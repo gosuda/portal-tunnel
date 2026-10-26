@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
+	"github.com/gosuda/portal-tunnel/v2/observability"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -51,6 +52,7 @@ type appConfig struct {
 	AdminToken         string
 	PprofEnabled       bool
 	PprofListenAddr    string
+	LokiURL            string
 	// Relay-owned x402 facilitator surface: portal.Server is x402-blind, so
 	// this application resolves the flags and mounts the payment endpoints.
 	X402Enabled bool
@@ -118,6 +120,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.StringFlagEnv(fs, &cfg.AdminToken, "admin-token", "", "admin bearer token for relay admin and policy APIs", "ADMIN_TOKEN")
 	utils.BoolFlagEnv(fs, &cfg.PprofEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.PprofListenAddr, "pprof-addr", DefaultPprofListenAddr, "pprof diagnostics listen address when enabled", "PPROF_ADDR")
+	utils.StringFlagEnv(fs, &cfg.LokiURL, "loki-url", "", "optional Loki push endpoint; relay logs are sent when configured", "LOKI_URL")
 	utils.BoolFlagEnv(fs, &cfg.X402Enabled, "x402-enabled", false, "enable relay-owned Sui x402 facilitator endpoints under /api/x402 for future control-plane payments", "X402_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
 	utils.StringFlagEnv(fs, &cfg.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
@@ -153,6 +156,12 @@ func runServeCommand(args []string) error {
 	if err := envIssueError(); err != nil {
 		return err
 	}
+	logWriter, err := observability.NewLokiWriter(zerolog.NewConsoleWriter(), cfg.LokiURL, "portal-relay")
+	if err != nil {
+		return err
+	}
+	defer logWriter.Close()
+	log.Logger = log.Output(logWriter)
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
@@ -204,6 +213,32 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
+	telemetry, err := observability.Start(ctx, observability.Config{ServiceName: "portal-relay"})
+	if err != nil {
+		return fmt.Errorf("start observability: %w", err)
+	}
+	defer telemetry.Shutdown(context.Background())
+	relayMetrics, err := observability.RegisterRelayMetrics(telemetry.Meter(), func() observability.RelayMetrics {
+		activeTenants, activeConnections := server.TransportStats()
+		traffic := server.NetworkTraffic()
+		networkTraffic := make([]observability.NetworkTraffic, 0, len(traffic))
+		for _, item := range traffic {
+			networkTraffic = append(networkTraffic, observability.NetworkTraffic{
+				Application: item.Application, Transport: item.Transport,
+				InBytes: item.InBytes, OutBytes: item.OutBytes,
+				InPackets: item.InPackets, OutPackets: item.OutPackets,
+			})
+		}
+		return observability.RelayMetrics{
+			ActiveTenantsByTransport:     activeTenants,
+			ActiveConnectionsByTransport: activeConnections,
+			NetworkTraffic:               networkTraffic,
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("register relay metrics: %w", err)
+	}
+	defer relayMetrics.Unregister()
 	ingress, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -240,6 +275,16 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	handler := policy.Mux(server, base, ingress,
 		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 		access, cfg.PreAuth)
+	metricsHandler := telemetry.Handler()
+	nextHandler := handler
+	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			metricsHandler.ServeHTTP(w, r)
+			return
+		}
+		nextHandler.ServeHTTP(w, r)
+	})
+	handler = observability.WrapHTTP(telemetry.Meter(), handler)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)
 	}
@@ -262,7 +307,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	case err := <-pprofErrs:
 		serveErr = fmt.Errorf("serve pprof: %w", err)
 		cancel()
-		<-serveDone
+		serveErr = errors.Join(serveErr, <-serveDone)
 	}
 	cancel()
 

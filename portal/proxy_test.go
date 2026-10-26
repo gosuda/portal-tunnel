@@ -38,7 +38,7 @@ func TestBridgeCancellationInterruptsThrottle(t *testing.T) {
 		key := types.NewServiceIdentityKey("lease", "0x1")
 		bps.SetIdentityBPS(key, 1)
 		done := make(chan struct{})
-		go func() { defer close(done); var p proxy; p.bridge(ctx, left, right, key, bps) }()
+		go func() { defer close(done); var p proxy; p.bridge(ctx, left, right, key, bps, nil, nil) }()
 		go func() { _, _ = client.Write([]byte("throttled")) }()
 		synctest.Wait()
 		cancel()
