@@ -125,20 +125,20 @@ func (m *Manager) serve(material *TLSMaterial) {
 		}
 		return next
 	})
-	if replaced != nil && !replaced.holds(material.Certificate.Certificate[0]) && !material.TrustedBy(replaced, m.cfg.BaseDomain) {
+	if replaced != nil && !replaced.holds(material.Certificate.Certificate[0]) && !material.TrustedBy(replaced.CertPEM, m.cfg.BaseDomain) {
 		log.Warn().
 			Str("base_domain", m.cfg.BaseDomain).
 			Msg("renewed relay certificate does not chain to the replaced one's issuer: tenants on older SDKs pinned to the previous chain must re-register, which their next lease renewal asks them to; restart the relay to re-pin them all at once")
 	}
 }
 
-// TrustedBy reports whether a client that pinned the chain of pinned accepts t
-// as the certificate of serverName, trusting the pinned certificates as roots
-// the way the /v1/sign connection of an SDK that cannot re-pin does. A renewal
-// by the same intermediate passes; one by another intermediate does not.
-func (t *TLSMaterial) TrustedBy(pinned *TLSMaterial, serverName string) bool {
+// TrustedBy reports whether a client that pinned the relay chain pinnedPEM
+// accepts t as the certificate of serverName, trusting the pinned certificates
+// as roots the way the /v1/sign connection of an SDK that cannot re-pin does. A
+// renewal by the same intermediate passes; one by another intermediate does not.
+func (t *TLSMaterial) TrustedBy(pinnedPEM []byte, serverName string) bool {
 	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(pinned.CertPEM) {
+	if !roots.AppendCertsFromPEM(pinnedPEM) {
 		return false
 	}
 	intermediates := x509.NewCertPool()

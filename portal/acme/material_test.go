@@ -296,7 +296,7 @@ func TestTrustedByFollowsTheIssuingIntermediate(t *testing.T) {
 		// of a renewal reach that root.
 		"another intermediate under a root the pinned bundle carries": {underRoot.issue(t, relayHost), otherUnderRoot.issue(t, relayHost), true},
 	} {
-		if got := test.renewed.TrustedBy(test.pinned, relayHost); got != test.want {
+		if got := test.renewed.TrustedBy(test.pinned.CertPEM, relayHost); got != test.want {
 			t.Errorf("TrustedBy(%s) = %v, want %v", name, got, test.want)
 		}
 	}

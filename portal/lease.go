@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -335,7 +336,9 @@ func (r *leaseRegistry) recordForVerifiedLease(key types.ServiceIdentityKey, lea
 	return record, nil
 }
 
-func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, material *acme.TLSMaterial) (*leaseRecord, types.RegisterResponse, error) {
+// Register admits a lease. served is the relay certificate served now, whose
+// chain the tenant is about to pin (nil when unknown).
+func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
@@ -386,13 +389,15 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		CanonicalHostname: canonicalHostname,
 		Metadata:          req.Metadata.Copy(),
 		Overlay:           req.Overlay,
-		material:          material,
 		ExpiresAt:         expiresAt,
 		FirstSeenAt:       issuedAt,
 		LastSeenAt:        issuedAt,
 		sourceAddr:        sourceAddr,
 		ReportedIP:        utils.SanitizeReportedIP(reportedIP),
 		reverse:           transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
+	}
+	if served != nil {
+		record.pinnedChain = served.CertPEM
 	}
 
 	r.mu.Lock()
@@ -663,19 +668,22 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 // chain it pinned, and the relay now serves a certificate that chain does not
 // verify (a renewal by another intermediate). Such a tenant fails every
 // handshake until it registers again, which lease_not_found makes it do; the
-// new record then remembers the current certificate, so each change asks each
-// lease at most once. A certificate that still verifies becomes the one the
-// lease is known to accept, so the check runs once per lease and change: a
-// later certificate verifies against either chain exactly when it comes from
-// the same intermediate. The caller holds r.mu.
+// new record then remembers the current chain, so each change asks each lease
+// at most once. A chain that still verifies becomes the one the lease is known
+// to accept, so the check runs once per lease and change: a later certificate
+// verifies against either chain exactly when it comes from the same
+// intermediate. The tenant pins its chain just after registering, so a renewal
+// in between can make the record older than the pin; that costs at most one
+// needless re-registration and needs no other source for the chain. The caller
+// holds r.mu.
 func (r *leaseRegistry) stalePin(record *leaseRecord, current *acme.TLSMaterial) bool {
-	if record.material == nil || current == nil || record.material == current {
+	if record.pinnedChain == nil || current == nil || bytes.Equal(record.pinnedChain, current.CertPEM) {
 		return false
 	}
-	if !current.TrustedBy(record.material, r.rootHostname) {
+	if !current.TrustedBy(record.pinnedChain, r.rootHostname) {
 		return true
 	}
-	record.material = current
+	record.pinnedChain = current.CertPEM
 	return false
 }
 

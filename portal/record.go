@@ -28,10 +28,11 @@ type leaseRecord struct {
 	CanonicalHostname string
 	Metadata          types.LeaseMetadata
 	Overlay           bool
-	// material is the relay certificate the lease's tenant is known to accept:
-	// the one served when it registered, or a later one that verifies against
-	// it. nil means unknown, and such a lease is never asked to re-register.
-	material *acme.TLSMaterial
+	// pinnedChain is the relay chain (PEM) the lease's tenant is known to
+	// accept: the one served when it registered, or a later one that verifies
+	// against it. Only the public chain is kept, never a key. nil means unknown,
+	// and such a lease is never asked to re-register.
+	pinnedChain []byte
 
 	registerChallenge *identity.RegisterChallenge
 
