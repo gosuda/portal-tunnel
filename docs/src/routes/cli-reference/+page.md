@@ -486,8 +486,10 @@ Agent flags:
 | `portal agent run` | `--config` | platform default | Agent TOML config path |
 | `portal agent run` | `--foreground` | `false` | Run in the current process without installing the OS service |
 | `portal agent run` | `--service` | `false` | Internal service entrypoint used by the installed OS service |
+| `portal agent run` | `--theme` | `amber` | Dashboard color theme with `--foreground`: `amber` or `green` (env: `PORTAL_TUI_THEME`) |
 | `portal agent dashboard` | `--config` | platform default | Config path used for display and state-dir discovery |
 | `portal agent dashboard` | `--state-dir` | config/default | Agent state directory to attach to |
+| `portal agent dashboard` | `--theme` | `amber` | Color theme: `amber` or `green` (env: `PORTAL_TUI_THEME`) |
 | `portal agent stop` | `--config` | platform default | Config path used to resolve state dir and service name |
 | `portal agent stop` | `--state-dir` | config/default | Agent state directory to stop |
 | `portal agent restart` | `--config` | platform default | Config path used to reinstall and restart the service |
