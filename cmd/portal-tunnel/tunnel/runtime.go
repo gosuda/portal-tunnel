@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -158,7 +159,12 @@ type Runtime struct {
 	handler   http.Handler
 	target    string
 	udpTarget string
+	// authProvider stays nil until the startup check of the application auth
+	// provider finishes.
+	authProvider atomic.Pointer[authProviderCheck]
 }
+
+type authProviderCheck struct{ err error }
 
 func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	if err := spec.Validate(); err != nil {
@@ -241,12 +247,28 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 		// Only a warning: the provider may come back, and every login retries it.
 		// A tunnel stopped during the check cancels it, which is not an outage.
 		go func() {
-			if err := gateway.CheckApplicationAuthProvider(ctx, *spec.HTTP.Auth); err != nil && ctx.Err() == nil {
+			err := gateway.CheckApplicationAuthProvider(ctx, *spec.HTTP.Auth)
+			if ctx.Err() != nil {
+				return
+			}
+			runtime.authProvider.Store(&authProviderCheck{err: err})
+			if err != nil {
 				log.Warn().Err(err).Str("address", runtime.Identity.Address).Msg("application auth provider is not usable; visitors cannot sign in until it is")
 			}
 		}()
 	}
 	return runtime, nil
+}
+
+// AuthProviderCheck reports whether the startup check of the application auth
+// provider has finished and, if it failed, why the provider is not usable.
+// Only the oidc provider depends on anything outside the tunnel; the check
+// passes at once for the others.
+func (runtime *Runtime) AuthProviderCheck() (checked bool, err error) {
+	if check := runtime.authProvider.Load(); check != nil {
+		return true, check.err
+	}
+	return false, nil
 }
 
 func (runtime *Runtime) Run(ctx context.Context) error {

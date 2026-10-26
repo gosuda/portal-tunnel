@@ -70,6 +70,13 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if walletAuthenticated {
 			status.WalletAddress = walletAddress
 		}
+		if !bearerAuthenticated {
+			// A wallet session is read-only and may be open to any wallet, so it
+			// does not learn who may sign in to a tunnel.
+			for i := range status.Tunnels {
+				status.Tunnels[i].AuthAllowedWallets = nil
+			}
+		}
 		utils.WriteAPIData(w, http.StatusOK, status)
 	case r.URL.Path == types.PathAgentShutdown:
 		if !utils.RequireMethod(w, r, http.MethodPost) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -29,6 +30,8 @@ type manager struct {
 	mu      sync.RWMutex
 	cfg     Config
 	tunnels map[string]*managedTunnel
+	// rootCtx is the context tunnels run under; Start replaces it with the
+	// agent's context.
 	rootCtx context.Context
 }
 
@@ -37,6 +40,7 @@ func newManager(cfg Config, controlAddr string) *manager {
 		controlAddr: controlAddr,
 		cfg:         cfg,
 		tunnels:     make(map[string]*managedTunnel, len(cfg.Tunnels)),
+		rootCtx:     context.Background(),
 	}
 	for _, tunnelCfg := range cfg.Tunnels {
 		manager.tunnels[tunnelCfg.ID] = &managedTunnel{cfg: tunnelCfg}
@@ -154,7 +158,7 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 				tunnel.Hide = *req.Metadata.Hide
 			}
 		}
-		return nil
+		return req.applyAuth(tunnel)
 	}); err != nil {
 		return err
 	}
@@ -167,6 +171,38 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 		return fmt.Errorf("tunnel %q not found", id)
 	}
 	return tunnel.UpdateSettings(updateMetadata, updateMaxActiveRelays)
+}
+
+func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) error {
+	if r.Auth != nil {
+		tunnel.Auth = *r.Auth
+		if strings.TrimSpace(tunnel.Auth) == "" {
+			if r.AuthAllowedWallets != nil || r.AuthIdentityHeaders != nil || r.AuthOIDCIssuer != nil || r.AuthOIDCClientID != nil || r.AuthOIDCClientSecret != nil {
+				return errors.New("auth is empty, which turns sign-in off: leave out the other auth fields")
+			}
+			tunnel.AuthAllowedWallets = nil
+			tunnel.AuthIdentityHeaders = false
+			tunnel.AuthOIDCIssuer = ""
+			tunnel.AuthOIDCClientID = ""
+			tunnel.AuthOIDCClientSecret = ""
+		}
+	}
+	if r.AuthAllowedWallets != nil {
+		tunnel.AuthAllowedWallets = append([]string(nil), *r.AuthAllowedWallets...)
+	}
+	if r.AuthIdentityHeaders != nil {
+		tunnel.AuthIdentityHeaders = *r.AuthIdentityHeaders
+	}
+	if r.AuthOIDCIssuer != nil {
+		tunnel.AuthOIDCIssuer = *r.AuthOIDCIssuer
+	}
+	if r.AuthOIDCClientID != nil {
+		tunnel.AuthOIDCClientID = *r.AuthOIDCClientID
+	}
+	if r.AuthOIDCClientSecret != nil {
+		tunnel.AuthOIDCClientSecret = *r.AuthOIDCClientSecret
+	}
+	return nil
 }
 
 func (m *manager) AddTunnel(req AgentTunnelRequest) error {
@@ -229,12 +265,12 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		Discovery:            &discovery,
 		Overlay:              req.Overlay,
 		MaxActiveRelays:      req.MaxActiveRelays,
-		Auth:                 strings.ToLower(strings.TrimSpace(req.Auth)),
+		Auth:                 req.Auth,
 		AuthAllowedWallets:   append([]string(nil), req.AuthAllowedWallets...),
 		AuthIdentityHeaders:  req.AuthIdentityHeaders,
-		AuthOIDCIssuer:       strings.TrimSpace(req.AuthOIDCIssuer),
-		AuthOIDCClientID:     strings.TrimSpace(req.AuthOIDCClientID),
-		AuthOIDCClientSecret: strings.TrimSpace(req.AuthOIDCClientSecret),
+		AuthOIDCIssuer:       req.AuthOIDCIssuer,
+		AuthOIDCClientID:     req.AuthOIDCClientID,
+		AuthOIDCClientSecret: req.AuthOIDCClientSecret,
 		X402Config:           x402,
 	}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
@@ -311,12 +347,24 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 	nextTunnelCfg := cfg.Tunnels[index]
 	m.mu.Lock()
 	m.cfg = cfg
-	if tunnel := m.tunnels[id]; tunnel != nil {
+	rootCtx := m.rootCtx
+	tunnel := m.tunnels[id]
+	if tunnel != nil {
 		tunnel.mu.Lock()
 		tunnel.cfg = nextTunnelCfg
 		tunnel.mu.Unlock()
 	}
 	m.mu.Unlock()
+
+	// The sign-in gate is built when the runtime starts, so a changed gate
+	// takes effect by restarting this tunnel the way ApplyConfig restarts a
+	// changed one; the other tunnels are left alone. The tunnel starts again
+	// from its saved config, which drops relays connected to it at runtime.
+	if tunnel == nil || reflect.DeepEqual(before.applicationAuth(), nextTunnelCfg.applicationAuth()) {
+		return nil
+	}
+	_ = tunnel.Stop(context.Background())
+	tunnel.Start(rootCtx)
 	return nil
 }
 
@@ -410,9 +458,6 @@ func (m *manager) ApplyConfig(cfg Config) error {
 	for _, tunnel := range append(toStop, toUpdate...) {
 		_ = tunnel.Stop(context.Background())
 	}
-	if rootCtx == nil {
-		rootCtx = context.Background()
-	}
 	for _, tunnel := range append(toStart, toUpdate...) {
 		tunnel.Start(rootCtx)
 	}
@@ -449,7 +494,7 @@ type managedTunnel struct {
 
 	cancel    context.CancelFunc
 	done      chan struct{}
-	exposure  *sdk.Exposure
+	runtime   *tunnel.Runtime
 	lastError string
 	address   string
 	relays    []AgentRelayStatus
@@ -504,12 +549,12 @@ func (t *managedTunnel) ConnectRelay(relayURL string) error {
 	if !slices.Contains(t.cfg.RelayURLs, relayURL) {
 		t.cfg.RelayURLs = append(t.cfg.RelayURLs, relayURL)
 	}
-	exposure := t.exposure
+	runtime := t.runtime
 	t.mu.Unlock()
-	if exposure == nil {
+	if runtime == nil {
 		return nil
 	}
-	return exposure.AddRelay(relayURL)
+	return runtime.Exposure.AddRelay(relayURL)
 }
 
 func (t *managedTunnel) DisconnectRelay(relayURL string) error {
@@ -525,28 +570,28 @@ func (t *managedTunnel) DisconnectRelay(relayURL string) error {
 		}
 	}
 	t.cfg.RelayURLs = next
-	exposure := t.exposure
+	runtime := t.runtime
 	t.mu.Unlock()
-	if exposure == nil {
+	if runtime == nil {
 		return nil
 	}
-	return exposure.RemoveRelay(relayURL)
+	return runtime.Exposure.RemoveRelay(relayURL)
 }
 
 func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays bool) error {
 	t.mu.RLock()
-	exposure := t.exposure
+	runtime := t.runtime
 	cfg := t.cfg
 	t.mu.RUnlock()
-	if exposure == nil {
+	if runtime == nil {
 		return nil
 	}
 	var err error
 	if updateMetadata {
-		err = errors.Join(err, exposure.UpdateMetadata(metadataFromTunnelConfig(cfg)))
+		err = errors.Join(err, runtime.Exposure.UpdateMetadata(metadataFromTunnelConfig(cfg)))
 	}
 	if updateMaxActiveRelays {
-		err = errors.Join(err, exposure.SetMaxActiveRelays(cfg.MaxActiveRelays))
+		err = errors.Join(err, runtime.Exposure.SetMaxActiveRelays(cfg.MaxActiveRelays))
 	}
 	return err
 }
@@ -555,7 +600,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	t.mu.RLock()
 	cfg := t.cfg
 	lastError := t.lastError
-	exposure := t.exposure
+	runtime := t.runtime
 	done := t.done
 	address := t.address
 	relays := append([]AgentRelayStatus(nil), t.relays...)
@@ -574,7 +619,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	switch {
 	case lastError != "":
 		state = "error"
-	case exposure != nil:
+	case runtime != nil:
 		state = "running"
 	case running:
 		state = "starting"
@@ -598,10 +643,20 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		MaxActiveRelays:     cfg.MaxActiveRelays,
 		Metadata:            metadataFromTunnelConfig(cfg),
 		Auth:                cfg.Auth,
+		AuthAllowedWallets:  append([]string(nil), cfg.AuthAllowedWallets...),
 		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
 		AuthOIDCIssuer:      cfg.AuthOIDCIssuer,
 		AuthOIDCClientID:    cfg.AuthOIDCClientID,
 		X402Config:          x402,
+
+		AuthOIDCClientSecretSet: cfg.AuthOIDCClientSecret != "",
+	}
+	if runtime != nil && cfg.Auth == gateway.ApplicationAuthProviderOIDC {
+		checked, err := runtime.AuthProviderCheck()
+		status.AuthOIDCProviderChecked = checked
+		if err != nil {
+			status.AuthOIDCProviderError = err.Error()
+		}
 	}
 	if len(cfg.HTTPRoutes) > 0 {
 		status.HTTPRoutes = make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
@@ -614,7 +669,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 			})
 		}
 	}
-	if exposure == nil {
+	if runtime == nil {
 		status.Address = address
 		for i := range relays {
 			relays[i].AliasURL = ""
@@ -622,9 +677,9 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		status.Relays = relays
 		return status
 	}
-	relays = agentRelayStatuses(exposure.Relays())
+	relays = agentRelayStatuses(runtime.Exposure.Relays())
 	t.mu.Lock()
-	if t.exposure == exposure {
+	if t.runtime == runtime {
 		t.relays = append([]AgentRelayStatus(nil), relays...)
 	}
 	address = t.address
@@ -658,7 +713,7 @@ func (t *managedTunnel) runLoop(ctx context.Context) {
 	for {
 		err := t.runOnce(ctx)
 		t.mu.Lock()
-		t.exposure = nil
+		t.runtime = nil
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || err == nil {
 			t.lastError = ""
 		} else {
@@ -687,11 +742,10 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	exposure := runtime.Exposure
 	t.mu.Lock()
-	t.exposure = exposure
+	t.runtime = runtime
 	t.address = runtime.Identity.Address
-	t.relays = agentRelayStatuses(exposure.Relays())
+	t.relays = agentRelayStatuses(runtime.Exposure.Relays())
 	t.lastError = ""
 	t.mu.Unlock()
 

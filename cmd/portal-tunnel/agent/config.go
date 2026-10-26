@@ -410,17 +410,24 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 			Payment:             payment,
 		}
 		if hasAuth {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
-				Provider:         cfg.Auth,
-				AllowedWallets:   append([]string(nil), cfg.AuthAllowedWallets...),
-				IdentityHeaders:  cfg.AuthIdentityHeaders,
-				OIDCIssuerURL:    cfg.AuthOIDCIssuer,
-				OIDCClientID:     cfg.AuthOIDCClientID,
-				OIDCClientSecret: cfg.AuthOIDCClientSecret,
-			}
+			auth := cfg.applicationAuth()
+			spec.HTTP.Auth = &auth
 		}
 	}
 	return spec
+}
+
+// applicationAuth is the sign-in gate that the tunnel's gateway is built with
+// when its runtime starts.
+func (cfg TunnelConfig) applicationAuth() gateway.ApplicationAuthConfig {
+	return gateway.ApplicationAuthConfig{
+		Provider:         cfg.Auth,
+		AllowedWallets:   append([]string(nil), cfg.AuthAllowedWallets...),
+		IdentityHeaders:  cfg.AuthIdentityHeaders,
+		OIDCIssuerURL:    cfg.AuthOIDCIssuer,
+		OIDCClientID:     cfg.AuthOIDCClientID,
+		OIDCClientSecret: cfg.AuthOIDCClientSecret,
+	}
 }
 
 func metadataFromTunnelConfig(cfg TunnelConfig) types.LeaseMetadata {
