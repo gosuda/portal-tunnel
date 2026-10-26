@@ -149,7 +149,9 @@ type agentDashboardLiveBinding struct {
 
 func (m agentDashboardModel) confirming() bool { return m.confirmDelete != "" || m.confirmStop }
 
-func (m agentDashboardModel) asksBeforeStopping() bool { return m.stopsAgent && m.browsing() }
+// asksBeforeStopping holds wherever F10 would otherwise close a dashboard that
+// stops the agent, except while a question already waits for an answer.
+func (m agentDashboardModel) asksBeforeStopping() bool { return m.stopsAgent && !m.confirming() }
 
 func (m agentDashboardModel) browsing() bool { return !m.confirming() }
 
