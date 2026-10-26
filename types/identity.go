@@ -29,6 +29,32 @@ const (
 	CanonicalLeaseNameHashDomain = "portal-canonical-name-v1"
 )
 
+// Identity-bound TLS channel binding runs on a native client's own TLS
+// connection to a canonical hostname, before any application data, between a
+// client and a tunnel that may run different versions. The client sends the
+// request magic and a fresh nonce. The tunnel answers with the answer tag, its
+// exporter under TLSChannelBindingExporterLabel, and a compact secp256k1
+// signature, made with the identity embedded in the hostname, over
+// TLSChannelBindingDomain || 0 || hostname || 0 || nonce || exporter. The tag
+// tells an answer apart from the reply of a tunnel that passed the request to
+// its application instead.
+//
+// A stream whose first five bytes are the request magic is taken for a binding
+// request, so an application that opens with exactly these bytes would be
+// answered as one. TLS and HTTP never start that way, and the magic is not a
+// secret.
+const (
+	TLSChannelBindingExporterLabel = "EXPORTER-Portal-TLS-Channel-Binding-v1"
+	TLSChannelBindingDomain        = "portal-tls-channel-binding-v1"
+	TLSChannelBindingRequestMagic  = "PTCB\x01"
+	TLSChannelBindingAnswerTag     = "PTCA\x01"
+	TLSChannelBindingNonceSize     = 32
+	TLSChannelBindingExporterSize  = 32
+	TLSChannelBindingSignatureSize = 65
+	TLSChannelBindingRequestSize   = len(TLSChannelBindingRequestMagic) + TLSChannelBindingNonceSize
+	TLSChannelBindingAnswerSize    = len(TLSChannelBindingAnswerTag) + TLSChannelBindingExporterSize + TLSChannelBindingSignatureSize
+)
+
 type Identity struct {
 	Name           string `json:"name,omitempty"`
 	Address        string `json:"address,omitempty"`

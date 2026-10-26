@@ -296,3 +296,38 @@ func TestRelayHostTrustBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeHostWithoutPort(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ in, want string }{
+		{"app.example", "app.example"},
+		{"  App.Example. ", "app.example"},
+		{"app.example:443", "app.example"},
+		{"App.Example.:443", "app.example"},
+		{"[::1]:8443", "::1"},
+		{"", ""},
+	} {
+		if got := NormalizeHostWithoutPort(tc.in); got != tc.want {
+			t.Errorf("NormalizeHostWithoutPort(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestExtractCanonicalHostnameAddressIgnoresCasePortAndTrailingDot(t *testing.T) {
+	t.Parallel()
+
+	const address = "0x1234567890abcdef1234567890abcdef12345678"
+	for _, hostname := range []string{
+		"1234567890abcdef1234567890abcdef12345678.relay.example",
+		"1234567890ABCDEF1234567890abcdef12345678.Relay.Example.:8443",
+		"myapp-1234567890abcdef1234567890abcdef12345678.relay.example",
+	} {
+		if got, err := ExtractCanonicalHostnameAddress(hostname); err != nil || got != address {
+			t.Errorf("ExtractCanonicalHostnameAddress(%q) = %q, %v; want %q", hostname, got, err, address)
+		}
+	}
+	if _, err := ExtractCanonicalHostnameAddress("myapp.relay.example"); err == nil {
+		t.Error("ExtractCanonicalHostnameAddress accepted a friendly name that embeds no address")
+	}
+}

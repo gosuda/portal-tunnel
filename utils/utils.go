@@ -179,6 +179,15 @@ func NormalizeHostname(host string) string {
 	return host
 }
 
+// NormalizeHostWithoutPort normalizes a hostname and drops its port, if any.
+func NormalizeHostWithoutPort(hostname string) string {
+	hostname = strings.TrimSpace(hostname)
+	if host, _, err := net.SplitHostPort(hostname); err == nil {
+		hostname = host
+	}
+	return NormalizeHostname(hostname)
+}
+
 func NormalizeBaseDomain(domain string) string {
 	return strings.TrimPrefix(NormalizeHostname(domain), "*.")
 }
@@ -326,6 +335,19 @@ func NormalizeServiceName(raw string) (string, error) {
 		return "", errors.New("name must not look like a canonical hostname (40 hexadecimal characters, alone or after a hyphen)")
 	}
 	return label, nil
+}
+
+// ExtractCanonicalHostnameAddress extracts the 40-character hexadecimal EVM
+// address embedded in the first DNS label of a canonical Portal lease hostname
+// (<address>.<root>, <name>-<address>.<root>, or <hash>--<address>.<root>) and
+// returns it with a lowercase 0x prefix.
+func ExtractCanonicalHostnameAddress(hostname string) (string, error) {
+	label, rest, ok := strings.Cut(NormalizeHostWithoutPort(hostname), ".")
+	if !ok || label == "" || rest == "" || !hasCanonicalShape(label) {
+		return "", errors.New("hostname does not contain a canonical lease address")
+	}
+	address := label[len(label)-40:]
+	return "0x" + strings.ToLower(address), nil
 }
 
 // hasCanonicalShape reports whether label is shaped like a canonical label:
