@@ -189,7 +189,11 @@ A rejected TTL leaves the existing lease unchanged.
 renewal without it is answered with `lease_not_found` and the lease is not
 extended when the relay now serves a certificate that the chain pinned at
 registration does not verify (a renewal by another intermediate); the SDK then
-registers again and pins the current chain.
+registers again and pins the current chain. An SDK that only exposes raw TCP or
+UDP is asked as well, although it never signs, so it reconnects once after such
+a renewal. On a relay with more of these tenants than its pre-auth registration
+budget admits per renewal cycle, some registrations are answered with 429 and
+wait for their retry time.
 
 `RenewResponse`:
 
