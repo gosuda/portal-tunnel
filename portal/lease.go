@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
@@ -334,7 +335,7 @@ func (r *leaseRegistry) recordForVerifiedLease(key types.ServiceIdentityKey, lea
 	return record, nil
 }
 
-func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (*leaseRecord, types.RegisterResponse, error) {
+func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, material *acme.TLSMaterial) (*leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
@@ -385,6 +386,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		CanonicalHostname: canonicalHostname,
 		Metadata:          req.Metadata.Copy(),
 		Overlay:           req.Overlay,
+		material:          material,
 		ExpiresAt:         expiresAt,
 		FirstSeenAt:       issuedAt,
 		LastSeenAt:        issuedAt,
@@ -590,7 +592,10 @@ type reverseEndpointInput struct {
 	useOverlay    bool
 }
 
-func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (types.RenewResponse, reverseEndpointInput, error) {
+// Renew extends a lease. current is the relay certificate served now: a lease
+// whose SDK cannot re-pin and whose pinned chain no longer verifies it is asked
+// to register again instead (see stalePin).
+func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, current *acme.TLSMaterial) (types.RenewResponse, reverseEndpointInput, error) {
 	if r == nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, errFeatureUnavailable
 	}
@@ -613,6 +618,10 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (ty
 	if err != nil {
 		r.mu.Unlock()
 		return types.RenewResponse{}, reverseEndpointInput{}, err
+	}
+	if !req.RepinsChain && r.stalePin(record, current) {
+		r.mu.Unlock()
+		return types.RenewResponse{}, reverseEndpointInput{}, errLeaseNotFound
 	}
 
 	now := time.Now()
@@ -647,6 +656,27 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr) (ty
 		ExpiresAt:   expiresAt,
 		AccessToken: nextAccessToken,
 	}, reverseInput, nil
+}
+
+// stalePin reports whether the tenant of record, on an SDK that pins the relay
+// chain once, can no longer reach /v1/sign: its signer connection trusts the
+// chain it pinned, and the relay now serves a certificate that chain does not
+// verify (a renewal by another intermediate). Such a tenant fails every
+// handshake until it registers again, which lease_not_found makes it do; the
+// new record then remembers the current certificate, so each change asks each
+// lease at most once. A certificate that still verifies becomes the one the
+// lease is known to accept, so the check runs once per lease and change: a
+// later certificate verifies against either chain exactly when it comes from
+// the same intermediate. The caller holds r.mu.
+func (r *leaseRegistry) stalePin(record *leaseRecord, current *acme.TLSMaterial) bool {
+	if record.material == nil || current == nil || record.material == current {
+		return false
+	}
+	if !current.TrustedBy(record.material, r.rootHostname) {
+		return true
+	}
+	record.material = current
+	return false
 }
 
 func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
