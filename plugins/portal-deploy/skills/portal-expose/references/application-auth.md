@@ -92,7 +92,11 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 
 ## Persistent agent
 
-The same settings are fields of a `[[tunnels]]` entry, except `--auth-identity-proof`, which has no key: an agent tunnel cannot send the identity proof, and the agent does not read `AUTH_IDENTITY_PROOF`. The agent does not read the `AUTH_OIDC_*` variables and has no way to refer to a secret, so a client secret can only be stored in the TOML file as plain text. Do not put it there on your own: tell the user so, and write it only after they explicitly accept that risk (the rule is in `references/safety-and-verification.md`). If they do not, the user runs the tunnel with `portal expose` from their own terminal, as step 5 of the oidc section describes. When they accept, keep the file outside the repository (or in an ignored path), owned by the user with mode `0600` in a directory only they can read, never print the secret or paste it into logs or the final answer, and say in the handoff that the file holds a secret. Leave `auth_oidc_client_secret` empty only when the provider registered the client without a secret. A tunnel with neither `identity_path` nor `identity_json` keeps its identity in `<state_dir>/identity.json`, or `<state_dir>/<id>/identity.json` when the config has more than one tunnel: pass that file as `--identity-path` to `portal auth issue`; a relative `identity_path` is resolved against the config file's folder, not the shell's.
+The same settings are fields of a `[[tunnels]]` entry, except `--auth-identity-proof`, which has no key: an agent tunnel cannot send the identity proof, and the agent does not read `AUTH_IDENTITY_PROOF`. The agent does not read the `AUTH_OIDC_*` variables and has no way to refer to a secret, so a client secret can only be stored in the TOML file as plain text. Tell the user so, and store it only after they explicitly accept that risk (the rule is in `references/safety-and-verification.md`). If they do not, the user runs the tunnel with `portal expose` from their own terminal, as step 5 of the oidc section describes.
+
+When they accept, do not learn the secret and do not write it yourself: leave `auth_oidc_client_secret` out of the entry, and once the agent runs ask the user to type it in the dashboard. In `portal agent dashboard` they select the tunnel and open the Access screen (`F4`), type the secret in the Client secret row (hidden as typed; `F3` shows it so they can check it), and apply with `F2`. The agent writes it to the config file and restarts that tunnel only. Until then visitors cannot finish signing in with a provider that issues a secret. Writing it into the TOML file yourself is the fallback only when the user insists on it, after the same explicit acceptance, and then you handle the secret: never print it or paste it into logs or the final answer.
+
+Either way the file then holds a secret: keep it outside the repository (or in an ignored path), owned by the user with mode `0600` in a directory only they can read, and say in the handoff that the file holds a secret. Leave `auth_oidc_client_secret` empty only when the provider registered the client without a secret. A tunnel with neither `identity_path` nor `identity_json` keeps its identity in `<state_dir>/identity.json`, or `<state_dir>/<id>/identity.json` when the config has more than one tunnel: pass that file as `--identity-path` to `portal auth issue`; a relative `identity_path` is resolved against the config file's folder, not the shell's.
 
 ```toml
 [[tunnels]]
@@ -109,7 +113,7 @@ auth_allowed_wallets = ["alice@example.com"]
 auth_identity_headers = true
 ```
 
-`auth_allowed_wallets` holds the allowlist for every method, not only wallets.
+`auth_allowed_wallets` holds the allowlist for every method, not only wallets. To change it on a running agent tunnel, edit the file and run `portal agent restart`, which restarts every tunnel of the service, or have the user change it in the dashboard's Access screen (`F4`), or send `PATCH /agent/tunnels/{id}` (documented on the agent page), which restarts only that tunnel and writes the file too.
 
 ## Verify
 
@@ -117,7 +121,7 @@ Without signing in as the user:
 
 1. `curl -sI https://<host>/` returns `303` with `Location: /_portal/auth/login?next=%2F`. A `200` means the gate is not on; stop and report it.
 2. `curl -s -X POST https://<host>/` returns `401` with `{"error":"authentication required"}`.
-3. `credential`: `curl -s -H "X-Portal-Access-Credential: $C" https://<host>/` returns the app's real response. Use a credential the user issued; do not paste it into the final answer.
+3. `credential`: `curl -s -H "X-Portal-Access-Credential: $C" https://<host>/` returns the app's real response. Use the credential you already issued for the subject you hand over (from the captured output, kept in a shell variable); do not issue one just to verify, and do not paste it into the final answer. If you do not hold one, skip this step and say so.
 4. `oidc`: `curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://<host>/_portal/auth/login` prints `303` and the provider's authorization endpoint. Use GET: a login starts only on GET, and HEAD answers `405`. Do not complete a provider login on the user's behalf.
 
 ## When it fails
