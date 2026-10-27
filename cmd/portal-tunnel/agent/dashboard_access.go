@@ -177,6 +177,7 @@ type agentDashboardAccess struct {
 	headers     bool
 	allowed     []string
 	clearSecret bool // the stored client secret is to be removed; never set while a secret is typed
+	applied     bool // an apply of this draft went through
 	err         error
 
 	add, issuer, clientID, secret textinput.Model
@@ -239,6 +240,7 @@ func (m *agentDashboardModel) closeAccess() {
 // is not part of that: it is empty whenever the screen is closed, and every
 // change of mode empties it.
 func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
+	a.applied = false
 	a.provider = tunnel.Auth
 	a.headers = tunnel.AuthIdentityHeaders
 	a.allowed = slices.Clone(tunnel.AuthAllowedWallets)
@@ -416,6 +418,7 @@ func (m *agentDashboardModel) answerAccess(msg agentDashboardAccessMsg) {
 	m.access.err = msg.err
 	if msg.err == nil {
 		m.access.forgetSecret()
+		m.access.applied = true
 	}
 }
 
@@ -485,7 +488,7 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 
 	changed := !a.request(tunnel).Empty()
 	applyLabel := "Apply"
-	if !changed {
+	if !changed && a.applied {
 		applyLabel = "Applied"
 	}
 	var content agentDashboardView

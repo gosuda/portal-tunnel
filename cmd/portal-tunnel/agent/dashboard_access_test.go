@@ -418,8 +418,10 @@ func TestDashboardAccessApply(t *testing.T) {
 			t.Fatalf("%s with nothing changed must not send a request", key)
 		}
 	}
-	if !strings.Contains(untouched.View(), "( Applied )") {
-		t.Fatalf("an untouched draft shows the Apply button as applied:\n%s", untouched.View())
+	// Nothing has been applied on a screen that was just opened, so its disabled button
+	// does not claim that.
+	if view := untouched.View(); !strings.Contains(view, "( Apply )") || strings.Contains(view, "Applied") {
+		t.Fatalf("an untouched draft shows a disabled Apply button:\n%s", view)
 	}
 
 	changed := press1(untouched, keyUp, keyRunes(fakeSecret))
@@ -433,6 +435,23 @@ func TestDashboardAccessApply(t *testing.T) {
 	}
 	if closed, _ := clickAction(t, changed, agentDashboardActionCancelAccess); strings.Contains(closed.View(), "ACCESS:") {
 		t.Fatal("the Cancel button should close the screen")
+	}
+}
+
+func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	added := testAccessStatus()
+	added.Tunnels[accessWeb].AuthAllowedWallets = append(added.Tunnels[accessWeb].AuthAllowedWallets, "carol@example.com")
+
+	model := accessScreen(t, theme, testAccessStatus(), accessWeb, append(downs(4), keyRunes("carol@example.com"), keyEnter)...)
+	model = send(model, agentDashboardAccessMsg{tunnelID: "web"})
+	if view := model.View(); !strings.Contains(view, "[ Apply ]") || strings.Contains(view, "Applied") {
+		t.Fatalf("before the poll brings the new settings the draft still differs from what is stored:\n%s", view)
+	}
+	model = send(model, agentDashboardStatusMsg{status: added})
+	view := model.View()
+	if !strings.Contains(view, "( Applied )") || !strings.Contains(view, "carol@example.com") || strings.Contains(view, "Error:") {
+		t.Fatalf("once the poll brings the new settings the screen says Applied and keeps them:\n%s", view)
 	}
 }
 

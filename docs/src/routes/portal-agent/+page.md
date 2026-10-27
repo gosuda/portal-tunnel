@@ -377,7 +377,9 @@ including a new provider check. If the agent refuses the change, for example an
 OIDC tunnel without an allow list entry, its message shows on the screen, the
 typed secret stays so that you can correct the rest, and nothing is changed.
 The typed secret is dropped when the screen closes, when the mode changes, and
-after a successful apply.
+after a successful apply. While nothing differs from what is stored the Apply
+button is disabled, and it reads Applied only after an apply of this screen's
+own.
 
 ### Theme and terminal support
 
