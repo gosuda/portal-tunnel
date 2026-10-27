@@ -235,6 +235,21 @@ func NormalizeApplicationAuthHost(raw string) (string, error) {
 	return strings.TrimSuffix(host, "."), nil
 }
 
+// sameApplicationHost reports whether two hosts name the same application: they
+// are equal once each is normalized, so letter case, a trailing dot and the
+// default port :443 do not tell applications apart. A host that does not
+// normalize names nothing, and neither does a URL: NormalizeApplicationAuthHost
+// also reads https://host/, but a Host header or a stored host never has a slash
+// (net/http answers such a header with 400).
+func sameApplicationHost(a, b string) bool {
+	if strings.Contains(a, "/") || strings.Contains(b, "/") {
+		return false
+	}
+	normalizedA, errA := NormalizeApplicationAuthHost(a)
+	normalizedB, errB := NormalizeApplicationAuthHost(b)
+	return errA == nil && errB == nil && normalizedA == normalizedB
+}
+
 func verifyApplicationCredential(key []byte, tunnelIdentity types.Identity, host, credential string, now time.Time) (applicationCredentialClaims, error) {
 	credential = strings.TrimSpace(credential)
 	if !strings.HasPrefix(credential, applicationCredentialPrefix) {
@@ -246,15 +261,14 @@ func verifyApplicationCredential(key []byte, tunnelIdentity types.Identity, host
 	}
 	// A credential issued before the default port was dropped from the name still
 	// carries it, and names the same application.
-	normalizedHost, err := NormalizeApplicationAuthHost(host)
-	claimedHost, claimedErr := NormalizeApplicationAuthHost(claims.Host)
-	if err != nil || claimedErr != nil || claimedHost != normalizedHost || !now.UTC().Before(time.Unix(claims.ExpiresAt, 0)) {
+	if !sameApplicationHost(claims.Host, host) || !now.UTC().Before(time.Unix(claims.ExpiresAt, 0)) {
 		return applicationCredentialClaims{}, errors.New("application credential is invalid or expired")
 	}
-	claims.Subject, err = normalizeApplicationAuthSubject(claims.Subject)
+	subject, err := normalizeApplicationAuthSubject(claims.Subject)
 	if err != nil {
 		return applicationCredentialClaims{}, errors.New("application credential is invalid")
 	}
+	claims.Subject = subject
 	return claims, nil
 }
 
