@@ -178,6 +178,7 @@ type agentDashboardAccess struct {
 	headers     bool
 	allowed     []string
 	clearSecret bool // the stored client secret is to be removed; never set while a secret is typed
+	applying    bool // an apply was sent and has not been answered
 	applied     bool // an apply of this draft went through
 	err         error
 	// base is the stored settings the draft was loaded from or last found in
@@ -239,6 +240,7 @@ func (m *agentDashboardModel) closeAccess() {
 	a.tunnelID = ""
 	a.allowed = nil
 	a.err = nil
+	a.applying = false
 }
 
 // syncAccess keeps the open Access screen from applying a stale draft. The
@@ -247,7 +249,10 @@ func (m *agentDashboardModel) closeAccess() {
 // the CLI or another dashboard) would put its old values back. A status that
 // differs from both the draft's base and the draft is such a change: the screen
 // shows the stored settings again and says so, and what was edited is dropped.
-// A status equal to the draft is the answer to this screen's own apply.
+// That includes edits made while this screen's own apply was still running,
+// since the screen cannot tell them apart; opening it again continues from what
+// is stored. A status equal to the draft is the answer to this screen's own
+// apply.
 func (m *agentDashboardModel) syncAccess() {
 	tunnel, ok := m.accessTunnel()
 	if !ok {
@@ -261,7 +266,7 @@ func (m *agentDashboardModel) syncAccess() {
 		a.forgetSecret()
 		a.load(tunnel)
 		a.moveFocus(a.focusIndex())
-		a.err = errors.New("changed elsewhere; showing what is stored")
+		a.err = errors.New("settings changed meanwhile; showing what is stored")
 	}
 }
 
@@ -433,10 +438,11 @@ func (m agentDashboardModel) applyAccess() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	req := m.access.request(tunnel)
-	if req.Empty() {
+	if m.access.applying || req.Empty() {
 		return m, nil
 	}
 	m.access.err = nil
+	m.access.applying = true
 	// The command holds the request, not the model, so that a typed secret has
 	// no other copy than the one in its input and the request on its way.
 	stateDir, tunnelID := m.stateDir, tunnel.ID
@@ -452,10 +458,11 @@ func (m agentDashboardModel) applyAccess() (tea.Model, tea.Cmd) {
 // success drops the secret. The screen keeps its own error because the status
 // poll that follows every answer replaces the dashboard's.
 func (m *agentDashboardModel) answerAccess(msg agentDashboardAccessMsg) {
-	if msg.tunnelID != m.access.tunnelID {
+	if msg.tunnelID != m.access.tunnelID || !m.access.applying {
 		m.err = msg.err // the screen was closed while the request ran
 		return
 	}
+	m.access.applying = false
 	m.access.err = msg.err
 	if msg.err == nil {
 		m.access.forgetSecret()
@@ -529,7 +536,10 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 
 	changed := !a.request(tunnel).Empty()
 	applyLabel := "Apply"
-	if !changed && a.applied {
+	switch {
+	case a.applying:
+		applyLabel = "Applying..."
+	case !changed && a.applied:
 		applyLabel = "Applied"
 	}
 	var content agentDashboardView
@@ -542,7 +552,7 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 		)
 	} else {
 		content.addButtons(th, inner,
-			agentDashboardButton{label: applyLabel, action: agentDashboardActionApplyAccess, disabled: !changed},
+			agentDashboardButton{label: applyLabel, action: agentDashboardActionApplyAccess, disabled: !changed || a.applying},
 			agentDashboardButton{label: "Cancel", action: agentDashboardActionCancelAccess},
 		)
 	}

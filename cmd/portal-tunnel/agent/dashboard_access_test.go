@@ -444,7 +444,7 @@ func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) 
 	added.Tunnels[accessWeb].AuthAllowedWallets = append(added.Tunnels[accessWeb].AuthAllowedWallets, "carol@example.com")
 
 	model := accessScreen(t, theme, testAccessStatus(), accessWeb, append(downs(4), keyRunes("carol@example.com"), keyEnter)...)
-	model = send(model, agentDashboardAccessMsg{tunnelID: "web"})
+	model = send(press1(model, keyF2), agentDashboardAccessMsg{tunnelID: "web"})
 	if view := model.View(); !strings.Contains(view, "[ Apply ]") || strings.Contains(view, "Applied") {
 		t.Fatalf("before the poll brings the new settings the draft still differs from what is stored:\n%s", view)
 	}
@@ -457,7 +457,7 @@ func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) 
 	// What was just applied is the new base: a further edit survives the polls that follow.
 	model = press1(model, keyRunes("erin@example.com"), keyEnter)
 	view = send(model, agentDashboardStatusMsg{status: added}).View()
-	if !strings.Contains(view, "erin@example.com") || strings.Contains(view, "changed elsewhere") {
+	if !strings.Contains(view, "erin@example.com") || strings.Contains(view, "changed meanwhile") {
 		t.Fatalf("an edit made after an apply must survive the next poll:\n%s", view)
 	}
 }
@@ -482,7 +482,7 @@ func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 			model := accessScreen(t, theme, testAccessStatus(), accessWeb, tt.keys...)
 			model = send(model, agentDashboardStatusMsg{status: elsewhere})
 			view := model.View()
-			for _, want := range []string{"ACCESS: web", "changed elsewhere", "dave@example.com", "portal-web-2"} {
+			for _, want := range []string{"ACCESS: web", "changed meanwhile", "dave@example.com", "portal-web-2"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("the screen should show the stored settings again, lacking %q:\n%s", want, view)
 				}
@@ -501,8 +501,58 @@ func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 	t.Run("a poll that changes nothing", func(t *testing.T) {
 		model := accessScreen(t, theme, testAccessStatus(), accessWeb, append(downs(4), keyRunes("carol@example.com"), keyEnter)...)
 		view := send(model, agentDashboardStatusMsg{status: testAccessStatus()}).View()
-		if !strings.Contains(view, "carol@example.com") || strings.Contains(view, "changed elsewhere") {
+		if !strings.Contains(view, "carol@example.com") || strings.Contains(view, "changed meanwhile") {
 			t.Fatalf("an edited draft must survive a poll that brings nothing new:\n%s", view)
+		}
+	})
+}
+
+// One apply runs at a time, and its answer belongs to the screen that sent it.
+func TestDashboardAccessAppliesOneAtATime(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	typedEntry := append(downs(4), keyRunes("carol@example.com"), keyEnter)
+
+	t.Run("a second save waits for the answer", func(t *testing.T) {
+		model, cmd := press(accessScreen(t, theme, testAccessStatus(), accessWeb, typedEntry...), keyF2)
+		if cmd == nil {
+			t.Fatal("F2 should send the request")
+		}
+		if view := model.View(); !strings.Contains(view, "( Applying... )") {
+			t.Fatalf("a running apply should show on the disabled button:\n%s", view)
+		}
+		if _, again := press(model, keyF2); again != nil {
+			t.Fatal("F2 while an apply is running must not send another request")
+		}
+		refused := send(model, agentDashboardAccessMsg{tunnelID: "web", err: errors.New("invalid_request")})
+		if _, cmd := press(refused, keyF2); cmd == nil {
+			t.Fatal("after a refusal the draft can be applied again")
+		}
+	})
+
+	t.Run("the answer of a closed screen is not the new screen's", func(t *testing.T) {
+		model := press1(accessScreen(t, theme, testAccessStatus(), accessWeb, typedEntry...), keyF2, keyEsc)
+		if strings.Contains(model.View(), "ACCESS:") {
+			t.Fatal("esc should close the screen")
+		}
+		reopened := press1(model, keyF4, keyUp, keyRunes(fakeSecret), keyF3)
+		late := send(reopened, agentDashboardAccessMsg{tunnelID: "web"})
+		if view := late.View(); !strings.Contains(view, fakeSecret) || strings.Contains(view, "Applied") {
+			t.Fatalf("the late answer must leave the reopened screen as it is:\n%s", view)
+		}
+	})
+
+	t.Run("an edit made while it runs is dropped for the stored settings", func(t *testing.T) {
+		applied := testAccessStatus()
+		applied.Tunnels[accessWeb].AuthAllowedWallets = append(applied.Tunnels[accessWeb].AuthAllowedWallets, "carol@example.com")
+		model := press1(accessScreen(t, theme, testAccessStatus(), accessWeb, typedEntry...), keyF2)
+		model = press1(model, keyRunes("erin@example.com"), keyEnter)
+		model = send(model, agentDashboardStatusMsg{status: applied})
+		if view := model.View(); !strings.Contains(view, "changed meanwhile") || strings.Contains(view, "erin@example.com") || !strings.Contains(view, "carol@example.com") {
+			t.Fatalf("the screen should show what the agent stored and say it changed:\n%s", view)
+		}
+		model = send(model, agentDashboardAccessMsg{tunnelID: "web"})
+		if view := model.View(); !strings.Contains(view, "( Applied )") {
+			t.Fatalf("the answer to the apply should still be taken:\n%s", view)
 		}
 	})
 }
@@ -510,7 +560,7 @@ func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 func TestDashboardAccessShowsTheServerErrorInline(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	const refusal = "invalid_request: oidc client id is required"
-	model := accessScreen(t, theme, testAccessStatus(), accessWeb, keyUp, keyRunes(fakeSecret))
+	model := accessScreen(t, theme, testAccessStatus(), accessWeb, keyUp, keyRunes(fakeSecret), keyF2)
 	model = send(model, agentDashboardAccessMsg{tunnelID: "web", err: errors.New(refusal)})
 
 	view := model.View()
@@ -553,7 +603,7 @@ func TestDashboardAccessDropsTheSecretWhenItsJobIsDone(t *testing.T) {
 	}
 
 	t.Run("after a successful apply", func(t *testing.T) {
-		model := send(accessScreen(t, theme, status, accessWeb, typeIt...), agentDashboardAccessMsg{tunnelID: "web"})
+		model := send(press1(accessScreen(t, theme, status, accessWeb, typeIt...), keyF2), agentDashboardAccessMsg{tunnelID: "web"})
 		if view := model.View(); strings.Contains(view, fakeSecret) || strings.Contains(view, "Secret (shown)") || !strings.Contains(view, "set; type to replace") {
 			t.Fatalf("the secret and the reveal should be gone after a successful apply:\n%s", view)
 		}
@@ -821,7 +871,7 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 			}
 			step.check(t, savedTunnel(t, path, tunnel.ID))
 
-			model = send(model, agentDashboardAccessMsg{tunnelID: tunnel.ID})
+			model = send(press1(model, keyF2), agentDashboardAccessMsg{tunnelID: tunnel.ID})
 			if req := model.access.request(tunnelStatus(t, m, tunnel.ID)); !req.Empty() {
 				body, _ := json.Marshal(req)
 				t.Fatalf("what the agent stored differs from the draft in %s", body)

@@ -97,7 +97,7 @@ func testDashboardScenarios() []dashboardScenario {
 		{"access", openAccess(accessWeb)},
 		{"access with a long secret revealed", openAccess(accessWeb, keyUp, keyRunes(strings.Repeat("secret ", 20)), keyF3)},
 		{"access with a long secret hidden", openAccess(accessWeb, keyUp, keyRunes(strings.Repeat("secret ", 20)))},
-		{"access with an error", openAccess(accessWeb, keyUp, keyRunes("x"), agentDashboardAccessMsg{tunnelID: "web", err: errors.New(strings.Repeat("invalid_request: something is wrong with the sign-in settings. ", 6))})},
+		{"access with an error", openAccess(accessWeb, keyUp, keyRunes("x"), keyF2, agentDashboardAccessMsg{tunnelID: "web", err: errors.New(strings.Repeat("invalid_request: something is wrong with the sign-in settings. ", 6))})},
 		{"access of a wallet tunnel", openAccess(accessWallet)},
 		{"access of an open tunnel", openAccess(accessOpen)},
 		{"access with a long allow list", []tea.Msg{agentDashboardStatusMsg{status: longAllowList}, keyF4, keyDown, keyDown, keyDown, keyDown, keyDown}},
