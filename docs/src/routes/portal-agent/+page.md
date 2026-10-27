@@ -379,7 +379,10 @@ typed secret stays so that you can correct the rest, and nothing is changed.
 The typed secret is dropped when the screen closes, when the mode changes, and
 after a successful apply. While nothing differs from what is stored the Apply
 button is disabled, and it reads Applied only after an apply of this screen's
-own.
+own. If the tunnel's sign-in settings are changed elsewhere while the screen is
+open (`config.toml`, the CLI, another dashboard), the screen shows the stored
+settings again, drops what you had edited, and says so, so that applying cannot
+put the old values back.
 
 ### Theme and terminal support
 

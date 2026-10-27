@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -179,6 +180,10 @@ type agentDashboardAccess struct {
 	clearSecret bool // the stored client secret is to be removed; never set while a secret is typed
 	applied     bool // an apply of this draft went through
 	err         error
+	// base is the stored settings the draft was loaded from or last found in
+	// step with. A status that differs from both base and the draft means
+	// someone else changed the tunnel under the draft (see syncAccess).
+	base AgentTunnelStatus
 
 	add, issuer, clientID, secret textinput.Model
 }
@@ -236,10 +241,46 @@ func (m *agentDashboardModel) closeAccess() {
 	a.err = nil
 }
 
+// syncAccess keeps the open Access screen from applying a stale draft. The
+// PATCH names the fields that differ from the stored settings, so a draft that
+// no longer matches what is stored (the tunnel was changed through config.toml,
+// the CLI or another dashboard) would put its old values back. A status that
+// differs from both the draft's base and the draft is such a change: the screen
+// shows the stored settings again and says so, and what was edited is dropped.
+// A status equal to the draft is the answer to this screen's own apply.
+func (m *agentDashboardModel) syncAccess() {
+	tunnel, ok := m.accessTunnel()
+	if !ok {
+		return
+	}
+	a := &m.access
+	switch {
+	case a.request(tunnel).Empty():
+		a.base = tunnel
+	case !sameAccessSettings(tunnel, a.base):
+		a.forgetSecret()
+		a.load(tunnel)
+		a.moveFocus(a.focusIndex())
+		a.err = errors.New("changed elsewhere; showing what is stored")
+	}
+}
+
+// sameAccessSettings reports whether two statuses of a tunnel agree on
+// everything the Access screen edits or shows as stored.
+func sameAccessSettings(a, b AgentTunnelStatus) bool {
+	return a.Auth == b.Auth &&
+		slices.Equal(a.AuthAllowedWallets, b.AuthAllowedWallets) &&
+		a.AuthIdentityHeaders == b.AuthIdentityHeaders &&
+		a.AuthOIDCIssuer == b.AuthOIDCIssuer &&
+		a.AuthOIDCClientID == b.AuthOIDCClientID &&
+		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet
+}
+
 // load makes the draft equal to what the tunnel has stored. The secret input
 // is not part of that: it is empty whenever the screen is closed, and every
 // change of mode empties it.
 func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
+	a.base = tunnel
 	a.applied = false
 	a.provider = tunnel.Auth
 	a.headers = tunnel.AuthIdentityHeaders

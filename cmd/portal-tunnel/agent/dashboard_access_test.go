@@ -453,6 +453,58 @@ func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) 
 	if !strings.Contains(view, "( Applied )") || !strings.Contains(view, "carol@example.com") || strings.Contains(view, "Error:") {
 		t.Fatalf("once the poll brings the new settings the screen says Applied and keeps them:\n%s", view)
 	}
+
+	// What was just applied is the new base: a further edit survives the polls that follow.
+	model = press1(model, keyRunes("erin@example.com"), keyEnter)
+	view = send(model, agentDashboardStatusMsg{status: added}).View()
+	if !strings.Contains(view, "erin@example.com") || strings.Contains(view, "changed elsewhere") {
+		t.Fatalf("an edit made after an apply must survive the next poll:\n%s", view)
+	}
+}
+
+// The PATCH names what differs from the stored settings, so a draft that went stale would put
+// its old values back over a change made through config.toml, the CLI or another dashboard.
+func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	elsewhere := testAccessStatus()
+	elsewhere.Tunnels[accessWeb].AuthAllowedWallets = []string{"alice@example.com", "dave@example.com"}
+	elsewhere.Tunnels[accessWeb].AuthOIDCClientID = "portal-web-2"
+
+	for _, tt := range []struct {
+		name string
+		keys []tea.Msg
+	}{
+		{"an untouched draft", nil},
+		{"an edited draft", append(downs(4), keyRunes("carol@example.com"), keyEnter)},
+		{"a typed secret", []tea.Msg{keyUp, keyRunes(fakeSecret), keyF3}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			model := accessScreen(t, theme, testAccessStatus(), accessWeb, tt.keys...)
+			model = send(model, agentDashboardStatusMsg{status: elsewhere})
+			view := model.View()
+			for _, want := range []string{"ACCESS: web", "changed elsewhere", "dave@example.com", "portal-web-2"} {
+				if !strings.Contains(view, want) {
+					t.Fatalf("the screen should show the stored settings again, lacking %q:\n%s", want, view)
+				}
+			}
+			for _, not := range []string{"carol@example.com", fakeSecret} {
+				if strings.Contains(view, not) {
+					t.Fatalf("what was edited before the change must be dropped, found %q:\n%s", not, view)
+				}
+			}
+			if _, cmd := press(model, keyF2); cmd != nil {
+				t.Fatal("applying right after the refresh must not send the old values back")
+			}
+		})
+	}
+
+	t.Run("a poll that changes nothing", func(t *testing.T) {
+		model := accessScreen(t, theme, testAccessStatus(), accessWeb, append(downs(4), keyRunes("carol@example.com"), keyEnter)...)
+		view := send(model, agentDashboardStatusMsg{status: testAccessStatus()}).View()
+		if !strings.Contains(view, "carol@example.com") || strings.Contains(view, "changed elsewhere") {
+			t.Fatalf("an edited draft must survive a poll that brings nothing new:\n%s", view)
+		}
+	})
 }
 
 func TestDashboardAccessShowsTheServerErrorInline(t *testing.T) {

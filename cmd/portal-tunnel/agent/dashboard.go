@@ -168,6 +168,7 @@ func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.configPath = msg.status.ConfigPath
 			}
 			m.clampSelection()
+			m.syncAccess()
 			m.ensureSelectedSettingsDraft()
 			m.syncRelayAttempts()
 			m.clampSidebarScroll()
