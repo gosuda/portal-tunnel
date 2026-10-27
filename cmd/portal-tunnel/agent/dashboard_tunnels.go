@@ -41,11 +41,14 @@ func (m agentDashboardModel) deleteTunnel(tunnelID string) (tea.Model, tea.Cmd) 
 	})
 }
 
+// agentDashboardStopQuestion asks before closing a dashboard that stops the agent.
+const agentDashboardStopQuestion = "Stop the agent? Every tunnel goes down."
+
 func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboardView {
 	th := &m.theme
 	var pane agentDashboardView
 	if m.confirming() {
-		question := "Stop the agent? Every tunnel goes down."
+		question := agentDashboardStopQuestion
 		if m.confirmDelete != "" {
 			name := m.confirmDelete
 			for _, tunnel := range m.status.Tunnels {

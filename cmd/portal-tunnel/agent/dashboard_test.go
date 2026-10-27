@@ -76,9 +76,31 @@ func testDashboardScenarios() []dashboardScenario {
 	longDescription := testDashboardStatus()
 	longDescription.Tunnels[0].Metadata.Description = strings.Repeat("a long description ", 10)
 
+	signIn := agentDashboardStatusMsg{status: testAccessStatus()}
+	longAllowList := testAccessStatus()
+	for i := range 12 {
+		longAllowList.Tunnels[accessWeb].AuthAllowedWallets = append(longAllowList.Tunnels[accessWeb].AuthAllowedWallets, fmt.Sprintf("a-rather-long-address-%d@a-long-company-name.example.com", i))
+	}
+	openAccess := func(down int, keys ...tea.Msg) []tea.Msg {
+		steps := []tea.Msg{signIn}
+		for range down {
+			steps = append(steps, keyDown)
+		}
+		return append(append(steps, keyF4), keys...)
+	}
+
 	return []dashboardScenario{
 		{"tunnels", []tea.Msg{load}},
 		{"settings", []tea.Msg{load, keyRight}},
+		{"settings with OIDC sign-in", []tea.Msg{signIn, keyRight}},
+		{"settings with wallet sign-in", []tea.Msg{signIn, keyDown, keyRight}},
+		{"access", openAccess(accessWeb)},
+		{"access with a long secret revealed", openAccess(accessWeb, keyUp, keyRunes(strings.Repeat("secret ", 20)), keyF3)},
+		{"access with a long secret hidden", openAccess(accessWeb, keyUp, keyRunes(strings.Repeat("secret ", 20)))},
+		{"access with an error", openAccess(accessWeb, keyUp, keyRunes("x"), keyF2, agentDashboardAccessMsg{tunnelID: "web", err: errors.New(strings.Repeat("invalid_request: something is wrong with the sign-in settings. ", 6))})},
+		{"access of a wallet tunnel", openAccess(accessWallet)},
+		{"access of an open tunnel", openAccess(accessOpen)},
+		{"access with a long allow list", []tea.Msg{agentDashboardStatusMsg{status: longAllowList}, keyF4, keyDown, keyDown, keyDown, keyDown, keyDown}},
 		{"settings with a long value", []tea.Msg{load, keyRight, keyDown, long}},
 		{"settings resized from a wider terminal", []tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, keyRight}},
 		{"settings resized with the cursor at the start", []tea.Msg{tea.WindowSizeMsg{Width: 200, Height: 50}, agentDashboardStatusMsg{status: longDescription}, keyRight, keyDown, tea.KeyMsg{Type: tea.KeyHome}}},

@@ -28,6 +28,10 @@ const (
 	agentDashboardActionOpenTunnelURL
 	agentDashboardActionAnswerYes
 	agentDashboardActionAnswerNo
+	agentDashboardActionOpenAccess
+	agentDashboardActionApplyAccess
+	agentDashboardActionCancelAccess
+	agentDashboardActionFocusAccessField
 )
 
 type agentDashboardPane int
@@ -86,6 +90,8 @@ type agentDashboardModel struct {
 	metadataOwner        textinput.Model
 	metadataThumbnail    textinput.Model
 	metadataHide         textinput.Model
+
+	access agentDashboardAccess
 }
 
 type agentDashboardStatusMsg struct {
@@ -133,6 +139,7 @@ func newAgentDashboardModel(configPath, stateDir string, theme agentDashboardThe
 		metadataOwner:       theme.newInput("owner"),
 		metadataThumbnail:   theme.newInput("https://..."),
 		metadataHide:        theme.newInput("true or false"),
+		access:              newAgentDashboardAccess(theme),
 	}
 	model.resetAddTunnelForm()
 	model.resizeInputs(0)
@@ -161,6 +168,7 @@ func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.configPath = msg.status.ConfigPath
 			}
 			m.clampSelection()
+			m.syncAccess()
 			m.ensureSelectedSettingsDraft()
 			m.syncRelayAttempts()
 			m.clampSidebarScroll()
@@ -168,6 +176,9 @@ func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case agentDashboardActionMsg:
 		m.err = msg.err
+		return m, agentDashboardFetchStatus(m.stateDir)
+	case agentDashboardAccessMsg:
+		m.answerAccess(msg)
 		return m, agentDashboardFetchStatus(m.stateDir)
 	case tea.KeyMsg:
 		return m.updateKeys(msg)
@@ -223,6 +234,10 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 				m.focusSettingsField(region.field)
 				return m, nil
 			}
+			if region.action == agentDashboardActionFocusAccessField {
+				m.access.moveFocus(region.field)
+				return m, nil
+			}
 			if region.action == agentDashboardActionFocusAddTunnelField {
 				m.setActivePane(agentDashboardPaneTunnels)
 				if !m.addingTunnel {
@@ -260,6 +275,12 @@ func (m agentDashboardModel) runAction(action agentDashboardAction, tunnelID, re
 		return m.disconnectSelectedRelay()
 	case agentDashboardActionApplySettings:
 		return m.applySettingsEdit()
+	case agentDashboardActionOpenAccess:
+		return m.openAccess()
+	case agentDashboardActionApplyAccess:
+		return m.applyAccess()
+	case agentDashboardActionCancelAccess:
+		m.closeAccess()
 	case agentDashboardActionOpenTunnelURL:
 		return m.openRelayTunnelURL(tunnelID, relayURL)
 	}
@@ -376,14 +397,21 @@ func (m *agentDashboardModel) setActivePane(pane agentDashboardPane) {
 	}
 }
 
+// scrollActivePane moves the relay selection; the Access screen hides the
+// Relays pane, so the wheel does nothing there.
 func (m agentDashboardModel) scrollActivePane(delta int) (tea.Model, tea.Cmd) {
-	m.selectRelayOffset(delta)
+	if !m.accessing() {
+		m.selectRelayOffset(delta)
+	}
 	return m, nil
 }
 
 func (m *agentDashboardModel) clampSelection() {
 	if !slices.ContainsFunc(m.status.Tunnels, func(tunnel AgentTunnelStatus) bool { return tunnel.ID == m.confirmDelete }) {
 		m.confirmDelete = ""
+	}
+	if _, ok := m.accessTunnel(); m.accessing() && !ok {
+		m.closeAccess()
 	}
 	if len(m.status.Tunnels) == 0 {
 		m.selectedTunnelID = ""
@@ -477,6 +505,10 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 		&m.metadataOwner,
 		&m.metadataThumbnail,
 		&m.metadataHide,
+		&m.access.add,
+		&m.access.issuer,
+		&m.access.clientID,
+		&m.access.secret,
 	} {
 		input.Width = settingsWidth
 		// The input keeps its visible window while the cursor stays inside it, so move the

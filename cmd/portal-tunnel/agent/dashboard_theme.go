@@ -65,6 +65,7 @@ type agentDashboardGlyphs struct {
 	buttonOpen, buttonClose                   string
 	buttonOffOpen, buttonOffClose             string
 	promptFocused, promptBlurred              string
+	mask                                      string // stands for each typed character of a hidden secret
 	activeOpen, activeClose                   string // around the title of the active frame
 	arrowUp, arrowDown, arrowLeft, arrowRight string // key names in the key bar
 }
@@ -109,6 +110,7 @@ func agentDashboardGlyphSet(unicode bool) agentDashboardGlyphs {
 		selected: ">", unselected: " ",
 		buttonOpen: "[ ", buttonClose: " ]", buttonOffOpen: "( ", buttonOffClose: " )",
 		promptFocused: "> ", promptBlurred: "  ",
+		mask:       "*",
 		activeOpen: "[ ", activeClose: " ]",
 		arrowUp: "^", arrowDown: "v", arrowLeft: "<", arrowRight: ">",
 	}
@@ -116,6 +118,7 @@ func agentDashboardGlyphSet(unicode bool) agentDashboardGlyphs {
 		glyphs.topLeft, glyphs.topRight, glyphs.bottomLeft, glyphs.bottomRight = "╔", "╗", "╚", "╝"
 		glyphs.horizontal, glyphs.vertical, glyphs.divider = "═", "║", "─"
 		glyphs.arrowUp, glyphs.arrowDown, glyphs.arrowLeft, glyphs.arrowRight = "↑", "↓", "←", "→"
+		glyphs.mask = "•"
 	}
 	return glyphs
 }
@@ -130,5 +133,14 @@ func (th *agentDashboardTheme) newInput(placeholder string) textinput.Model {
 	input.PlaceholderStyle = th.muted
 	input.Cursor.Style = th.text
 	input.Cursor.TextStyle = th.bright
+	return input
+}
+
+// newSecretInput returns a text input that shows one mask glyph for each typed
+// character until its echo mode is switched to textinput.EchoNormal.
+func (th *agentDashboardTheme) newSecretInput() textinput.Model {
+	input := th.newInput("")
+	input.EchoMode = textinput.EchoPassword
+	input.EchoCharacter = []rune(th.glyph.mask)[0]
 	return input
 }

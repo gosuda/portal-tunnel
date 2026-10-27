@@ -276,7 +276,7 @@ Dashboard panes:
 | Pane | Purpose |
 |------|---------|
 | Tunnels | Add, select, and delete tunnels |
-| Settings | Edit max active relays and public metadata |
+| Settings | Edit max active relays and public metadata, and see how the tunnel is protected |
 | Relays | Connect or disconnect relays for the selected tunnel |
 
 The active pane has its title in brackets and gets the most rows; the other
@@ -300,6 +300,7 @@ every function key has a letter or key alias:
 | `tab` / `shift+tab`, `left` / `right` | Switch panes |
 | `up` / `down` | Move within the active pane or between form fields |
 | `enter` | Apply the Settings, create the tunnel in the form, or connect the selected relay in the Relays pane |
+| `F4` / `s` | Open the Access screen of the selected tunnel (only `F4` in the Settings pane, where `s` is typed) |
 | `F8` / `delete` | In the Tunnels pane, delete the selected tunnel after you confirm with `y`; `n`, `esc`, `q` or `F10` keeps it |
 | `c` | Connect the selected relay in the Relays pane |
 | `d` / `delete` | Disconnect the selected relay in the Relays pane |
@@ -335,6 +336,57 @@ and `discovery` in `config.toml`, then restart
 the agent or tunnel. Other advanced options such as UDP, TCP, or custom
 identity JSON are also configured in
 `config.toml`.
+
+### Access screen
+
+The Settings pane shows how the selected tunnel's public address is protected:
+open to anyone, `credential`, wallet (`siwe`), or `oidc`, with the allow list,
+the identity headers and, for OIDC, the issuer, the client ID, whether a client
+secret is stored, and the result of the provider check made when the tunnel
+started. An empty allow list means any valid credential or wallet for
+`credential` and `siwe`, so removing the last entry opens the tunnel to all of
+them; `oidc` needs at least one entry.
+
+`F4`, `s`, or the Access button in the Settings pane opens the Access screen in
+place of the panes to change these settings. The Mode row picks the provider;
+the other rows are the allow list, an input for the next entry (a wallet address
+for `siwe`, a subject for `credential`, or an email, `@example.com` for a domain,
+or `sub:<id>` for `oidc`), the identity headers, and the OIDC issuer, client ID,
+and client secret.
+
+| Key | Action |
+|-----|--------|
+| `left` / `right` | Change the mode, or turn the identity headers on or off |
+| `up` / `down`, `tab` / `shift+tab` | Move between rows |
+| `enter` | In the entry input, add the entry to the allow list; on the other rows, apply |
+| `F2` | Apply from any row |
+| `delete` / `backspace` | Remove the selected allow list entry |
+| `F3` / `ctrl+r` | Show or hide the client secret you typed |
+| `F6` / `ctrl+x` | Mark the stored client secret for removal, or take the mark back (typing a secret takes the mark back, and marking drops what was typed) |
+| `esc` | Cancel and close the screen |
+
+An entry is checked and normalized as you add it. The client secret is typed
+hidden, one `•` (`*` in the ASCII fallback) per character, and the screen only
+ever says whether a secret is stored. An empty secret input leaves the stored
+secret as it is. Applying sends one `PATCH /agent/tunnels/{id}` that names only
+what changed. The agent restarts the tunnel because the sign-in gate is built
+when the tunnel starts, and the tunnel comes back without the relays connected
+to it from the Relays pane, which are not saved in `config.toml`. The screen
+stays open and says Applied once the next status shows the new settings,
+including a new provider check. If the agent refuses the change, for example an
+OIDC tunnel without an allow list entry, its message shows on the screen, the
+typed secret stays so that you can correct the rest, and nothing is changed.
+The typed secret is dropped when the screen closes, when the mode changes, and
+after a successful apply. While nothing differs from what is stored the Apply
+button is disabled, and it reads Applied only after an apply of this screen's
+own. One apply runs at a time: the button reads Applying... until the agent
+answers, and the agent restarts the tunnel before it does. If the agent does not
+answer in time the screen says so; the change may still be applied, and the next
+status shows it. If the tunnel's sign-in settings change while the
+screen is open (`config.toml`, the CLI, another dashboard, or your own apply
+while you kept editing), the screen shows the stored settings again, drops what
+you had edited, and says so, so that applying cannot put the old values back;
+open the screen again to continue from what is stored.
 
 ### Theme and terminal support
 
