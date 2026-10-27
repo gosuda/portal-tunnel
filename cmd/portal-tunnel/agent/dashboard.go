@@ -155,7 +155,9 @@ func (m agentDashboardModel) Init() tea.Cmd {
 }
 
 // shownErr is the error the dashboard reports: a failed poll says more than an
-// earlier action's refusal, as the agent is out of reach.
+// earlier action's refusal, as the agent is out of reach. esc dismisses err but
+// not pollErr: while the agent is unreachable the banner stays, as it says why
+// nothing works.
 func (m agentDashboardModel) shownErr() error {
 	if m.pollErr != nil {
 		return m.pollErr

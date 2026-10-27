@@ -106,8 +106,9 @@ type ExposedHTTPRoute struct {
 // boundary: client-spoofed headers are removed before application auth injects
 // verified identity headers and before the reverse proxy regenerates
 // X-Forwarded-* values.  A listed name is removed in every spelling a gateway
-// may read as the same header: any case, and underscores for hyphens.  Host is rejected because Go stores it in
-// Request.Host, not Header, so Header.Del("Host") is a silent no-op.
+// may read as the same header: any case, and underscores for hyphens.  Host is
+// rejected because Go stores it in Request.Host, not Header, so
+// Header.Del("Host") is a silent no-op.
 func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, error) {
 	headers := make([]string, 0, len(names))
 	seen := make(map[string]struct{}, len(names))
