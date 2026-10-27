@@ -105,8 +105,10 @@ type ExposedHTTPRoute struct {
 // client request headers before any Portal processing runs.  This is the trust
 // boundary: client-spoofed headers are removed before application auth injects
 // verified identity headers and before the reverse proxy regenerates
-// X-Forwarded-* values.  Host is rejected because Go stores it in
-// Request.Host, not Header, so Header.Del("Host") is a silent no-op.
+// X-Forwarded-* values.  A listed name is removed in every spelling a gateway
+// may read as the same header: any case, and underscores for hyphens.  Host is
+// rejected because Go stores it in Request.Host, not Header, so
+// Header.Del("Host") is a silent no-op.
 func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, error) {
 	headers := make([]string, 0, len(names))
 	seen := make(map[string]struct{}, len(names))
@@ -132,9 +134,7 @@ func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, er
 		headers = append(headers, canonical)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, h := range headers {
-			r.Header.Del(h)
-		}
+		utils.DelHeaderSpellings(r.Header, headers...)
 		next.ServeHTTP(w, r)
 	}), nil
 }
@@ -632,11 +632,9 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Always remove Portal-owned credential and identity headers unless the
 	// local application auth gate explicitly verified and attached them for
 	// this request.
-	r.Header.Del(types.HeaderAccessCredential)
+	utils.DelHeaderSpellings(r.Header, types.HeaderAccessCredential)
 	if !hasVerifiedIdentityHeaders(r) {
-		r.Header.Del(types.HeaderPortalUser)
-		r.Header.Del(types.HeaderPortalAuth)
-		r.Header.Del(types.HeaderPortalProof)
+		utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
 	}
 
 	path := "/"

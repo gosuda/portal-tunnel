@@ -465,6 +465,41 @@ func TestDashboardEscClearsTheError(t *testing.T) {
 	}
 }
 
+// Every action is followed by a status poll, so an error the action left must outlive
+// that poll, and a poll that failed must not outlive the next one that works.
+func TestDashboardKeepsAnActionErrorAcrossPolls(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	healthy := agentDashboardStatusMsg{status: testDashboardStatus()}
+	refused := errors.New("tunnel name is required")
+
+	t.Run("the poll after a refused action", func(t *testing.T) {
+		model := newTestDashboard(t, theme, 100, 40, healthy, agentDashboardActionMsg{err: refused}, healthy, healthy)
+		if !strings.Contains(model.View(), "Error: "+refused.Error()) {
+			t.Fatalf("the refusal must stay on screen after the polls that follow it:\n%s", model.View())
+		}
+		if cleared, _ := press(model, keyEsc); strings.Contains(cleared.View(), "Error:") {
+			t.Fatal("esc should still dismiss it")
+		}
+		if worked := send(model, agentDashboardActionMsg{}); strings.Contains(worked.View(), "Error:") {
+			t.Fatal("an action that works should replace the refusal of the one before")
+		}
+	})
+
+	t.Run("a failed poll", func(t *testing.T) {
+		unreachable := agentDashboardStatusMsg{err: errors.New("agent not reachable")}
+		model := newTestDashboard(t, theme, 100, 40, healthy, agentDashboardActionMsg{err: refused}, unreachable)
+		if view := model.View(); !strings.Contains(view, "Error: agent not reachable") || strings.Contains(view, refused.Error()) {
+			t.Fatalf("a failed poll says more than an older refusal:\n%s", view)
+		}
+		if view := send(model, healthy).View(); !strings.Contains(view, "Error: "+refused.Error()) || strings.Contains(view, "not reachable") {
+			t.Fatalf("once the poll works again the refusal is what is left:\n%s", view)
+		}
+		if view := send(newTestDashboard(t, theme, 100, 40, healthy, unreachable), healthy).View(); strings.Contains(view, "Error:") {
+			t.Fatalf("a poll that works must clear the failure of the one before:\n%s", view)
+		}
+	})
+}
+
 func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()})

@@ -462,10 +462,8 @@ func CheckApplicationAuthProvider(ctx context.Context, cfg ApplicationAuthConfig
 
 func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	credential := strings.TrimSpace(r.Header.Get(types.HeaderAccessCredential))
-	r.Header.Del(types.HeaderAccessCredential)
-	r.Header.Del(types.HeaderPortalUser)
-	r.Header.Del(types.HeaderPortalAuth)
-	r.Header.Del(types.HeaderPortalProof)
+	utils.DelHeaderSpellings(r.Header, types.HeaderAccessCredential)
+	utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
 
 	switch r.URL.Path {
 	case applicationAuthLoginPath:

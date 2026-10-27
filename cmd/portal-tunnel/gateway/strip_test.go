@@ -3,10 +3,25 @@ package gateway
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+// portalHeaderNames lists the headers of h that a gateway reading underscores as
+// hyphens takes for a Portal header, in whatever spelling they arrived.
+func portalHeaderNames(h http.Header) []string {
+	var names []string
+	for key := range h {
+		if strings.HasPrefix(strings.ToLower(strings.ReplaceAll(key, "_", "-")), "x-portal-") {
+			names = append(names, key)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
 
 func TestStripRequestHeaders(t *testing.T) {
 	t.Parallel()
@@ -42,6 +57,17 @@ func TestStripRequestHeaders(t *testing.T) {
 	if gotHeaders.Get("X-Custom") != "" {
 		t.Fatal("x-custom forwarded after case-insensitive strip")
 	}
+	// The underscore spelling goes too: CGI-style upstreams read it as the same header.
+	req3 := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req3.Header["X_custom"] = []string{"secret"}
+	req3.Header["X_keep"] = []string{"keep"}
+	handler.ServeHTTP(httptest.NewRecorder(), req3)
+	if _, ok := gotHeaders["X_custom"]; ok {
+		t.Fatal("X_custom forwarded after the strip of X-Custom")
+	}
+	if _, ok := gotHeaders["X_keep"]; !ok {
+		t.Fatal("X_keep removed, but nothing asked for X-Keep to be stripped")
+	}
 }
 
 func TestStripRequestHeadersRejectsHost(t *testing.T) {
@@ -67,7 +93,9 @@ func TestStripRequestHeadersRejectsInvalidNames(t *testing.T) {
 func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	t.Parallel()
 	var gotUser, gotAuth, gotProof, gotCredential string
+	var gotPortalNames []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPortalNames = portalHeaderNames(r.Header)
 		gotUser = r.Header.Get(types.HeaderPortalUser)
 		gotAuth = r.Header.Get(types.HeaderPortalAuth)
 		gotProof = r.Header.Get(types.HeaderPortalProof)
@@ -85,6 +113,10 @@ func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	req.Header.Set(types.HeaderPortalAuth, "spoofed-auth")
 	req.Header.Set(types.HeaderPortalProof, "spoofed-proof")
 	req.Header.Set(types.HeaderAccessCredential, "pcred_spoofed")
+	// The same headers spelled with underscores, which a CGI-style upstream reads as these.
+	for _, name := range []string{"X_Portal_User", "X_portal_auth", "x_portal_proof", "X_Portal_Access_Credential"} {
+		req.Header[name] = []string{"spoofed"}
+	}
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -92,5 +124,8 @@ func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	}
 	if gotUser != "" || gotAuth != "" || gotProof != "" || gotCredential != "" {
 		t.Fatalf("spoofed portal headers reached upstream: user=%q auth=%q proof=%q credential=%q", gotUser, gotAuth, gotProof, gotCredential)
+	}
+	if len(gotPortalNames) != 0 {
+		t.Fatalf("spoofed portal headers reached upstream under other spellings: %q", gotPortalNames)
 	}
 }

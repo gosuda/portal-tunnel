@@ -84,8 +84,8 @@ func (m agentDashboardModel) layout() agentDashboardView {
 	mainWidth, gutter, sidebarWidth := agentDashboardColumnWidths(width)
 
 	var status string
-	if m.err != nil && m.status.ControlAddr != "" {
-		status = m.theme.failed.Render(agentDashboardFit(fmt.Sprintf("%s Error: %v", m.theme.glyph.ledFailed, m.err), width))
+	if err := m.shownErr(); err != nil && m.status.ControlAddr != "" {
+		status = m.theme.failed.Render(agentDashboardFit(fmt.Sprintf("%s Error: %v", m.theme.glyph.ledFailed, err), width))
 	}
 	bodyHeight := 0
 	if m.height > 0 {
@@ -123,7 +123,7 @@ func (m agentDashboardModel) renderTitleBar(width int) string {
 // together fill height rows, or draws the Access screen in their place; height
 // 0 gives every pane its natural size.
 func (m agentDashboardModel) renderMain(width, height int) agentDashboardView {
-	if m.err != nil && m.status.ControlAddr == "" {
+	if m.shownErr() != nil && m.status.ControlAddr == "" {
 		return m.renderUnavailable(width, height)
 	}
 	if m.accessing() {
@@ -194,7 +194,7 @@ func (m agentDashboardModel) renderUnavailable(width, height int) agentDashboard
 	th := &m.theme
 	inner := width - agentDashboardFrameWidth
 	var content agentDashboardView
-	content.addStyled(inner, th.failed, fmt.Sprintf("%s Agent unavailable: %v", th.glyph.ledFailed, m.err))
+	content.addStyled(inner, th.failed, fmt.Sprintf("%s Agent unavailable: %v", th.glyph.ledFailed, m.shownErr()))
 	content.addLine("")
 	content.addStyled(inner, th.text, "Start managed service: portal agent run --config "+m.configPath)
 	content.addStyled(inner, th.text, "No service manager:   portal agent run --foreground --config "+m.configPath)

@@ -46,7 +46,13 @@ func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 	req.Header.Set(types.HeaderPortalUser, "forged-user")
 	req.Header.Set(types.HeaderPortalAuth, "forged-auth")
 	req.Header.Set(types.HeaderPortalProof, "forged-proof")
+	// A CGI-style upstream reads these as the headers above.
+	for _, name := range []string{"X_Portal_User", "X_portal_auth", "x_portal_proof"} {
+		req.Header[name] = []string{"forged"}
+	}
 	req.Header.Set("X-Keep", "kept")
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header["X_Forwarded_Proto"] = []string{"http"}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -57,9 +63,18 @@ func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 	if header.Get("X-Keep") != "kept" {
 		t.Fatalf("handler header X-Keep = %q; the request was altered beyond the Portal headers", header.Get("X-Keep"))
 	}
-	for _, name := range []string{types.HeaderPortalUser, types.HeaderPortalAuth, types.HeaderPortalProof} {
-		if values := header.Values(name); len(values) != 0 {
-			t.Errorf("handler received forged %s = %q", name, values)
+	for key, values := range header {
+		if strings.HasPrefix(strings.ToLower(strings.ReplaceAll(key, "_", "-")), "x-portal-") {
+			t.Errorf("handler received forged %s = %q", key, values)
+		}
+	}
+	// The tunnel ended TLS, so a client cannot say otherwise in any spelling.
+	if got := header.Values("X-Forwarded-Proto"); len(got) != 1 || got[0] != "https" {
+		t.Errorf("handler X-Forwarded-Proto = %q; want only https", got)
+	}
+	for key := range header {
+		if key != "X-Forwarded-Proto" && strings.EqualFold(strings.ReplaceAll(key, "_", "-"), "X-Forwarded-Proto") {
+			t.Errorf("handler received the client's %s", key)
 		}
 	}
 }
@@ -196,6 +211,43 @@ func TestHTTPRoutePreservesPublicHostForEveryUpstream(t *testing.T) {
 
 			if pr.Out.Host != "app.relay.example" {
 				t.Fatalf("outbound Host = %q, want app.relay.example", pr.Out.Host)
+			}
+		})
+	}
+}
+
+// Go removes the canonical X-Forwarded-* headers of the inbound request, and the
+// route sets its own; a client's underscore spelling of one must not reach an
+// upstream that reads it as the same header.
+func TestHTTPRouteRemovesOtherSpellingsOfTheForwardedHeaders(t *testing.T) {
+	t.Parallel()
+
+	spoofed := []string{"X_Forwarded_For", "x_forwarded_host", "X_Forwarded_Proto", "X_Forwarded_Prefix"}
+	for _, prefix := range []string{"/", "/app"} {
+		t.Run(prefix, func(t *testing.T) {
+			t.Parallel()
+
+			route, err := newHTTPRoute(HTTPRouteConfig{Prefix: prefix, Upstream: "http://127.0.0.1:3000"})
+			if err != nil {
+				t.Fatalf("newHTTPRoute() error = %v", err)
+			}
+			in := httptest.NewRequest(http.MethodGet, "http://app.relay.example"+prefix, nil)
+			for _, name := range append(spoofed, "X_keep") {
+				in.Header[name] = []string{"spoofed"}
+			}
+			pr := &httputil.ProxyRequest{In: in, Out: in.Clone(t.Context())}
+			route.rewriteProxyRequest(pr)
+
+			for _, name := range spoofed {
+				if _, ok := pr.Out.Header[name]; ok {
+					t.Errorf("%s reached the upstream", name)
+				}
+			}
+			if _, ok := pr.Out.Header["X_keep"]; !ok {
+				t.Error("X_keep was removed, but it is not a forwarded header")
+			}
+			if got := pr.Out.Header.Get("X-Forwarded-Prefix"); (got != "") != (prefix != "/") {
+				t.Errorf("X-Forwarded-Prefix = %q for the route %q", got, prefix)
 			}
 		})
 	}

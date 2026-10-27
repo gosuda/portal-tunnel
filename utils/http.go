@@ -5,10 +5,29 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 )
 
 type HTTPClientOption func(*http.Client)
+
+// DelHeaderSpellings removes the named headers from h in every spelling a
+// gateway may read as the same header: any letter case, and underscores in
+// place of hyphens. CGI-style upstreams (WSGI, PHP, nginx) turn X_Portal_User
+// and X-Portal-User into the same variable, so deleting only the canonical
+// spelling would let a client send the one the gateway did not remove.
+func DelHeaderSpellings(h http.Header, names ...string) {
+	for key := range h {
+		if slices.ContainsFunc(names, func(name string) bool { return sameHeaderName(key, name) }) {
+			delete(h, key)
+		}
+	}
+}
+
+func sameHeaderName(a, b string) bool {
+	return strings.EqualFold(strings.ReplaceAll(a, "_", "-"), strings.ReplaceAll(b, "_", "-"))
+}
 
 var (
 	// Each client clones this baseline before applying options.

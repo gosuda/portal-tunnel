@@ -388,7 +388,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--auth-oidc-client-secret` | `AUTH_OIDC_CLIENT_SECRET` | string | | Optional OIDC client secret for `--auth oidc` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
 | `--auth-identity-proof` | `AUTH_IDENTITY_PROOF` | string | | Secret sent as `X-Portal-Proof` with the identity headers; at least 16 visible ASCII characters; requires `--auth-identity-headers`; set it by environment variable, not on the command line, because process lists show arguments |
-| `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; `Host` and `X-Forwarded-Proto` cannot be stripped (always regenerated before this middleware runs); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth`/`Proof` are allowed; requires `--http-route`, `--target`, or `--auth` |
+| `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive, and the underscore spelling of a name (`X_Custom` for `X-Custom`) goes with it; applies to HTTP and WebSocket upgrades; `Host` and `X-Forwarded-Proto` cannot be stripped (always regenerated before this middleware runs); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth`/`Proof` are allowed; requires `--http-route`, `--target`, or `--auth` |
 | `--x402-pay-to` | | string | | Payment recipient address for this tunnel |
 | `--x402-testnet` | | bool | `false` | Use Sui testnet when `--x402-network` is omitted |
 | `--x402-network` | | string | | Optional Sui, Casper, or Nano CAIP-2 network |
