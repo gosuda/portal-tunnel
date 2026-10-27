@@ -1,5 +1,5 @@
 {
- "notes": "Rules the command builder (frontend/src/lib/tunnelCommand.ts) repeats from the Go gateway, because the browser cannot call Go. The vitest test in tunnelCommand.test.ts and cmd/portal-tunnel/gateway/frontend_rules_test.go run every row, so a rule changed on one side alone fails a test. Not covered: the EIP-55 checksum of a mixed-case wallet address (the browser has no Keccak; the tunnel checks it), http issuers on a loopback host (the builder does not offer them), and a host with the default port :443 (the builder drops it, as a browser does; add rows once NormalizeApplicationAuthHost drops it too).",
+ "notes": "Rules the command builder (frontend/src/lib/tunnelCommand.ts) repeats from the Go gateway, because the browser cannot call Go. The vitest test in tunnelCommand.test.ts and cmd/portal-tunnel/gateway/frontend_rules_test.go run every row, so a rule changed on one side alone fails a test. Not covered: the EIP-55 checksum of a mixed-case wallet address (the browser has no Keccak; the tunnel checks it), http issuers on a loopback host (the builder does not offer them), and a port written with leading zeros (:0443), which a browser never sends.",
  "allow": [
    {"method": "credential", "typed": "alice", "valid": true, "canonical": "alice"},
    {"method": "credential", "typed": "  alice  ", "valid": true, "canonical": "alice"},
@@ -73,8 +73,13 @@
    {"address": "app.example.", "host": "app.example"},
    {"address": "https://app.example", "host": "app.example"},
    {"address": "https://App.Example./", "host": "app.example"},
+   {"address": "https://app.example:443", "host": "app.example"},
+   {"address": "https://app.example:443/", "host": "app.example"},
+   {"address": "app.example:443", "host": "app.example"},
+   {"address": "App.Example.:443", "host": "app.example"},
    {"address": "https://app.example:8443", "host": "app.example:8443"},
    {"address": "app.example:8443", "host": "app.example:8443"},
+   {"address": "app.example:1443", "host": "app.example:1443"},
    {"address": "http://app.example", "host": ""},
    {"address": "https://user@app.example", "host": ""},
    {"address": "https://app.example/path", "host": ""},
