@@ -263,6 +263,10 @@ func TestSameApplicationHost(t *testing.T) {
 		{"app.example", "", false},
 		{"app.example", "app example", false},
 		{"app example", "app example", false},
+		{"https://app.example/", "app.example", false},
+		{"app.example", "https://app.example", false},
+		{"app.example/", "app.example", false},
+		{"https://app.example/", "https://app.example/", false},
 	} {
 		if got := sameApplicationHost(tt.a, tt.b); got != tt.want {
 			t.Errorf("sameApplicationHost(%q, %q) = %v; want %v", tt.a, tt.b, got, tt.want)

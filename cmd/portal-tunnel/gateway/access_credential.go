@@ -238,8 +238,13 @@ func NormalizeApplicationAuthHost(raw string) (string, error) {
 // sameApplicationHost reports whether two hosts name the same application: they
 // are equal once each is normalized, so letter case, a trailing dot and the
 // default port :443 do not tell applications apart. A host that does not
-// normalize names nothing.
+// normalize names nothing, and neither does a URL: NormalizeApplicationAuthHost
+// also reads https://host/, but a Host header or a stored host never has a slash
+// (net/http answers such a header with 400).
 func sameApplicationHost(a, b string) bool {
+	if strings.Contains(a, "/") || strings.Contains(b, "/") {
+		return false
+	}
 	normalizedA, errA := NormalizeApplicationAuthHost(a)
 	normalizedB, errB := NormalizeApplicationAuthHost(b)
 	return errA == nil && errB == nil && normalizedA == normalizedB
