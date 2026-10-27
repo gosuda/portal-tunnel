@@ -1094,7 +1094,7 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, 
 		return "", "", false
 	}
 	var claims applicationAuthClaims
-	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !strings.EqualFold(claims.Host, strings.TrimSpace(r.Host)) || time.Now().UTC().Unix() >= claims.ExpiresAt {
+	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !sameApplicationHost(claims.Host, r.Host) || time.Now().UTC().Unix() >= claims.ExpiresAt {
 		return "", "", false
 	}
 	provider := claims.Provider

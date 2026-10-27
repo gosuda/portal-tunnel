@@ -243,6 +243,86 @@ func TestApplicationAuthCredential(t *testing.T) {
 	}
 }
 
+func TestSameApplicationHost(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		a, b string
+		want bool
+	}{
+		{"app.example", "app.example", true},
+		{"app.example", "App.Example", true},
+		{"app.example", "app.example.", true},
+		{"app.example:443", "app.example", true},
+		{"App.Example.:443", "app.example", true},
+		{"app.example:8443", "app.example:8443", true},
+		{"app.example:8443", "app.example", false},
+		{"app.example:1443", "app.example", false},
+		{"app.example", "other.example", false},
+		{"", "", false},
+		{"app.example", "", false},
+		{"app.example", "app example", false},
+		{"app example", "app example", false},
+	} {
+		if got := sameApplicationHost(tt.a, tt.b); got != tt.want {
+			t.Errorf("sameApplicationHost(%q, %q) = %v; want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+// A session is for an application, not for the spelling of its host that the
+// client happened to use: a Go client that writes :443 in its URL and a browser
+// that leaves it out reach the same application with the same session.
+func TestApplicationSessionFollowsTheHostNotItsSpelling(t *testing.T) {
+	t.Parallel()
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeem := func(host string) *http.Cookie {
+		t.Helper()
+		credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
+		req := httptest.NewRequest(http.MethodPost, "https://"+host+applicationAuthRedeemPath, bytes.NewReader(body))
+		req.Header.Set("Origin", "https://"+host)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		cookies := rec.Result().Cookies()
+		if rec.Code != http.StatusOK || len(cookies) != 1 {
+			t.Fatalf("redeem at %q: status = %d, cookies = %v", host, rec.Code, cookies)
+		}
+		return cookies[0]
+	}
+	status := func(cookie *http.Cookie, host string) int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+host+"/private", nil)
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	for _, issuedAt := range []string{"app.example", "app.example:443"} {
+		cookie := redeem(issuedAt)
+		for _, usedAt := range []string{"app.example", "app.example:443", "App.Example", "app.example."} {
+			if got := status(cookie, usedAt); got != http.StatusNoContent {
+				t.Errorf("a session issued at %q, used at %q: status = %d; want %d", issuedAt, usedAt, got, http.StatusNoContent)
+			}
+		}
+		for _, usedAt := range []string{"app.example:8443", "other.example"} {
+			if got := status(cookie, usedAt); got == http.StatusNoContent {
+				t.Errorf("a session issued at %q was accepted at %q", issuedAt, usedAt)
+			}
+		}
+	}
+}
+
 // identityProofTestValue is a fake proof that satisfies the length and
 // character rules.
 const identityProofTestValue = "test-proof-0123456789"
