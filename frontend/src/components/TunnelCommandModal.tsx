@@ -32,7 +32,7 @@ export function TunnelCommandModal() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 pb-6">
+        <div className="min-w-0 px-6 pb-6">
           <TunnelCommandForm />
         </div>
       </DialogContent>

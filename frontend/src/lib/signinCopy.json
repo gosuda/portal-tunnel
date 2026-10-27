@@ -1,0 +1,12 @@
+{
+ "credential": {
+  "title": "Sign in to continue",
+  "body": "Paste the access credential the owner of this app gave you.",
+  "action": "Sign in"
+ },
+ "siwe": {
+  "title": "Connect your wallet",
+  "body": "Sign a one-time message to show you own an allowed Ethereum address. It costs nothing.",
+  "action": "Connect wallet"
+ }
+}
