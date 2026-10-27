@@ -58,8 +58,8 @@ routes. Portal removes client-supplied `X-Portal-User`, `X-Portal-Auth`, and
 configured, and only restores verified values when
 `--auth-identity-headers` is enabled. It removes the same names spelled with
 underscores too (`X_Portal_User`), which some CGI-style upstreams read as the
-same header; nginx and Apache drop such headers by default. With
-`--auth-identity-proof` it also sends
+same header; nginx and Apache's CGI handling drop such headers by default.
+With `--auth-identity-proof` it also sends
 an `X-Portal-Proof` secret that the upstream can verify to tell Portal from
 another local process ([details](/siwe-authentication#verifying-the-identity-headers)).
 The gate also consumes the Portal session cookie, so upstream applications
