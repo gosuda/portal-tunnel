@@ -48,6 +48,7 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 				// The tunnel ended TLS, and every public Portal URL is https, so a
 				// client-sent X-Forwarded-Proto cannot say otherwise. Inbound
 				// Portal identity headers are also removed before reaching handler.
+				utils.DelHeaderSpellings(r.Header, "X-Forwarded-Proto")
 				r.Header.Set("X-Forwarded-Proto", "https")
 				utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
 				handler.ServeHTTP(w, r)
@@ -325,6 +326,10 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	pr.SetURL(r.upstream)
 	// SetURL clears Host; routed HTTP keeps the browser-visible authority.
 	pr.Out.Host = pr.In.Host
+	// The proxy removes the canonical X-Forwarded-* headers of the inbound request
+	// before this runs; their underscore spellings, which a CGI-style upstream reads
+	// as the same headers, are removed here, with X-Forwarded-Prefix, set below.
+	utils.DelHeaderSpellings(pr.Out.Header, "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Prefix")
 	pr.SetXForwarded()
 
 	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy (here
@@ -337,12 +342,11 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 		}
 	}
 
-	// X-Forwarded-Prefix is only meaningful for non-root routes. Always
-	// remove any client-supplied value first, then set the trusted one
+	// X-Forwarded-Prefix is only meaningful for non-root routes. Any
+	// client-supplied value is gone (removed above), and the trusted one is set
 	// only when the route carries a non-root prefix. Root routes leave
 	// the header absent so upstream applications do not see a spoofed
 	// value.
-	pr.Out.Header.Del("X-Forwarded-Prefix")
 	if r.prefix != "/" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", r.prefix)
 	}
