@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import ruleVectors from "@/lib/authRuleVectors.json";
 import {
   addAuthAllow,
+  applicationAuthHost,
   authBlocksUDP,
   buildAuthIssueCommand,
   buildAuthRedirectURLs,
@@ -480,6 +482,48 @@ describe("tunnelCommand sign-in", () => {
       "https://user@my-app.portal.example.com",
     ]) {
       expect(buildAuthIssueCommand({ ...invite, address })).toBe("");
+    }
+  });
+});
+
+// The builder repeats rules of the Go gateway, because the browser cannot call
+// it. cmd/portal-tunnel/gateway/frontend_rules_test.go runs the same rows
+// against the Go functions, so a rule changed on one side alone fails a test.
+describe("rules shared with the Go gateway", () => {
+  const methods = new Set(["credential", "siwe", "oidc"]);
+
+  it("reads every allowlist entry as the gateway does", () => {
+    for (const row of ruleVectors.allow) {
+      expect(methods.has(row.method)).toBe(true);
+      const method = row.method as "credential" | "siwe" | "oidc";
+      const [entry] = addAuthAllow(method, [], row.typed);
+      const valid = entry !== undefined && classifyAuthAllow(method, entry).ok;
+      expect(valid, `${method} entry ${JSON.stringify(row.typed)}`).toBe(row.valid);
+      if (row.valid && "canonical" in row) {
+        expect(entry, `${method} entry ${JSON.stringify(row.typed)}`).toBe(row.canonical);
+      }
+    }
+  });
+
+  it("accepts the OIDC issuers the gateway accepts", () => {
+    for (const row of ruleVectors.issuer) {
+      const issues = validateTunnelAuth({
+        method: "oidc",
+        allow: ["alice@example.com"],
+        identityHeaders: false,
+        oidcIssuer: row.value,
+        oidcClientId: "client",
+      });
+      expect(
+        issues.some((issue) => issue.field === "issuer"),
+        `issuer ${JSON.stringify(row.value)}`
+      ).toBe(!row.valid);
+    }
+  });
+
+  it("binds a private link to the host the gateway reads", () => {
+    for (const row of ruleVectors.host) {
+      expect(applicationAuthHost(row.address), `address ${JSON.stringify(row.address)}`).toBe(row.host);
     }
   });
 });
