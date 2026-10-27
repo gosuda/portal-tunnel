@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -266,6 +267,37 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 				t.Fatalf("mode after the save = %o; want %o", got, tt.want)
 			}
 		})
+	}
+}
+
+// holdsSecret lists the credential fields by hand, as the document writer lists
+// the keys it saves. A credential field added to TunnelConfig and missing from
+// holdsSecret would be saved into a world-readable file with no test to notice, so
+// every field whose key reads like a credential must count.
+func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
+	var found int
+	for _, field := range reflect.VisibleFields(reflect.TypeOf(TunnelConfig{})) {
+		key, _, _ := strings.Cut(field.Tag.Get("koanf"), ",")
+		credential := key == "identity_json" || slices.ContainsFunc([]string{"secret", "token", "key", "password"}, func(word string) bool {
+			return strings.Contains(key, word)
+		})
+		if !field.IsExported() || key == "" || !credential {
+			continue
+		}
+		found++
+		if field.Type.Kind() != reflect.String {
+			t.Errorf("%s is not a string; teach this test and holdsSecret how to read it", key)
+			continue
+		}
+		var tunnel TunnelConfig
+		reflect.ValueOf(&tunnel).Elem().FieldByIndex(field.Index).SetString("fake")
+		if !tunnel.holdsSecret() {
+			t.Errorf("%s reads like a credential, but a config that stores it is not made private: add it to holdsSecret", key)
+		}
+	}
+	// Three keys are known today; fewer means the match above stopped finding them.
+	if found < 3 {
+		t.Errorf("found %d credential keys in TunnelConfig; want at least 3", found)
 	}
 }
 
