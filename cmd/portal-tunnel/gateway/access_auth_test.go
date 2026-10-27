@@ -777,6 +777,25 @@ func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 		}
 	}
 
+	// A credential issued while the port was still part of the host keeps working.
+	for _, claimedHost := range []string{"app.example:443", "App.Example.:443"} {
+		token, err := encodeSignedApplicationAuthJSON([]byte(key), applicationCredentialClaims{
+			Version: applicationCredentialVersion, Subject: "alice", Tunnel: tunnelIdentity.Key(), Host: claimedHost,
+			ExpiresAt: time.Now().UTC().Add(time.Hour).Unix(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, requestHost := range []string{"app.example", "app.example:443"} {
+			if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, requestHost, applicationCredentialPrefix+token, time.Now().UTC()); err != nil {
+				t.Errorf("a credential issued for %q, redeemed at Host %q: %v; want accepted", claimedHost, requestHost, err)
+			}
+		}
+		if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, "app.example:8443", applicationCredentialPrefix+token, time.Now().UTC()); err == nil {
+			t.Errorf("a credential issued for %q accepted at another port", claimedHost)
+		}
+	}
+
 	redeemURL, err := ApplicationCredentialRedeemURL("https://app.example:443", "portal_cred_x")
 	if err != nil || !strings.HasPrefix(redeemURL, "https://app.example/") {
 		t.Errorf("ApplicationCredentialRedeemURL() = %q, %v; want a URL on app.example without the default port", redeemURL, err)

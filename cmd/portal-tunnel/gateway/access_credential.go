@@ -244,8 +244,11 @@ func verifyApplicationCredential(key []byte, tunnelIdentity types.Identity, host
 	if err := decodeSignedApplicationAuthJSON(key, strings.TrimPrefix(credential, applicationCredentialPrefix), &claims); err != nil || claims.Version != applicationCredentialVersion || claims.Tunnel != tunnelIdentity.Key() {
 		return applicationCredentialClaims{}, errors.New("application credential is invalid")
 	}
+	// A credential issued before the default port was dropped from the name still
+	// carries it, and names the same application.
 	normalizedHost, err := NormalizeApplicationAuthHost(host)
-	if err != nil || !strings.EqualFold(claims.Host, normalizedHost) || !now.UTC().Before(time.Unix(claims.ExpiresAt, 0)) {
+	claimedHost, claimedErr := NormalizeApplicationAuthHost(claims.Host)
+	if err != nil || claimedErr != nil || claimedHost != normalizedHost || !now.UTC().Before(time.Unix(claims.ExpiresAt, 0)) {
 		return applicationCredentialClaims{}, errors.New("application credential is invalid or expired")
 	}
 	claims.Subject, err = normalizeApplicationAuthSubject(claims.Subject)
