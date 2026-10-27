@@ -111,3 +111,30 @@ func TestSigninPagesRefuseControlCharactersInNext(t *testing.T) {
 		}
 	}
 }
+
+// The visitor preview in the command builder shows the title, text and button
+// of the real sign-in pages, from signinCopy.json.
+func TestFrontendSigninPreviewMatchesThePages(t *testing.T) {
+	t.Parallel()
+
+	var previewCopy map[string]struct {
+		Title  string `json:"title"`
+		Body   string `json:"body"`
+		Action string `json:"action"`
+	}
+	loadFrontendFile(t, "signinCopy.json", &previewCopy)
+
+	for _, provider := range []string{ApplicationAuthProviderCredential, ApplicationAuthProviderSIWE} {
+		want, ok := previewCopy[provider]
+		if !ok {
+			t.Errorf("signinCopy.json has no %s entry", provider)
+			continue
+		}
+		body := getSigninPage(newSigninTestHandler(t, provider), "app.example").Body.String()
+		for _, snippet := range []string{">" + want.Title + "</h1>", ">" + want.Body + "</p>", ">" + want.Action + "</button>"} {
+			if !strings.Contains(body, snippet) {
+				t.Errorf("the %s sign-in page lacks %q; update the page or frontend/src/lib/signinCopy.json", provider, snippet)
+			}
+		}
+	}
+}

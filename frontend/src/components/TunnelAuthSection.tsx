@@ -24,6 +24,7 @@ import {
   type TunnelFormTheme,
 } from "@/components/TunnelFormParts";
 import { useCopy } from "@/hooks/useCopy";
+import signinCopy from "@/lib/signinCopy.json";
 import { cn } from "@/lib/utils";
 import {
   GOOGLE_OIDC_ISSUER,
@@ -808,17 +809,12 @@ function VisitorPreview({
   } catch {
     // The issuer is still being typed.
   }
+  // The credential and wallet texts are those of the sign-in pages; the gateway
+  // test (frontend_rules_test.go) fails when a page and signinCopy.json differ.
+  // OIDC leaves for the provider at once and has no page of its own.
   const page = {
-    credential: {
-      title: "Sign in to continue",
-      body: "Paste the access credential the owner of this app gave you.",
-      action: "Sign in",
-    },
-    siwe: {
-      title: "Connect your wallet",
-      body: "Sign a one-time message to show you own an allowed Ethereum address. It costs nothing.",
-      action: "Connect wallet",
-    },
+    credential: signinCopy.credential,
+    siwe: signinCopy.siwe,
     oidc: {
       title: `You are sent to ${issuerHost}`,
       body: "They sign in there and come back to the app.",
