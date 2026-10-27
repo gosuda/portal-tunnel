@@ -739,6 +739,69 @@ func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {
 	}
 }
 
+// The host an operator types for `portal auth issue` and the Host a request
+// carries name the same application when they differ only by case, a trailing
+// dot or the default HTTPS port: a browser leaves that port out of Host, while
+// a Go client sends what its URL says.
+func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
+	t.Parallel()
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	key, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		issuedFor   string
+		requestHost string
+		want        bool
+	}{
+		{"app.example", "app.example", true},
+		{"https://app.example:443", "app.example", true},
+		{"app.example:443", "app.example", true},
+		{"app.example", "app.example:443", true},
+		{"App.Example.:443", "app.example", true},
+		{"https://app.example:8443", "app.example:8443", true},
+		{"app.example:8443", "app.example", false},
+		{"app.example", "app.example:8443", false},
+		{"app.example:1443", "app.example", false},
+		{"app.example", "app.example:1443", false},
+	} {
+		credential, err := IssueApplicationCredential(tunnelIdentity, tt.issuedFor, "alice", time.Now().UTC().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("IssueApplicationCredential(%q) error = %v", tt.issuedFor, err)
+		}
+		_, err = verifyApplicationCredential([]byte(key), tunnelIdentity, tt.requestHost, credential, time.Now().UTC())
+		if (err == nil) != tt.want {
+			t.Errorf("a credential issued for %q, redeemed at Host %q: error = %v; want accepted %v", tt.issuedFor, tt.requestHost, err, tt.want)
+		}
+	}
+
+	// A credential issued while the port was still part of the host keeps working.
+	for _, claimedHost := range []string{"app.example:443", "App.Example.:443"} {
+		token, err := encodeSignedApplicationAuthJSON([]byte(key), applicationCredentialClaims{
+			Version: applicationCredentialVersion, Subject: "alice", Tunnel: tunnelIdentity.Key(), Host: claimedHost,
+			ExpiresAt: time.Now().UTC().Add(time.Hour).Unix(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, requestHost := range []string{"app.example", "app.example:443"} {
+			if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, requestHost, applicationCredentialPrefix+token, time.Now().UTC()); err != nil {
+				t.Errorf("a credential issued for %q, redeemed at Host %q: %v; want accepted", claimedHost, requestHost, err)
+			}
+		}
+		if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, "app.example:8443", applicationCredentialPrefix+token, time.Now().UTC()); err == nil {
+			t.Errorf("a credential issued for %q accepted at another port", claimedHost)
+		}
+	}
+
+	redeemURL, err := ApplicationCredentialRedeemURL("https://app.example:443", "portal_cred_x")
+	if err != nil || !strings.HasPrefix(redeemURL, "https://app.example/") {
+		t.Errorf("ApplicationCredentialRedeemURL() = %q, %v; want a URL on app.example without the default port", redeemURL, err)
+	}
+}
+
 func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
 	t.Helper()
 	tunnelIdentity := applicationAuthTestIdentity()

@@ -211,6 +211,9 @@ func ApplicationCredentialRedeemURL(host, credential string) (string, error) {
 	return "https://" + host + applicationAuthLoginPath + "#credential=" + url.QueryEscape(credential), nil
 }
 
+// NormalizeApplicationAuthHost returns the canonical name of an application: lower
+// case, without a trailing dot and without the default HTTPS port, which a browser
+// leaves out of Host while an operator or a Go client may write it.
 func NormalizeApplicationAuthHost(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -228,7 +231,8 @@ func NormalizeApplicationAuthHost(raw string) (string, error) {
 	if !validAuthority || !rootPath || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("application auth host must be an HTTPS URL or hostname without a path")
 	}
-	return strings.ToLower(strings.TrimSuffix(parsed.Host, ".")), nil
+	host := strings.TrimSuffix(strings.ToLower(parsed.Host), ":443")
+	return strings.TrimSuffix(host, "."), nil
 }
 
 func verifyApplicationCredential(key []byte, tunnelIdentity types.Identity, host, credential string, now time.Time) (applicationCredentialClaims, error) {
@@ -240,8 +244,11 @@ func verifyApplicationCredential(key []byte, tunnelIdentity types.Identity, host
 	if err := decodeSignedApplicationAuthJSON(key, strings.TrimPrefix(credential, applicationCredentialPrefix), &claims); err != nil || claims.Version != applicationCredentialVersion || claims.Tunnel != tunnelIdentity.Key() {
 		return applicationCredentialClaims{}, errors.New("application credential is invalid")
 	}
+	// A credential issued before the default port was dropped from the name still
+	// carries it, and names the same application.
 	normalizedHost, err := NormalizeApplicationAuthHost(host)
-	if err != nil || !strings.EqualFold(claims.Host, normalizedHost) || !now.UTC().Before(time.Unix(claims.ExpiresAt, 0)) {
+	claimedHost, claimedErr := NormalizeApplicationAuthHost(claims.Host)
+	if err != nil || claimedErr != nil || claimedHost != normalizedHost || !now.UTC().Before(time.Unix(claims.ExpiresAt, 0)) {
 		return applicationCredentialClaims{}, errors.New("application credential is invalid or expired")
 	}
 	claims.Subject, err = normalizeApplicationAuthSubject(claims.Subject)
