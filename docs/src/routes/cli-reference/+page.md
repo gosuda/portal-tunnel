@@ -434,8 +434,10 @@ portal auth issue myapp.example.com --subject alice --expires 720h
 | `--identity-path` | string | `identity.json` | Existing tunnel identity; no identity is created by this command |
 | `--identity-json` | string | | In-memory existing tunnel identity; `IDENTITY_JSON` environment variable; takes precedence over the path |
 
-The command prints a bearer credential and an HTTPS redeem URL. Use it with a
-tunnel started via `portal expose ... --auth credential`. API clients can send
+The command prints a bearer credential and an HTTPS redeem URL. `<host>` is the
+published hostname, or an `https://` URL of it; the default port `:443` is
+ignored, and a relay on another port needs it (`myapp.example.com:8443`). Use it
+with a tunnel started via `portal expose ... --auth credential`. API clients can send
 the credential in `X-Portal-Access-Credential`; Portal validates and removes
 that header before forwarding the request upstream.
 
