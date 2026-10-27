@@ -490,6 +490,15 @@ Custom identity paths must use a directory that other users cannot modify.
 Portal protects the identity file's ACL but does not change the permissions of
 an arbitrary parent directory.
 
+The agent restricts `config.toml` before it stores a credential in it. When the
+tunnels it saves hold an OIDC client secret, an inline `identity_json` or an
+x402 facilitator token, it removes the group and other permissions from the
+file on Linux and macOS (`0644` becomes `0600`; the owner's bits stay) and, if
+it cannot, fails the change without writing anything. On Windows it checks the
+file's ACL. This happens when the agent saves the file, through the dashboard or
+the control API; a config you write by hand is not touched until then, so create
+it with `0600` when it holds a secret.
+
 The agent refuses non-loopback `control_addr` values. Use `127.0.0.1`,
 `localhost`, or another loopback address.
 

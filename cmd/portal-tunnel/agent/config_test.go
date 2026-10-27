@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -220,6 +221,51 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 		if !reflect.DeepEqual(loaded.Tunnels[i], reloaded.Tunnels[i]) {
 			t.Errorf("tunnel %q changed by a save:\n before: %+v\n after:  %+v", loaded.Tunnels[i].ID, loaded.Tunnels[i], reloaded.Tunnels[i])
 		}
+	}
+}
+
+// Linux and macOS keep the mode a file already has, so the agent restricts a
+// config before it writes a credential into it; a config without one is left as
+// the user set it.
+func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows restricts the file with an ACL instead of a mode")
+	}
+
+	plain := TunnelConfig{ID: "web", TargetAddr: "127.0.0.1:3000"}
+	for _, tt := range []struct {
+		name   string
+		before os.FileMode
+		tunnel TunnelConfig
+		want   os.FileMode
+	}{
+		{"OIDC client secret in a world-readable file", 0o644, TunnelConfig{ID: "web", Auth: "oidc", AuthOIDCClientSecret: "fake-secret"}, 0o600},
+		{"identity with a private key in a group-readable file", 0o640, TunnelConfig{ID: "web", IdentityJSON: `{"private_key":"fake"}`}, 0o600},
+		{"x402 facilitator token in a group-writable file", 0o660, TunnelConfig{ID: "web", FacilitatorToken: "fake-token"}, 0o600},
+		{"a secret in a file that is already private", 0o600, TunnelConfig{ID: "web", AuthOIDCClientSecret: "fake-secret"}, 0o600},
+		{"the owner's other bits are kept", 0o755, TunnelConfig{ID: "web", AuthOIDCClientSecret: "fake-secret"}, 0o700},
+		{"a blank secret is not one", 0o644, TunnelConfig{ID: "web", AuthOIDCClientSecret: "  "}, 0o644},
+		{"no secret", 0o644, plain, 0o644},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tt.before); err != nil { // not subject to the umask
+				t.Fatal(err)
+			}
+			if err := writeConfigDocument(path, tt.before, Config{Tunnels: []TunnelConfig{plain, tt.tunnel}}); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != tt.want {
+				t.Fatalf("mode after the save = %o; want %o", got, tt.want)
+			}
+		})
 	}
 }
 

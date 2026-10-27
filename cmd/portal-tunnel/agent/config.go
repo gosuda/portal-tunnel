@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -154,7 +156,26 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 	if err := utils.EnsurePrivateFile(path); err != nil {
 		return fmt.Errorf("secure agent config before update: %w", err)
 	}
+	// EnsurePrivateFile does nothing outside Windows, and os.WriteFile keeps the
+	// mode of a file that exists, so a 0644 config would hold a secret anyone can
+	// read. The mode is restricted before the secret is written; when that is not
+	// possible, nothing is written.
+	if runtime.GOOS != "windows" && slices.ContainsFunc(cfg.Tunnels, TunnelConfig.holdsSecret) && mode&0o077 != 0 {
+		mode &^= 0o077
+		if err := os.Chmod(path, mode); err != nil {
+			return fmt.Errorf("restrict agent config that holds a secret: %w", err)
+		}
+	}
 	return os.WriteFile(path, data, mode)
+}
+
+// holdsSecret reports whether writing the tunnel stores a credential: the
+// OIDC client secret, an identity with its private key, or an x402 facilitator
+// token.
+func (cfg TunnelConfig) holdsSecret() bool {
+	return strings.TrimSpace(cfg.AuthOIDCClientSecret) != "" ||
+		strings.TrimSpace(cfg.IdentityJSON) != "" ||
+		strings.TrimSpace(cfg.FacilitatorToken) != ""
 }
 
 func configMap(cfg Config) map[string]any {
