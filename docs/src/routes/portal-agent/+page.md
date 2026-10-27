@@ -380,7 +380,9 @@ The typed secret is dropped when the screen closes, when the mode changes, and
 after a successful apply. While nothing differs from what is stored the Apply
 button is disabled, and it reads Applied only after an apply of this screen's
 own. One apply runs at a time: the button reads Applying... until the agent
-answers, and the agent restarts the tunnel before it does. If the tunnel's sign-in settings change while the
+answers, and the agent restarts the tunnel before it does. If the agent has not
+answered within 10 seconds the screen says so; the change may still be applied,
+and the next status shows it. If the tunnel's sign-in settings change while the
 screen is open (`config.toml`, the CLI, another dashboard, or your own apply
 while you kept editing), the screen shows the stored settings again, drops what
 you had edited, and says so, so that applying cannot put the old values back;

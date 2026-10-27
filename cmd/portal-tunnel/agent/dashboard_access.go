@@ -16,6 +16,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+// agentDashboardApplyTimeout is how long the dashboard waits for the agent to
+// answer an apply. The agent writes the settings first and then restarts the
+// tunnel, which can take longer.
+const agentDashboardApplyTimeout = 10 * time.Second
+
 // agentDashboardAccessMaxEntries is how many allow list entries the Settings
 // pane lists before it counts the rest.
 const agentDashboardAccessMaxEntries = 4
@@ -447,9 +452,13 @@ func (m agentDashboardModel) applyAccess() (tea.Model, tea.Cmd) {
 	// no other copy than the one in its input and the request on its way.
 	stateDir, tunnelID := m.stateDir, tunnel.ID
 	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), agentDashboardApplyTimeout)
 		defer cancel()
-		return agentDashboardAccessMsg{tunnelID: tunnelID, err: UpdateTunnel(ctx, stateDir, tunnelID, req)}
+		err := UpdateTunnel(ctx, stateDir, tunnelID, req)
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("the agent did not answer within %s; the change may still be applied, the next status shows it", agentDashboardApplyTimeout)
+		}
+		return agentDashboardAccessMsg{tunnelID: tunnelID, err: err}
 	}
 }
 
