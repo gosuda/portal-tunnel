@@ -362,7 +362,7 @@ and client secret.
 | `F2` | Apply from any row |
 | `delete` / `backspace` | Remove the selected allow list entry |
 | `F3` / `ctrl+r` | Show or hide the client secret you typed |
-| `F6` / `ctrl+x` | Mark the stored client secret for removal, or take the mark back |
+| `F6` / `ctrl+x` | Mark the stored client secret for removal, or take the mark back (typing a secret takes the mark back, and marking drops what was typed) |
 | `esc` | Cancel and close the screen |
 
 An entry is checked and normalized as you add it. The client secret is typed

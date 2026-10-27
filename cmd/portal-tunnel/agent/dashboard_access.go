@@ -176,7 +176,7 @@ type agentDashboardAccess struct {
 	provider    string
 	headers     bool
 	allowed     []string
-	clearSecret bool // the stored client secret is to be removed
+	clearSecret bool // the stored client secret is to be removed; never set while a secret is typed
 	err         error
 
 	add, issuer, clientID, secret textinput.Model
