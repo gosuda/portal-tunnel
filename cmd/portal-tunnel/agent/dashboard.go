@@ -49,7 +49,11 @@ type agentDashboardModel struct {
 	theme      agentDashboardTheme
 
 	status AgentStatusResponse
-	err    error
+	// err is what the last action or input refused with; it stays until the next
+	// action answers or esc dismisses it.
+	err error
+	// pollErr is why the last status poll failed; the next poll that works clears it.
+	pollErr error
 
 	width  int
 	height int
@@ -150,6 +154,15 @@ func (m agentDashboardModel) Init() tea.Cmd {
 	return tea.Batch(agentDashboardFetchStatus(m.stateDir), agentDashboardTick(), textinput.Blink)
 }
 
+// shownErr is the error the dashboard reports: a failed poll says more than an
+// earlier action's refusal, as the agent is out of reach.
+func (m agentDashboardModel) shownErr() error {
+	if m.pollErr != nil {
+		return m.pollErr
+	}
+	return m.err
+}
+
 func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -161,7 +174,7 @@ func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentDashboardTickMsg:
 		return m, tea.Batch(agentDashboardFetchStatus(m.stateDir), agentDashboardTick())
 	case agentDashboardStatusMsg:
-		m.err = msg.err
+		m.pollErr = msg.err
 		if msg.err == nil {
 			m.status = msg.status
 			if strings.TrimSpace(msg.status.ConfigPath) != "" {
