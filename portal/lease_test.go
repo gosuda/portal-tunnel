@@ -1122,12 +1122,53 @@ func TestRenewAsksOnlyLeasesLeftBehindByTheRelayCertificateToRegisterAgain(t *te
 	}
 }
 
+// The verdict rests on the chain the SDK pinned, not on a later chain that
+// merely verified against it. A bundle that carries a root the pinned chain
+// lacks (a cross-signed one) verifies against the pinned chain, but trusting it
+// as a root would also accept what the pinned chain does not.
+func TestRenewJudgesAgainstTheChainTheLeaseRegisteredUnder(t *testing.T) {
+	t.Parallel()
+
+	root := newTestRelayIntermediate(t, "Root")
+	first, second := root.subordinate(t, "R10"), root.subordinate(t, "R11")
+	pinned := first.issue(t, "example.com")
+	withRoot := first.issue(t, "example.com", root.cert)
+	otherIssuer := second.issue(t, "example.com")
+
+	registry := newTestRegistry(t, false, false)
+	_, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, pinned)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	renew := func(current *acme.TLSMaterial) error {
+		_, _, err := registry.Renew(types.RenewRequest{AccessToken: registered.AccessToken, TTL: 600}, netip.MustParseAddr("203.0.113.10"), current)
+		return err
+	}
+	if err := renew(withRoot); err != nil {
+		t.Fatalf("Renew() with a chain the pinned one verifies = %v, want the lease renewed", err)
+	}
+	if err := renew(otherIssuer); !errors.Is(err, errLeaseNotFound) {
+		t.Fatalf("Renew() with a chain only the root of the earlier bundle verifies = %v, want lease_not_found", err)
+	}
+}
+
 type testRelayIntermediate struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
 }
 
 func newTestRelayIntermediate(t *testing.T, name string) testRelayIntermediate {
+	t.Helper()
+	return newTestRelayCA(t, name, nil)
+}
+
+// subordinate returns a CA named name that i issued.
+func (i testRelayIntermediate) subordinate(t *testing.T, name string) testRelayIntermediate {
+	t.Helper()
+	return newTestRelayCA(t, name, &i)
+}
+
+func newTestRelayCA(t *testing.T, name string, issuer *testRelayIntermediate) testRelayIntermediate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -1142,7 +1183,11 @@ func newTestRelayIntermediate(t *testing.T, name string) testRelayIntermediate {
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	parent, parentKey := template, key
+	if issuer != nil {
+		parent, parentKey = issuer.cert, issuer.key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, parent, &key.PublicKey, parentKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1154,8 +1199,8 @@ func newTestRelayIntermediate(t *testing.T, name string) testRelayIntermediate {
 }
 
 // issue returns relay material for host, served as the leaf followed by this
-// intermediate, as an ACME bundle is.
-func (i testRelayIntermediate) issue(t *testing.T, host string) *acme.TLSMaterial {
+// intermediate and then the extra certificates, as an ACME bundle is.
+func (i testRelayIntermediate) issue(t *testing.T, host string, extra ...*x509.Certificate) *acme.TLSMaterial {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -1179,6 +1224,9 @@ func (i testRelayIntermediate) issue(t *testing.T, host string) *acme.TLSMateria
 		t.Fatal(err)
 	}
 	certPEM := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: i.cert.Raw})...)
+	for _, certificate := range extra {
+		certPEM = append(certPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})...)
+	}
 	certificate, err := tls.X509KeyPair(certPEM, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 	if err != nil {
 		t.Fatal(err)

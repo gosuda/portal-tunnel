@@ -668,22 +668,23 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 // chain it pinned, and the relay now serves a certificate that chain does not
 // verify (a renewal by another intermediate). Such a tenant fails every
 // handshake until it registers again, which lease_not_found makes it do; the
-// new record then remembers the current chain, so each change asks each lease
-// at most once. A chain that still verifies becomes the one the lease is known
-// to accept, so the check runs once per lease and change: a later certificate
-// verifies against either chain exactly when it comes from the same
-// intermediate. The tenant pins its chain just after registering, so a renewal
-// in between can make the record older than the pin; that costs at most one
+// new record then pins the current chain, so each change asks each lease at
+// most once. The verdict always rests on the chain the lease registered under,
+// the one the SDK pinned: verifying against a chain that itself only verified
+// (one that carries a cross-signed root, say) would accept what the pin does
+// not. A chain that verifies is remembered, so the check runs once per lease and
+// change. The tenant pins its chain just after registering, so a renewal in
+// between can make the record older than the pin; that costs at most one
 // needless re-registration and needs no other source for the chain. The caller
 // holds r.mu.
 func (r *leaseRegistry) stalePin(record *leaseRecord, current *acme.TLSMaterial) bool {
-	if record.pinnedChain == nil || current == nil || bytes.Equal(record.pinnedChain, current.CertPEM) {
+	if record.pinnedChain == nil || current == nil || bytes.Equal(record.pinnedChain, current.CertPEM) || bytes.Equal(record.verifiedChain, current.CertPEM) {
 		return false
 	}
 	if !current.TrustedBy(record.pinnedChain, r.rootHostname) {
 		return true
 	}
-	record.pinnedChain = current.CertPEM
+	record.verifiedChain = current.CertPEM
 	return false
 }
 

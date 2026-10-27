@@ -28,11 +28,15 @@ type leaseRecord struct {
 	CanonicalHostname string
 	Metadata          types.LeaseMetadata
 	Overlay           bool
-	// pinnedChain is the relay chain (PEM) the lease's tenant is known to
-	// accept: the one served when it registered, or a later one that verifies
-	// against it. Only the public chain is kept, never a key. nil means unknown,
-	// and such a lease is never asked to re-register.
+	// pinnedChain is the relay chain (PEM) served when the lease registered,
+	// which an SDK that cannot re-pin pins as well and verifies its signer
+	// connection against. It never changes. Only the public chain is kept, never
+	// a key. nil means unknown, and such a lease is never asked to re-register.
 	pinnedChain []byte
+	// verifiedChain is the last served chain (PEM) that pinnedChain was found
+	// to verify, so that chain is not checked again. It is never a basis for a
+	// verdict.
+	verifiedChain []byte
 
 	registerChallenge *identity.RegisterChallenge
 
