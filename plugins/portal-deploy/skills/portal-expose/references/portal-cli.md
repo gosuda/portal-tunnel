@@ -116,6 +116,9 @@ The flag is `--description`, not `--desc`. Environment variables in the third co
 | `--max-active-relays` | `3` | `MAX_ACTIVE_RELAYS` | Cap on auto-selected relays kept connected |
 | `--metrics-addr` | | | Serve Prometheus `/metrics` on `host:port` |
 | `--x402-pay-to`, `--x402-network`, `--x402-asset`, `--x402-endpoint`, `--x402-testnet`, `--x402-facilitator-token` | | `CSPR_CLOUD_API_KEY` for the token | Paid routes; see `x402.md` |
+| `--auth`, `--auth-allow`, `--auth-identity-headers`, `--auth-identity-proof`, `--auth-oidc-issuer`, `--auth-oidc-client-id`, `--auth-oidc-client-secret` | | `AUTH_IDENTITY_PROOF` for `--auth-identity-proof`; `AUTH_OIDC_ISSUER`, `AUTH_OIDC_CLIENT_ID`, `AUTH_OIDC_CLIENT_SECRET` for the `--auth-oidc-*` flags | Visitor sign-in; see `application-auth.md` |
+
+`portal auth issue <host> --subject <name> [--expires 720h] [--identity-path <file>]` mints a credential link for `--auth credential`; see `application-auth.md`.
 
 `portal list` accepts `--relays` and `--default-relays` (default `true`) and prints one `RELAY  VERSION` row per resolved relay. It never lists services.
 
@@ -201,7 +204,7 @@ Default config locations:
 
 `[agent]`: `state_dir` (defaults to the platform data directory), `control_addr` (default `127.0.0.1:4018`), `service_name` (default `portal-agent`), `allowed_wallets` (wallet addresses allowed to sign in to the dashboard).
 
-`[[tunnels]]`: `id`, `name`, `target`, `serve` (static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`; the relay cache options have no TOML equivalent), `http_routes` (entries with `prefix`, `upstream`, `methods`, `amount`), `relays`, `discovery`, `overlay`, `identity_path`, `identity_json`, `udp`, `udp_addr`, `tcp`, `ban_mitm`, `max_active_relays` (default `3`), `description`, `tags`, `owner`, `thumbnail`, `hide`, `x402_pay_to`, `x402_testnet`, `x402_network`, `x402_asset`, `x402_endpoints`, `x402_facilitator_token`. The keys mirror the `portal expose` flags one to one.
+`[[tunnels]]`: `id`, `name`, `target`, `serve` (static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`; the relay cache options have no TOML equivalent), `http_routes` (entries with `prefix`, `upstream`, `methods`, `amount`), `relays`, `discovery`, `overlay`, `identity_path`, `identity_json`, `udp`, `udp_addr`, `tcp`, `ban_mitm`, `max_active_relays` (default `3`), `description`, `tags`, `owner`, `thumbnail`, `hide`, `x402_pay_to`, `x402_testnet`, `x402_network`, `x402_asset`, `x402_endpoints`, `x402_facilitator_token`, `auth`, `auth_allowed_wallets`, `auth_identity_headers`, `auth_oidc_issuer`, `auth_oidc_client_id`, `auth_oidc_client_secret`, `strip_request_headers`. Apart from `id`, each key stands for a `portal expose` argument or flag (`target` is the positional target, `auth_allowed_wallets` is `--auth-allow`, `strip_request_headers` is `--strip-request-header`). Some flags have no key, for example the relay cache options, `--metrics-addr`, `--log-format` and `--auth-identity-proof`, and the agent does not read `AUTH_IDENTITY_PROOF`, so an agent tunnel cannot send the identity proof.
 
 ## Output and readiness
 
@@ -209,6 +212,6 @@ Default config locations:
 - HTTP readiness log: `service ready at <https-url>`.
 - Raw TCP/UDP readiness log: `raw transport endpoints allocated` with `tcp_addr` and/or `udp_addr`. Do not wait for an HTTPS URL in that mode.
 - Multiple relays can produce multiple public URLs. Report and verify each URL or raw endpoint that is handed off.
-- Tenant TLS terminates locally through a keyless TLS 1.3 server: the relay signs each handshake with its certificate key but never receives the session keys. The hostname is still publicly reachable. Without `--hide`, anyone can enumerate the lease through `GET <relay>/api/state`, and relays that enable their directory page show it there as well. Portal does not add application authentication.
+- Tenant TLS terminates locally through a keyless TLS 1.3 server: the relay signs each handshake with its certificate key but never receives the session keys. The hostname is still publicly reachable. Without `--hide`, anyone can enumerate the lease through `GET <relay>/api/state`, and relays that enable their directory page show it there as well. Portal adds no application authentication unless the tunnel is started with `--auth` (`application-auth.md`).
 - The MITM self-probe runs against every relay whose tenant TLS stack exports keying material. `--ban-mitm` defaults to false. Without it, a mismatch is a warning and the tunnel keeps serving. With it, Portal bans the relay and closes that listener, and refuses at registration a relay that cannot export keying material. `--cache` disables the probe because it deliberately permits relay TLS termination; the two flags cannot be combined. A `self-probe timed out` or `self-probe failed` line is not a detection.
 - A later log line starting `relay no longer active for <url>` retracts a previously ready URL.

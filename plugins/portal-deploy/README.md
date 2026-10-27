@@ -115,6 +115,8 @@ An agent working in that repository then has every value the relay's quick-start
 - `Deploy the app in this repository with Portal and verify the public URL.`
 - `Expose this app with Portal, protect GET /paid with x402, and verify the payment challenge.`
 - `Create a temporary Portal preview for the frontend on port 5173.`
+- `Expose this app with Portal and let only alice@example.com sign in with Google.`
+- `Share this app through Portal with a login link I can send to two colleagues.`
 - `Keep this service available through a persistent Portal agent tunnel.`
 - `Connect this app to the relay at https://portal.example.com the way its website suggests, and open the public URL.`
 - `Run a public Portal relay and verify its health endpoint.`
@@ -128,6 +130,7 @@ Positive:
 
 - Deploy this local app with Portal and verify the public URL.
 - Protect GET /paid with a 0.01 USDC x402 payment and verify the public challenge.
+- Restrict the public URL of this app to chosen people with a Portal sign-in and verify that it asks for one.
 - Create a temporary Portal preview for this project.
 - Run this app as a persistent Portal tunnel.
 - Serve this trusted static site through Portal.

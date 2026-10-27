@@ -49,6 +49,7 @@ portal expose --serve ./dist --name my-site --relays %s --discovery=false
 - [Relay hosting](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/self-hosting/+page.md): Configure and operate a relay.
 - [API reference](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/api-reference/+page.md): Relay HTTP endpoints and shared types.
 - [Security model](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/security-model/+page.md): Encryption and trust boundaries.
+- [Application access authentication](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/docs/src/routes/siwe-authentication/+page.md): Limit who can open a tunnel with credential, wallet, or OpenID Connect sign-in.
 - [Public relay state](%s/api/state): Current public leases and landing-page state for this relay.
 - [GitHub repository](https://github.com/gosuda/portal-tunnel): Source, releases, and issue tracking.
 
@@ -65,7 +66,7 @@ Nothing needs to be installed to use the skills: fetch the canonical SKILL.md fr
 
 If the user asks you to expose, publish, share, tunnel, connect an app to this relay, or create a public preview of a local application, read and follow:
 
-- [portal-expose skill](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md): Inspect the local app, verify it locally, run the same install-and-expose command this relay's page generates (built from the app settings), verify the public endpoint, and hand off lifecycle information.
+- [portal-expose skill](https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-deploy/skills/portal-expose/SKILL.md): Inspect the local app, verify it locally, run the same install-and-expose command this relay's page generates (built from the app settings), verify the public endpoint, and hand off lifecycle information. It also covers limiting who can open the URL with sign-in (credential link, wallet, or OpenID Connect) when the user asks for it.
 
 If the user asks you to reach, call, test, browse, or check a service that is already published through Portal, or asks what is available on this relay, read and follow:
 
