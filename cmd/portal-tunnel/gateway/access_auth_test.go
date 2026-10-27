@@ -49,9 +49,11 @@ func TestApplicationAuthRequiresLogin(t *testing.T) {
 func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	wallet := applicationAuthTestWallet(t, "1")
 	var upstreamUser, upstreamAuth string
+	var upstreamPortalNames []string
 	handler := newApplicationAuthTestHandler(t, []string{wallet.Identity().Address}, true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamUser = r.Header.Get(types.HeaderPortalUser)
 		upstreamAuth = r.Header.Get(types.HeaderPortalAuth)
+		upstreamPortalNames = portalHeaderNames(r.Header)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -89,6 +91,8 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	protectedReq.AddCookie(cookies[0])
 	protectedReq.Header.Set(types.HeaderPortalUser, "attacker")
 	protectedReq.Header.Set(types.HeaderPortalAuth, "attacker")
+	protectedReq.Header["X_Portal_User"] = []string{"attacker"}
+	protectedReq.Header["X_portal_auth"] = []string{"attacker"}
 	protectedRec := httptest.NewRecorder()
 	handler.ServeHTTP(protectedRec, protectedReq)
 	if protectedRec.Code != http.StatusNoContent {
@@ -96,6 +100,10 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	}
 	if upstreamUser != wallet.Identity().Address || upstreamAuth != "siwe" {
 		t.Fatalf("identity headers = %q, %q", upstreamUser, upstreamAuth)
+	}
+	// Under no other spelling may a visitor's own value sit beside the verified one.
+	if want := []string{types.HeaderPortalAuth, types.HeaderPortalUser}; !slices.Equal(upstreamPortalNames, want) {
+		t.Fatalf("portal headers at the upstream = %q; want only %q", upstreamPortalNames, want)
 	}
 
 	// A verified challenge is a short-lived proof: replaying it

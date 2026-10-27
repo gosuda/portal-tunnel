@@ -54,7 +54,9 @@ SIWE challenges expire after two minutes; signed sessions expire after at most
 
 The auth gate wraps the complete HTTP router, including static files and x402
 routes. Portal removes client-supplied `X-Portal-User`, `X-Portal-Auth`, and
-`X-Portal-Proof` headers before routing, whether or not the proof is
+`X-Portal-Proof` headers before routing, also when a client spells them with
+underscores (`X_Portal_User`), which CGI-style upstreams read as the same header,
+whether or not the proof is
 configured, and only restores verified values when
 `--auth-identity-headers` is enabled. With `--auth-identity-proof` it also sends
 an `X-Portal-Proof` secret that the upstream can verify to tell Portal from

@@ -49,9 +49,7 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 				// client-sent X-Forwarded-Proto cannot say otherwise. Inbound
 				// Portal identity headers are also removed before reaching handler.
 				r.Header.Set("X-Forwarded-Proto", "https")
-				r.Header.Del(types.HeaderPortalUser)
-				r.Header.Del(types.HeaderPortalAuth)
-				r.Header.Del(types.HeaderPortalProof)
+				utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
 				handler.ServeHTTP(w, r)
 			}),
 			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,

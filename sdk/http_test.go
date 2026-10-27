@@ -46,6 +46,10 @@ func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 	req.Header.Set(types.HeaderPortalUser, "forged-user")
 	req.Header.Set(types.HeaderPortalAuth, "forged-auth")
 	req.Header.Set(types.HeaderPortalProof, "forged-proof")
+	// A CGI-style upstream reads these as the headers above.
+	for _, name := range []string{"X_Portal_User", "X_portal_auth", "x_portal_proof"} {
+		req.Header[name] = []string{"forged"}
+	}
 	req.Header.Set("X-Keep", "kept")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -57,9 +61,9 @@ func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 	if header.Get("X-Keep") != "kept" {
 		t.Fatalf("handler header X-Keep = %q; the request was altered beyond the Portal headers", header.Get("X-Keep"))
 	}
-	for _, name := range []string{types.HeaderPortalUser, types.HeaderPortalAuth, types.HeaderPortalProof} {
-		if values := header.Values(name); len(values) != 0 {
-			t.Errorf("handler received forged %s = %q", name, values)
+	for key, values := range header {
+		if strings.HasPrefix(strings.ToLower(strings.ReplaceAll(key, "_", "-")), "x-portal-") {
+			t.Errorf("handler received forged %s = %q", key, values)
 		}
 	}
 }

@@ -22,6 +22,10 @@ const (
 	ReverseSubprotocol = "portal.reverse.v1"
 )
 
+// PortalIdentityHeaders are the request headers Portal sets itself, and so removes
+// from every request it did not authenticate.
+var PortalIdentityHeaders = []string{HeaderPortalUser, HeaderPortalAuth, HeaderPortalProof}
+
 const (
 	DefaultHTTPRedirectAddr = ":80"
 	HTTPRedirectFeatureName = "http-redirect"
