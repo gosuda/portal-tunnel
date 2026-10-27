@@ -3,7 +3,14 @@ package acme
 import (
 	"bytes"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -265,4 +272,106 @@ func TestTenantTLSConfigTrustsWhatTheRelaySignsFor(t *testing.T) {
 	if err := reach(served, "tenant.other.example"); err == nil {
 		t.Error("tenant presenting the served certificate under another name was reached, want it refused")
 	}
+}
+
+// An SDK that pins the relay chain once verifies its /v1/sign connection
+// against that chain. A renewal by the same intermediate still verifies; one by
+// another intermediate does not, and neither does a certificate for another
+// name.
+func TestTrustedByFollowsTheIssuingIntermediate(t *testing.T) {
+	t.Parallel()
+
+	const relayHost = "portal.example.com"
+	intermediate, otherIntermediate := newTestIntermediate(t, "R10", nil), newTestIntermediate(t, "R11", nil)
+	root := newTestIntermediate(t, "Root", nil)
+	underRoot, otherUnderRoot := newTestIntermediate(t, "R12", &root), newTestIntermediate(t, "R13", &root)
+	for name, test := range map[string]struct {
+		pinned, renewed *TLSMaterial
+		want            bool
+	}{
+		"same intermediate":             {intermediate.issue(t, relayHost), intermediate.issue(t, relayHost), true},
+		"another intermediate":          {intermediate.issue(t, relayHost), otherIntermediate.issue(t, relayHost), false},
+		"same intermediate, other name": {intermediate.issue(t, relayHost), intermediate.issue(t, "other.example.com"), false},
+		// A bundle that also carries the root lets the presented intermediate
+		// of a renewal reach that root.
+		"another intermediate under a root the pinned bundle carries": {underRoot.issue(t, relayHost), otherUnderRoot.issue(t, relayHost), true},
+	} {
+		if got := test.renewed.TrustedBy(test.pinned.CertPEM, relayHost); got != test.want {
+			t.Errorf("TrustedBy(%s) = %v, want %v", name, got, test.want)
+		}
+	}
+}
+
+type testIntermediate struct {
+	cert   *x509.Certificate
+	key    *ecdsa.PrivateKey
+	parent *testIntermediate
+}
+
+// newTestIntermediate returns an issuing CA, standing for one intermediate of
+// the relay's CA, issued by parent or self-signed when parent is nil.
+func newTestIntermediate(t *testing.T, name string, parent *testIntermediate) testIntermediate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: name},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	issuer, issuerKey := template, key
+	if parent != nil {
+		issuer, issuerKey = parent.cert, parent.key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, issuer, &key.PublicKey, issuerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return testIntermediate{cert: cert, key: key, parent: parent}
+}
+
+// issue returns relay material for host with a new key, served as the leaf
+// followed by this intermediate and its parents, as an ACME bundle is.
+func (i testIntermediate) issue(t *testing.T, host string) *TLSMaterial {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: host},
+		DNSNames:     []string{host, "*." + host},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, i.cert, &key.PublicKey, i.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	for issuer := &i; issuer != nil; issuer = issuer.parent {
+		certPEM = append(certPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.cert.Raw})...)
+	}
+	material, err := newTLSMaterial(certPEM, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return material
 }

@@ -1111,6 +1111,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 		TTL:         int(defaultLeaseTTL / time.Second),
 		ReportedIP:  utils.ResolvePublicIP(requestCtx),
 		Metadata:    l.metadataSnapshot(),
+		RepinsChain: true,
 	})
 	if err != nil {
 		if staleLeaseError(err) {

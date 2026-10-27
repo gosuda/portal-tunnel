@@ -351,7 +351,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, sourceAd
 			descriptors = nil
 		}
 	}
-	record, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors)
+	record, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial())
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return identityKey, types.RegisterResponse{}, false
@@ -429,7 +429,7 @@ func (s *Server) HandleRenew(w http.ResponseWriter, r *http.Request, sourceAddr 
 		return
 	}
 
-	resp, endpointInput, err := s.registry.Renew(req, sourceAddr)
+	resp, endpointInput, err := s.registry.Renew(req, sourceAddr, s.acmeManager.TLSMaterial())
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return
