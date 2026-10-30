@@ -715,7 +715,7 @@ func (o *oidcAuthenticator) writeFailurePage(w http.ResponseWriter, r *http.Requ
 	if next = sanitizeApplicationAuthNext(next); next != "/" {
 		query.Set("next", next)
 	}
-	// the refused account's retry asks the provider for its account chooser
+	// The refused account's retry asks the provider for its account chooser
 	if page == signinOIDCDeniedPage {
 		query.Set("prompt", oidcAccountChooserPrompt)
 	}
