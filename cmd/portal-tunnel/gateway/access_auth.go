@@ -536,6 +536,10 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 	writeSigninPage(w, page, r.Host)
 }
 
+// oidcAccountChooserPrompt is the prompt value that asks the provider to show its
+// account chooser. Only the retry on the not-allowed page sends it.
+const oidcAccountChooserPrompt = "select_account"
+
 func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 	// A login keeps its state in one cookie, so a request that never completes
 	// the login, like a HEAD probe, must not overwrite the state of one in progress.
@@ -596,11 +600,16 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 	})
 
 	oauthCfg := o.oauth2Config(doc, host)
-	authURL := oauthCfg.AuthCodeURL(
-		state,
+	authOptions := []oauth2.AuthCodeOption{
 		oauth2.S256ChallengeOption(codeVerifier),
 		oauth2.SetAuthURLParam("nonce", nonce),
-	)
+	}
+	// A browser still signed in to the refused account is let straight back in
+	// unless asked otherwise. Any other prompt value a caller sends is not passed on.
+	if r.URL.Query().Get("prompt") == oidcAccountChooserPrompt {
+		authOptions = append(authOptions, oauth2.SetAuthURLParam("prompt", oidcAccountChooserPrompt))
+	}
+	authURL := oauthCfg.AuthCodeURL(state, authOptions...)
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, authURL, http.StatusSeeOther)
 }
@@ -702,9 +711,17 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 // writeFailurePage shows a browser why its OIDC login ended without a session.
 // The retry link starts a new login that returns the visitor to next.
 func (o *oidcAuthenticator) writeFailurePage(w http.ResponseWriter, r *http.Request, status int, page, next string, fields ...string) {
-	retry := applicationAuthLoginPath
+	query := url.Values{}
 	if next = sanitizeApplicationAuthNext(next); next != "/" {
-		retry += "?next=" + url.QueryEscape(next)
+		query.Set("next", next)
+	}
+	// the refused account's retry asks the provider for its account chooser
+	if page == signinOIDCDeniedPage {
+		query.Set("prompt", oidcAccountChooserPrompt)
+	}
+	retry := applicationAuthLoginPath
+	if len(query) > 0 {
+		retry += "?" + query.Encode()
 	}
 	issuer := o.issuerURL
 	if parsed, err := url.Parse(o.issuerURL); err == nil && parsed.Host != "" {

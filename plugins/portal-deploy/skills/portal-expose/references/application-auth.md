@@ -137,5 +137,6 @@ Without signing in as the user:
 | `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least 16 characters of visible ASCII without spaces` | Generate the value with `openssl rand -hex 32` as above. |
 | `HTTP tunnel cannot be combined with TCP or UDP` | Remove `--tcp` / `--udp`, or drop sign-in. |
 | `application auth cannot be combined with relay cache` | Remove `--cache`, or drop sign-in. |
+| "This account is not allowed" comes back on Sign in again | The browser is still signed in to the provider with the refused account, and the provider lets it straight back in. Sign in again asks the provider for its account chooser, so pick another account there, or sign out of the provider first. |
 | The provider reports a redirect URI mismatch | No callback is registered for the host the visitor opened. Register `https://<host>/_portal/auth/callback` for that exact host too: the short and the address-bound host differ, and so does each relay's. |
 | `application auth provider is not usable` in the log | The issuer is wrong or unreachable from this machine. |
