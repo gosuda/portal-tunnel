@@ -320,7 +320,7 @@ func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 			t.Parallel()
 			idp := newOIDCTestIdP(t, tt.configure)
 			gate := newOIDCTestGate(t, idp)
-			login := startOIDCLogin(t, gate, idp, cmp.Or(tt.loginHost, "app.example"))
+			login := startOIDCLogin(t, gate, idp, cmp.Or(tt.loginHost, "app.example"), applicationAuthLoginPath)
 			rec := httptest.NewRecorder()
 			gate.ServeHTTP(rec, login.callbackRequest(t, gate, tt.tamper))
 			assertOIDCCallback(t, rec, tt.want)
@@ -358,7 +358,7 @@ func TestApplicationAuthOIDCFailureScreens(t *testing.T) {
 			for _, browser := range []bool{true, false} {
 				idp := newOIDCTestIdP(t, tt.configure)
 				gate := newOIDCTestGate(t, idp)
-				login := startOIDCLogin(t, gate, idp, "app.example")
+				login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath)
 				req := login.callbackRequest(t, gate, tt.tamper)
 				if browser {
 					req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -417,7 +417,7 @@ func TestApplicationAuthOIDCDeniedScreenShowsOnlyTheVisitorsAccount(t *testing.T
 			t.Parallel()
 			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { p.mutate = tt.mutate })
 			gate := newOIDCTestGate(t, idp, allowed...)
-			req := startOIDCLogin(t, gate, idp, "app.example").callbackRequest(t, gate, nil)
+			req := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath).callbackRequest(t, gate, nil)
 			req.Header.Set("Accept", "text/html")
 			rec := httptest.NewRecorder()
 			gate.ServeHTTP(rec, req)
@@ -449,7 +449,7 @@ func TestApplicationAuthOIDCRetryAsksForAccountChooser(t *testing.T) {
 		p.mutate = func(c *oidcIDTokenClaims) { c.Subject, c.Email = "user-999", "mallory@example.com" }
 	})
 	gate := newOIDCTestGate(t, idp)
-	login := startOIDCLoginAt(t, gate, idp, "app.example", applicationAuthLoginPath+"?next="+url.QueryEscape("/docs?page=2"))
+	login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath+"?next="+url.QueryEscape("/docs?page=2"))
 	req := login.callbackRequest(t, gate, nil)
 	req.Header.Set("Accept", "text/html")
 	denied := httptest.NewRecorder()
@@ -603,7 +603,7 @@ func TestApplicationAuthOIDCKeysAreFetchedForVerificationOnly(t *testing.T) {
 	t.Parallel()
 	idp := newOIDCTestIdP(t, nil)
 	gate := newOIDCTestGate(t, idp)
-	login := startOIDCLogin(t, gate, idp, "app.example")
+	login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath)
 	if got := idp.jwksHits.Load(); got != 0 {
 		t.Fatalf("starting a login requested the signing keys %d times; want 0", got)
 	}
@@ -953,7 +953,7 @@ func TestApplicationAuthOIDCEmailVerifiedDecoding(t *testing.T) {
 // completeOIDCLogin runs the login and the callback at app.example.
 func completeOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP) *httptest.ResponseRecorder {
 	t.Helper()
-	login := startOIDCLogin(t, gate, idp, "app.example")
+	login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath)
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, login.callbackRequest(t, gate, nil))
 	return rec
@@ -1008,13 +1008,7 @@ type oidcLogin struct {
 
 // startOIDCLogin performs the login step and tells the stub IdP which PKCE
 // challenge and nonce the callback must carry.
-func startOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP, host string) oidcLogin {
-	t.Helper()
-	return startOIDCLoginAt(t, gate, idp, host, applicationAuthLoginPath)
-}
-
-// startOIDCLoginAt is startOIDCLogin for a login request that carries its own query.
-func startOIDCLoginAt(t *testing.T, gate *applicationAuth, idp *oidcTestIdP, host, path string) oidcLogin {
+func startOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP, host, path string) oidcLogin {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+host+path, nil))
@@ -1183,7 +1177,7 @@ func TestApplicationAuthOIDCSessionLifetime(t *testing.T) {
 			})
 			gate := newOIDCTestGate(t, idp)
 			start := time.Now()
-			login := startOIDCLogin(t, gate, idp, "app.example")
+			login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath)
 			callback := httptest.NewRecorder()
 			gate.ServeHTTP(callback, login.callbackRequest(t, gate, nil))
 			assertOIDCCallback(t, callback, http.StatusSeeOther)
