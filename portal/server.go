@@ -753,6 +753,37 @@ func (s *Server) PolicyLeases() []types.PolicyLease {
 	return s.registry.PolicyLeases(time.Now())
 }
 
+// ServerStats is a point-in-time operational snapshot. Active leases exclude
+// expired registrations; active connections count currently bridged HTTP/SNI
+// and raw TCP streams, including overlay streams. ActiveUDPFlows counts tracked
+// flows on active leases, including idle flows until their normal expiry.
+// ForwardedBytes counts successful HTTP/SNI and raw TCP stream writes in both
+// directions (including overlay), excluding UDP payloads. It is cumulative
+// for this Server instance and resets when a new Server is created.
+// Fields are read independently, so concurrent traffic may advance between
+// reads; the snapshot is not an atomic transaction.
+type ServerStats struct {
+	ActiveLeases      int64
+	ActiveConnections int64
+	ActiveUDPFlows    int64
+	ForwardedBytes    int64
+}
+
+// Stats returns bounded, aggregate relay state without tenant identifiers.
+// A nil or uninitialized Server has zero stats.
+func (s *Server) Stats() ServerStats {
+	if s == nil {
+		return ServerStats{}
+	}
+	var stats ServerStats
+	if s.registry != nil {
+		stats.ActiveLeases, stats.ActiveUDPFlows = s.registry.stats(time.Now())
+	}
+	stats.ActiveConnections = s.proxy.activeConnectionCount()
+	stats.ForwardedBytes = s.proxy.tcpBytes.Load()
+	return stats
+}
+
 // AccessProjectionKeys returns identities whose live lease or retained cache
 // content needs the relay's current access decision.
 func (s *Server) AccessProjectionKeys() []types.ServiceIdentityKey {

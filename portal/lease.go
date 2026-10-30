@@ -1000,6 +1000,21 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 	return leases
 }
 
+func (r *leaseRegistry) stats(now time.Time) (activeLeases, activeUDPFlows int64) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, record := range r.records {
+		if record == nil || record.reverse == nil || record.isExpired(now) {
+			continue
+		}
+		activeLeases++
+		if record.datagram != nil {
+			activeUDPFlows += record.datagram.ActiveFlowCount()
+		}
+	}
+	return activeLeases, activeUDPFlows
+}
+
 func (r *leaseRegistry) deleteRecord(i int) {
 	if record := r.records[i]; record != nil {
 		r.cache.Detach(record.cacheLease())
