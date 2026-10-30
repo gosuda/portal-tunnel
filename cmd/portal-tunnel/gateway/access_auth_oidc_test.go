@@ -320,7 +320,7 @@ func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 			t.Parallel()
 			idp := newOIDCTestIdP(t, tt.configure)
 			gate := newOIDCTestGate(t, idp)
-			login := startOIDCLogin(t, gate, idp, cmp.Or(tt.loginHost, "app.example"))
+			login := startOIDCLogin(t, gate, idp, cmp.Or(tt.loginHost, "app.example"), applicationAuthLoginPath)
 			rec := httptest.NewRecorder()
 			gate.ServeHTTP(rec, login.callbackRequest(t, gate, tt.tamper))
 			assertOIDCCallback(t, rec, tt.want)
@@ -339,6 +339,7 @@ func TestApplicationAuthOIDCFailureScreens(t *testing.T) {
 		configure func(p *oidcTestIdP)
 		tamper    oidcTamper
 		title     string
+		retry     string
 	}{
 		{name: "visitor canceled at the provider", tamper: withQuery("error=access_denied"), title: "Sign-in was canceled"},
 		{name: "provider reported another error", tamper: withQuery("error=server_error"), title: "Sign-in could not be completed"},
@@ -348,7 +349,7 @@ func TestApplicationAuthOIDCFailureScreens(t *testing.T) {
 		{name: "token endpoint rejects the code", configure: func(p *oidcTestIdP) { p.tokenStatus = http.StatusBadRequest }, title: "Sign-in could not be completed"},
 		{name: "account is not on the allowlist", configure: func(p *oidcTestIdP) {
 			p.mutate = func(c *oidcIDTokenClaims) { c.Subject, c.Email = "user-999", "mallory@example.com" }
-		}, title: "This account is not allowed"},
+		}, title: "This account is not allowed", retry: applicationAuthLoginPath + "?prompt=select_account"},
 	}
 
 	for _, tt := range tests {
@@ -357,7 +358,7 @@ func TestApplicationAuthOIDCFailureScreens(t *testing.T) {
 			for _, browser := range []bool{true, false} {
 				idp := newOIDCTestIdP(t, tt.configure)
 				gate := newOIDCTestGate(t, idp)
-				login := startOIDCLogin(t, gate, idp, "app.example")
+				login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath)
 				req := login.callbackRequest(t, gate, tt.tamper)
 				if browser {
 					req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -377,7 +378,11 @@ func TestApplicationAuthOIDCFailureScreens(t *testing.T) {
 				if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" || rec.Header().Get("Content-Security-Policy") != signinContentSecurityPolicy {
 					t.Fatalf("browser got %q under CSP %q", rec.Header().Get("Content-Type"), rec.Header().Get("Content-Security-Policy"))
 				}
-				for _, want := range []string{"<h1>" + tt.title + "</h1>", "app.example", `href="` + applicationAuthLoginPath + `"`} {
+				retry := applicationAuthLoginPath
+				if tt.retry != "" {
+					retry = tt.retry
+				}
+				for _, want := range []string{"<h1>" + tt.title + "</h1>", "app.example", `href="` + retry + `"`} {
 					if !strings.Contains(body, want) {
 						t.Fatalf("page is missing %q", want)
 					}
@@ -412,7 +417,7 @@ func TestApplicationAuthOIDCDeniedScreenShowsOnlyTheVisitorsAccount(t *testing.T
 			t.Parallel()
 			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) { p.mutate = tt.mutate })
 			gate := newOIDCTestGate(t, idp, allowed...)
-			req := startOIDCLogin(t, gate, idp, "app.example").callbackRequest(t, gate, nil)
+			req := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath).callbackRequest(t, gate, nil)
 			req.Header.Set("Accept", "text/html")
 			rec := httptest.NewRecorder()
 			gate.ServeHTTP(rec, req)
@@ -431,6 +436,56 @@ func TestApplicationAuthOIDCDeniedScreenShowsOnlyTheVisitorsAccount(t *testing.T
 				}
 			}
 		})
+	}
+}
+
+// The not-allowed page's retry carries prompt=select_account, so a browser still
+// signed in to the refused account gets the provider's account chooser, and the
+// retry keeps the deep link. No other login sends the prompt.
+func TestApplicationAuthOIDCRetryAsksForAccountChooser(t *testing.T) {
+	t.Parallel()
+
+	idp := newOIDCTestIdP(t, func(p *oidcTestIdP) {
+		p.mutate = func(c *oidcIDTokenClaims) { c.Subject, c.Email = "user-999", "mallory@example.com" }
+	})
+	gate := newOIDCTestGate(t, idp)
+	login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath+"?next="+url.QueryEscape("/docs?page=2"))
+	req := login.callbackRequest(t, gate, nil)
+	req.Header.Set("Accept", "text/html")
+	denied := httptest.NewRecorder()
+	gate.ServeHTTP(denied, req)
+	assertOIDCCallback(t, denied, http.StatusUnauthorized)
+	// the page escapes the attribute, so the & between the query's parameters is written &amp;
+	retry := `href="` + applicationAuthLoginPath + `?next=%2Fdocs%3Fpage%3D2&amp;prompt=select_account"`
+	if !strings.Contains(denied.Body.String(), retry) {
+		t.Fatalf("retry link is not the account-chooser login: %q", denied.Body.String())
+	}
+
+	for _, tt := range []struct {
+		name, path string
+		chooser    bool
+	}{
+		{name: "plain login", path: applicationAuthLoginPath},
+		{name: "prompt none", path: applicationAuthLoginPath + "?prompt=none"},
+		{name: "prompt login", path: applicationAuthLoginPath + "?prompt=login"},
+		{name: "account chooser", path: applicationAuthLoginPath + "?prompt=select_account", chooser: true},
+	} {
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://app.example"+tt.path, nil))
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("%s: login = %d", tt.name, rec.Code)
+		}
+		authorize, err := url.Parse(rec.Header().Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt, sent := authorize.Query()["prompt"]
+		if sent != tt.chooser {
+			t.Fatalf("%s: provider got prompt %q, want account chooser %v", tt.name, prompt, tt.chooser)
+		}
+		if tt.chooser && strings.Join(prompt, ",") != "select_account" {
+			t.Fatalf("%s: provider got prompt %q, want select_account", tt.name, prompt)
+		}
 	}
 }
 
@@ -548,7 +603,7 @@ func TestApplicationAuthOIDCKeysAreFetchedForVerificationOnly(t *testing.T) {
 	t.Parallel()
 	idp := newOIDCTestIdP(t, nil)
 	gate := newOIDCTestGate(t, idp)
-	login := startOIDCLogin(t, gate, idp, "app.example")
+	login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath)
 	if got := idp.jwksHits.Load(); got != 0 {
 		t.Fatalf("starting a login requested the signing keys %d times; want 0", got)
 	}
@@ -898,7 +953,7 @@ func TestApplicationAuthOIDCEmailVerifiedDecoding(t *testing.T) {
 // completeOIDCLogin runs the login and the callback at app.example.
 func completeOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP) *httptest.ResponseRecorder {
 	t.Helper()
-	login := startOIDCLogin(t, gate, idp, "app.example")
+	login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath)
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, login.callbackRequest(t, gate, nil))
 	return rec
@@ -953,10 +1008,10 @@ type oidcLogin struct {
 
 // startOIDCLogin performs the login step and tells the stub IdP which PKCE
 // challenge and nonce the callback must carry.
-func startOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP, host string) oidcLogin {
+func startOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP, host, path string) oidcLogin {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+host+applicationAuthLoginPath, nil))
+	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+host+path, nil))
 	authRedirect, err := url.Parse(rec.Header().Get("Location"))
 	if err != nil || rec.Code != http.StatusSeeOther {
 		t.Fatalf("login = %d, %q, %v", rec.Code, rec.Header().Get("Location"), err)
@@ -1122,7 +1177,7 @@ func TestApplicationAuthOIDCSessionLifetime(t *testing.T) {
 			})
 			gate := newOIDCTestGate(t, idp)
 			start := time.Now()
-			login := startOIDCLogin(t, gate, idp, "app.example")
+			login := startOIDCLogin(t, gate, idp, "app.example", applicationAuthLoginPath)
 			callback := httptest.NewRecorder()
 			gate.ServeHTTP(callback, login.callbackRequest(t, gate, nil))
 			assertOIDCCallback(t, callback, http.StatusSeeOther)
