@@ -3,11 +3,44 @@ package transport
 import (
 	"math"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestRelayDatagramActiveFlowCountConcurrentWithLifecycle(t *testing.T) {
+	d := NewRelayDatagram(types.NewServiceIdentityKey("lease", "stats"), 0)
+	t.Cleanup(d.Close)
+	if got := d.ActiveFlowCount(); got != 0 {
+		t.Fatalf("initial flow count = %d", got)
+	}
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for range 100 {
+				if got := d.ActiveFlowCount(); got < 0 || got > 1 {
+					t.Errorf("active flow count = %d", got)
+				}
+			}
+		}()
+	}
+	addr := netip.MustParseAddrPort("127.0.0.1:1234")
+	for range 50 {
+		id, _, ok := d.touchFlow(addr, time.Now())
+		if !ok {
+			t.Fatal("flow rejected")
+		}
+		d.forgetFlow(id)
+	}
+	readers.Wait()
+	if got := d.ActiveFlowCount(); got != 0 {
+		t.Fatalf("final flow count = %d", got)
+	}
+}
 
 func TestRelayDatagramAdmissionPreservesEstablishedFlows(t *testing.T) {
 	d := NewRelayDatagram(types.NewServiceIdentityKey("lease", "bounds"), 0)

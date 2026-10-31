@@ -2,12 +2,14 @@ package portal
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +17,89 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestServerStatsLeaseLifecycleAndCumulativeTraffic(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	server := &Server{registry: registry}
+	if got := server.Stats(); got != (ServerStats{}) {
+		t.Fatalf("initial Stats() = %+v", got)
+	}
+	if got := (*Server)(nil).Stats(); got != (ServerStats{}) {
+		t.Fatalf("nil Stats() = %+v", got)
+	}
+	_, response, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "stats"),
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, client := net.Pipe()
+	right, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	bridgeDone := make(chan struct{})
+	go func() {
+		defer close(bridgeDone)
+		server.proxy.bridge(t.Context(), left, right, types.ServiceIdentityKey{}, registry.bps)
+	}()
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := client.Write([]byte("hello"))
+		writeDone <- err
+	}()
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(peer, buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	if got := server.Stats(); got.ActiveLeases != 1 || got.ActiveConnections != 1 {
+		t.Fatalf("registered Stats() = %+v", got)
+	}
+	_ = client.Close()
+	_ = peer.Close()
+	<-bridgeDone
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: response.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+	if got := server.Stats(); got != (ServerStats{ForwardedBytes: 5}) {
+		t.Fatalf("unregistered Stats() = %+v", got)
+	}
+}
+
+func TestServerStatsConcurrentLeaseLifecycle(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	server := &Server{registry: registry}
+	leaseIdentity := newTestLeaseIdentity(t, "stats-concurrent")
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for range 100 {
+				if got := server.Stats(); got.ActiveLeases < 0 || got.ActiveLeases > 1 {
+					t.Errorf("Stats() during registration = %+v", got)
+				}
+			}
+		}()
+	}
+	for range 10 {
+		_, response, err := registry.Register(types.RegisterChallengeRequest{
+			Identity: leaseIdentity,
+		}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: response.AccessToken}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readers.Wait()
+	if got := server.Stats(); got.ActiveLeases != 0 {
+		t.Fatalf("final Stats() = %+v", got)
+	}
+}
 
 func TestBackhaulPendingSourcesSharesIPv6SubnetBudget(t *testing.T) {
 	sources := newBackhaulPendingSources()
