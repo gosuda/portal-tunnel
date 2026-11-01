@@ -24,10 +24,10 @@ func main() {
 		packages = []string{"./..."}
 	}
 
-	args := append([]string{"lint", "-json"}, packages...)
+	args := append([]string{"tool", "gojgp", "lint", "-json"}, packages...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	command := exec.CommandContext(context.Background(), "gojgp", args...)
+	command := exec.CommandContext(context.Background(), "go", args...)
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
