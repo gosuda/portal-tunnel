@@ -22,6 +22,17 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
+	errPortalSDKContextIsNil               = errors.New("portal sdk: context is nil")
+	errPortalSDKThisRuntimeSupportsHTTPS   = errors.New("portal sdk: this runtime supports HTTPS exposure only")
+	errRelayStaticCacheCannotCombinedUDP   = errors.New("relay static cache cannot be combined with UDP, raw TCP, or MITM blocking")
+	errPortalSDKIdentityMustIncludeAddress = errors.New("portal sdk: identity must include address, public key, and private key")
+	errPortalSDKLeastOneInitialRelay       = errors.New("portal sdk: at least one initial relay is required")
+	errExposureDoesNotHaveUDPEnabled       = errors.New("exposure does not have udp enabled")
+	errExposureDoesNotHaveTCPEnabled       = errors.New("exposure does not have tcp enabled")
+)
+
 // RelayState is the lifecycle state of one relay.
 type RelayState string
 
@@ -204,12 +215,12 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	var cfg options
 	for _, option := range opts {
 		if option == nil {
-			return nil, errors.New("portal sdk: option is nil")
+			return nil, errPortalSDKOptionIsNil
 		}
 		option(&cfg)
 	}
 	if ctx == nil {
-		return nil, errors.New("portal sdk: context is nil")
+		return nil, errPortalSDKContextIsNil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -219,12 +230,12 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
 	if runtime.GOOS == "js" && requiresSocketTransport {
-		return nil, errors.New("portal sdk: this runtime supports HTTPS exposure only")
+		return nil, errPortalSDKThisRuntimeSupportsHTTPS
 	}
 	var source *cache.Source
 	if cfg.Cache != nil {
 		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM {
-			return nil, errors.New("relay static cache cannot be combined with UDP, raw TCP, or MITM blocking")
+			return nil, errRelayStaticCacheCannotCombinedUDP
 		}
 		var err error
 		source, err = cache.NewSource(*cfg.Cache)
@@ -240,7 +251,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if strings.TrimSpace(identity.Address) == "" ||
 		strings.TrimSpace(identity.PublicKey) == "" ||
 		strings.TrimSpace(identity.PrivateKey) == "" {
-		return nil, errors.New("portal sdk: identity must include address, public key, and private key")
+		return nil, errPortalSDKIdentityMustIncludeAddress
 	}
 
 	// Resolve initial membership and enforce the non-empty invariant.
@@ -258,7 +269,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 			return nil, err
 		}
 		if len(resolved) == 0 {
-			return nil, errors.New("portal sdk: at least one initial relay is required")
+			return nil, errPortalSDKLeastOneInitialRelay
 		}
 		bootstraps, err := discovery.BootstrapRelayURLs()
 		if err != nil {
@@ -271,7 +282,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		controller.SetLocalAddress(identity.Address)
 		controller.SetSelectionKey(deriveSelectionKey(identity))
 	} else if len(relayURLs) == 0 {
-		return nil, errors.New("portal sdk: at least one initial relay is required")
+		return nil, errPortalSDKLeastOneInitialRelay
 	}
 
 	exposureCtx, cancel := context.WithCancel(ctx)
@@ -885,7 +896,7 @@ func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
 
 func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool) ([]RelayStatus, error) {
 	if ctx == nil {
-		return nil, errors.New("portal sdk: context is nil")
+		return nil, errPortalSDKContextIsNil
 	}
 	for {
 		ready, changed := e.readyRelays(matches)
@@ -943,7 +954,7 @@ func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 // backhaul and returns the ready relay snapshots.
 func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error) {
 	if !e.options.UDPEnabled {
-		return nil, errors.New("exposure does not have udp enabled")
+		return nil, errExposureDoesNotHaveUDPEnabled
 	}
 	return e.waitReady(ctx, func(status RelayStatus) bool {
 		return status.State != RelayFailed && status.UDPAddr != ""
@@ -954,7 +965,7 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error)
 // address and returns the ready relay snapshots.
 func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
 	if !e.options.TCPEnabled {
-		return nil, errors.New("exposure does not have tcp enabled")
+		return nil, errExposureDoesNotHaveTCPEnabled
 	}
 	return e.waitReady(ctx, func(status RelayStatus) bool {
 		return status.State != RelayFailed && status.TCPAddr != ""

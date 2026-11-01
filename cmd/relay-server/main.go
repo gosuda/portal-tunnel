@@ -26,6 +26,14 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errUDPAndTCPRelayTransportRequire     = errors.New("udp and tcp relay transport require a valid min port and max port range")
+	errMinPortAndMaxPortMust              = errors.New("min port and max port must be between 1 and 65535")
+	errMinPortMustLessThanOr              = errors.New("min port must be less than or equal to max port")
+	errX402FacilitatorRequiresValidSuiPay = errors.New("x402 facilitator requires a valid Sui pay-to address")
+	errOnlyOneHelpTopicSupported          = errors.New("only one help topic is supported")
+)
+
 func main() {
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
@@ -179,11 +187,11 @@ func validateRelaySettings(cfg *appConfig) error {
 	if cfg.UDPEnabled || cfg.TCPEnabled {
 		switch {
 		case cfg.Relay.MinPort <= 0 || cfg.Relay.MaxPort <= 0:
-			return errors.New("udp and tcp relay transport require a valid min port and max port range")
+			return errUDPAndTCPRelayTransportRequire
 		case cfg.Relay.MinPort > 65535 || cfg.Relay.MaxPort > 65535:
-			return errors.New("min port and max port must be between 1 and 65535")
+			return errMinPortAndMaxPortMust
 		case cfg.Relay.MinPort > cfg.Relay.MaxPort:
-			return errors.New("min port must be less than or equal to max port")
+			return errMinPortMustLessThanOr
 		}
 	}
 	return nil
@@ -252,13 +260,17 @@ func runServer(ctx context.Context, cfg appConfig) error {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- server.Serve(runCtx, handler) }()
+	serveDone := make(chan struct{})
+	var relayErr error
+	go func() {
+		defer close(serveDone)
+		relayErr = server.Serve(runCtx, handler)
+	}()
 
 	var serveErr error
 	select {
-	case err := <-serveDone:
-		serveErr = err
+	case <-serveDone:
+		serveErr = relayErr
 	case err := <-pprofErrs:
 		serveErr = fmt.Errorf("serve pprof: %w", err)
 		cancel()
@@ -295,7 +307,7 @@ func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
 	}
 	payTo := suischeme.NormalizeAddress(cfg.X402PayTo)
 	if payTo == "" {
-		return x402FacilitatorSettings{}, errors.New("x402 facilitator requires a valid Sui pay-to address")
+		return x402FacilitatorSettings{}, errX402FacilitatorRequiresValidSuiPay
 	}
 	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: payTo, PortalURL: cfg.Relay.PortalURL}, nil
 }
@@ -395,7 +407,7 @@ func runHelpCommand(args []string) error {
 		}
 	default:
 		printRootUsage(os.Stderr)
-		return errors.New("only one help topic is supported")
+		return errOnlyOneHelpTopicSupported
 	}
 }
 

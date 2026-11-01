@@ -17,6 +17,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var errRequestBodyMustContainSingleJSON = errors.New("request body must contain a single JSON value")
+
 const maxAPIResponseBytes int64 = 4 << 20
 
 // ErrAPIResponseTooLarge reports that an API response exceeded its decoded-byte limit.
@@ -269,7 +271,7 @@ func decodeJSONRequestBody[T any](w http.ResponseWriter, r *http.Request, maxByt
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return dst, errors.New("request body must contain a single JSON value")
+			return dst, errRequestBodyMustContainSingleJSON
 		}
 		return dst, err
 	}

@@ -16,6 +16,13 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errPortalSDKExposureIsNil       = errors.New("portal sdk: exposure is nil")
+	errPortalSDKLeastOneProxyTarget = errors.New("portal sdk: at least one proxy target is required")
+	errRelayDidNotExposeAnyUDP      = errors.New("relay did not expose any UDP listeners")
+	errUDPFlowCapacityReached       = errors.New("UDP flow capacity reached")
+)
+
 // maxTCPConnections bounds local TCP proxy sockets and workers independently
 // of relay admission limits.
 const maxTCPConnections = 128
@@ -40,10 +47,10 @@ func ProxyUDP(ctx context.Context, exposure *Exposure, target string) error {
 // exposure when proxying stops.
 func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig) error {
 	if exposure == nil {
-		return errors.New("portal sdk: exposure is nil")
+		return errPortalSDKExposureIsNil
 	}
 	if ctx == nil {
-		return errors.New("portal sdk: context is nil")
+		return errPortalSDKContextIsNil
 	}
 
 	var err error
@@ -67,7 +74,7 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 		workerCount++
 	}
 	if workerCount == 0 {
-		return errors.New("portal sdk: at least one proxy target is required")
+		return errPortalSDKLeastOneProxyTarget
 	}
 
 	identity := exposure.identity
@@ -297,7 +304,7 @@ func runUDPProxy(ctx context.Context, exposure *Exposure, udpTarget string) erro
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return errors.New("relay did not expose any UDP listeners")
+		return errRelayDidNotExposeAnyUDP
 	}
 
 	for _, relay := range udpRelays {
@@ -458,7 +465,7 @@ func (m *udpFlowManager) getOrCreate(ctx context.Context, frame types.DatagramFr
 		return f.conn, nil
 	}
 	if m.readers >= types.DefaultUDPMaxFlows {
-		return nil, errors.New("UDP flow capacity reached")
+		return nil, errUDPFlowCapacityReached
 	}
 	localConn, err := net.DialUDP("udp", nil, m.target)
 	if err != nil {

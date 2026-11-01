@@ -28,6 +28,19 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errListenerIsNotReady                                 = errors.New("listener is not ready")
+	errListenerIsNotRegistered                            = errors.New("listener is not registered")
+	errListenerHostnameIsUnavailable                      = errors.New("listener hostname is unavailable")
+	errListenerRelayMaterialsAreUnavailable               = errors.New("listener relay materials are unavailable")
+	errListenerRelayCertificatePoolUnavailable            = errors.New("listener relay certificate pool is unavailable")
+	errTLSConnectionIsRequired                            = errors.New("tls connection is required")
+	errTLSConnectionDoesNotSupportKeying                  = errors.New("tls connection does not support keying material export")
+	errTunnelDidNotAnswerChannelBinding                   = errors.New("tunnel did not answer channel binding")
+	errTLSChannelBindingExporterMismatchRelay             = errors.New("tls channel binding exporter mismatch: relay terminated client tls")
+	errListenerCanonicalHostnameUnavailableChannelBinding = errors.New("listener canonical hostname is unavailable for channel binding")
+)
+
 var errMITMDetected = errors.New("tls termination suspected by self-probe")
 
 // keyingMaterialExporter is the direct TLS 1.3 keying material exporter the
@@ -138,20 +151,20 @@ func (m *mitmManager) setResponderCapable(capable bool) {
 func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport, error) {
 	l := m.listener
 	if l == nil || l.api == nil || l.api.relayURL == nil {
-		return mitmProbeReport{}, errors.New("listener is not ready")
+		return mitmProbeReport{}, errListenerIsNotReady
 	}
 
 	lease, ok := l.leaseSnapshot()
 	if !ok {
-		return mitmProbeReport{}, errors.New("listener is not registered")
+		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
 	if lease.hostname == "" {
-		return mitmProbeReport{}, errors.New("listener hostname is unavailable")
+		return mitmProbeReport{}, errListenerHostnameIsUnavailable
 	}
 
 	publicURL := l.publicURLForLease(lease)
 	if publicURL == "" {
-		return mitmProbeReport{}, errors.New("listener is not registered")
+		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
 
 	report := mitmProbeReport{
@@ -174,11 +187,11 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	}
 
 	if lease.tenantTLS == nil {
-		return report, errors.New("listener relay materials are unavailable")
+		return report, errListenerRelayMaterialsAreUnavailable
 	}
 	relayPool := lease.tenantTLS.RelayCertPool()
 	if relayPool == nil {
-		return report, errors.New("listener relay certificate pool is unavailable")
+		return report, errListenerRelayCertificatePoolUnavailable
 	}
 
 	probeTLSConf := &tls.Config{
@@ -252,7 +265,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	l := m.listener
 	if l == nil || l.api == nil || l.api.relayURL == nil {
-		return "", errors.New("listener is not ready")
+		return "", errListenerIsNotReady
 	}
 	parsedURL, err := url.Parse(publicURL)
 	if err != nil {
@@ -403,7 +416,7 @@ func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
 // afterwards.
 func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string) error {
 	if conn == nil {
-		return errors.New("tls connection is required")
+		return errTLSConnectionIsRequired
 	}
 	expectedAddr, err := utils.ExtractCanonicalHostnameAddress(hostname)
 	if err != nil {
@@ -413,7 +426,7 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	exportFn, ok := probeExporter(conn)
 	if !ok {
 		_ = conn.Close()
-		return errors.New("tls connection does not support keying material export")
+		return errTLSConnectionDoesNotSupportKeying
 	}
 	clientExporter, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
 	if err != nil {
@@ -452,7 +465,7 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	}
 	if string(tag) != types.TLSChannelBindingAnswerTag {
 		_ = conn.Close()
-		return errors.New("tunnel did not answer channel binding")
+		return errTunnelDidNotAnswerChannelBinding
 	}
 	signed := answer[len(tag):]
 	if _, err := io.ReadFull(conn, signed); err != nil {
@@ -464,7 +477,7 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	compactSig := signed[types.TLSChannelBindingExporterSize:]
 	if subtle.ConstantTimeCompare(clientExporter, tunnelExporter) != 1 {
 		_ = conn.Close()
-		return errors.New("tls channel binding exporter mismatch: relay terminated client tls")
+		return errTLSChannelBindingExporterMismatchRelay
 	}
 
 	payload := tlsChannelBindingPayload(hostname, nonce[:], clientExporter)
@@ -533,7 +546,7 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 	}
 	if hostname == "" {
 		_ = conn.Close()
-		return nil, errors.New("listener canonical hostname is unavailable for channel binding")
+		return nil, errListenerCanonicalHostnameUnavailableChannelBinding
 	}
 
 	var reqFrame [types.TLSChannelBindingRequestSize]byte

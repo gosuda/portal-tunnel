@@ -12,6 +12,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var (
+	errQUICBackhaulConnectionIsRequired = errors.New("quic backhaul connection is required")
+	errQUICDatagramSupportRequired      = errors.New("QUIC DATAGRAM support required")
+	errUDPPayloadExceedsLimit           = errors.New("UDP payload exceeds limit")
+)
+
 var errNoConnection = errors.New("no quic backhaul connection registered")
 
 // DatagramSession owns one active QUIC DATAGRAM connection and exposes decoded frames.
@@ -42,12 +48,12 @@ func NewDatagramSession(bufferSize int, dropIncoming bool) *DatagramSession {
 // Any previously active connection is replaced and closed.
 func (s *DatagramSession) Bind(conn *quic.Conn) (<-chan error, error) {
 	if conn == nil {
-		return nil, errors.New("quic backhaul connection is required")
+		return nil, errQUICBackhaulConnectionIsRequired
 	}
 
 	if !conn.ConnectionState().SupportsDatagrams.Remote {
 		_ = conn.CloseWithError(0, "QUIC DATAGRAM support required")
-		return nil, errors.New("QUIC DATAGRAM support required")
+		return nil, errQUICDatagramSupportRequired
 	}
 
 	s.mu.Lock()
@@ -136,7 +142,7 @@ func (s *DatagramSession) datagramConnectionLocked(payload []byte) (*quic.Conn, 
 	default:
 	}
 	if len(payload) > types.MaxUDPPayloadSize {
-		return nil, errors.New("UDP payload exceeds limit")
+		return nil, errUDPPayloadExceedsLimit
 	}
 	if s.conn == nil {
 		return nil, errNoConnection

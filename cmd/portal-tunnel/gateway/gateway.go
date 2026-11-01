@@ -31,6 +31,19 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errStripRequestHeaderNameRequired                = errors.New("strip request header name is required")
+	errHostCannotStrippedGoStoresIt                  = errors.New(`"Host" cannot be stripped: Go stores it in Request.Host, not Header`)
+	errXForwardedProtoCannotStrippedRunhttp          = errors.New(`"X-Forwarded-Proto" cannot be stripped: RunHTTP always overwrites it with the trusted https value before this middleware runs`)
+	errLeastOneHTTPRouteRequired                     = errors.New("at least one http route is required")
+	errX402UsdcPaymentRequiresSuiPay                 = errors.New("x402 USDC payment requires a Sui pay-to address")
+	errX402WcsprPaymentRequiresWcsprCep              = errors.New("x402 wCSPR payment requires the wCSPR CEP-18 contract hash")
+	errX402WcsprPaymentRequiresCasperPay             = errors.New("x402 wCSPR payment requires a Casper pay-to address")
+	errX402XnoPaymentRequiresChecksummedNano         = errors.New("x402 XNO payment requires a checksummed Nano pay-to address")
+	errCsprCloudX402FacilitatorRequiresAuthorization = errors.New("CSPR.cloud x402 facilitator requires an authorization token")
+	errX402PaymentMethodIsRequired                   = errors.New("x402 payment method is required")
+)
+
 const (
 	suiMainnetNetwork = "sui:mainnet"
 	suiTestnetNetwork = "sui:testnet"
@@ -115,7 +128,7 @@ func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, er
 	for _, name := range names {
 		name = strings.TrimSpace(name)
 		if name == "" {
-			return nil, errors.New("strip request header name is required")
+			return nil, errStripRequestHeaderNameRequired
 		}
 		if !isValidHeaderName(name) {
 			return nil, fmt.Errorf("invalid strip request header name %q", name)
@@ -123,9 +136,9 @@ func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, er
 		canonical := http.CanonicalHeaderKey(name)
 		switch canonical {
 		case "Host":
-			return nil, errors.New(`"Host" cannot be stripped: Go stores it in Request.Host, not Header`)
+			return nil, errHostCannotStrippedGoStoresIt
 		case "X-Forwarded-Proto":
-			return nil, errors.New(`"X-Forwarded-Proto" cannot be stripped: RunHTTP always overwrites it with the trusted https value before this middleware runs`)
+			return nil, errXForwardedProtoCannotStrippedRunhttp
 		}
 		if _, ok := seen[canonical]; ok {
 			continue
@@ -163,7 +176,7 @@ func isValidHeaderName(name string) bool {
 // through to the routes like any other path.
 func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Handler, error) {
 	if len(routes) == 0 {
-		return nil, errors.New("at least one http route is required")
+		return nil, errLeastOneHTTPRouteRequired
 	}
 	contract.PayTo = strings.TrimSpace(contract.PayTo)
 
@@ -265,7 +278,7 @@ func composeSuiRoute(prefix, amount string, contract X402Payment) (*routePolicy,
 	}
 	payTo := suischeme.NormalizeAddress(contract.PayTo)
 	if payTo == "" {
-		return nil, errors.New("x402 USDC payment requires a Sui pay-to address")
+		return nil, errX402UsdcPaymentRequiresSuiPay
 	}
 	atomic, err := suischeme.StablecoinAmountToAtomic(network, "USDC", amount)
 	if err != nil {
@@ -337,14 +350,14 @@ func composeCasperRoute(prefix, amount string, contract X402Payment) (*routePoli
 	}
 	asset := strings.ToLower(strings.TrimSpace(contract.Asset))
 	if asset == "" {
-		return nil, errors.New("x402 wCSPR payment requires the wCSPR CEP-18 contract hash")
+		return nil, errX402WcsprPaymentRequiresWcsprCep
 	}
 	// casperscheme.NormalizeAddress is strict: only account-hash-<64 hex>
 	// and hex-encoded public keys survive, so a malformed pay-to dies at
 	// composition instead of publishing an unpayable contract.
 	payTo := casperscheme.NormalizeAddress(contract.PayTo)
 	if payTo == "" {
-		return nil, errors.New("x402 wCSPR payment requires a Casper pay-to address")
+		return nil, errX402WcsprPaymentRequiresCasperPay
 	}
 	motes, err := casperscheme.CSPRToMotes(amount)
 	if err != nil {
@@ -387,7 +400,7 @@ func composeCasperRoute(prefix, amount string, contract X402Payment) (*routePoli
 func composeNanoRoute(prefix, amount, network string, contract X402Payment, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
 	payTo := normalizeNanoAddress(contract.PayTo)
 	if payTo == "" {
-		return nil, errors.New("x402 XNO payment requires a checksummed Nano pay-to address")
+		return nil, errX402XnoPaymentRequiresChecksummedNano
 	}
 	raw, err := xnoToRaw(amount)
 	if err != nil {
@@ -522,7 +535,7 @@ func newCasperFacilitatorClient(contract X402Payment) (*facilitatorclient.Client
 	endpoint := cmp.Or(firstEndpoint(contract.Endpoints), casperscheme.DefaultFacilitatorURL)
 	token := strings.TrimSpace(contract.FacilitatorToken)
 	if token == "" && strings.EqualFold(strings.TrimRight(endpoint, "/"), casperscheme.DefaultFacilitatorURL) {
-		return nil, errors.New("CSPR.cloud x402 facilitator requires an authorization token")
+		return nil, errCsprCloudX402FacilitatorRequiresAuthorization
 	}
 	// Reject plaintext non-loopback endpoints when a token is present: the
 	// facilitator client sends the token in an Authorization header and an
@@ -754,7 +767,7 @@ func normalizedPaymentMethods(methods []string) ([]string, error) {
 	for _, raw := range methods {
 		method := strings.ToUpper(strings.TrimSpace(raw))
 		if method == "" {
-			return nil, errors.New("x402 payment method is required")
+			return nil, errX402PaymentMethodIsRequired
 		}
 		set[method] = struct{}{}
 	}

@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+var errReverseConnectionIsRequired = errors.New("reverse connection is required")
+
 var errPoolFull = errors.New("reverse ready queue full")
 
 // ReversePool owns idle connections until Acquire transfers them to a caller.
@@ -65,7 +67,7 @@ func (p *ReversePool) Offer(conn net.Conn) error {
 // Close waits for outstanding reservations; no new offers enter after it begins.
 func (p *ReversePool) ReserveOffer(conn net.Conn) (*offerReservation, error) {
 	if conn == nil {
-		return nil, errors.New("reverse connection is required")
+		return nil, errReverseConnectionIsRequired
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

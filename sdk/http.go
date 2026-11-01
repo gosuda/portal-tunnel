@@ -20,6 +20,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRelayListenerOrLocalAddressRequired = errors.New("relay listener or local address is required")
+	errLeastOneHTTPRouteRequired           = errors.New("at least one http route is required")
+	errHTTPRoutePrefixIsRequired           = errors.New("http route prefix is required")
+)
+
 const (
 	defaultHTTPReadHeaderTimeout = 30 * time.Second
 	defaultHTTPShutdownTimeout   = 5 * time.Second
@@ -34,7 +40,7 @@ const (
 // labeled https too.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	if relayListener == nil && localAddr == "" {
-		return errors.New("relay listener or local address is required")
+		return errRelayListenerOrLocalAddressRequired
 	}
 
 	if handler == nil {
@@ -170,7 +176,7 @@ type HTTPRoutes struct {
 // NewHTTPRoutes creates routed HTTP handling for the given route configs.
 func NewHTTPRoutes(routeConfigs []HTTPRouteConfig) (*HTTPRoutes, error) {
 	if len(routeConfigs) == 0 {
-		return nil, errors.New("at least one http route is required")
+		return nil, errLeastOneHTTPRouteRequired
 	}
 
 	routes := make([]*httpRoute, 0, len(routeConfigs))
@@ -229,7 +235,7 @@ type httpRoute struct {
 func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	prefix := strings.TrimSpace(routeConfig.Prefix)
 	if prefix == "" {
-		return nil, errors.New("http route prefix is required")
+		return nil, errHTTPRoutePrefixIsRequired
 	}
 	if !strings.HasPrefix(prefix, "/") {
 		return nil, fmt.Errorf("http route prefix %q must start with /", prefix)

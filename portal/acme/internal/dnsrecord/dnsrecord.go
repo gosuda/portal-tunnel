@@ -9,12 +9,17 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRecordNameIsRequired = errors.New("record name is required")
+	errBaseDomainIsRequired = errors.New("base domain is required")
+)
+
 // RecordName validates a fully qualified record name and returns it
 // normalized.
 func RecordName(raw string) (string, error) {
 	name := utils.NormalizeHostname(raw)
 	if name == "" {
-		return "", errors.New("record name is required")
+		return "", errRecordNameIsRequired
 	}
 	return name, nil
 }
@@ -23,7 +28,7 @@ func RecordName(raw string) (string, error) {
 func BaseDomain(raw string) (string, error) {
 	name := utils.NormalizeBaseDomain(raw)
 	if name == "" {
-		return "", errors.New("base domain is required")
+		return "", errBaseDomainIsRequired
 	}
 	return name, nil
 }
@@ -117,7 +122,7 @@ func RelativeName(provider, fqdn, zone string) (string, error) {
 	fqdn = utils.NormalizeHostname(fqdn)
 	zone = utils.NormalizeBaseDomain(zone)
 	if fqdn == "" {
-		return "", errors.New("record name is required")
+		return "", errRecordNameIsRequired
 	}
 	if zone == "" {
 		return "", fmt.Errorf("%s zone is required", provider)

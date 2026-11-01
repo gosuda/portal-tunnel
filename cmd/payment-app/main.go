@@ -22,6 +22,14 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errX402PayToIsRequired              = errors.New("--x402-pay-to is required")
+	errX402AmountIsRequired             = errors.New("--x402-amount is required")
+	errPhotoURLIsRequired               = errors.New("--photo-url is required")
+	errX402MaxTimeoutCannotNegative     = errors.New("--x402-max-timeout cannot be negative")
+	errX402RequestTimeoutCannotNegative = errors.New("--x402-request-timeout cannot be negative")
+)
+
 const (
 	defaultThumbnailURL = "https://image.portal.thumbgo.kr/generated/1e56ad0f0a1d.png"
 	defaultPhotoURL     = "https://image.portal.thumbgo.kr/generated/905a4835ad50.png"
@@ -112,15 +120,15 @@ func run(args []string) error {
 func validatePaymentConfig(cfg paymentConfig) error {
 	switch {
 	case strings.TrimSpace(cfg.x402PayTo) == "":
-		return errors.New("--x402-pay-to is required")
+		return errX402PayToIsRequired
 	case strings.TrimSpace(cfg.x402Amount) == "":
-		return errors.New("--x402-amount is required")
+		return errX402AmountIsRequired
 	case strings.TrimSpace(cfg.photoURL) == "":
-		return errors.New("--photo-url is required")
+		return errPhotoURLIsRequired
 	case cfg.x402MaxTimeoutSeconds < 0:
-		return errors.New("--x402-max-timeout cannot be negative")
+		return errX402MaxTimeoutCannotNegative
 	case cfg.x402RequestTimeout < 0:
-		return errors.New("--x402-request-timeout cannot be negative")
+		return errX402RequestTimeoutCannotNegative
 	default:
 		return nil
 	}

@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+var (
+	errCacheTotalBytesMustPositive  = errors.New("cache total bytes must be positive")
+	errCacheOfflineTTLMustBetween1s = errors.New("cache offline TTL must be between 1s and 8760h")
+)
+
 // Config is operator policy. Tenant fairness and request admission are internal
 // cache responsibilities; origins can only request a shorter offline TTL.
 type Config struct {
@@ -18,10 +23,10 @@ func (cfg Config) Validate() error {
 		return nil
 	}
 	if cfg.MaxBytes <= 0 {
-		return errors.New("cache total bytes must be positive")
+		return errCacheTotalBytesMustPositive
 	}
 	if cfg.MaxTTL < time.Second || cfg.MaxTTL > 365*24*time.Hour {
-		return errors.New("cache offline TTL must be between 1s and 8760h")
+		return errCacheOfflineTTLMustBetween1s
 	}
 	return nil
 }

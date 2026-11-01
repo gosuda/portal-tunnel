@@ -18,6 +18,23 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errTunnelTargetIsRequired                  = errors.New("tunnel target is required")
+	errHTTPTunnelCannotCombinedTCPOr           = errors.New("HTTP tunnel cannot be combined with TCP or UDP")
+	errStaticServingCannotCombinedTargetOr     = errors.New("static serving cannot be combined with a target or HTTP routes")
+	errHTTPTunnelRequiresTargetRouteOr         = errors.New("HTTP tunnel requires a target, route, or static site")
+	errHTTPTunnelCannotCombineTargetAnd        = errors.New("HTTP tunnel cannot combine a target and routes")
+	errRelayCacheRequiresStaticSite            = errors.New("relay cache requires a static site")
+	errRelayCachePermitsTLSTerminationAnd      = errors.New("relay cache permits TLS termination and cannot be combined with MITM protection")
+	errApplicationAuthCannotCombinedRelayCache = errors.New("application auth cannot be combined with relay cache")
+	errHTTPRoutesRequirePrefixAndUpstream      = errors.New("HTTP routes require a prefix and upstream")
+	errStripRequestHeadersCannotCombinedStatic = errors.New("strip request headers cannot be combined with static serving (--serve); static sites do not proxy request headers")
+	errStripRequestHeadersRequireHTTPUpstream  = errors.New("strip request headers require an HTTP upstream route or target")
+	errStripRequestHeaderHostNotSupported      = errors.New(`strip request header "Host" is not supported: Go stores it in Request.Host, not Header`)
+	errStripRequestHeaderXForwardedProto       = errors.New(`strip request header "X-Forwarded-Proto" is not supported: RunHTTP always overwrites it with the trusted https value`)
+	errCasperPaymentsRequireAnAsset            = errors.New("casper payments require an asset")
+)
+
 // Spec is Portal's canonical description of one tunnel. Frontends own parsing
 // and serialization; runtime assembly starts at this boundary.
 type Spec struct {
@@ -79,40 +96,40 @@ func (spec Spec) Validate() error {
 	target := strings.TrimSpace(spec.Transport.Target)
 	if spec.HTTP == nil {
 		if target == "" {
-			return errors.New("tunnel target is required")
+			return errTunnelTargetIsRequired
 		}
 		return nil
 	}
 
 	httpConfig := spec.HTTP
 	if spec.Transport.TCP || spec.Transport.UDP != nil {
-		return errors.New("HTTP tunnel cannot be combined with TCP or UDP")
+		return errHTTPTunnelCannotCombinedTCPOr
 	}
 	if strings.TrimSpace(httpConfig.Serve) != "" {
 		if target != "" || len(httpConfig.Routes) > 0 {
-			return errors.New("static serving cannot be combined with a target or HTTP routes")
+			return errStaticServingCannotCombinedTargetOr
 		}
 	} else if target == "" && len(httpConfig.Routes) == 0 {
-		return errors.New("HTTP tunnel requires a target, route, or static site")
+		return errHTTPTunnelRequiresTargetRouteOr
 	}
 	if target != "" && len(httpConfig.Routes) > 0 {
-		return errors.New("HTTP tunnel cannot combine a target and routes")
+		return errHTTPTunnelCannotCombineTargetAnd
 	}
 	if httpConfig.Cache != nil {
 		if strings.TrimSpace(httpConfig.Serve) == "" {
-			return errors.New("relay cache requires a static site")
+			return errRelayCacheRequiresStaticSite
 		}
 		if spec.Relays.BanMITM {
-			return errors.New("relay cache permits TLS termination and cannot be combined with MITM protection")
+			return errRelayCachePermitsTLSTerminationAnd
 		}
 		if httpConfig.Auth != nil {
-			return errors.New("application auth cannot be combined with relay cache")
+			return errApplicationAuthCannotCombinedRelayCache
 		}
 	}
 	for _, route := range httpConfig.Routes {
 		prefix := strings.TrimSpace(route.Prefix)
 		if prefix == "" || strings.TrimSpace(route.Upstream) == "" {
-			return errors.New("HTTP routes require a prefix and upstream")
+			return errHTTPRoutesRequirePrefixAndUpstream
 		}
 		if !strings.HasPrefix(prefix, "/") {
 			return fmt.Errorf("HTTP route %q prefix must start with /", prefix)
@@ -126,23 +143,23 @@ func (spec Spec) Validate() error {
 	}
 	if len(httpConfig.StripRequestHeaders) > 0 {
 		if strings.TrimSpace(httpConfig.Serve) != "" {
-			return errors.New("strip request headers cannot be combined with static serving (--serve); static sites do not proxy request headers")
+			return errStripRequestHeadersCannotCombinedStatic
 		}
 		hasHTTPUpstream := len(httpConfig.Routes) > 0 || strings.TrimSpace(target) != "" || httpConfig.Auth != nil
 		if !hasHTTPUpstream {
-			return errors.New("strip request headers require an HTTP upstream route or target")
+			return errStripRequestHeadersRequireHTTPUpstream
 		}
 		for _, h := range httpConfig.StripRequestHeaders {
 			if strings.EqualFold(strings.TrimSpace(h), "Host") {
-				return errors.New(`strip request header "Host" is not supported: Go stores it in Request.Host, not Header`)
+				return errStripRequestHeaderHostNotSupported
 			}
 			if strings.EqualFold(strings.TrimSpace(h), "X-Forwarded-Proto") {
-				return errors.New(`strip request header "X-Forwarded-Proto" is not supported: RunHTTP always overwrites it with the trusted https value`)
+				return errStripRequestHeaderXForwardedProto
 			}
 		}
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(httpConfig.Payment.Network)), "casper:") && strings.TrimSpace(httpConfig.Payment.Asset) == "" {
-		return errors.New("casper payments require an asset")
+		return errCasperPaymentsRequireAnAsset
 	}
 	if auth := httpConfig.Auth; auth != nil {
 		if err := gateway.ValidateApplicationAuthConfig(*auth); err != nil {

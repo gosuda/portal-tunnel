@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:24-slim AS frontend-builder
 WORKDIR /src
 
 COPY frontend/package.json frontend/package-lock.json ./

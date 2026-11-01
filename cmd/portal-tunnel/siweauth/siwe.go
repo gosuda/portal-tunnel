@@ -35,6 +35,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var errWalletAuthRequiresLeastOneAllowed = errors.New("wallet auth requires at least one allowed address")
+
 const (
 	// challengeTTL bounds how long a wallet has to sign its challenge.
 	challengeTTL = 2 * time.Minute
@@ -105,7 +107,7 @@ func New(cfg Config) (*Authenticator, error) {
 		return nil, err
 	}
 	if !cfg.AllowAnyAddress && len(addresses) == 0 {
-		return nil, errors.New("wallet auth requires at least one allowed address")
+		return nil, errWalletAuthRequiresLeastOneAllowed
 	}
 	allowed := make(map[string]struct{}, len(addresses))
 	for _, address := range addresses {

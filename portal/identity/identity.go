@@ -13,6 +13,15 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errIdentityJSONIsRequired                 = errors.New("identity json is required")
+	errIdentityPrivateKeyDoesNotMatch         = errors.New("identity private key does not match mnemonic")
+	errIdentityDerivationPathRequiresMnemonic = errors.New("identity derivation_path requires mnemonic")
+	errIdentityPrivateKeyIsRequired           = errors.New("identity private key is required")
+	errIdentityAddressDoesNotMatchPrivate     = errors.New("identity address does not match private key")
+	errIdentityPublicKeyDoesNotMatch          = errors.New("identity public key does not match private key")
+)
+
 // normalizeOptionalName normalizes an optional service name: returns an empty
 // string when the trimmed name is empty, or validates and returns a service
 // name label.
@@ -83,7 +92,7 @@ func Generate(name string) (types.Identity, error) {
 
 func decode(data []byte) (types.Identity, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return types.Identity{}, errors.New("identity json is required")
+		return types.Identity{}, errIdentityJSONIsRequired
 	}
 
 	var payload storedIdentity
@@ -137,14 +146,14 @@ func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
 		if resolved.PrivateKey == "" {
 			resolved.PrivateKey = privateKey
 		} else if !strings.EqualFold(utils.TrimHexPrefix(resolved.PrivateKey), privateKey) {
-			return types.Identity{}, errors.New("identity private key does not match mnemonic")
+			return types.Identity{}, errIdentityPrivateKeyDoesNotMatch
 		}
 	} else if resolved.DerivationPath != "" {
-		return types.Identity{}, errors.New("identity derivation_path requires mnemonic")
+		return types.Identity{}, errIdentityDerivationPathRequiresMnemonic
 	}
 
 	if resolved.PrivateKey == "" {
-		return types.Identity{}, errors.New("identity private key is required")
+		return types.Identity{}, errIdentityPrivateKeyIsRequired
 	}
 
 	signingIdentity, err := ResolveSecp256k1Identity(resolved.PrivateKey)
@@ -157,14 +166,14 @@ func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
 			return types.Identity{}, err
 		}
 		if address != signingIdentity.Address {
-			return types.Identity{}, errors.New("identity address does not match private key")
+			return types.Identity{}, errIdentityAddressDoesNotMatchPrivate
 		}
 		resolved.Address = address
 	} else {
 		resolved.Address = signingIdentity.Address
 	}
 	if resolved.PublicKey != "" && !strings.EqualFold(utils.TrimHexPrefix(resolved.PublicKey), signingIdentity.PublicKey) {
-		return types.Identity{}, errors.New("identity public key does not match private key")
+		return types.Identity{}, errIdentityPublicKeyDoesNotMatch
 	}
 	resolved.PublicKey = signingIdentity.PublicKey
 	resolved.PrivateKey = signingIdentity.PrivateKey

@@ -22,6 +22,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errGcloudProviderIsNil       = errors.New("gcloud provider is nil")
+	errGcloudProjectIDIsRequired = errors.New("gcloud project id is required")
+	errGcloudDNSServiceIsNil     = errors.New("gcloud dns service is nil")
+)
+
 const (
 	defaultRecordTTL  = 60
 	defaultPollPeriod = 2 * time.Second
@@ -59,7 +65,7 @@ func (p *Provider) Name() string {
 
 func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
 	if p == nil {
-		return nil, errors.New("gcloud provider is nil")
+		return nil, errGcloudProviderIsNil
 	}
 
 	runtimeCfg, err := newRuntimeConfig(ctx, p.cfg)
@@ -81,7 +87,7 @@ func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, e
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
-		return errors.New("gcloud provider is nil")
+		return errGcloudProviderIsNil
 	}
 	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
@@ -108,7 +114,7 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 
 func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
-		return errors.New("gcloud provider is nil")
+		return errGcloudProviderIsNil
 	}
 	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
@@ -133,7 +139,7 @@ func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP strin
 
 func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
-		return errors.New("gcloud provider is nil")
+		return errGcloudProviderIsNil
 	}
 	name, err := dnsrecord.RecordName(name)
 	if err != nil {
@@ -167,7 +173,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
-		return errors.New("gcloud provider is nil")
+		return errGcloudProviderIsNil
 	}
 	name, value, err := dnsrecord.TXTInputs(name, value)
 	if err != nil {
@@ -217,7 +223,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 
 func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error {
 	if p == nil {
-		return errors.New("gcloud provider is nil")
+		return errGcloudProviderIsNil
 	}
 	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
 	if err != nil {
@@ -283,7 +289,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
-		return "", "", "", errors.New("gcloud provider is nil")
+		return "", "", "", errGcloudProviderIsNil
 	}
 	baseDomain, err = dnsrecord.BaseDomain(baseDomain)
 	if err != nil {
@@ -333,7 +339,7 @@ func newRuntimeConfig(ctx context.Context, cfg Config) (runtimeConfig, error) {
 		}
 	}
 	if projectID == "" {
-		return runtimeConfig{}, errors.New("gcloud project id is required")
+		return runtimeConfig{}, errGcloudProjectIDIsRequired
 	}
 
 	return runtimeConfig{
@@ -363,7 +369,7 @@ func (p *Provider) newService(ctx context.Context, domain string) (*dns.Service,
 
 func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, projectID, domain, explicit string) (*dns.ManagedZone, error) {
 	if service == nil {
-		return nil, errors.New("gcloud dns service is nil")
+		return nil, errGcloudDNSServiceIsNil
 	}
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
@@ -454,7 +460,7 @@ func replaceRecordSet(ctx context.Context, service *dns.Service, projectID, mana
 
 func applyChange(ctx context.Context, service *dns.Service, projectID, managedZone string, change *dns.Change) error {
 	if service == nil {
-		return errors.New("gcloud dns service is nil")
+		return errGcloudDNSServiceIsNil
 	}
 
 	result, err := service.Changes.Create(projectID, managedZone, change).Context(ctx).Do()
@@ -481,7 +487,7 @@ func applyChange(ctx context.Context, service *dns.Service, projectID, managedZo
 
 func listRecordSets(ctx context.Context, service *dns.Service, projectID, managedZone, name, recordType string) ([]*dns.ResourceRecordSet, error) {
 	if service == nil {
-		return nil, errors.New("gcloud dns service is nil")
+		return nil, errGcloudDNSServiceIsNil
 	}
 
 	recordType = strings.ToUpper(strings.TrimSpace(recordType))
@@ -503,7 +509,7 @@ func listRecordSets(ctx context.Context, service *dns.Service, projectID, manage
 
 func enableDNSSEC(ctx context.Context, service *dns.Service, projectID, managedZone string) error {
 	if service == nil {
-		return errors.New("gcloud dns service is nil")
+		return errGcloudDNSServiceIsNil
 	}
 
 	operation, err := service.ManagedZones.Patch(projectID, managedZone, &dns.ManagedZone{
@@ -534,7 +540,7 @@ func enableDNSSEC(ctx context.Context, service *dns.Service, projectID, managedZ
 
 func listDNSKeys(ctx context.Context, service *dns.Service, projectID, managedZone string) ([]*dns.DnsKey, error) {
 	if service == nil {
-		return nil, errors.New("gcloud dns service is nil")
+		return nil, errGcloudDNSServiceIsNil
 	}
 
 	keys := make([]*dns.DnsKey, 0, 2)

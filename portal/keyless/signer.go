@@ -15,6 +15,12 @@ import (
 	"golang.org/x/crypto/cryptobyte"
 )
 
+var (
+	errPortalBindingRegistryIsRequired     = errors.New("portal binding registry is required")
+	errSigningKeyLookupIsRequired          = errors.New("signing key lookup is required")
+	errSigningRequestNotBoundVerifiedLease = errors.New("signing request is not bound to a verified lease")
+)
+
 // relayKeyID is the store key of the relay API listener certificate key.
 // Tenant handshakes address it explicitly in every TranscriptSignRequest.
 const relayKeyID = "relay-cert"
@@ -47,10 +53,10 @@ type Signer struct {
 // the one of that certificate and not necessarily of the one served now.
 func NewSigner(bindings *BindingRegistry, signingKey func(leafDER []byte) crypto.Signer) (*Signer, error) {
 	if bindings == nil {
-		return nil, errors.New("portal binding registry is required")
+		return nil, errPortalBindingRegistryIsRequired
 	}
 	if signingKey == nil {
-		return nil, errors.New("signing key lookup is required")
+		return nil, errSigningKeyLookupIsRequired
 	}
 
 	return &Signer{
@@ -60,7 +66,7 @@ func NewSigner(bindings *BindingRegistry, signingKey func(leafDER []byte) crypto
 			TranscriptValidator: ksigner.TranscriptValidatorFunc(func(ctx context.Context, req *signrpc.TranscriptSignRequest) error {
 				leaseID, _ := ctx.Value(signLeaseIDContextKey{}).(string)
 				if leaseID == "" {
-					return errors.New("signing request is not bound to a verified lease")
+					return errSigningRequestNotBoundVerifiedLease
 				}
 				return bindings.ValidateAndConsume(req.Binding, leaseID, req.ClientHello)
 			}),
