@@ -29,6 +29,23 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errDatagramFrameTargetsStaleAddress           = errors.New("datagram frame targets stale address")
+	errBrowserSDKCannotVerifyResolvedAddresses    = errors.New("browser SDK cannot verify resolved addresses for relay-selected gateways; use a direct relay with overlay disabled")
+	errRelayReturnedOverlayReverseEndpointBut     = errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
+	errRelayReturnedGatewayMetadataDirectReverse  = errors.New("relay returned gateway metadata for a direct reverse endpoint")
+	errRelayReturnedOverlayReverseEndpointWithout = errors.New("relay returned an overlay reverse endpoint without a signed gateway descriptor")
+	errOverlayGatewayDescriptorDoesNotCover       = errors.New("overlay gateway descriptor does not cover the reverse endpoint expiry")
+	errOverlayGatewayDescriptorHasNoDestination   = errors.New("overlay gateway descriptor has no destination")
+	errInvalidOverlayReverseEndpointURL           = errors.New("invalid overlay reverse endpoint URL")
+	errOverlayReverseEndpointDoesNotMatch         = errors.New("overlay reverse endpoint does not match the signed gateway URL")
+	errReverseCapabilityIsNotAvailable            = errors.New("reverse capability is not available")
+	errRelayTLSConfigIsUnavailable                = errors.New("relay tls config is unavailable")
+	errReverseEndpointHostnameIsUnavailable       = errors.New("reverse endpoint hostname is unavailable")
+	errAccessTokenIsNotAvailable                  = errors.New("access token is not available")
+	errRelayAuthorityIsUnavailable                = errors.New("relay authority is unavailable")
+)
+
 const (
 	defaultDialTimeout      = 15 * time.Second
 	defaultHandshakeTimeout = 30 * time.Second
@@ -522,7 +539,7 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 		return net.ErrClosed
 	}
 	if frameAddress := strings.TrimSpace(frame.Address); frameAddress != "" && frameAddress != l.identity.Address {
-		return errors.New("datagram frame targets stale address")
+		return errDatagramFrameTargetsStaleAddress
 	}
 	return l.datagram.SendFrame(frame)
 }
@@ -779,17 +796,17 @@ func (l *listener) isAlternateReverseEndpoint(rawURL string) bool {
 func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
 	alternate := l.isAlternateReverseEndpoint(endpoint.URL)
 	if runtime.GOOS == "js" && alternate {
-		return errors.New("browser SDK cannot verify resolved addresses for relay-selected gateways; use a direct relay with overlay disabled")
+		return errBrowserSDKCannotVerifyResolvedAddresses
 	}
 	if !l.overlay && endpoint.Overlay {
-		return errors.New("relay returned an overlay reverse endpoint but overlay is disabled")
+		return errRelayReturnedOverlayReverseEndpointBut
 	}
 	if !endpoint.Overlay {
 		if alternate {
 			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL", endpoint.URL)
 		}
 		if endpoint.Gateway != nil {
-			return errors.New("relay returned gateway metadata for a direct reverse endpoint")
+			return errRelayReturnedGatewayMetadataDirectReverse
 		}
 		if l.overlay {
 			l.warnOverlayDirect.Do(func() {
@@ -802,7 +819,7 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 	}
 
 	if endpoint.Gateway == nil {
-		return errors.New("relay returned an overlay reverse endpoint without a signed gateway descriptor")
+		return errRelayReturnedOverlayReverseEndpointWithout
 	}
 	gateway, err := discovery.VerifyRelayDescriptor(*endpoint.Gateway)
 	if err != nil {
@@ -810,10 +827,10 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 	}
 	now := time.Now().UTC()
 	if !gateway.ExpiresAt.After(now) || endpoint.ExpiresAt.After(gateway.ExpiresAt) {
-		return errors.New("overlay gateway descriptor does not cover the reverse endpoint expiry")
+		return errOverlayGatewayDescriptorDoesNotCover
 	}
 	if strings.TrimSpace(gateway.IVNPDestination) == "" {
-		return errors.New("overlay gateway descriptor has no destination")
+		return errOverlayGatewayDescriptorHasNoDestination
 	}
 	gatewayURL, err := url.Parse(gateway.APIHTTPSAddr)
 	if err != nil {
@@ -821,10 +838,10 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 	}
 	reverseURL, err := url.Parse(endpoint.URL)
 	if err != nil || reverseURL.Host == "" {
-		return errors.New("invalid overlay reverse endpoint URL")
+		return errInvalidOverlayReverseEndpointURL
 	}
 	if reverseURL.String() != utils.ResolveAPIURL(gatewayURL, types.PathSDKConnect).String() {
-		return errors.New("overlay reverse endpoint does not match the signed gateway URL")
+		return errOverlayReverseEndpointDoesNotMatch
 	}
 	return validatePublicReverseHostname(reverseURL.Hostname())
 }
@@ -908,7 +925,7 @@ func (l *listener) runDatagramLoop(ctx context.Context) error {
 func (l *listener) reverseTarget() (*url.URL, string, error) {
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.reverse.Capability == "" {
-		return nil, "", errors.New("reverse capability is not available")
+		return nil, "", errReverseCapabilityIsNotAvailable
 	}
 	if !lease.reverse.ExpiresAt.After(time.Now().UTC()) {
 		return nil, "", errLeaseRefreshRequired
@@ -918,7 +935,7 @@ func (l *listener) reverseTarget() (*url.URL, string, error) {
 		return nil, "", fmt.Errorf("reverse endpoint is not authorized: %w", err)
 	}
 	if l.api.tlsConfigClone() == nil {
-		return nil, "", errors.New("relay tls config is unavailable")
+		return nil, "", errRelayTLSConfigIsUnavailable
 	}
 
 	reverseURL, err := url.Parse(lease.reverse.URL)
@@ -930,7 +947,7 @@ func (l *listener) reverseTarget() (*url.URL, string, error) {
 
 func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tls.Config, error) {
 	if endpoint == nil || endpoint.Hostname() == "" {
-		return nil, errors.New("reverse endpoint hostname is unavailable")
+		return nil, errReverseEndpointHostnameIsUnavailable
 	}
 	// Never bootstrap local TLS trust for a relay-supplied gateway.
 	if l.isAlternateReverseEndpoint(endpoint.String()) {
@@ -1013,15 +1030,15 @@ func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, faile
 func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, error) {
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.accessToken == "" {
-		return nil, errors.New("access token is not available")
+		return nil, errAccessTokenIsNotAvailable
 	}
 	tlsCfg := l.api.tlsConfigClone()
 	if tlsCfg == nil {
-		return nil, errors.New("relay tls config is unavailable")
+		return nil, errRelayTLSConfigIsUnavailable
 	}
 	dialAddr := relayAuthority(l.api.relayURL, "")
 	if dialAddr == "" {
-		return nil, errors.New("relay authority is unavailable")
+		return nil, errRelayAuthorityIsUnavailable
 	}
 	return transport.DialQUICBackhaul(ctx, dialAddr, tlsCfg, lease.accessToken)
 }

@@ -26,6 +26,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var errReputationStoreRequiresStatePath = errors.New("reputation store requires a state path")
+
 // Vote values are the relay-local wire contract mirrored by the frontend.
 const (
 	VoteUp   = "up"
@@ -77,7 +79,7 @@ type ReputationStore struct {
 func NewReputationStore(path string) (*ReputationStore, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return nil, errors.New("reputation store requires a state path")
+		return nil, errReputationStoreRequiresStatePath
 	}
 	store := &ReputationStore{path: path}
 	_, err := utils.ReadJSONFileIfExists(path, &store.state)

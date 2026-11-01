@@ -22,6 +22,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var errX402UsdcPaymentRequiresValidSui = errors.New("x402 USDC payment requires a valid Sui pay-to address")
+
 //go:embed static/index.html static/photo.html static/style.css
 var staticFiles embed.FS
 
@@ -94,7 +96,7 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 	}
 	payTo := suischeme.NormalizeAddress(cfg.PayTo)
 	if payTo == "" {
-		return nil, errors.New("x402 USDC payment requires a valid Sui pay-to address")
+		return nil, errX402UsdcPaymentRequiresValidSui
 	}
 	amount, err := suischeme.StablecoinAmountToAtomic(network, usdcAssetSymbol, cfg.Amount)
 	if err != nil {

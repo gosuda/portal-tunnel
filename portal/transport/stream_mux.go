@@ -19,6 +19,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var (
+	errReverseStreamIsRequired    = errors.New("reverse stream is required")
+	errReverseCapabilityIsInvalid = errors.New("reverse capability is invalid")
+)
+
 const (
 	reverseStreamAuthTimeout    = 10 * time.Second
 	reverseCapabilityLimit      = 8 << 10
@@ -160,14 +165,14 @@ func (m *ReverseMux) Done() <-chan struct{} {
 // but every stream must still prove that its short-lived capability is current.
 func authenticateReverseStream(ctx context.Context, conn net.Conn, capability string) error {
 	if conn == nil {
-		return errors.New("reverse stream is required")
+		return errReverseStreamIsRequired
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	capability = strings.TrimSpace(capability)
 	if capability == "" || len(capability) > reverseCapabilityLimit {
-		return errors.New("reverse capability is invalid")
+		return errReverseCapabilityIsInvalid
 	}
 
 	deadline := time.Now().Add(reverseStreamAuthTimeout)
@@ -202,7 +207,7 @@ func authenticateReverseStream(ctx context.Context, conn net.Conn, capability st
 
 func readReverseStreamCapability(conn net.Conn) (string, error) {
 	if conn == nil {
-		return "", errors.New("reverse stream is required")
+		return "", errReverseStreamIsRequired
 	}
 	if err := conn.SetDeadline(time.Now().Add(reverseStreamAuthTimeout)); err != nil {
 		return "", err
@@ -215,7 +220,7 @@ func readReverseStreamCapability(conn net.Conn) (string, error) {
 	length := int(binary.BigEndian.Uint16(size[:]))
 	if length == 0 || length > reverseCapabilityLimit {
 		_, _ = conn.Write([]byte{reverseStreamStatusRejected})
-		return "", errors.New("reverse capability is invalid")
+		return "", errReverseCapabilityIsInvalid
 	}
 	raw := make([]byte, length)
 	if _, err := io.ReadFull(conn, raw); err != nil {
@@ -228,7 +233,7 @@ func readReverseStreamCapability(conn net.Conn) (string, error) {
 // The stream carries application bytes only after an accepted response.
 func ConfirmReverseStream(conn net.Conn, accepted bool) error {
 	if conn == nil {
-		return errors.New("reverse stream is required")
+		return errReverseStreamIsRequired
 	}
 	status := reverseStreamStatusRejected
 	if accepted {

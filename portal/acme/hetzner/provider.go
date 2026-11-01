@@ -19,6 +19,14 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errHetznerProviderIsNil             = errors.New("hetzner provider is nil")
+	errHetznerAPITokenIsRequired        = errors.New("hetzner api token is required")
+	errHetznerDNSDoesNotSupportProvider = errors.New("hetzner dns does not support provider-side dnssec signing; use a DNSSEC-capable provider for ENS gasless automation")
+	errHetznerClientIsNil               = errors.New("hetzner client is nil")
+	errRecordValueIsRequired            = errors.New("record value is required")
+)
+
 const defaultRecordTTL = 60
 
 type Provider struct {
@@ -40,10 +48,10 @@ func (p *Provider) Name() string {
 
 func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
 	if p == nil {
-		return nil, errors.New("hetzner provider is nil")
+		return nil, errHetznerProviderIsNil
 	}
 	if p.apiToken == "" {
-		return nil, errors.New("hetzner api token is required")
+		return nil, errHetznerAPITokenIsRequired
 	}
 
 	cfg := legohetzner.NewDefaultConfig()
@@ -58,7 +66,7 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
-		return errors.New("hetzner provider is nil")
+		return errHetznerProviderIsNil
 	}
 	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
@@ -80,7 +88,7 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 
 func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
-		return errors.New("hetzner provider is nil")
+		return errHetznerProviderIsNil
 	}
 	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
@@ -99,7 +107,7 @@ func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP strin
 
 func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
-		return errors.New("hetzner provider is nil")
+		return errHetznerProviderIsNil
 	}
 	name, err := dnsrecord.RecordName(name)
 	if err != nil {
@@ -121,7 +129,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
-		return errors.New("hetzner provider is nil")
+		return errHetznerProviderIsNil
 	}
 	name, value, err := dnsrecord.TXTInputs(name, value)
 	if err != nil {
@@ -140,7 +148,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 
 func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error {
 	if p == nil {
-		return errors.New("hetzner provider is nil")
+		return errHetznerProviderIsNil
 	}
 	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
 	if err != nil {
@@ -159,16 +167,16 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 
 func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
-		return "", "", "", errors.New("hetzner provider is nil")
+		return "", "", "", errHetznerProviderIsNil
 	}
 	_, err = dnsrecord.BaseDomain(baseDomain)
 	if err != nil {
 		return "", "", "", err
 	}
 	if p.apiToken == "" {
-		return "", "", "", errors.New("hetzner api token is required")
+		return "", "", "", errHetznerAPITokenIsRequired
 	}
-	return "", "", "", errors.New("hetzner dns does not support provider-side dnssec signing; use a DNSSEC-capable provider for ENS gasless automation")
+	return "", "", "", errHetznerDNSDoesNotSupportProvider
 }
 
 func (p *Provider) clientAndZone(ctx context.Context, domain string) (*hcloud.Client, *hcloud.Zone, error) {
@@ -185,10 +193,10 @@ func (p *Provider) clientAndZone(ctx context.Context, domain string) (*hcloud.Cl
 
 func (p *Provider) newClient() (*hcloud.Client, error) {
 	if p == nil {
-		return nil, errors.New("hetzner provider is nil")
+		return nil, errHetznerProviderIsNil
 	}
 	if p.apiToken == "" {
-		return nil, errors.New("hetzner api token is required")
+		return nil, errHetznerAPITokenIsRequired
 	}
 	return hcloud.NewClient(
 		hcloud.WithToken(p.apiToken),
@@ -199,7 +207,7 @@ func (p *Provider) newClient() (*hcloud.Client, error) {
 
 func (p *Provider) findZone(ctx context.Context, client *hcloud.Client, domain string) (*hcloud.Zone, error) {
 	if client == nil {
-		return nil, errors.New("hetzner client is nil")
+		return nil, errHetznerClientIsNil
 	}
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
@@ -242,7 +250,7 @@ func ensureRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone,
 	}
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return errors.New("record value is required")
+		return errRecordValueIsRequired
 	}
 	desired := []hcloud.ZoneRRSetRecord{{Value: value}}
 

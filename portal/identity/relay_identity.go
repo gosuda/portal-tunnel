@@ -11,6 +11,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errIdentityPathIsRequired        = errors.New("identity path is required")
+	errRelayIdentityFileIsIncomplete = errors.New("relay identity file is incomplete")
+)
+
 type relayIdentityFile struct {
 	Name           string `json:"name,omitempty"`
 	Address        string `json:"address,omitempty"`
@@ -38,7 +43,7 @@ func (i RelayIdentity) Copy() RelayIdentity {
 func LoadOrCreateRelayIdentity(path, rootHost string) (RelayIdentity, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return RelayIdentity{}, errors.New("identity path is required")
+		return RelayIdentity{}, errIdentityPathIsRequired
 	}
 	rootHost = strings.TrimSpace(rootHost)
 	if normalizedRootHost := utils.PortalRootHost(rootHost); normalizedRootHost != "" {
@@ -52,7 +57,7 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (RelayIdentity, error) {
 	switch {
 	case err == nil:
 		if relay.Address == "" || relay.PublicKey == "" || relay.PrivateKey == "" {
-			return RelayIdentity{}, errors.New("relay identity file is incomplete")
+			return RelayIdentity{}, errRelayIdentityFileIsIncomplete
 		}
 	case created:
 		generated, generateErr := Generate("relay")

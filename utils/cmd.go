@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+var errOnlyOneHelpTopicSupported = errors.New("only one help topic is supported")
+
 type CommandFunc func([]string) error
 type IntEnvParser func(string, int) int
 type boolFlagValue interface{ IsBoolFlag() bool }
@@ -515,7 +517,7 @@ func MakeHelpCommand(rootUsage func(io.Writer), topics []HelpTopic) CommandFunc 
 		}
 		if len(args) > 1 {
 			rootUsage(os.Stderr)
-			return errors.New("only one help topic is supported")
+			return errOnlyOneHelpTopicSupported
 		}
 		topic := strings.TrimSpace(args[0])
 		switch topic {

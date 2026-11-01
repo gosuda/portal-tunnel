@@ -16,10 +16,15 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errControlAddressIsRequired              = errors.New("control address is required")
+	errControlAddressMustIncludeLoopbackHost = errors.New("control address must include a loopback host")
+)
+
 func Run(ctx context.Context, cfg Config) error {
 	endpointStateDir := strings.TrimSpace(cfg.Agent.StateDir)
 	if endpointStateDir == "" {
-		return errors.New("agent.state_dir is required")
+		return errAgentStateDirIsRequired
 	}
 	if err := utils.EnsurePrivateDir(endpointStateDir); err != nil {
 		return fmt.Errorf("secure agent state directory: %w", err)
@@ -44,7 +49,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	controlAddr := strings.TrimSpace(cfg.Agent.ControlAddr)
 	if controlAddr == "" {
-		return errors.New("control address is required")
+		return errControlAddressIsRequired
 	}
 	host, _, err := net.SplitHostPort(controlAddr)
 	if err != nil {
@@ -52,7 +57,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	host = strings.Trim(host, "[]")
 	if host == "" {
-		return errors.New("control address must include a loopback host")
+		return errControlAddressMustIncludeLoopbackHost
 	}
 	if !strings.EqualFold(host, "localhost") {
 		ip := net.ParseIP(host)

@@ -13,6 +13,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRelayDiscoveryControllerIsNil = errors.New("relay discovery: controller is nil")
+	errRelayDiscoveryContextIsNil    = errors.New("relay discovery: context is nil")
+)
+
 // FailureKind classifies a relay failure for discovery policy. Callers map
 // their own failure vocabulary onto these kinds explicitly (the sdk does so
 // in one place, next to its RelayFailure type), while the POLICY — which
@@ -229,10 +234,10 @@ func (c *Controller) signal() {
 // changes. The caller remains responsible for reconciling the result.
 func (c *Controller) Next(ctx context.Context) ([]string, error) {
 	if c == nil {
-		return nil, errors.New("relay discovery: controller is nil")
+		return nil, errRelayDiscoveryControllerIsNil
 	}
 	if ctx == nil {
-		return nil, errors.New("relay discovery: context is nil")
+		return nil, errRelayDiscoveryContextIsNil
 	}
 	for {
 		now := time.Now()

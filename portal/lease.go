@@ -25,6 +25,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errLeaseTokenAuthorityIsRequired        = errors.New("lease token authority is required")
+	errLeaseTokenAuthorityPublicKeyRequired = errors.New("lease token authority public key is required")
+	errLeaseTokenIssuerMustAbsoluteURL      = errors.New("lease token issuer must be an absolute URL")
+)
+
 const (
 	defaultLeaseTTL                          = 2 * time.Minute
 	maxLeaseTTL                              = 10 * time.Minute
@@ -78,15 +84,15 @@ type leaseRegistry struct {
 
 func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
 	if tokenAuthority == nil {
-		return nil, errors.New("lease token authority is required")
+		return nil, errLeaseTokenAuthorityIsRequired
 	}
 	tokenIdentity := tokenAuthority.Identity()
 	if strings.TrimSpace(tokenIdentity.PublicKey) == "" {
-		return nil, errors.New("lease token authority public key is required")
+		return nil, errLeaseTokenAuthorityPublicKeyRequired
 	}
 	issuerURL, err := url.Parse(strings.TrimSpace(tokenIssuer))
 	if err != nil || issuerURL.Host == "" {
-		return nil, errors.New("lease token issuer must be an absolute URL")
+		return nil, errLeaseTokenIssuerMustAbsoluteURL
 	}
 
 	return &leaseRegistry{

@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+var errServiceUnavailable = errors.New("service unavailable")
+
 func TestSanitizeReportedIP(t *testing.T) {
 	t.Parallel()
 
@@ -180,7 +182,7 @@ func TestResolvePublicIPFallbackDoesNotWaitForUnavailableFamily(t *testing.T) {
 				original := DefaultHTTPClient
 				DefaultHTTPClient = &http.Client{Transport: publicIPTransport(func(req *http.Request) (*http.Response, error) {
 					if slices.Contains(publicIPEndpoints, req.URL.String()) {
-						return nil, errors.New("service unavailable")
+						return nil, errServiceUnavailable
 					}
 					if slices.Contains(tc.endpoints, req.URL.String()) {
 						synctest.Sleep(100 * time.Millisecond)

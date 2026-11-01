@@ -18,6 +18,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errStateDirIsRequired             = errors.New("state dir is required")
+	errAgentEndpointStateIsIncomplete = errors.New("agent endpoint state is incomplete")
+)
+
 const (
 	controlRequestBodyLimit = 8 << 10
 	endpointFilename        = "agent-endpoint.json"
@@ -342,7 +347,7 @@ func UpdateTunnel(ctx context.Context, stateDir, tunnelID string, req AgentTunne
 func controlRequest(ctx context.Context, stateDir, method, path string, payload any, out any) error {
 	stateDir = strings.TrimSpace(stateDir)
 	if stateDir == "" {
-		return errors.New("state dir is required")
+		return errStateDirIsRequired
 	}
 	var endpoint endpoint
 	if err := utils.ReadJSONFile(filepath.Join(stateDir, endpointFilename), &endpoint); err != nil {
@@ -355,7 +360,7 @@ func controlRequest(ctx context.Context, stateDir, method, path string, payload 
 		return err
 	}
 	if strings.TrimSpace(endpoint.ControlAddr) == "" || strings.TrimSpace(endpoint.Token) == "" {
-		return errors.New("agent endpoint state is incomplete")
+		return errAgentEndpointStateIsIncomplete
 	}
 	baseURL, err := url.Parse("http://" + endpoint.ControlAddr)
 	if err != nil {

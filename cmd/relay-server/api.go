@@ -28,6 +28,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRelayAPIRequiresPortalServer    = errors.New("relay api requires portal server")
+	errRelayAPIRequiresAccessState     = errors.New("relay api requires access state")
+	errRelayAPIRequiresPolicyStatePath = errors.New("relay api requires policy state path")
+)
+
 //go:embed dist/*
 var embeddedDistFS embed.FS
 
@@ -64,14 +70,14 @@ type RelayAPI struct {
 
 func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.Ingress, policyStatePath, adminToken, frontendDir string, initialSettings types.PolicySettings) (*RelayAPI, error) {
 	if server == nil {
-		return nil, errors.New("relay api requires portal server")
+		return nil, errRelayAPIRequiresPortalServer
 	}
 	if access == nil {
-		return nil, errors.New("relay api requires access state")
+		return nil, errRelayAPIRequiresAccessState
 	}
 	policyStatePath = strings.TrimSpace(policyStatePath)
 	if policyStatePath == "" {
-		return nil, errors.New("relay api requires policy state path")
+		return nil, errRelayAPIRequiresPolicyStatePath
 	}
 	frontendFS, err := resolveFrontendFS(frontendDir)
 	if err != nil {

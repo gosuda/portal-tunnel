@@ -22,6 +22,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errAgentStateDirIsRequired    = errors.New("agent.state_dir is required")
+	errAgentControlAddrIsRequired = errors.New("agent.control_addr is required")
+)
+
 const (
 	DefaultControlAddr = "127.0.0.1:4018"
 	DefaultServiceName = "portal-agent"
@@ -360,10 +365,10 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 
 func (cfg Config) Validate() error {
 	if strings.TrimSpace(cfg.Agent.StateDir) == "" {
-		return errors.New("agent.state_dir is required")
+		return errAgentStateDirIsRequired
 	}
 	if strings.TrimSpace(cfg.Agent.ControlAddr) == "" {
-		return errors.New("agent.control_addr is required")
+		return errAgentControlAddrIsRequired
 	}
 	if err := validateAgentPathComponent("agent.service_name", cfg.Agent.ServiceName); err != nil {
 		return err

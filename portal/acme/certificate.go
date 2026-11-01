@@ -29,6 +29,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errACMECADirectoryURLMustValid = errors.New("acme ca directory url must be a valid URL without credentials, query, or fragment")
+	errACMECADirectoryURLMustUse   = errors.New("acme ca directory url must use https")
+)
+
 const (
 	localDevelopmentCertificateTTL = 3650 * 24 * time.Hour
 	defaultRenewThreshold          = 30 * 24 * time.Hour
@@ -184,10 +189,10 @@ func NormalizeCADirURL(raw string) (string, error) {
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("acme ca directory url must be a valid URL without credentials, query, or fragment")
+		return "", errACMECADirectoryURLMustValid
 	}
 	if parsed.Scheme != "https" {
-		return "", errors.New("acme ca directory url must use https")
+		return "", errACMECADirectoryURLMustUse
 	}
 	// The scheme and host are case-insensitive, and the files of a CA are named
 	// after this string, so two spellings of one directory must not look like two CAs.
