@@ -1,13 +1,40 @@
 package identity
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestIdentityParsingPreservesHexErrors(t *testing.T) {
+	for name, parse := range map[string]func() error{
+		"address": func() error {
+			_, err := NormalizeEVMAddress("0x" + strings.Repeat("z", 40))
+			return err
+		},
+		"public key": func() error {
+			_, err := ParseSecp256k1PublicKeyHex("zz")
+			return err
+		},
+		"private key": func() error {
+			_, err := ResolveSecp256k1Identity("zz")
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := parse()
+			var invalidByte hex.InvalidByteError
+			if !errors.As(err, &invalidByte) || invalidByte != 'z' {
+				t.Fatalf("parse error = %v, want wrapped hex error", err)
+			}
+		})
+	}
+}
 
 func mustGenerate(t *testing.T, name string) types.Identity {
 	t.Helper()

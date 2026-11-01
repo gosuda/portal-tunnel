@@ -183,7 +183,10 @@ func NormalizeCADirURL(raw string) (string, error) {
 		return lego.LEDirectoryProduction, nil
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil {
+		return "", fmt.Errorf("acme ca directory url must be a valid URL without credentials, query, or fragment: %w", err)
+	}
+	if parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("acme ca directory url must be a valid URL without credentials, query, or fragment")
 	}
 	if parsed.Scheme != "https" {

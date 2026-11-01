@@ -68,7 +68,7 @@ func NormalizeEVMAddress(raw string) (string, error) {
 		return "", errors.New("address must be 20 bytes")
 	}
 	if _, err := hex.DecodeString(hexPart); err != nil {
-		return "", errors.New("address must be hex encoded")
+		return "", fmt.Errorf("address must be hex encoded: %w", err)
 	}
 
 	lowerHex := strings.ToLower(hexPart)
@@ -315,12 +315,12 @@ func ParseSecp256k1PublicKeyHex(raw string) (*secp256k1.PublicKey, error) {
 
 	decoded, err := hex.DecodeString(publicKeyHex)
 	if err != nil {
-		return nil, errors.New("public key must be hex encoded")
+		return nil, fmt.Errorf("public key must be hex encoded: %w", err)
 	}
 
 	publicKey, err := secp256k1.ParsePubKey(decoded)
 	if err != nil {
-		return nil, errors.New("invalid secp256k1 public key")
+		return nil, fmt.Errorf("invalid secp256k1 public key: %w", err)
 	}
 	return publicKey, nil
 }
@@ -334,7 +334,7 @@ func parseSecp256k1PrivateKeyHex(raw string, requireNonZero bool) (*secp256k1.Pr
 
 	decoded, err := hex.DecodeString(privateKeyHex)
 	if err != nil {
-		return nil, "", errors.New("secp256k1 private key must be hex encoded")
+		return nil, "", fmt.Errorf("secp256k1 private key must be hex encoded: %w", err)
 	}
 	if len(decoded) != secp256k1.PrivKeyBytesLen {
 		return nil, "", fmt.Errorf("secp256k1 private key must be %d bytes", secp256k1.PrivKeyBytesLen)

@@ -253,7 +253,10 @@ func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time
 		return types.ReverseEndpoint{}, errors.New("relay returned incomplete reverse endpoint")
 	}
 	parsed, err := url.Parse(endpoint.URL)
-	if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Scheme, "https") {
+	if err != nil {
+		return types.ReverseEndpoint{}, fmt.Errorf("relay returned invalid reverse endpoint URL: %w", err)
+	}
+	if parsed.Host == "" || !strings.EqualFold(parsed.Scheme, "https") {
 		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint URL")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.EscapedPath() != types.PathSDKConnect {

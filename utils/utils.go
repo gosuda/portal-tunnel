@@ -55,7 +55,7 @@ func NormalizeDNSLabel(raw string) (string, error) {
 	if !isPlainDNSLabel(label) {
 		ascii, err := idna.Lookup.ToASCII(label)
 		if err != nil {
-			return "", errors.New("name is invalid")
+			return "", fmt.Errorf("name is invalid: %w", err)
 		}
 		label = NormalizeHostname(ascii)
 	}
@@ -126,12 +126,12 @@ func NormalizeRelayURL(raw string) (string, error) {
 
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return "", errors.New("relay url is invalid")
+		return "", fmt.Errorf("relay url is invalid: %w", err)
 	}
 	if parsed.Host == "" && parsed.Path != "" && !strings.Contains(parsed.Path, "/") {
 		parsed, err = url.Parse("https://" + strings.TrimSpace(parsed.Path))
 		if err != nil {
-			return "", errors.New("relay url is invalid")
+			return "", fmt.Errorf("relay url is invalid: %w", err)
 		}
 	}
 	if parsed.Host == "" {
@@ -145,7 +145,10 @@ func NormalizeRelayURL(raw string) (string, error) {
 	}
 	if port := parsed.Port(); port != "" {
 		n, err := strconv.Atoi(port)
-		if err != nil || n < 1 || n > 65535 {
+		if err != nil {
+			return "", fmt.Errorf("relay url port must be between 1 and 65535: %w", err)
+		}
+		if n < 1 || n > 65535 {
 			return "", errors.New("relay url port must be between 1 and 65535")
 		}
 	}
@@ -390,7 +393,7 @@ func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
 		return "", errors.New("address must contain 40 hexadecimal characters")
 	}
 	if _, err := hex.DecodeString(address); err != nil {
-		return "", errors.New("address must contain 40 hexadecimal characters")
+		return "", fmt.Errorf("address must contain 40 hexadecimal characters: %w", err)
 	}
 	if name == "" {
 		return LeaseHostname(address, rootHost)

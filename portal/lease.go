@@ -85,7 +85,10 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 		return nil, errors.New("lease token authority public key is required")
 	}
 	issuerURL, err := url.Parse(strings.TrimSpace(tokenIssuer))
-	if err != nil || issuerURL.Host == "" {
+	if err != nil {
+		return nil, fmt.Errorf("lease token issuer must be an absolute URL: %w", err)
+	}
+	if issuerURL.Host == "" {
 		return nil, errors.New("lease token issuer must be an absolute URL")
 	}
 

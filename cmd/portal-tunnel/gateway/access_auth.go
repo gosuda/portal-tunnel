@@ -211,7 +211,10 @@ func normalizeOIDCIssuerURL(raw string) (string, error) {
 		return "", errors.New("oidc issuer url is required")
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil {
+		return "", fmt.Errorf("oidc issuer url must be a valid URL without query or fragment: %w", err)
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("oidc issuer url must be a valid URL without query or fragment")
 	}
 	if parsed.Scheme != "https" && !isLoopbackHTTP(parsed) {

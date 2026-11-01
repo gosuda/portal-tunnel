@@ -125,7 +125,7 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 	}
 	target, err := url.Parse(strings.TrimSpace(portalURL))
 	if err != nil {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+		return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials: %w", err)
 	}
 	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
@@ -133,7 +133,10 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 	}
 	if port := target.Port(); port != "" {
 		n, err := strconv.Atoi(port)
-		if err != nil || n < 1 || n > 65535 {
+		if err != nil {
+			return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect PORTAL_URL port must be between 1 and 65535: %w", err)
+		}
+		if n < 1 || n > 65535 {
 			return types.HTTPRedirectConfig{}, errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
 		}
 	}
@@ -151,7 +154,10 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 		}
 	}
 	n, err := strconv.Atoi(port)
-	if err != nil || n < 0 || n > 65535 {
+	if err != nil {
+		return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535: %w", err)
+	}
+	if n < 0 || n > 65535 {
 		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535")
 	}
 	return cfg, nil
