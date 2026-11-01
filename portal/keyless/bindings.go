@@ -10,6 +10,24 @@ import (
 	"time"
 )
 
+var (
+	errClientHelloSpanIsRequired            = errors.New("client hello span is required")
+	errBindingIsUnknown                     = errors.New("binding is unknown")
+	errBindingIsExpired                     = errors.New("binding is expired")
+	errBindingHelloIsAlreadyFixed           = errors.New("binding hello is already fixed")
+	errBindingMustBe16Bytes                 = errors.New("binding must be 16 bytes")
+	errClientHelloTranscriptIsRequired      = errors.New("client hello transcript is required")
+	errBindingIsUnknownOrExpired            = errors.New("binding is unknown or expired")
+	errBindingDoesNotBelongSigningLease     = errors.New("binding does not belong to the signing lease")
+	errBindingHelloWasNeverFixed            = errors.New("binding hello was never fixed")
+	errClientHelloDoesNotMatchRouted        = errors.New("client hello does not match the routed connection")
+	errClientHelloContainsNonHandshakeTLS   = errors.New("client hello contains a non-handshake TLS record")
+	errClientHelloTLSRecordHasInvalid       = errors.New("client hello TLS record has invalid length")
+	errFirstTLSHandshakeMessageNotClient    = errors.New("first TLS handshake message is not a client hello")
+	errClientHelloHandshakeHasInvalidLength = errors.New("client hello handshake has invalid length")
+	errClientHelloTLSRecordExceedsLimit     = errors.New("client hello TLS record exceeds limit")
+)
+
 // BindingRegistry owns Portal's connection-binding policy for keyless transcript signing.
 type BindingRegistry struct {
 	mu      sync.Mutex
@@ -47,19 +65,19 @@ func (b *BindingRegistry) Issue(leaseID string, clientHello []byte) [16]byte {
 // FixHello pins a ClientHello to a binding issued without one.
 func (b *BindingRegistry) FixHello(binding [16]byte, clientHello []byte) error {
 	if len(clientHello) == 0 {
-		return errors.New("client hello span is required")
+		return errClientHelloSpanIsRequired
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	entry, ok := b.entries[binding]
 	if !ok {
-		return errors.New("binding is unknown")
+		return errBindingIsUnknown
 	}
 	if !time.Now().Before(entry.expiresAt) {
-		return errors.New("binding is expired")
+		return errBindingIsExpired
 	}
 	if entry.helloHash != ([32]byte{}) {
-		return errors.New("binding hello is already fixed")
+		return errBindingHelloIsAlreadyFixed
 	}
 	entry.helloHash = sha256.Sum256(clientHello)
 	return nil
@@ -68,10 +86,10 @@ func (b *BindingRegistry) FixHello(binding [16]byte, clientHello []byte) error {
 // ValidateAndConsume validates the lease and ClientHello and spends the binding.
 func (b *BindingRegistry) ValidateAndConsume(binding []byte, leaseID string, clientHello []byte) error {
 	if len(binding) != 16 {
-		return errors.New("binding must be 16 bytes")
+		return errBindingMustBe16Bytes
 	}
 	if len(clientHello) == 0 {
-		return errors.New("client hello transcript is required")
+		return errClientHelloTranscriptIsRequired
 	}
 	helloHash := sha256.Sum256(clientHello)
 	var key [16]byte
@@ -80,16 +98,16 @@ func (b *BindingRegistry) ValidateAndConsume(binding []byte, leaseID string, cli
 	defer b.mu.Unlock()
 	entry, ok := b.entries[key]
 	if !ok || !time.Now().Before(entry.expiresAt) {
-		return errors.New("binding is unknown or expired")
+		return errBindingIsUnknownOrExpired
 	}
 	if entry.leaseID != leaseID {
-		return errors.New("binding does not belong to the signing lease")
+		return errBindingDoesNotBelongSigningLease
 	}
 	if entry.helloHash == ([32]byte{}) {
-		return errors.New("binding hello was never fixed")
+		return errBindingHelloWasNeverFixed
 	}
 	if entry.helloHash != helloHash {
-		return errors.New("client hello does not match the routed connection")
+		return errClientHelloDoesNotMatchRouted
 	}
 	delete(b.entries, key)
 	return nil
@@ -138,11 +156,11 @@ func (a *clientHelloAccumulator) add(p []byte) ([]byte, bool, error) {
 	a.pending = append(a.pending, p...)
 	for len(a.pending) >= tlsRecordHeaderLen {
 		if a.pending[0] != tlsHandshakeContentType {
-			return nil, false, errors.New("client hello contains a non-handshake TLS record")
+			return nil, false, errClientHelloContainsNonHandshakeTLS
 		}
 		recordLen := int(a.pending[3])<<8 | int(a.pending[4])
 		if recordLen == 0 || recordLen > maxTLSRecordPayload {
-			return nil, false, errors.New("client hello TLS record has invalid length")
+			return nil, false, errClientHelloTLSRecordHasInvalid
 		}
 		if len(a.pending) < tlsRecordHeaderLen+recordLen {
 			return nil, false, nil
@@ -155,12 +173,12 @@ func (a *clientHelloAccumulator) add(p []byte) ([]byte, bool, error) {
 			body = body[need:]
 			if len(a.hello) == 4 {
 				if a.hello[0] != clientHelloType {
-					return nil, false, errors.New("first TLS handshake message is not a client hello")
+					return nil, false, errFirstTLSHandshakeMessageNotClient
 				}
 				messageLen := int(a.hello[1])<<16 | int(a.hello[2])<<8 | int(a.hello[3])
 				a.expected = 4 + messageLen
 				if messageLen == 0 || a.expected > maxClientHelloSize {
-					return nil, false, errors.New("client hello handshake has invalid length")
+					return nil, false, errClientHelloHandshakeHasInvalidLength
 				}
 			}
 		}
@@ -173,7 +191,7 @@ func (a *clientHelloAccumulator) add(p []byte) ([]byte, bool, error) {
 		}
 	}
 	if len(a.pending) > maxTLSRecordPayload+tlsRecordHeaderLen {
-		return nil, false, errors.New("client hello TLS record exceeds limit")
+		return nil, false, errClientHelloTLSRecordExceedsLimit
 	}
 	return nil, false, nil
 }

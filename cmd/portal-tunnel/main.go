@@ -30,6 +30,19 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errCacheTTLRequiresCache               = errors.New("--cache-ttl requires --cache")
+	errStripRequestHeaderRequiresHTTPRoute = errors.New("--strip-request-header requires --http-route, --target, or --auth")
+	errAuthSubcommandMustBeIssue           = errors.New("auth subcommand must be issue")
+	errTunnelIsRequired                    = errors.New("tunnel is required")
+	errSubjectIsRequired                   = errors.New("--subject is required")
+	errExpiresMustBePositive               = errors.New("--expires must be positive")
+	errPaymentAmountIsRequired             = errors.New("payment amount is required")
+	errPaymentMethodIsRequired             = errors.New("payment method is required")
+	errPaymentMethodsAreRequiredBefore     = errors.New("payment methods are required before ':'")
+	errNoRelayURLsConfigured               = errors.New("no relay URLs configured")
+)
+
 func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
@@ -201,7 +214,7 @@ func runExposeCommand(args []string) error {
 
 func tunnelSpecFromExposeFlags(fs *flag.FlagSet, flags exposeFlags) (tunnel.Spec, error) {
 	if !flags.cache && flags.cacheTTL != 0 {
-		return tunnel.Spec{}, errors.New("--cache-ttl requires --cache")
+		return tunnel.Spec{}, errCacheTTLRequiresCache
 	}
 	routes := make([]tunnel.HTTPRoute, 0, len(flags.httpRoutes))
 	for _, raw := range flags.httpRoutes {
@@ -271,7 +284,7 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, flags exposeFlags) (tunnel.Spec
 	hasStripPolicy := len(flags.stripRequestHeaders) > 0
 	hasHTTPUpstream := len(routes) > 0 || strings.TrimSpace(flags.targetAddr) != ""
 	if hasStripPolicy && serve == "" && !hasHTTPUpstream && !authEnabled && !flags.cache {
-		return tunnel.Spec{}, errors.New("--strip-request-header requires --http-route, --target, or --auth")
+		return tunnel.Spec{}, errStripRequestHeaderRequiresHTTPRoute
 	}
 	useHTTP := serve != "" || len(routes) > 0 || authEnabled || flags.cache || hasStripPolicy
 	if useHTTP {
@@ -308,7 +321,7 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, flags exposeFlags) (tunnel.Spec
 func runAuthCommand(args []string) error {
 	if len(args) == 0 || args[0] != "issue" {
 		printAuthUsage(os.Stderr)
-		return errors.New("auth subcommand must be issue")
+		return errAuthSubcommandMustBeIssue
 	}
 	var subject, identityPath, identityJSON string
 	var expires time.Duration
@@ -329,13 +342,13 @@ func runAuthCommand(args []string) error {
 		if err != nil {
 			return err
 		}
-		return errors.New("tunnel is required")
+		return errTunnelIsRequired
 	}
 	if strings.TrimSpace(subject) == "" {
-		return errors.New("--subject is required")
+		return errSubjectIsRequired
 	}
 	if expires <= 0 {
-		return errors.New("--expires must be positive")
+		return errExpiresMustBePositive
 	}
 	tunnelIdentity, err := identity.LoadExisting(identityPath, identityJSON)
 	if err != nil {
@@ -356,7 +369,7 @@ func runAuthCommand(args []string) error {
 func parseHTTPRoutePayment(value string) ([]string, string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return nil, "", errors.New("payment amount is required")
+		return nil, "", errPaymentAmountIsRequired
 	}
 	methodPart, amount, hasMethods := strings.Cut(value, ":")
 	if !hasMethods {
@@ -365,14 +378,14 @@ func parseHTTPRoutePayment(value string) ([]string, string, error) {
 	}
 	amount = strings.TrimSpace(amount)
 	if amount == "" {
-		return nil, "", errors.New("payment amount is required")
+		return nil, "", errPaymentAmountIsRequired
 	}
 	methods := []string(nil)
 	if hasMethods {
 		for rawMethod := range strings.SplitSeq(methodPart, ",") {
 			method := strings.ToUpper(strings.TrimSpace(rawMethod))
 			if method == "" {
-				return nil, "", errors.New("payment method is required")
+				return nil, "", errPaymentMethodIsRequired
 			}
 			exists := slices.Contains(methods, method)
 			if !exists {
@@ -380,7 +393,7 @@ func parseHTTPRoutePayment(value string) ([]string, string, error) {
 			}
 		}
 		if len(methods) == 0 {
-			return nil, "", errors.New("payment methods are required before ':'")
+			return nil, "", errPaymentMethodsAreRequiredBefore
 		}
 	}
 	return methods, amount, nil
@@ -445,7 +458,7 @@ func runListCommand(args []string) error {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}
 	if len(relayURLs) == 0 {
-		return errors.New("no relay URLs configured")
+		return errNoRelayURLsConfigured
 	}
 
 	versions := make([]string, len(relayURLs))

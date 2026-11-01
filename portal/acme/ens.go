@@ -14,6 +14,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errHostnameIsRequired   = errors.New("hostname is required")
+	errACMEManagerIsStopped = errors.New("acme manager is stopped")
+)
+
 const (
 	ensGaslessHostnamesFileName = "ens-gasless-hostnames.json"
 	gaslessENSTXTPrefix         = "ENS1 "
@@ -117,7 +122,7 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 
 	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" {
-		return errors.New("hostname is required")
+		return errHostnameIsRequired
 	}
 	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
@@ -153,7 +158,7 @@ func (m *Manager) queueENSCommand(ctx context.Context, command ensDNSCommand) er
 	defer m.commandMu.RUnlock()
 	select {
 	case <-m.stopCh:
-		return errors.New("acme manager is stopped")
+		return errACMEManagerIsStopped
 	default:
 	}
 	select {

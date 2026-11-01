@@ -21,6 +21,16 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRoute53ProviderIsNil                  = errors.New("route53 provider is nil")
+	errRoute53DnssecRequiresActiveKeySigning = errors.New("route53 dnssec requires an ACTIVE key-signing key")
+	errRoute53ClientIsNil                    = errors.New("route53 client is nil")
+	errHostedZoneIDIsRequired                = errors.New("hosted zone id is required")
+	errRoute53SessionTokenRequiresAccessKey  = errors.New("route53 session token requires access key id and secret access key")
+	errRoute53AccessKeyIDAndSecret           = errors.New("route53 access key id and secret access key must be supplied together")
+	errRoute53DnssecRequiresAwsDnssecKms     = errors.New("route53 dnssec requires AWS_DNSSEC_KMS_KEY_ARN when no active key-signing key exists")
+)
+
 const (
 	defaultAWSRegion     = "us-east-1"
 	defaultDNSSECKSKName = "portal_ksk"
@@ -60,7 +70,7 @@ func (p *Provider) Name() string {
 
 func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
 	if p == nil {
-		return nil, errors.New("route53 provider is nil")
+		return nil, errRoute53ProviderIsNil
 	}
 	if err := validateConfig(p.cfg); err != nil {
 		return nil, err
@@ -82,7 +92,7 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
-		return errors.New("route53 provider is nil")
+		return errRoute53ProviderIsNil
 	}
 	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
@@ -109,7 +119,7 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 
 func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
-		return errors.New("route53 provider is nil")
+		return errRoute53ProviderIsNil
 	}
 	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
@@ -133,7 +143,7 @@ func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP strin
 
 func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
-		return errors.New("route53 provider is nil")
+		return errRoute53ProviderIsNil
 	}
 	name, err := dnsrecord.RecordName(name)
 	if err != nil {
@@ -168,7 +178,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
-		return errors.New("route53 provider is nil")
+		return errRoute53ProviderIsNil
 	}
 	name, value, err := dnsrecord.TXTInputs(name, value)
 	if err != nil {
@@ -192,7 +202,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 
 func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error {
 	if p == nil {
-		return errors.New("route53 provider is nil")
+		return errRoute53ProviderIsNil
 	}
 	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
 	if err != nil {
@@ -216,7 +226,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
-		return "", "", "", errors.New("route53 provider is nil")
+		return "", "", "", errRoute53ProviderIsNil
 	}
 	baseDomain, err = dnsrecord.BaseDomain(baseDomain)
 	if err != nil {
@@ -251,7 +261,7 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 			return "", "", "", fmt.Errorf("refresh route53 dnssec status: %w", err)
 		}
 		if _, ok := activeKeySigningKey(out.KeySigningKeys); !ok {
-			return "", "", "", errors.New("route53 dnssec requires an ACTIVE key-signing key")
+			return "", "", "", errRoute53DnssecRequiresActiveKeySigning
 		}
 	}
 
@@ -295,7 +305,7 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 		return explicitZoneID, nil
 	}
 	if client == nil {
-		return "", errors.New("route53 client is nil")
+		return "", errRoute53ClientIsNil
 	}
 
 	candidates := utils.DomainCandidates(domain)
@@ -405,10 +415,10 @@ func deleteTXTRecords(ctx context.Context, client *awsroute53.Client, hostedZone
 
 func upsertRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, name string, recordType route53types.RRType, values []string, comment string) error {
 	if client == nil {
-		return errors.New("route53 client is nil")
+		return errRoute53ClientIsNil
 	}
 	if hostedZoneID == "" {
-		return errors.New("hosted zone id is required")
+		return errHostedZoneIDIsRequired
 	}
 
 	fqdn := utils.NormalizeHostname(name)
@@ -455,7 +465,7 @@ func getTXTRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneI
 
 func getRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneID, name string, recordType route53types.RRType) (*route53types.ResourceRecordSet, error) {
 	if client == nil {
-		return nil, errors.New("route53 client is nil")
+		return nil, errRoute53ClientIsNil
 	}
 	fqdn := utils.NormalizeHostname(name)
 	if !strings.HasSuffix(fqdn, ".") {
@@ -483,7 +493,7 @@ func getRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneID, 
 
 func deleteRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneID string, recordSet *route53types.ResourceRecordSet, comment string) error {
 	if client == nil {
-		return errors.New("route53 client is nil")
+		return errRoute53ClientIsNil
 	}
 	if recordSet == nil {
 		return nil
@@ -520,9 +530,9 @@ func regionOrDefault(region string) string {
 func validateConfig(cfg Config) error {
 	switch {
 	case cfg.SessionToken != "" && (cfg.AccessKeyID == "" || cfg.SecretAccessKey == ""):
-		return errors.New("route53 session token requires access key id and secret access key")
+		return errRoute53SessionTokenRequiresAccessKey
 	case (cfg.AccessKeyID == "") != (cfg.SecretAccessKey == ""):
-		return errors.New("route53 access key id and secret access key must be supplied together")
+		return errRoute53AccessKeyIDAndSecret
 	}
 	return nil
 }
@@ -534,10 +544,10 @@ func normalizeZoneID(raw string) string {
 
 func getDNSSECStatus(ctx context.Context, client *awsroute53.Client, hostedZoneID string) (*awsroute53.GetDNSSECOutput, error) {
 	if client == nil {
-		return nil, errors.New("route53 client is nil")
+		return nil, errRoute53ClientIsNil
 	}
 	if hostedZoneID == "" {
-		return nil, errors.New("hosted zone id is required")
+		return nil, errHostedZoneIDIsRequired
 	}
 	return client.GetDNSSEC(ctx, &awsroute53.GetDNSSECInput{
 		HostedZoneId: aws.String(hostedZoneID),
@@ -546,7 +556,7 @@ func getDNSSECStatus(ctx context.Context, client *awsroute53.Client, hostedZoneI
 
 func ensureActiveKeySigningKey(ctx context.Context, client *awsroute53.Client, hostedZoneID string, cfg Config, keys []route53types.KeySigningKey) error {
 	if client == nil {
-		return errors.New("route53 client is nil")
+		return errRoute53ClientIsNil
 	}
 	kskName := defaultDNSSECKSKName
 
@@ -565,7 +575,7 @@ func ensureActiveKeySigningKey(ctx context.Context, client *awsroute53.Client, h
 	}
 
 	if strings.TrimSpace(cfg.KMSKeyARN) == "" {
-		return errors.New("route53 dnssec requires AWS_DNSSEC_KMS_KEY_ARN when no active key-signing key exists")
+		return errRoute53DnssecRequiresAwsDnssecKms
 	}
 
 	_, err := client.CreateKeySigningKey(ctx, &awsroute53.CreateKeySigningKeyInput{

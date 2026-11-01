@@ -11,6 +11,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+var (
+	errBuildPrivateDaclMissingDacl    = errors.New("build private DACL: missing DACL")
+	errCurrentWindowsIdentityHasNoSid = errors.New("current Windows identity has no SID")
+)
+
 // EnsurePrivateDir restricts an agent-owned directory before any secrets are placed in it.
 func EnsurePrivateDir(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
@@ -98,7 +103,7 @@ func secureWindowsPath(path string, directory bool) error {
 		return fmt.Errorf("build private DACL: %w", err)
 	}
 	if dacl == nil {
-		return errors.New("build private DACL: missing DACL")
+		return errBuildPrivateDaclMissingDacl
 	}
 	securityInfo := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
 	var replacementOwner *windows.SID
@@ -125,7 +130,7 @@ func privateWindowsDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, *wi
 	owner := user.User.Sid
 	sid := owner.String()
 	if sid == "" {
-		return nil, nil, errors.New("current Windows identity has no SID")
+		return nil, nil, errCurrentWindowsIdentityHasNoSid
 	}
 	principals := []string{"SY", "BA"}
 	if sid != "S-1-5-18" && sid != "S-1-5-32-544" {

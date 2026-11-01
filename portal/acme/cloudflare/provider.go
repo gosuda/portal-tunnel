@@ -16,6 +16,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errCloudflareProviderIsNil    = errors.New("cloudflare provider is nil")
+	errCloudflareTokenIsRequired  = errors.New("cloudflare token is required")
+	errCloudflareAPIRequestFailed = errors.New("cloudflare api request failed")
+)
+
 const (
 	apiBase = "https://api.cloudflare.com/client/v4"
 )
@@ -86,10 +92,10 @@ func (p *Provider) Name() string {
 
 func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
 	if p == nil {
-		return nil, errors.New("cloudflare provider is nil")
+		return nil, errCloudflareProviderIsNil
 	}
 	if p.token == "" {
-		return nil, errors.New("cloudflare token is required")
+		return nil, errCloudflareTokenIsRequired
 	}
 
 	cfg := cloudflare.NewDefaultConfig()
@@ -104,10 +110,10 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
-		return errors.New("cloudflare provider is nil")
+		return errCloudflareProviderIsNil
 	}
 	if p.token == "" {
-		return errors.New("cloudflare token is required")
+		return errCloudflareTokenIsRequired
 	}
 	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
@@ -129,10 +135,10 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 
 func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
-		return errors.New("cloudflare provider is nil")
+		return errCloudflareProviderIsNil
 	}
 	if p.token == "" {
-		return errors.New("cloudflare token is required")
+		return errCloudflareTokenIsRequired
 	}
 	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
@@ -151,10 +157,10 @@ func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP strin
 
 func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
-		return errors.New("cloudflare provider is nil")
+		return errCloudflareProviderIsNil
 	}
 	if p.token == "" {
-		return errors.New("cloudflare token is required")
+		return errCloudflareTokenIsRequired
 	}
 	name, err := dnsrecord.RecordName(name)
 	if err != nil {
@@ -187,10 +193,10 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
-		return errors.New("cloudflare provider is nil")
+		return errCloudflareProviderIsNil
 	}
 	if p.token == "" {
-		return errors.New("cloudflare token is required")
+		return errCloudflareTokenIsRequired
 	}
 	name, value, err := dnsrecord.TXTInputs(name, value)
 	if err != nil {
@@ -209,10 +215,10 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 
 func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error {
 	if p == nil {
-		return errors.New("cloudflare provider is nil")
+		return errCloudflareProviderIsNil
 	}
 	if p.token == "" {
-		return errors.New("cloudflare token is required")
+		return errCloudflareTokenIsRequired
 	}
 	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
 	if err != nil {
@@ -241,10 +247,10 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
-		return "", "", "", errors.New("cloudflare provider is nil")
+		return "", "", "", errCloudflareProviderIsNil
 	}
 	if p.token == "" {
-		return "", "", "", errors.New("cloudflare token is required")
+		return "", "", "", errCloudflareTokenIsRequired
 	}
 	baseDomain, err = dnsrecord.BaseDomain(baseDomain)
 	if err != nil {
@@ -480,7 +486,7 @@ func cloudflareHeaders(token string) http.Header {
 
 func wrapErrors(errs []apiError) error {
 	if len(errs) == 0 {
-		return errors.New("cloudflare api request failed")
+		return errCloudflareAPIRequestFailed
 	}
 	messages := make([]string, 0, len(errs))
 	for _, apiErr := range errs {

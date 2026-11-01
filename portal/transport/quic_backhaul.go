@@ -17,6 +17,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var errQUICBackhaulAccessTokenRequired = errors.New("quic backhaul access token is required")
+
 const (
 	quicBackhaulALPN             = "portal-tunnel"
 	quicBackhaulControlTimeout   = 10 * time.Second
@@ -49,7 +51,7 @@ func ListenQUICBackhaul(addr string, getCertificate func(*tls.ClientHelloInfo) (
 func DialQUICBackhaul(ctx context.Context, addr string, tlsConfig *tls.Config, accessToken string) (*quic.Conn, error) {
 	accessToken = strings.TrimSpace(accessToken)
 	if accessToken == "" {
-		return nil, errors.New("quic backhaul access token is required")
+		return nil, errQUICBackhaulAccessTokenRequired
 	}
 
 	conn, err := dialQUICBackhaulConnection(ctx, addr, quicBackhaulClientTLSConfig(tlsConfig))
@@ -236,7 +238,7 @@ func AcceptQUICBackhaulControl(ctx context.Context, conn *quic.Conn) (*QUICBackh
 
 	accessToken := strings.TrimSpace(msg.AccessToken)
 	if accessToken == "" {
-		return nil, errors.New("quic backhaul access token is required")
+		return nil, errQUICBackhaulAccessTokenRequired
 	}
 
 	return &QUICBackhaulControl{

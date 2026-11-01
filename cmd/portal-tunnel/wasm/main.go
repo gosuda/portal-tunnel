@@ -16,6 +16,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
+var (
+	errBrowserTunnelOptionsAreRequired = errors.New("browser tunnel options are required")
+	errRelayURLIsRequired              = errors.New("relay URL is required")
+	errRelayDidNotReturnPublicURL      = errors.New("relay did not return a public URL")
+)
+
 type browserConnector struct {
 	mu       sync.Mutex
 	cancel   context.CancelFunc
@@ -36,14 +42,14 @@ func main() {
 func (c *browserConnector) start(_ js.Value, args []js.Value) any {
 	return promise(func() (any, error) {
 		if len(args) != 1 || args[0].Type() != js.TypeObject {
-			return nil, errors.New("browser tunnel options are required")
+			return nil, errBrowserTunnelOptionsAreRequired
 		}
 		options := args[0]
 		name := strings.TrimSpace(jsString(options.Get("name")))
 		relayURL := strings.TrimSpace(jsString(options.Get("relayURL")))
 		body := jsString(options.Get("body"))
 		if relayURL == "" {
-			return nil, errors.New("relay URL is required")
+			return nil, errRelayURLIsRequired
 		}
 
 		id, err := identity.Generate(name)
@@ -85,7 +91,7 @@ func (c *browserConnector) start(_ js.Value, args []js.Value) any {
 		}
 		if len(ready) == 0 || ready[0].PublicURL == "" {
 			c.clear(exposure)
-			return nil, errors.New("relay did not return a public URL")
+			return nil, errRelayDidNotReturnPublicURL
 		}
 		return map[string]any{
 			"publicURL": ready[0].PublicURL,

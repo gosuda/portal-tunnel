@@ -20,6 +20,15 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errNjallaProviderIsNil                   = errors.New("njalla provider is nil")
+	errNjallaTokenIsRequired                 = errors.New("njalla token is required")
+	errNjallaDnssecAutomationNotSupportedUse = errors.New("njalla dnssec automation is not supported; use a DNSSEC-capable provider for ENS gasless automation")
+	errNjallaClientIsNil                     = errors.New("njalla client is nil")
+	errRecordContentIsRequired               = errors.New("record content is required")
+	errNjallaRecordIDIsRequired              = errors.New("njalla record id is required")
+)
+
 const (
 	apiEndpoint      = "https://njal.la/api/1/"
 	defaultRecordTTL = 60
@@ -44,10 +53,10 @@ func (p *Provider) Name() string {
 
 func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
 	if p == nil {
-		return nil, errors.New("njalla provider is nil")
+		return nil, errNjallaProviderIsNil
 	}
 	if p.token == "" {
-		return nil, errors.New("njalla token is required")
+		return nil, errNjallaTokenIsRequired
 	}
 
 	cfg := legonjalla.NewDefaultConfig()
@@ -62,7 +71,7 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
-		return errors.New("njalla provider is nil")
+		return errNjallaProviderIsNil
 	}
 	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
@@ -84,7 +93,7 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 
 func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
-		return errors.New("njalla provider is nil")
+		return errNjallaProviderIsNil
 	}
 	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
@@ -103,7 +112,7 @@ func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP strin
 
 func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
-		return errors.New("njalla provider is nil")
+		return errNjallaProviderIsNil
 	}
 	name, err := dnsrecord.RecordName(name)
 	if err != nil {
@@ -125,7 +134,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
-		return errors.New("njalla provider is nil")
+		return errNjallaProviderIsNil
 	}
 	name, value, err := dnsrecord.TXTInputs(name, value)
 	if err != nil {
@@ -144,7 +153,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 
 func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error {
 	if p == nil {
-		return errors.New("njalla provider is nil")
+		return errNjallaProviderIsNil
 	}
 	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
 	if err != nil {
@@ -163,16 +172,16 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 
 func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
-		return "", "", "", errors.New("njalla provider is nil")
+		return "", "", "", errNjallaProviderIsNil
 	}
 	_, err = dnsrecord.BaseDomain(baseDomain)
 	if err != nil {
 		return "", "", "", err
 	}
 	if p.token == "" {
-		return "", "", "", errors.New("njalla token is required")
+		return "", "", "", errNjallaTokenIsRequired
 	}
-	return "", "", "", errors.New("njalla dnssec automation is not supported; use a DNSSEC-capable provider for ENS gasless automation")
+	return "", "", "", errNjallaDnssecAutomationNotSupportedUse
 }
 
 func (p *Provider) clientAndZone(ctx context.Context, domain string) (*apiClient, string, error) {
@@ -189,10 +198,10 @@ func (p *Provider) clientAndZone(ctx context.Context, domain string) (*apiClient
 
 func (p *Provider) newClient() (*apiClient, error) {
 	if p == nil {
-		return nil, errors.New("njalla provider is nil")
+		return nil, errNjallaProviderIsNil
 	}
 	if p.token == "" {
-		return nil, errors.New("njalla token is required")
+		return nil, errNjallaTokenIsRequired
 	}
 	return &apiClient{
 		token:      p.token,
@@ -203,7 +212,7 @@ func (p *Provider) newClient() (*apiClient, error) {
 
 func (p *Provider) findZone(ctx context.Context, client *apiClient, domain string) (string, error) {
 	if client == nil {
-		return "", errors.New("njalla client is nil")
+		return "", errNjallaClientIsNil
 	}
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
@@ -242,7 +251,7 @@ func ensureRecord(ctx context.Context, client *apiClient, zone, fqdn, recordType
 	}
 	content = strings.TrimSpace(content)
 	if content == "" {
-		return errors.New("record content is required")
+		return errRecordContentIsRequired
 	}
 
 	existing, err := listRecords(ctx, client, zone, fqdn, recordType)
@@ -314,7 +323,7 @@ func deleteRecords(ctx context.Context, client *apiClient, zone, fqdn, recordTyp
 
 func listRecords(ctx context.Context, client *apiClient, zone, fqdn, recordType string) ([]record, error) {
 	if client == nil {
-		return nil, errors.New("njalla client is nil")
+		return nil, errNjallaClientIsNil
 	}
 	recordName, err := dnsrecord.RelativeName("njalla", fqdn, zone)
 	if err != nil {
@@ -411,7 +420,7 @@ func (c *apiClient) addRecord(ctx context.Context, rec record) (*record, error) 
 func (c *apiClient) removeRecord(ctx context.Context, id, domain string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return errors.New("njalla record id is required")
+		return errNjallaRecordIDIsRequired
 	}
 	return c.do(ctx, "remove-record", record{ID: recordID(id), Domain: domain}, nil)
 }
@@ -426,7 +435,7 @@ func (c *apiClient) listRecords(ctx context.Context, domain string) ([]record, e
 
 func (c *apiClient) do(ctx context.Context, method string, params any, out any) error {
 	if c == nil {
-		return errors.New("njalla client is nil")
+		return errNjallaClientIsNil
 	}
 	endpoint := strings.TrimSpace(c.endpoint)
 	endpoint = cmp.Or(endpoint, apiEndpoint)

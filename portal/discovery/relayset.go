@@ -14,6 +14,18 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var (
+	errTargetRelayDescriptorMissingRelays                 = errors.New("target relay descriptor missing from relays")
+	errTargetRelayDescriptorConflictsRetainedSigned       = errors.New("target relay descriptor conflicts with retained signed contents at the same issued_at")
+	errRelayBannedFromPool                                = errors.New("relay banned from pool")
+	errAnnouncedDescriptorRejectedRollbackOrTakeover      = errors.New("announced descriptor rejected by rollback or takeover guard")
+	errAnnouncedDescriptorConflictsRetainedSignedContents = errors.New("announced descriptor conflicts with retained signed contents at the same issued_at")
+	errRelayDescriptorMissingIssuedAt                     = errors.New("relay descriptor missing issued_at")
+	errRelayDescriptorAlreadyExpired                      = errors.New("relay descriptor already expired")
+	errRelayDescriptorTooFarFuture                        = errors.New("relay descriptor is too far in the future")
+	errRelayDescriptorValidityWindowExceedsMaximum        = errors.New("relay descriptor validity window exceeds maximum")
+)
+
 // RelaySet owns the shared relay discovery view: configured bootstrap relay URLs,
 // the latest validated descriptor seen for each relay, and local runtime state
 // such as ban/failure tracking and observed discovery RTT.
@@ -632,10 +644,10 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		return relaySetChanged, fmt.Errorf("%w: relay=%q client=%q", ErrProtocolMismatch, resp.ProtocolVersion, types.DiscoveryVersion)
 	}
 	if missingTarget {
-		return relaySetChanged, errors.New("target relay descriptor missing from relays")
+		return relaySetChanged, errTargetRelayDescriptorMissingRelays
 	}
 	if conflictingTarget {
-		return relaySetChanged, errors.New("target relay descriptor conflicts with retained signed contents at the same issued_at")
+		return relaySetChanged, errTargetRelayDescriptorConflictsRetainedSigned
 	}
 	if authoritative {
 		// A compatible, non-conflicting target can retire a prior mismatch.
@@ -863,7 +875,7 @@ func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) er
 	relayURL := record.Descriptor.APIHTTPSAddr
 	if existing, ok := s.relays[relayURL]; ok {
 		if existing.Banned {
-			return errors.New("relay banned from pool")
+			return errRelayBannedFromPool
 		}
 		record = mergeLocalRelayState(record, existing)
 	}
@@ -875,9 +887,9 @@ func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) er
 	case upsertIgnored:
 		return nil
 	case upsertRejected:
-		return errors.New("announced descriptor rejected by rollback or takeover guard")
+		return errAnnouncedDescriptorRejectedRollbackOrTakeover
 	case upsertConflicting:
-		return errors.New("announced descriptor conflicts with retained signed contents at the same issued_at")
+		return errAnnouncedDescriptorConflictsRetainedSignedContents
 	}
 	return nil
 }
@@ -930,16 +942,16 @@ func verifyFreshRelayDescriptor(desc types.RelayDescriptor, now time.Time) (type
 
 func validateRelayDescriptorFreshness(desc types.RelayDescriptor, now time.Time) error {
 	if desc.IssuedAt.IsZero() {
-		return errors.New("relay descriptor missing issued_at")
+		return errRelayDescriptorMissingIssuedAt
 	}
 	if !desc.ExpiresAt.After(now) {
-		return errors.New("relay descriptor already expired")
+		return errRelayDescriptorAlreadyExpired
 	}
 	if desc.IssuedAt.After(now.Add(AnnounceClockSkewTolerance)) {
-		return errors.New("relay descriptor is too far in the future")
+		return errRelayDescriptorTooFarFuture
 	}
 	if desc.ExpiresAt.Sub(desc.IssuedAt) > AnnounceMaxValidity {
-		return errors.New("relay descriptor validity window exceeds maximum")
+		return errRelayDescriptorValidityWindowExceedsMaximum
 	}
 	return nil
 }

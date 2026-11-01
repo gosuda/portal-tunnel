@@ -14,6 +14,13 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errCacheAPITransportIsUnavailable       = errors.New("cache API transport is unavailable")
+	errCacheOriginLeaseIsUnavailable        = errors.New("cache origin lease is unavailable")
+	errCacheSourceGenerationIsUnavailable   = errors.New("cache source generation is unavailable")
+	errStaticCacheSourceChangedDuringUpload = errors.New("static cache source changed during upload")
+)
+
 // Syncer subscribes one relay to an exposure's shared static source. A single
 // caller advances Next and supplies current transport/credentials to Sync.
 type Syncer struct {
@@ -75,10 +82,10 @@ func (s *Syncer) Next(ctx context.Context) bool {
 // All requests reject redirects; client itself is unchanged.
 func (s *Syncer) Sync(ctx context.Context, client *http.Client, accessToken string) error {
 	if client == nil {
-		return errors.New("cache API transport is unavailable")
+		return errCacheAPITransportIsUnavailable
 	}
 	if accessToken == "" {
-		return errors.New("cache origin lease is unavailable")
+		return errCacheOriginLeaseIsUnavailable
 	}
 	cacheClient := *client
 	cacheClient.CheckRedirect = func(*http.Request, []*http.Request) error {
@@ -100,7 +107,7 @@ func (s *Syncer) Sync(ctx context.Context, client *http.Client, accessToken stri
 func (s *Syncer) syncSnapshot(ctx context.Context, client *http.Client, accessToken string) error {
 	snapshot := s.snapshot
 	if snapshot == nil {
-		return errors.New("cache source generation is unavailable")
+		return errCacheSourceGenerationIsUnavailable
 	}
 	if snapshot.err != nil {
 		return snapshot.err
@@ -157,7 +164,7 @@ func (s *Syncer) syncSnapshot(ctx context.Context, client *http.Client, accessTo
 				info, statErr := input.Stat()
 				if statErr != nil || !info.Mode().IsRegular() || info.Size() != object.Size {
 					_ = input.Close()
-					return errors.New("static cache source changed during upload")
+					return errStaticCacheSourceChangedDuringUpload
 				}
 				_, copyErr := io.CopyN(part, input, object.Size)
 				closeErr := input.Close()

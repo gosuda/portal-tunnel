@@ -14,6 +14,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var errIdentityPathOrJSONRequired = errors.New("identity path or JSON is required")
+
 // LoadExisting loads an identity without generating or persisting one.
 func LoadExisting(path, rawJSON string) (types.Identity, error) {
 	if raw := strings.TrimSpace(rawJSON); raw != "" {
@@ -21,7 +23,7 @@ func LoadExisting(path, rawJSON string) (types.Identity, error) {
 	}
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return types.Identity{}, errors.New("identity path or JSON is required")
+		return types.Identity{}, errIdentityPathOrJSONRequired
 	}
 	if err := utils.EnsurePrivateFile(path); err != nil {
 		return types.Identity{}, fmt.Errorf("secure identity file: %w", err)

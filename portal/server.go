@@ -33,6 +33,21 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errHTTPRedirectRequiresPortalURLAbsolute     = errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+	errHTTPRedirectPortalURLPortMust             = errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
+	errHTTPRedirectHTTPRedirectAddrHas           = errors.New("http redirect HTTP_REDIRECT_ADDR has an invalid host")
+	errHTTPRedirectHTTPRedirectAddrPort          = errors.New("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535")
+	errRelayOverlayRequiresDiscovery             = errors.New("relay overlay requires discovery")
+	errStateDirectoryIsRequired                  = errors.New("state directory is required")
+	errRootHostIsRequired                        = errors.New("root host is required")
+	errTransportMaxLeasesMustNonNegative         = errors.New("transport max leases must be non-negative")
+	errTransportEnablementRequiresLeasePortRange = errors.New("transport enablement requires a lease port range")
+	errEnablingUDPRequiresRelayRestart           = errors.New("enabling udp requires a relay restart")
+	errServerAlreadyStarted                      = errors.New("server already started")
+	errJanitorIntervalMustBePositive             = errors.New("janitor interval must be positive")
+)
+
 const (
 	defaultClaimTimeout          = 10 * time.Second
 	defaultClientHelloWait       = 2 * time.Second
@@ -125,16 +140,16 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 	}
 	target, err := url.Parse(strings.TrimSpace(portalURL))
 	if err != nil {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+		return types.HTTPRedirectConfig{}, errHTTPRedirectRequiresPortalURLAbsolute
 	}
 	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+		return types.HTTPRedirectConfig{}, errHTTPRedirectRequiresPortalURLAbsolute
 	}
 	if port := target.Port(); port != "" {
 		n, err := strconv.Atoi(port)
 		if err != nil || n < 1 || n > 65535 {
-			return types.HTTPRedirectConfig{}, errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
+			return types.HTTPRedirectConfig{}, errHTTPRedirectPortalURLPortMust
 		}
 	}
 	cfg.Addr = utils.StringOrDefault(strings.TrimSpace(cfg.Addr), types.DefaultHTTPRedirectAddr)
@@ -143,7 +158,7 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 		return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR must be a host:port address: %w", err)
 	}
 	if strings.ContainsAny(host, " \t\r\n/#?@\\") {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR has an invalid host")
+		return types.HTTPRedirectConfig{}, errHTTPRedirectHTTPRedirectAddrHas
 	}
 	if strings.Contains(host, ":") {
 		if _, err := netip.ParseAddr(host); err != nil {
@@ -152,7 +167,7 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 	}
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 0 || n > 65535 {
-		return types.HTTPRedirectConfig{}, errors.New("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535")
+		return types.HTTPRedirectConfig{}, errHTTPRedirectHTTPRedirectAddrPort
 	}
 	return cfg, nil
 }
@@ -162,12 +177,12 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
-		return ServerConfig{}, errors.New("relay overlay requires discovery")
+		return ServerConfig{}, errRelayOverlayRequiresDiscovery
 	}
 	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
 	cfg.StateDir = strings.TrimSpace(cfg.StateDir)
 	if cfg.StateDir == "" {
-		return ServerConfig{}, errors.New("state directory is required")
+		return ServerConfig{}, errStateDirectoryIsRequired
 	}
 	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
 		cfg.ACME.KeyDir = cfg.StateDir
@@ -192,7 +207,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, fmt.Errorf("normalize portal url: %w", err)
 	}
 	if utils.PortalRootHost(selfRelayURL) == "" {
-		return ServerConfig{}, errors.New("root host is required")
+		return ServerConfig{}, errRootHostIsRequired
 	}
 
 	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
@@ -365,14 +380,14 @@ func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.Reverse
 // backhaul listener exists, since a listener cannot be created post-start.
 func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
 	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
-		return errors.New("transport max leases must be non-negative")
+		return errTransportMaxLeasesMustNonNegative
 	}
 	cfg := s.config()
 	if (udpEnabled || tcpEnabled) && !cfg.hasLeasePortRange() {
-		return errors.New("transport enablement requires a lease port range")
+		return errTransportEnablementRequiresLeasePortRange
 	}
 	if s.group != nil && udpEnabled && s.quicBackhaul == nil {
-		return errors.New("enabling udp requires a relay restart")
+		return errEnablingUDPRequiresRelayRestart
 	}
 	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
 	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
@@ -411,7 +426,7 @@ func (s *Server) Start(ctx context.Context, handler http.Handler) error {
 
 func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if s.group != nil {
-		return errors.New("server already started")
+		return errServerAlreadyStarted
 	}
 	cfg := s.config()
 	cacheManager, cacheErr := cache.New(cfg.Cache, filepath.Join(cfg.StateDir, "static-cache"))
@@ -1080,7 +1095,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 
 func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
-		return errors.New("janitor interval must be positive")
+		return errJanitorIntervalMustBePositive
 	}
 
 	ticker := time.NewTicker(interval)

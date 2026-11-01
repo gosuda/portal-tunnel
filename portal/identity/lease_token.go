@@ -13,6 +13,15 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errSigningKeyIsRequired               = errors.New("signing key is required")
+	errVerificationKeyIsRequired          = errors.New("verification key is required")
+	errTokenSignatureIsInvalid            = errors.New("token signature is invalid")
+	errLeaseTokenSigningAuthorityRequired = errors.New("lease token signing authority is required")
+	errLeaseIDIsRequired                  = errors.New("lease id is required")
+	errTokenExpiryMustBeInTheFuture       = errors.New("token expiry must be in the future")
+)
+
 const (
 	leaseAccessTokenAudience  = "portal-sdk"
 	reverseCapabilityAudience = "portal-reverse"
@@ -42,7 +51,7 @@ func (s *es256kOpaqueSigner) SignPayload(payload []byte, alg jose.SignatureAlgor
 		return nil, jose.ErrUnsupportedAlgorithm
 	}
 	if s == nil || s.authority == nil {
-		return nil, errors.New("signing key is required")
+		return nil, errSigningKeyIsRequired
 	}
 	signature, err := s.authority.SignSHA256Secp256k1(payload)
 	if err != nil {
@@ -60,11 +69,11 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 		return jose.ErrUnsupportedAlgorithm
 	}
 	if v == nil || v.publicKey == nil {
-		return errors.New("verification key is required")
+		return errVerificationKeyIsRequired
 	}
 	if err := VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey); err != nil {
 		if errors.Is(err, ErrSecp256k1SignatureInvalid) {
-			return errors.New("token signature is invalid")
+			return errTokenSignatureIsInvalid
 		}
 		return err
 	}
@@ -83,11 +92,11 @@ func IssueReverseCapability(authority Authority, issuer string, leaseIdentity ty
 
 func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.Identity, audience, leaseID string, expiresAt time.Time) (string, LeaseAccessTokenClaims, error) {
 	if authority == nil {
-		return "", LeaseAccessTokenClaims{}, errors.New("lease token signing authority is required")
+		return "", LeaseAccessTokenClaims{}, errLeaseTokenSigningAuthorityRequired
 	}
 	leaseID = strings.TrimSpace(leaseID)
 	if leaseID == "" {
-		return "", LeaseAccessTokenClaims{}, errors.New("lease id is required")
+		return "", LeaseAccessTokenClaims{}, errLeaseIDIsRequired
 	}
 
 	signer, err := jose.NewSigner(jose.SigningKey{
@@ -103,7 +112,7 @@ func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.
 	now := time.Now().UTC()
 	expiresAt = expiresAt.UTC()
 	if !expiresAt.After(now) {
-		return "", LeaseAccessTokenClaims{}, errors.New("token expiry must be in the future")
+		return "", LeaseAccessTokenClaims{}, errTokenExpiryMustBeInTheFuture
 	}
 	claims := LeaseAccessTokenClaims{
 		Claims: jwt.Claims{
@@ -151,7 +160,7 @@ func verifyIdentityToken(token, publicKeyHex, issuer, audience string, now time.
 	}
 	claims.LeaseID = strings.TrimSpace(claims.LeaseID)
 	if claims.LeaseID == "" {
-		return LeaseAccessTokenClaims{}, errors.New("lease id is required")
+		return LeaseAccessTokenClaims{}, errLeaseIDIsRequired
 	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
 		Issuer:      strings.TrimSpace(issuer),

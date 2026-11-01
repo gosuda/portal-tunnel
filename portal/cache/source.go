@@ -18,6 +18,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRelayCacheTTLMustZeroOr = errors.New("relay cache TTL must be zero or between 1s and 8760h")
+	errTooManyStaticCacheFiles = errors.New("too many static cache files")
+)
+
 // SourceConfig identifies the static site and its requested offline lifetime.
 // A zero TTL accepts the relay's maximum lifetime.
 type SourceConfig struct {
@@ -47,7 +52,7 @@ type sourceSnapshot struct {
 // NewSource resolves and validates a static site without starting background work.
 func NewSource(cfg SourceConfig) (*Source, error) {
 	if cfg.TTL != 0 && (cfg.TTL < time.Second || cfg.TTL > 365*24*time.Hour) {
-		return nil, errors.New("relay cache TTL must be zero or between 1s and 8760h")
+		return nil, errRelayCacheTTLMustZeroOr
 	}
 	root, index, err := utils.ResolveStaticSite(cfg.Path)
 	if err != nil {
@@ -135,7 +140,7 @@ func (s *Source) scan(ctx context.Context, limits types.StaticCacheLimits) *sour
 			return fmt.Errorf("cache source %q is not a regular file", path)
 		}
 		if len(snapshot.manifest.Files) >= types.StaticCacheMaxFiles {
-			return errors.New("too many static cache files")
+			return errTooManyStaticCacheFiles
 		}
 		file, err := root.Open(path)
 		if err != nil {

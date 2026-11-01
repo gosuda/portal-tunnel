@@ -8,6 +8,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var errPortalURLIsRequired = errors.New("portal url is required")
+
 //go:embed install.sh
 var installShellScript string
 
@@ -17,7 +19,7 @@ var installPowerShellScript string
 func RelayScript(portalURL string, isWindows bool) (script, filename, contentType string, err error) {
 	portalURL = strings.TrimSpace(portalURL)
 	if portalURL == "" {
-		return "", "", "", errors.New("portal url is required")
+		return "", "", "", errPortalURLIsRequired
 	}
 
 	script, filename, contentType = scriptFor(isWindows)

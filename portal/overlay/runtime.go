@@ -33,6 +33,29 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errIvnpDestinationMust32ByteB32            = errors.New("ivnp destination must be a 32-byte b32.i2p hash")
+	errInvalidIvnpDestinationHash              = errors.New("invalid ivnp destination hash")
+	errOverlayRuntimeConfigurationIsIncomplete = errors.New("overlay runtime configuration is incomplete")
+	errOverlayRuntimeIsUnavailable             = errors.New("overlay runtime is unavailable")
+	errIvnpConfigurationMustJSONObjectWithout  = errors.New("IVNP configuration must be a JSON object without runtime Logger or Resolver values")
+	errIvnpConfigurationMustContainExactlyOne  = errors.New("IVNP configuration must contain exactly one JSON object")
+	errOverlayRuntimeIsNotStarted              = errors.New("overlay runtime is not started")
+	errOverlayLeaseIsInvalid                   = errors.New("overlay lease is invalid")
+	errOverlayIngressDescriptorIsInvalid       = errors.New("overlay ingress descriptor is invalid")
+	errOverlayEndpointIsUnavailable            = errors.New("overlay endpoint is unavailable")
+	errOverlayPeerDoesNotMatchDestination      = errors.New("overlay peer does not match destination")
+	errInvalidOverlayCapabilityLength          = errors.New("invalid overlay capability length")
+	errInvalidOverlayCapability                = errors.New("invalid overlay capability")
+	errInvalidOverlayCapabilityPayload         = errors.New("invalid overlay capability payload")
+	errInvalidOverlayCapabilitySignature       = errors.New("invalid overlay capability signature")
+	errInvalidOverlayCapabilityClaims          = errors.New("invalid overlay capability claims")
+	errNonCanonicalOverlayCapability           = errors.New("non-canonical overlay capability")
+	errOverlayCapabilitySignerDoesNotMatch     = errors.New("overlay capability signer does not match ingress")
+	errOverlayCapabilityExpiredOrIncomplete    = errors.New("overlay capability is expired or incomplete")
+	errOverlayConnectionLacksPeerIdentity      = errors.New("overlay connection lacks peer identity")
+)
+
 const (
 	capabilityPrefix        = "ov1"
 	streamPort              = "4017"
@@ -55,12 +78,12 @@ func normalizeIVNPDestination(destination string) (string, error) {
 	destination = strings.ToLower(strings.TrimSpace(destination))
 	label, ok := strings.CutSuffix(destination, ".b32.i2p")
 	if !ok || len(label) != 52 {
-		return "", errors.New("ivnp destination must be a 32-byte b32.i2p hash")
+		return "", errIvnpDestinationMust32ByteB32
 	}
 	encoding := base32.StdEncoding.WithPadding(base32.NoPadding)
 	raw, err := encoding.DecodeString(strings.ToUpper(label))
 	if err != nil || len(raw) != 32 || strings.ToLower(encoding.EncodeToString(raw)) != label {
-		return "", errors.New("invalid ivnp destination hash")
+		return "", errInvalidIvnpDestinationHash
 	}
 	return destination, nil
 }
@@ -140,7 +163,7 @@ type Runtime struct {
 func New(config Config) (*Runtime, error) {
 	config.ConfigPath = strings.TrimSpace(config.ConfigPath)
 	if config.ConfigPath == "" || config.Authority == nil {
-		return nil, errors.New("overlay runtime configuration is incomplete")
+		return nil, errOverlayRuntimeConfigurationIsIncomplete
 	}
 	return &Runtime{
 		config:        config,
@@ -155,7 +178,7 @@ func New(config Config) (*Runtime, error) {
 
 func (r *Runtime) Start(ctx context.Context) error {
 	if r == nil {
-		return errors.New("overlay runtime is unavailable")
+		return errOverlayRuntimeIsUnavailable
 	}
 	file, err := os.Open(r.config.ConfigPath)
 	if err != nil {
@@ -170,10 +193,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("decode IVNP RouterConfig JSON: %w", err)
 	}
 	if cfg == nil || cfg.Logger != nil || cfg.Resolver != nil {
-		return errors.New("IVNP configuration must be a JSON object without runtime Logger or Resolver values")
+		return errIvnpConfigurationMustJSONObjectWithout
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("IVNP configuration must contain exactly one JSON object")
+		return errIvnpConfigurationMustContainExactlyOne
 	}
 	router, err := ivnp.NewRouter(ctx, *cfg)
 	if err != nil {
@@ -186,7 +209,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 
 func (r *Runtime) Run(ctx context.Context) error {
 	if r == nil || r.router == nil {
-		return errors.New("overlay runtime is not started")
+		return errOverlayRuntimeIsNotStarted
 	}
 	// Constructor contexts do not own IVNP resources after success. Close the
 	// router explicitly to cancel construction and join all destination I/O.
@@ -305,7 +328,7 @@ func (r *Runtime) IssueEndpoint(input IssueInput) (types.ReverseEndpoint, bool, 
 	now := time.Now().UTC()
 	input.LeaseID = strings.TrimSpace(input.LeaseID)
 	if input.LeaseID == "" || !input.ExpiresAt.After(now) {
-		return types.ReverseEndpoint{}, false, errors.New("overlay lease is invalid")
+		return types.ReverseEndpoint{}, false, errOverlayLeaseIsInvalid
 	}
 	ingress, err := discovery.VerifyRelayDescriptor(input.Self)
 	if err != nil {
@@ -313,7 +336,7 @@ func (r *Runtime) IssueEndpoint(input IssueInput) (types.ReverseEndpoint, bool, 
 	}
 	ingressDestination, err := normalizeIVNPDestination(ingress.IVNPDestination)
 	if err != nil || ingressDestination != r.Destination() {
-		return types.ReverseEndpoint{}, false, errors.New("overlay ingress descriptor is invalid")
+		return types.ReverseEndpoint{}, false, errOverlayIngressDescriptorIsInvalid
 	}
 
 	candidates := r.gatewayCandidates(input.Descriptors, now, ingress.Address, ingressDestination)
@@ -604,7 +627,7 @@ func (r *Runtime) acceptReverse(conn net.Conn) {
 
 func (r *Runtime) dial(ctx context.Context, destination string) (net.Conn, error) {
 	if r.endpoint == nil {
-		return nil, errors.New("overlay endpoint is unavailable")
+		return nil, errOverlayEndpointIsUnavailable
 	}
 	destination, err := normalizeIVNPDestination(destination)
 	if err != nil {
@@ -617,7 +640,7 @@ func (r *Runtime) dial(ctx context.Context, destination string) (net.Conn, error
 	peer, err := peerDestination(conn)
 	if err != nil || peer != destination {
 		closeNow(conn)
-		return nil, errors.New("overlay peer does not match destination")
+		return nil, errOverlayPeerDoesNotMatchDestination
 	}
 	return conn, nil
 }
@@ -651,32 +674,32 @@ func signCapability(authority identity.Authority, claims capabilityClaims) (stri
 func verifyCapability(capability string, now time.Time) (capabilityClaims, error) {
 	capability = strings.TrimSpace(capability)
 	if len(capability) == 0 || len(capability) > capabilityLimit {
-		return capabilityClaims{}, errors.New("invalid overlay capability length")
+		return capabilityClaims{}, errInvalidOverlayCapabilityLength
 	}
 	parts := strings.Split(capability, ".")
 	if len(parts) != 3 || parts[0] != capabilityPrefix {
-		return capabilityClaims{}, errors.New("invalid overlay capability")
+		return capabilityClaims{}, errInvalidOverlayCapability
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || len(payload) == 0 || len(payload) > capabilityLimit {
-		return capabilityClaims{}, errors.New("invalid overlay capability payload")
+		return capabilityClaims{}, errInvalidOverlayCapabilityPayload
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return capabilityClaims{}, errors.New("invalid overlay capability signature")
+		return capabilityClaims{}, errInvalidOverlayCapabilitySignature
 	}
 	var claims capabilityClaims
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&claims); err != nil {
-		return capabilityClaims{}, errors.New("invalid overlay capability claims")
+		return capabilityClaims{}, errInvalidOverlayCapabilityClaims
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return capabilityClaims{}, errors.New("invalid overlay capability claims")
+		return capabilityClaims{}, errInvalidOverlayCapabilityClaims
 	}
 	canonical, err := json.Marshal(claims)
 	if err != nil || !bytes.Equal(canonical, payload) {
-		return capabilityClaims{}, errors.New("non-canonical overlay capability")
+		return capabilityClaims{}, errNonCanonicalOverlayCapability
 	}
 	verifiedIngress, err := discovery.VerifyRelayDescriptor(claims.Ingress)
 	if err != nil {
@@ -692,7 +715,7 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 	}
 	address, err := identity.AddressFromCompressedPublicKeyHex(hex.EncodeToString(publicKey.SerializeCompressed()))
 	if err != nil || !strings.EqualFold(address, verifiedIngress.Address) {
-		return capabilityClaims{}, errors.New("overlay capability signer does not match ingress")
+		return capabilityClaims{}, errOverlayCapabilitySignerDoesNotMatch
 	}
 	claims.LeaseID = strings.TrimSpace(claims.LeaseID)
 	claims.GatewayAddress = strings.TrimSpace(claims.GatewayAddress)
@@ -700,7 +723,7 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 	incomplete := claims.Version != 1 || claims.LeaseID == "" || claims.GatewayAddress == ""
 	invalidExpiry := !claims.ExpiresAt.After(now) || claims.ExpiresAt.After(verifiedIngress.ExpiresAt)
 	if err != nil || incomplete || invalidExpiry {
-		return capabilityClaims{}, errors.New("overlay capability is expired or incomplete")
+		return capabilityClaims{}, errOverlayCapabilityExpiredOrIncomplete
 	}
 	claims.Ingress = verifiedIngress
 	return claims, nil
@@ -711,7 +734,7 @@ func peerDestination(conn net.Conn) (string, error) {
 	// Require the typed address; a hostname on an arbitrary net.Addr is not proof.
 	peer, ok := conn.RemoteAddr().(ivnp.Addr)
 	if !ok || peer.Hash == (ivnp.Hash{}) || peer.Port == 0 {
-		return "", errors.New("overlay connection lacks peer identity")
+		return "", errOverlayConnectionLacksPeerIdentity
 	}
 	return foundation.B32(peer.Hash), nil
 }

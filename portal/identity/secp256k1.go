@@ -14,6 +14,28 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var (
+	errAddressIsRequired                     = errors.New("address is required")
+	errAddressMustStartWith0x                = errors.New("address must start with 0x")
+	errAddressMustBe20Bytes                  = errors.New("address must be 20 bytes")
+	errAddressMustBeHexEncoded               = errors.New("address must be hex encoded")
+	errAddressChecksumIsInvalid              = errors.New("address checksum is invalid")
+	errInvalidUncompressedSecp256k1PublicKey = errors.New("invalid uncompressed secp256k1 public key")
+	errInvalidCompactSignatureLength         = errors.New("invalid compact signature length")
+	errInvalidEs256kSignatureLength          = errors.New("invalid es256k signature length")
+	errInvalidCompactSignatureHeader         = errors.New("invalid compact signature header")
+	errInvalidEs256kSignatureR               = errors.New("invalid es256k signature r")
+	errInvalidEs256kSignatureS               = errors.New("invalid es256k signature s")
+	errSignatureIsRequired                   = errors.New("signature is required")
+	errPublicKeyIsRequired                   = errors.New("public key is required")
+	errPublicKeyMustHexEncoded               = errors.New("public key must be hex encoded")
+	errInvalidSecp256k1PublicKey             = errors.New("invalid secp256k1 public key")
+	errPrivateKeyIsRequired                  = errors.New("private key is required")
+	errSecp256k1PrivateKeyMustHexEncoded     = errors.New("secp256k1 private key must be hex encoded")
+	errInvalidSecp256k1PrivateKey            = errors.New("invalid secp256k1 private key")
+	errSecp256k1PrivateKeyMustNotZero        = errors.New("secp256k1 private key must not be zero")
+)
+
 const (
 	// compactSecp256k1SignatureSize is the byte length of a compact
 	// recoverable secp256k1 ECDSA signature.
@@ -58,17 +80,17 @@ func (s Secp256k1Signature) Raw64() ([]byte, error) {
 func NormalizeEVMAddress(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "", errors.New("address is required")
+		return "", errAddressIsRequired
 	}
 	hexPart := trimHexPrefix(trimmed)
 	if hexPart == trimmed {
-		return "", errors.New("address must start with 0x")
+		return "", errAddressMustStartWith0x
 	}
 	if len(hexPart) != 40 {
-		return "", errors.New("address must be 20 bytes")
+		return "", errAddressMustBe20Bytes
 	}
 	if _, err := hex.DecodeString(hexPart); err != nil {
-		return "", errors.New("address must be hex encoded")
+		return "", errAddressMustBeHexEncoded
 	}
 
 	lowerHex := strings.ToLower(hexPart)
@@ -99,7 +121,7 @@ func NormalizeEVMAddress(raw string) (string, error) {
 
 	checksummed := builder.String()
 	if hexPart != lowerHex && hexPart != strings.ToUpper(hexPart) && hexPart != checksummed {
-		return "", errors.New("address checksum is invalid")
+		return "", errAddressChecksumIsInvalid
 	}
 	return "0x" + checksummed, nil
 }
@@ -112,7 +134,7 @@ func AddressFromCompressedPublicKeyHex(rawPublicKey string) (string, error) {
 
 	uncompressed := publicKey.SerializeUncompressed()
 	if len(uncompressed) != 65 || uncompressed[0] != 0x04 {
-		return "", errors.New("invalid uncompressed secp256k1 public key")
+		return "", errInvalidUncompressedSecp256k1PublicKey
 	}
 
 	hasher := sha3.NewLegacyKeccak256()
@@ -130,7 +152,7 @@ func signEthereumPersonalMessage(message, privateKeyHex string) (string, error) 
 
 	compactSignature := ecdsa.SignCompact(privateKey, ethereumPersonalMessageHash(message), false)
 	if len(compactSignature) != 65 {
-		return "", errors.New("invalid compact signature length")
+		return "", errInvalidCompactSignatureLength
 	}
 
 	signature := make([]byte, 65)
@@ -208,7 +230,7 @@ func ResolveSecp256k1Identity(rawPrivateKey string) (types.Identity, error) {
 
 func signSHA256Secp256k1(payload []byte, privateKey *secp256k1.PrivateKey) (Secp256k1Signature, error) {
 	if privateKey == nil {
-		return Secp256k1Signature{}, errors.New("signing key is required")
+		return Secp256k1Signature{}, errSigningKeyIsRequired
 	}
 	hash := sha256.Sum256(payload)
 	return newSecp256k1SignatureFromCompact(ecdsa.SignCompact(privateKey, hash[:], true))
@@ -218,7 +240,7 @@ func signSHA256Secp256k1(payload []byte, privateKey *secp256k1.PrivateKey) (Secp
 // recoverable signature over the SHA-256 digest of payload.
 func RecoverSHA256Secp256k1Compact(payload, signature []byte) (*secp256k1.PublicKey, error) {
 	if len(signature) != compactSecp256k1SignatureSize {
-		return nil, errors.New("invalid compact signature length")
+		return nil, errInvalidCompactSignatureLength
 	}
 
 	hash := sha256.Sum256(payload)
@@ -236,10 +258,10 @@ func RecoverSHA256Secp256k1Compact(payload, signature []byte) (*secp256k1.Public
 // SHA-256 digest of payload.
 func VerifySHA256Secp256k1Raw64(payload, signature []byte, publicKey *secp256k1.PublicKey) error {
 	if publicKey == nil {
-		return errors.New("verification key is required")
+		return errVerificationKeyIsRequired
 	}
 	if len(signature) != rawSecp256k1SignatureSize {
-		return errors.New("invalid es256k signature length")
+		return errInvalidEs256kSignatureLength
 	}
 
 	parsed, err := secp256k1SignatureFromRaw64(signature)
@@ -252,7 +274,7 @@ func VerifySHA256Secp256k1Raw64(payload, signature []byte, publicKey *secp256k1.
 
 func copySecp256k1CompactSignature(compact []byte) ([]byte, error) {
 	if len(compact) != compactSecp256k1SignatureSize {
-		return nil, errors.New("invalid compact signature length")
+		return nil, errInvalidCompactSignatureLength
 	}
 	if _, err := secp256k1CompactRecoveryID(compact[0]); err != nil {
 		return nil, err
@@ -273,31 +295,31 @@ func secp256k1CompactRecoveryID(header byte) (byte, error) {
 	case header >= 31 && header <= 34:
 		return header - 31, nil
 	default:
-		return 0, errors.New("invalid compact signature header")
+		return 0, errInvalidCompactSignatureHeader
 	}
 }
 
 func secp256k1SignatureFromRaw64(signature []byte) (*ecdsa.Signature, error) {
 	if len(signature) != rawSecp256k1SignatureSize {
-		return nil, errors.New("invalid es256k signature length")
+		return nil, errInvalidEs256kSignatureLength
 	}
 
 	var r, s secp256k1.ModNScalar
 	if overflow := r.SetByteSlice(signature[:32]); overflow || r.IsZero() {
-		return nil, errors.New("invalid es256k signature r")
+		return nil, errInvalidEs256kSignatureR
 	}
 	if overflow := s.SetByteSlice(signature[32:]); overflow || s.IsZero() {
-		return nil, errors.New("invalid es256k signature s")
+		return nil, errInvalidEs256kSignatureS
 	}
 	return ecdsa.NewSignature(&r, &s), nil
 }
 
 func verifySHA256Secp256k1Signature(payload []byte, signature *ecdsa.Signature, publicKey *secp256k1.PublicKey) error {
 	if signature == nil {
-		return errors.New("signature is required")
+		return errSignatureIsRequired
 	}
 	if publicKey == nil {
-		return errors.New("verification key is required")
+		return errVerificationKeyIsRequired
 	}
 	hash := sha256.Sum256(payload)
 	if !signature.Verify(hash[:], publicKey) {
@@ -309,18 +331,18 @@ func verifySHA256Secp256k1Signature(payload []byte, signature *ecdsa.Signature, 
 func ParseSecp256k1PublicKeyHex(raw string) (*secp256k1.PublicKey, error) {
 	publicKeyHex := strings.TrimSpace(raw)
 	if publicKeyHex == "" {
-		return nil, errors.New("public key is required")
+		return nil, errPublicKeyIsRequired
 	}
 	publicKeyHex = trimHexPrefix(publicKeyHex)
 
 	decoded, err := hex.DecodeString(publicKeyHex)
 	if err != nil {
-		return nil, errors.New("public key must be hex encoded")
+		return nil, errPublicKeyMustHexEncoded
 	}
 
 	publicKey, err := secp256k1.ParsePubKey(decoded)
 	if err != nil {
-		return nil, errors.New("invalid secp256k1 public key")
+		return nil, errInvalidSecp256k1PublicKey
 	}
 	return publicKey, nil
 }
@@ -328,13 +350,13 @@ func ParseSecp256k1PublicKeyHex(raw string) (*secp256k1.PublicKey, error) {
 func parseSecp256k1PrivateKeyHex(raw string, requireNonZero bool) (*secp256k1.PrivateKey, string, error) {
 	privateKeyHex := strings.TrimSpace(raw)
 	if privateKeyHex == "" {
-		return nil, "", errors.New("private key is required")
+		return nil, "", errPrivateKeyIsRequired
 	}
 	privateKeyHex = trimHexPrefix(privateKeyHex)
 
 	decoded, err := hex.DecodeString(privateKeyHex)
 	if err != nil {
-		return nil, "", errors.New("secp256k1 private key must be hex encoded")
+		return nil, "", errSecp256k1PrivateKeyMustHexEncoded
 	}
 	if len(decoded) != secp256k1.PrivKeyBytesLen {
 		return nil, "", fmt.Errorf("secp256k1 private key must be %d bytes", secp256k1.PrivKeyBytesLen)
@@ -342,7 +364,7 @@ func parseSecp256k1PrivateKeyHex(raw string, requireNonZero bool) (*secp256k1.Pr
 	if !requireNonZero {
 		key := secp256k1.PrivKeyFromBytes(decoded)
 		if key == nil {
-			return nil, "", errors.New("invalid secp256k1 private key")
+			return nil, "", errInvalidSecp256k1PrivateKey
 		}
 		return key, privateKeyHex, nil
 	}
@@ -355,11 +377,11 @@ func parseSecp256k1PrivateKeyHex(raw string, requireNonZero bool) (*secp256k1.Pr
 		}
 	}
 	if isZero {
-		return nil, "", errors.New("secp256k1 private key must not be zero")
+		return nil, "", errSecp256k1PrivateKeyMustNotZero
 	}
 	key := secp256k1.PrivKeyFromBytes(decoded)
 	if key == nil {
-		return nil, "", errors.New("invalid secp256k1 private key")
+		return nil, "", errInvalidSecp256k1PrivateKey
 	}
 	return key, privateKeyHex, nil
 }

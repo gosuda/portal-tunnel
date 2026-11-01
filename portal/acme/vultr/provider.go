@@ -17,6 +17,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errVultrProviderIsNil    = errors.New("vultr provider is nil")
+	errVultrAPIKeyIsRequired = errors.New("vultr api key is required")
+	errVultrClientIsNil      = errors.New("vultr client is nil")
+)
+
 const defaultRecordTTL = 60
 
 type Provider struct {
@@ -38,10 +44,10 @@ func (p *Provider) Name() string {
 
 func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
 	if p == nil {
-		return nil, errors.New("vultr provider is nil")
+		return nil, errVultrProviderIsNil
 	}
 	if p.apiKey == "" {
-		return nil, errors.New("vultr api key is required")
+		return nil, errVultrAPIKeyIsRequired
 	}
 
 	cfg := legovultr.NewDefaultConfig()
@@ -56,7 +62,7 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
 	if p == nil {
-		return errors.New("vultr provider is nil")
+		return errVultrProviderIsNil
 	}
 	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
@@ -82,7 +88,7 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 
 func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP string) error {
 	if p == nil {
-		return errors.New("vultr provider is nil")
+		return errVultrProviderIsNil
 	}
 	name, recordType, publicIP, err := dnsrecord.AddressRecordInputs(name, publicIP)
 	if err != nil {
@@ -101,7 +107,7 @@ func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP strin
 
 func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error {
 	if p == nil {
-		return errors.New("vultr provider is nil")
+		return errVultrProviderIsNil
 	}
 	name, err := dnsrecord.RecordName(name)
 	if err != nil {
@@ -123,7 +129,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
-		return errors.New("vultr provider is nil")
+		return errVultrProviderIsNil
 	}
 	name, value, err := dnsrecord.TXTInputs(name, value)
 	if err != nil {
@@ -142,7 +148,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 
 func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error {
 	if p == nil {
-		return errors.New("vultr provider is nil")
+		return errVultrProviderIsNil
 	}
 	name, matchPrefix, err := dnsrecord.TXTPrefixInputs(name, matchPrefix)
 	if err != nil {
@@ -161,7 +167,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 
 func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
-		return "", "", "", errors.New("vultr provider is nil")
+		return "", "", "", errVultrProviderIsNil
 	}
 	baseDomain, err = dnsrecord.BaseDomain(baseDomain)
 	if err != nil {
@@ -225,17 +231,17 @@ func (p *Provider) clientAndZone(ctx context.Context, domain string) (*govultr.C
 
 func (p *Provider) newClient(ctx context.Context) (*govultr.Client, error) {
 	if p == nil {
-		return nil, errors.New("vultr provider is nil")
+		return nil, errVultrProviderIsNil
 	}
 	if p.apiKey == "" {
-		return nil, errors.New("vultr api key is required")
+		return nil, errVultrAPIKeyIsRequired
 	}
 	return govultr.NewClient(oauth2.NewClient(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: p.apiKey}))), nil
 }
 
 func (p *Provider) findZone(ctx context.Context, client *govultr.Client, domain string) (string, error) {
 	if client == nil {
-		return "", errors.New("vultr client is nil")
+		return "", errVultrClientIsNil
 	}
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
@@ -352,7 +358,7 @@ func deleteRecords(ctx context.Context, client *govultr.Client, zone, fqdn, reco
 
 func listRecords(ctx context.Context, client *govultr.Client, zone, fqdn, recordType string) ([]govultr.DomainRecord, error) {
 	if client == nil {
-		return nil, errors.New("vultr client is nil")
+		return nil, errVultrClientIsNil
 	}
 	recordName, err := dnsrecord.RelativeName("vultr", fqdn, zone)
 	if err != nil {
