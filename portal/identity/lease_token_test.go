@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -9,6 +10,30 @@ const (
 	testTokenIssuer  = "portal-relay"
 	testTokenLeaseID = "lease-0001"
 )
+
+func TestES256KVerifierPreservesInvalidSignature(t *testing.T) {
+	authority := siweTestAuthority(t, "1")
+	publicKey, err := ParseSecp256k1PublicKeyHex(authority.Identity().PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("lease token payload")
+	signature, err := authority.SignSHA256Secp256k1(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := signature.Raw64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := es256kOpaqueVerifier{publicKey: publicKey}
+	if err := verifier.VerifyPayload(payload, raw, leaseTokenAlgorithm); err != nil {
+		t.Fatalf("valid signature rejected: %v", err)
+	}
+	if err := verifier.VerifyPayload([]byte("changed payload"), raw, leaseTokenAlgorithm); !errors.Is(err, ErrSecp256k1SignatureInvalid) {
+		t.Fatalf("VerifyPayload() error = %v, want invalid signature sentinel", err)
+	}
+}
 
 func TestLeaseAccessTokenClaimsRoundTrip(t *testing.T) {
 	leaseIdentity, err := Generate("demo")

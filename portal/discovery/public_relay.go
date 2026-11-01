@@ -24,7 +24,10 @@ var (
 // Names must also pass the resolved-address check on every new connection.
 func requirePublicRelayURL(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+	if err != nil {
+		return fmt.Errorf("%w: %w", errDiscoveredRelayMustHavePublicHTTPS, err)
+	}
+	if u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
 		return errDiscoveredRelayMustHavePublicHTTPS
 	}
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))

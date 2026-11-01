@@ -37,7 +37,10 @@ type SIWEMessage struct {
 // and wallet login. It is not a general SIWE formatter.
 func FormatSIWEMessage(m SIWEMessage) (string, error) {
 	domain, err := url.Parse("https://" + m.Domain)
-	if err != nil || domain.Host == "" {
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errInvalidSIWEDomain, err)
+	}
+	if domain.Host == "" {
 		return "", errInvalidSIWEDomain
 	}
 	authority := domain.Host
@@ -48,7 +51,10 @@ func FormatSIWEMessage(m SIWEMessage) (string, error) {
 		return "", errInvalidSIWEDomain
 	}
 	uri, err := url.Parse(m.URI)
-	if err != nil || !uri.IsAbs() {
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errInvalidSIWEURI, err)
+	}
+	if !uri.IsAbs() {
 		return "", errInvalidSIWEURI
 	}
 	address, err := NormalizeEVMAddress(m.Address)

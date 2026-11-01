@@ -230,7 +230,10 @@ func normalizeOIDCIssuerURL(raw string) (string, error) {
 		return "", errOIDCIssuerURLIsRequired
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errOIDCIssuerURLMustValidURL, err)
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errOIDCIssuerURLMustValidURL
 	}
 	if parsed.Scheme != "https" && !isLoopbackHTTP(parsed) {

@@ -239,7 +239,7 @@ func NormalizeApplicationAuthHost(raw string) (string, error) {
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", errApplicationAuthHostMustHTTPSURL
+		return "", fmt.Errorf("%w: %w", errApplicationAuthHostMustHTTPSURL, err)
 	}
 	validAuthority := strings.EqualFold(parsed.Scheme, "https") && parsed.Host != "" && parsed.User == nil
 	rootPath := parsed.Path == "" || parsed.Path == "/"

@@ -837,7 +837,10 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 		return fmt.Errorf("parse overlay gateway URL: %w", err)
 	}
 	reverseURL, err := url.Parse(endpoint.URL)
-	if err != nil || reverseURL.Host == "" {
+	if err != nil {
+		return fmt.Errorf("%w: %w", errInvalidOverlayReverseEndpointURL, err)
+	}
+	if reverseURL.Host == "" {
 		return errInvalidOverlayReverseEndpointURL
 	}
 	if reverseURL.String() != utils.ResolveAPIURL(gatewayURL, types.PathSDKConnect).String() {

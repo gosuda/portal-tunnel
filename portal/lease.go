@@ -91,7 +91,10 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 		return nil, errLeaseTokenAuthorityPublicKeyRequired
 	}
 	issuerURL, err := url.Parse(strings.TrimSpace(tokenIssuer))
-	if err != nil || issuerURL.Host == "" {
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errLeaseTokenIssuerMustAbsoluteURL, err)
+	}
+	if issuerURL.Host == "" {
 		return nil, errLeaseTokenIssuerMustAbsoluteURL
 	}
 

@@ -140,7 +140,7 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 	}
 	target, err := url.Parse(strings.TrimSpace(portalURL))
 	if err != nil {
-		return types.HTTPRedirectConfig{}, errHTTPRedirectRequiresPortalURLAbsolute
+		return types.HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
 	}
 	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
@@ -148,7 +148,10 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 	}
 	if port := target.Port(); port != "" {
 		n, err := strconv.Atoi(port)
-		if err != nil || n < 1 || n > 65535 {
+		if err != nil {
+			return types.HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectPortalURLPortMust, err)
+		}
+		if n < 1 || n > 65535 {
 			return types.HTTPRedirectConfig{}, errHTTPRedirectPortalURLPortMust
 		}
 	}
@@ -166,7 +169,10 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 		}
 	}
 	n, err := strconv.Atoi(port)
-	if err != nil || n < 0 || n > 65535 {
+	if err != nil {
+		return types.HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectHTTPRedirectAddrPort, err)
+	}
+	if n < 0 || n > 65535 {
 		return types.HTTPRedirectConfig{}, errHTTPRedirectHTTPRedirectAddrPort
 	}
 	return cfg, nil

@@ -16,7 +16,6 @@ import (
 var (
 	errSigningKeyIsRequired               = errors.New("signing key is required")
 	errVerificationKeyIsRequired          = errors.New("verification key is required")
-	errTokenSignatureIsInvalid            = errors.New("token signature is invalid")
 	errLeaseTokenSigningAuthorityRequired = errors.New("lease token signing authority is required")
 	errLeaseIDIsRequired                  = errors.New("lease id is required")
 	errTokenExpiryMustBeInTheFuture       = errors.New("token expiry must be in the future")
@@ -71,13 +70,7 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 	if v == nil || v.publicKey == nil {
 		return errVerificationKeyIsRequired
 	}
-	if err := VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey); err != nil {
-		if errors.Is(err, ErrSecp256k1SignatureInvalid) {
-			return errTokenSignatureIsInvalid
-		}
-		return err
-	}
-	return nil
+	return VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey)
 }
 
 func IssueLeaseAccessToken(authority Authority, issuer string, leaseIdentity types.Identity, leaseID string, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {

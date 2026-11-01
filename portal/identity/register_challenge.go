@@ -13,9 +13,8 @@ import (
 )
 
 var (
-	errRegisterChallengeDomainOrURIExceeds       = errors.New("register challenge domain or URI exceeds limits")
-	errSIWEMessageDoesNotMatchRegister           = errors.New("siwe message does not match register challenge")
-	errRelayReturnedInvalidOrExpiredRegistration = errors.New("relay returned an invalid or expired registration challenge")
+	errRegisterChallengeDomainOrURIExceeds = errors.New("register challenge domain or URI exceeds limits")
+	errSIWEMessageDoesNotMatchRegister     = errors.New("siwe message does not match register challenge")
 )
 
 const (
@@ -96,7 +95,7 @@ func (c *RegisterChallenge) Verify(req types.RegisterRequest, now time.Time) err
 // Only the challenge ID, nonce, and timing values come from the relay.
 func ValidateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, relayURL *url.URL, address string, now time.Time) error {
 	if challenge.ChallengeID == "" || !now.Before(challenge.ExpiresAt) {
-		return errRelayReturnedInvalidOrExpiredRegistration
+		return ErrInvalidRegisterSIWEChallenge
 	}
 	if invalidRegisterRelayURL(relayURL) || len(challenge.SIWEMessage) > maxRegisterSIWEMessageBytes {
 		return ErrInvalidRegisterSIWEChallenge
