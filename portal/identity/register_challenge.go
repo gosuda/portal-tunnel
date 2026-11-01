@@ -90,7 +90,7 @@ func (c *RegisterChallenge) Verify(req types.RegisterRequest, now time.Time) err
 // Only the challenge ID, nonce, and timing values come from the relay.
 func ValidateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, relayURL *url.URL, address string, now time.Time) error {
 	if challenge.ChallengeID == "" || !now.Before(challenge.ExpiresAt) {
-		return errors.New("relay returned an invalid or expired registration challenge")
+		return ErrInvalidRegisterSIWEChallenge
 	}
 	if invalidRegisterRelayURL(relayURL) || len(challenge.SIWEMessage) > maxRegisterSIWEMessageBytes {
 		return ErrInvalidRegisterSIWEChallenge

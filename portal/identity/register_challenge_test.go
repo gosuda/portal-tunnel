@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -85,6 +86,14 @@ func TestValidateRegisterSIWEChallenge(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "honest relay"},
+		{name: "missing challenge ID", change: func(_ *SIWEMessage, c *types.RegisterChallengeResponse) {
+			c.ChallengeID = ""
+		}, wantErr: true},
+		{name: "expiration reached", change: func(m *SIWEMessage, c *types.RegisterChallengeResponse) {
+			m.IssuedAt = now.Add(-time.Minute)
+			m.ExpiresAt = now
+			c.ExpiresAt = m.ExpiresAt
+		}, wantErr: true},
 		{name: "subsecond challenge", change: func(m *SIWEMessage, c *types.RegisterChallengeResponse) {
 			m.ExpiresAt = m.IssuedAt.Add(100 * time.Millisecond)
 			c.ExpiresAt = m.ExpiresAt
@@ -167,6 +176,9 @@ func TestValidateRegisterSIWEChallenge(t *testing.T) {
 			got := ValidateRegisterSIWEChallenge(challenge, relayURL, address, now)
 			if (got != nil) != tc.wantErr {
 				t.Fatalf("ValidateRegisterSIWEChallenge() error = %v, wantErr %t", got, tc.wantErr)
+			}
+			if tc.wantErr && !errors.Is(got, ErrInvalidRegisterSIWEChallenge) {
+				t.Fatalf("ValidateRegisterSIWEChallenge() error = %v, want invalid challenge sentinel", got)
 			}
 		})
 	}

@@ -62,13 +62,7 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 	if v == nil || v.publicKey == nil {
 		return errors.New("verification key is required")
 	}
-	if err := VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey); err != nil {
-		if errors.Is(err, ErrSecp256k1SignatureInvalid) {
-			return errors.New("token signature is invalid")
-		}
-		return err
-	}
-	return nil
+	return VerifySHA256Secp256k1Raw64(payload, signature, v.publicKey)
 }
 
 func IssueLeaseAccessToken(authority Authority, issuer string, leaseIdentity types.Identity, leaseID string, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
