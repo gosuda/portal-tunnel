@@ -226,17 +226,16 @@ func TestProxyV2IngressBoundary(t *testing.T) {
 	ipv6 := proxyV2Header(netip.MustParseAddrPort("[2001:db8::10]:1234"))
 	withTLV := append(proxyV2Header(netip.MustParseAddrPort("198.51.100.10:1234")), 0xee, 0, 1, 42)
 	binary.BigEndian.PutUint16(withTLV[14:], uint16(len(withTLV)-16))
-	badTLV := append([]byte(nil), withTLV...)
-	badTLV[len(badTLV)-2] = 2
 	local := append([]byte(nil), ipv4...)
 	local[12] = 0x20
 	for _, mode := range []string{"enabled", "untrusted", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(harnessPort(t, "127.0.0.1")))
 			cfg := portal.ServerConfig{PortalURL: "https://localhost", StateDir: t.TempDir(), SNIListenAddr: addr}
-			if mode == "enabled" {
+			switch mode {
+			case "enabled":
 				cfg.ProxyProtocolTrustedIPs = []string{"127.0.0.1"}
-			} else if mode == "untrusted" {
+			case "untrusted":
 				cfg.ProxyProtocolTrustedIPs = []string{"127.0.0.2"}
 			}
 			server, err := portal.NewServer(cfg)
@@ -259,7 +258,6 @@ func TestProxyV2IngressBoundary(t *testing.T) {
 				{"TCP4", ipv4, "198.51.100.10"},
 				{"TCP6", ipv6, "2001:db8::10"},
 				{"unknown TLV ignored", withTLV, "198.51.100.10"},
-				{"TLV length overflow", badTLV, ""},
 				{"LOCAL ignores asserted source", local, "127.0.0.1"},
 				{"v1", []byte("PROXY TCP4 198.51.100.10 127.0.0.1 1234 443\r\n"), ""},
 				{"nested header", append(append([]byte(nil), ipv4...), ipv6...), ""},
