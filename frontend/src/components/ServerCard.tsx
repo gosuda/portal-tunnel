@@ -6,6 +6,21 @@ import type { ReputationVote } from "@/types/api";
 import type { BaseServer } from "@/hooks/useList";
 import { useCopy } from "@/hooks/useCopy";
 
+const PLACEHOLDER_THUMBNAILS = [
+  "/placeholders/aurora-peaks.svg",
+  "/placeholders/twilight-watchtower.svg",
+  "/placeholders/nebula-fjord.svg",
+  "/placeholders/synth-horizon.svg",
+] as const;
+
+function pickPlaceholderThumbnail(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 33 + seed.charCodeAt(i)) >>> 0;
+  }
+  return PLACEHOLDER_THUMBNAILS[hash % PLACEHOLDER_THUMBNAILS.length];
+}
+
 interface ServerCardProps {
   server: BaseServer;
   isFavorite?: boolean;
@@ -34,7 +49,9 @@ export function ServerCard({
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
   const [isVoting, setIsVoting] = useState(false);
   const [voteError, setVoteError] = useState("");
-  const effectiveThumbnail = thumbnailFailed ? "" : thumbnail;
+  const effectiveThumbnail = thumbnailFailed ? "" : thumbnail.trim();
+  const resolvedThumbnail =
+    effectiveThumbnail || pickPlaceholderThumbnail(name || serverId);
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
@@ -112,9 +129,7 @@ export function ServerCard({
       <div
         className="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105"
         style={{
-          backgroundImage: effectiveThumbnail
-            ? `url(${effectiveThumbnail})`
-            : "linear-gradient(135deg, var(--card) 0%, var(--background) 100%)",
+          backgroundImage: `url(${resolvedThumbnail})`,
         }}
       />
       {effectiveThumbnail && (
@@ -314,7 +329,7 @@ export function ServerCard({
             name: server.name,
             description: server.description,
             tags: server.tags,
-            thumbnail: server.thumbnail,
+            thumbnail: resolvedThumbnail,
             owner: server.owner,
             online: server.online,
             serverUrl: server.link,

@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import { flushSync } from "react-dom";
 import { ArrowRight, Check, Copy, ExternalLink, Globe, Search } from "lucide-react";
 import { Header } from "@/components/Header";
-import { LandingHero } from "@/components/LandingHero";
+import { HeroBackdropGraphic, LandingHero } from "@/components/LandingHero";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
 import { useCopy } from "@/hooks/useCopy";
@@ -29,7 +29,7 @@ const SHOWCASE_SERVERS: BaseServer[] = [
     name: "irc2p",
     description: "",
     tags: [],
-    thumbnail: "/card-irc2p.png",
+    thumbnail: "",
     owner: "",
     online: true,
     dns: "irc2p.portal.rabbitson87.dev",
@@ -48,7 +48,7 @@ const SHOWCASE_SERVERS: BaseServer[] = [
     name: "sprint-retro",
     description: "Flats: sprint-retro",
     tags: [],
-    thumbnail: "/card-sprint-retro.png",
+    thumbnail: "",
     owner: "",
     online: true,
     dns: "sprint-retro.portal.rabbitson87.dev",
@@ -496,12 +496,14 @@ export function ServerListView({
   return (
     <div className="relative flex min-h-screen w-full flex-col overflow-x-hidden bg-[#030e1e] text-white">
       <div className="flex h-full grow flex-col">
-        <div className="relative w-full border-b border-[#19334d] bg-linear-to-b from-[#041428] via-[#031022] to-[#020b18] bg-no-repeat lg:h-[360px] lg:bg-[image:url('/hero-bg.png')] lg:bg-[position:top_center] lg:bg-[length:1672px_360px]">
-          <div className="mx-auto w-full max-w-[1437px] px-4 pt-[12px] sm:px-6 lg:px-[32px]">
+        <div className="relative w-full border-b border-[#19334d] bg-linear-to-b from-[#041428] via-[#031022] to-[#020b18] lg:h-[360px]">
+          <HeroBackdropGraphic />
+
+          <div className="relative z-10 mx-auto w-full max-w-[1437px] px-4 pt-[12px] sm:px-6 lg:px-[32px]">
             <Header title={title} />
           </div>
 
-          <div className="mx-auto w-full max-w-[1437px] px-4 pt-[24px] pb-8 sm:px-6 lg:px-[32px] lg:pt-[37px] lg:pb-0">
+          <div className="relative z-10 mx-auto w-full max-w-[1437px] px-4 pt-[24px] pb-8 sm:px-6 lg:px-[32px] lg:pt-[37px] lg:pb-0">
             <LandingHero />
           </div>
         </div>
