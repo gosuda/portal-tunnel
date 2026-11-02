@@ -812,7 +812,8 @@ export function HeroBackdropGraphic() {
 }
 
 export function LandingHero() {
-  const callout = `${CALLOUT_CLASS} gap-2 rounded-lg px-2.5 py-1.5 text-[10px] sm:px-3 sm:py-2 sm:text-xs`;
+  // On phones the labels drop their icons so they stay clear of the globe.
+  const callout = `${CALLOUT_CLASS} gap-2 rounded-md px-2 py-1 text-[9.5px] [&>svg]:hidden sm:rounded-lg sm:px-3 sm:py-2 sm:text-xs sm:[&>svg]:block`;
   return (
     <section aria-labelledby="landing-title" className="relative">
       <a
@@ -875,7 +876,7 @@ export function LandingHero() {
               <CalloutLaptopIcon />
               <YourMachineLabel />
             </div>
-            <div className={`${callout} ${CALLOUT_INDIGO} top-[18%] right-[2%]`}>
+            <div className={`${callout} ${CALLOUT_INDIGO} top-[5%] right-[2%] sm:top-[18%]`}>
               <CalloutRelaysIcon />
               Public relays
             </div>
