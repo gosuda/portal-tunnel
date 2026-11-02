@@ -225,6 +225,17 @@ closes the router and its destination resources, including pending connections.
 |----------|---------|------|-------------|
 | `TRUST_PROXY_HEADERS` | `false` | bool | Trust `X-Forwarded-*` and `X-Real-IP` headers from trusted proxies |
 | `TRUSTED_PROXY_CIDRS` | `""` | string | Explicit trusted proxy CIDR allowlist for forwarded headers (comma-separated); empty trusts no proxies and uses socket addresses even with `TRUST_PROXY_HEADERS=true` |
+| `PROXY_PROTOCOL_TRUSTED_IPS` | `""` | CSV | Require PROXY protocol v2 before TLS on the SNI TCP listener, accepting connections only from these exact upstream IPs (`--proxy-protocol-trusted-ips`); empty disables PROXY parsing and keeps plain TLS |
+
+For L4/TLS passthrough, use `PROXY_PROTOCOL_TRUSTED_IPS` with
+`TRUST_PROXY_HEADERS=false`. Entries are individual IPv4 or IPv6 addresses,
+not hostnames or CIDRs. A nonempty list rejects connections from other peers
+and rejects plain TLS, v1, and invalid v2 headers. TCP4/TCP6 sources replace
+the socket source through SNI routing and API admission; LOCAL health checks
+retain the proxy's socket source. TLVs never supply identity or TLS authority.
+Parsing runs inside the existing bounded ingress workers with a two-second
+header deadline. HTTP redirect, raw lease ports, and QUIC do not parse PROXY.
+See [Traefik passthrough setup and migration](/deployment#tcp-passthrough-with-traefik).
 
 When upgrading a deployment that used `TRUST_PROXY_HEADERS=true` with an empty
 `TRUSTED_PROXY_CIDRS`, set the proxy's fixed address explicitly (`/32` for IPv4,

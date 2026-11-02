@@ -127,6 +127,10 @@ type ServerConfig struct {
 	MaxPort          int
 	ACME             acme.Config
 
+	// ProxyProtocolTrustedIPs enables mandatory PROXY v2 on the SNI listener.
+	// Only these exact upstream IPs may connect; empty keeps plain TLS.
+	ProxyProtocolTrustedIPs []string
+
 	// ApplicationOwnsDomainReport delegates types.PathSDKDomain to the
 	// application handler, which can compose Server.DomainReport() itself.
 	ApplicationOwnsDomainReport bool
@@ -181,6 +185,21 @@ func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string)
 // ValidateServerConfig normalizes server configuration and checks the
 // side-effect-free invariants required before runtime resources are created.
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	trustedIPs := make([]string, 0, len(cfg.ProxyProtocolTrustedIPs))
+	for _, raw := range cfg.ProxyProtocolTrustedIPs {
+		addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+		if err != nil {
+			return ServerConfig{}, fmt.Errorf("parse PROXY protocol trusted IP %q: %w", raw, err)
+		}
+		addr = addr.Unmap()
+		if addr.Zone() != "" || addr.IsUnspecified() || addr.IsMulticast() {
+			return ServerConfig{}, errProxyProtocolAddress
+		}
+		if !slices.Contains(trustedIPs, addr.String()) {
+			trustedIPs = append(trustedIPs, addr.String())
+		}
+	}
+	cfg.ProxyProtocolTrustedIPs = trustedIPs
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
 		return ServerConfig{}, errRelayOverlayRequiresDiscovery
@@ -257,6 +276,7 @@ func DefaultSNIPort(portalURL string) int {
 
 func (cfg ServerConfig) snapshot() ServerConfig {
 	cfg.Bootstraps = slices.Clone(cfg.Bootstraps)
+	cfg.ProxyProtocolTrustedIPs = slices.Clone(cfg.ProxyProtocolTrustedIPs)
 	return cfg
 }
 
@@ -1002,6 +1022,7 @@ func (s *Server) closeIngress() {
 }
 
 func (s *Server) runPublicIngress(ctx context.Context) error {
+	trustedProxyIPs := s.config().ProxyProtocolTrustedIPs
 	for {
 		conn, err := s.sniListener.Accept()
 		switch {
@@ -1013,7 +1034,16 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 			go func(conn net.Conn) {
 				inspecting := true
 				defer func() { s.releaseIngress(conn, inspecting) }()
-				clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
+				ingressConn := conn
+				if len(trustedProxyIPs) > 0 {
+					proxyConn, proxyErr := readProxyProtocolV2(conn, trustedProxyIPs)
+					if proxyErr != nil {
+						_ = conn.Close()
+						return
+					}
+					ingressConn = proxyConn
+				}
+				clientHello, wrappedConn, err := l4.InspectClientHello(ingressConn, defaultClientHelloWait)
 				if err != nil {
 					if wrappedConn != nil {
 						_ = wrappedConn.Close()

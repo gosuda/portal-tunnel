@@ -238,9 +238,9 @@ map $ssl_preread_server_name $portal_backend {
 }
 ```
 
-**The PROXY header must be stripped before Portal.** `proxy_protocol on` is a
+**This nginx example's v1 PROXY header must be stripped before Portal.** `proxy_protocol on` is a
 server-level directive, so the `:443` listener sends the header to *every*
-destination it selects. Portal does not parse the PROXY protocol: it would read
+destination it selects. Portal does not parse PROXY v1: it would read
 `PROXY TCP4 ...` where it expects a TLS ClientHello and close the connection.
 Send the lease path through a stage that consumes the header first:
 
@@ -264,7 +264,9 @@ real_ip_header proxy_protocol;
 ```
 
 This is what gives the *other sites* on the box their real client addresses. For
-Portal itself it only matters if you terminate the root host.
+Portal's plain TLS listener still sees the nginx address in this example,
+so its pre-auth source budget is shared by clients behind nginx. To preserve
+sources without terminating TLS, use the opt-in v2 path described below.
 
 If you do, **overwrite `X-Forwarded-For` rather than appending to it**:
 
@@ -355,6 +357,119 @@ Compare with `probe | diff baseline.txt -` afterwards. Judge by the difference,
 not by whether a code looks healthy: `/` is not a valid request for every host,
 and a WebSocket-only endpoint answers a plain `GET` with nothing at all, which a
 proxy correctly reports as `502`.
+
+### TCP passthrough with Traefik
+
+For L4 ingress, configure Portal to consume **PROXY v2 before the TLS
+ClientHello**. Leave `TRUST_PROXY_HEADERS=false`: a passthrough proxy cannot
+sanitize HTTP headers inside TLS. The original source is carried through
+Portal's existing SNI-to-API handoff, so different clients receive different
+pre-auth source buckets. Tenant TLS still passes through Traefik unchanged;
+this setting does not grant Traefik any certificate or signing authority.
+
+Set the relay environment to the exact upstream socket IPs it will see:
+
+```dotenv
+PROXY_PROTOCOL_TRUSTED_IPS=10.42.0.39,10.42.0.40
+TRUST_PROXY_HEADERS=false
+```
+
+The list enables a **mandatory** v2 listener: other peers and plain TLS are
+rejected, rather than falling back to the proxy's address. Only bare IPv4/IPv6
+addresses are accepted, not Pod CIDRs, node subnets, or DNS names. LOCAL v2
+health checks use the actual proxy address; only TCP4/TCP6 PROXY commands
+assert a client source. Version 1 is unsupported, so the nginx example above
+must continue stripping its v1 header.
+
+In the [Traefik IngressRouteTCP](https://doc.traefik.io/traefik/reference/routing-configuration/kubernetes/crd/tcp/ingressroutetcp/),
+set the backend service's `proxyProtocol.version` to `2` and retain
+`tls.passthrough`. For example, in a namespace containing the `portal`
+ClusterIP service:
+
+```yaml
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: portal
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: HostSNI(`portal.example.com`) || HostSNI(`*.portal.example.com`)
+      services:
+        - name: portal
+          port: 443
+          proxyProtocol:
+            version: 2
+  tls:
+    passthrough: true
+```
+
+Route any additional supported tenant hostnames to the same passthrough
+service. Do not enable backend `tls: true`, which would add a second TLS
+layer. `proxyProtocol` here controls the **Traefik-to-Portal** hop; it does
+not enable trust for PROXY headers from Internet clients at Traefik's entrypoint.
+
+Restrict the Portal backend with a CNI-enforced NetworkPolicy and keep its
+SNI port off public NodePort/LoadBalancer services. For example, with Portal
+pods labeled `app: portal` and Traefik pods labeled `app: traefik` in namespace
+`traefik`, apply this in Portal's namespace:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: portal-sni-from-traefik
+spec:
+  podSelector:
+    matchLabels:
+      app: portal
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+          podSelector:
+            matchLabels:
+              app: traefik
+      ports:
+        - protocol: TCP
+          port: 443
+```
+
+Adapt labels and the target port to your deployment, and add separate rules
+for required DNS/QUIC/lease ports. Kubernetes ingress policies are additive:
+remove any other rule that exposes this SNI port to unrelated workloads.
+The IP allowlist and NetworkPolicy protect the same upstream boundary;
+PROXY headers are not cryptographically authenticated.
+
+Ensure Traefik itself sees the original client IP. If another load balancer
+or Kubernetes SNAT hides it, preserve the source on that hop (for example,
+an appropriate `externalTrafficPolicy: Local` setup), or configure an
+authenticated, restricted upstream propagation path into Traefik. Never
+enable insecure PROXY trust on its public entrypoint. Likewise, if Portal
+sees a shared node/NAT IP, do not trust that IP for unrelated workloads;
+change the network path so only the intended proxies can reach the listener.
+
+For migration, first deploy a Portal version supporting this setting with
+the list empty; the existing plain TLS path remains functional. Prepare the
+network restrictions and confirm the actual upstream peer IPs. Then drain
+traffic or use an isolated replacement backend while enabling the relay
+allowlist and Traefik's v2 emission together. Switching either side alone
+breaks new connections by design. Roll back both settings together. Pod IP
+changes require an explicit allowlist update and relay restart; pin or
+operationally manage these addresses instead of trusting the cluster subnet.
+
+After switching, check that registrations from distinct clients record
+distinct client IPs and re-register after relay restart. The default source
+budget is 20 burst units refilling at 10/minute; challenge/register/announce
+cost 1/5/2 units. Three complete registrations cost 18 units per source;
+clients behind the same actual NAT still share that source budget. The
+independent 200-unit global burst (600/minute refill) remains in effect,
+and admission rejections retain HTTP 429 with `Retry-After`. Temporarily
+raising `PREAUTH_SOURCE_BURST` / `PREAUTH_SOURCE_PER_MINUTE` can mitigate an
+incident, but does not restore source attribution. Keep both budgets enabled.
 
 ## Automated Updates
 
