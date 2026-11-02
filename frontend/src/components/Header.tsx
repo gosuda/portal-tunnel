@@ -26,7 +26,7 @@ export function Header({
   isAdmin,
   onAuthChange,
 }: HeaderProps) {
-  const [releaseVersion, setReleaseVersion] = useState("v2.7.0");
+  const [releaseVersion, setReleaseVersion] = useState("");
   const [ensVerified, setENSVerified] = useState(false);
   const {
     isAuthenticated,
@@ -67,12 +67,12 @@ export function Header({
             typeof status?.release_version === "string"
               ? status.release_version.trim()
               : "";
-          setReleaseVersion(fetchedVersion || "v2.7.0");
+          setReleaseVersion(fetchedVersion);
           setENSVerified(status?.ens?.verified === true);
         }
       } catch {
         if (!cancelled) {
-          setReleaseVersion("v2.7.0");
+          setReleaseVersion("");
           setENSVerified(false);
         }
       }

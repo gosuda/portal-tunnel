@@ -5,6 +5,7 @@ import { Header } from "@/components/Header";
 import { HeroBackdropGraphic, LandingHero } from "@/components/LandingHero";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
+import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { useCopy } from "@/hooks/useCopy";
 import type { BaseServer } from "@/hooks/useList";
 import type { SortOption, StatusFilter } from "@/types/filters";
@@ -22,70 +23,6 @@ export interface KnownRelay {
 const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
-
-const SHOWCASE_SERVERS: BaseServer[] = [
-  {
-    id: "irc2p",
-    name: "irc2p",
-    description: "",
-    tags: [],
-    thumbnail: "",
-    owner: "",
-    online: true,
-    dns: "irc2p.portal.rabbitson87.dev",
-    link: "https://irc2p.portal.rabbitson87.dev/",
-    firstSeen: "17H 45M",
-    reputation: {
-      hostname: "irc2p.portal.rabbitson87.dev",
-      up: 0,
-      down: 0,
-      total: 0,
-      viewer_vote: "",
-    },
-  },
-  {
-    id: "sprint-retro",
-    name: "sprint-retro",
-    description: "Flats: sprint-retro",
-    tags: [],
-    thumbnail: "",
-    owner: "",
-    online: true,
-    dns: "sprint-retro.portal.rabbitson87.dev",
-    link: "https://sprint-retro.portal.rabbitson87.dev/",
-    firstSeen: "8H 36M",
-    reputation: {
-      hostname: "sprint-retro.portal.rabbitson87.dev",
-      up: 0,
-      down: 0,
-      total: 0,
-      viewer_vote: "",
-    },
-  },
-];
-
-const SHOWCASE_RELAYS: Array<{ relayURL: string; releaseVersion: string }> = [
-  { relayURL: "https://portal.rabbitson87.dev", releaseVersion: "v2.7.0" },
-  { relayURL: "https://gosunuts.xyz", releaseVersion: "v2.7.0" },
-  { relayURL: "https://kakashit.org", releaseVersion: "v2.7.0" },
-  { relayURL: "https://portal.damn.it.com", releaseVersion: "v2.7.0" },
-  { relayURL: "https://portal.dawnfullstack.com", releaseVersion: "v2.7.0" },
-  { relayURL: "https://portal.dps0340.win", releaseVersion: "v2.7.0" },
-  { relayURL: "https://portal.naratteu.dynv6.net", releaseVersion: "v2.6.1" },
-  { relayURL: "https://portal.thumbgo.kr", releaseVersion: "v2.6.1" },
-  { relayURL: "https://rly.best", releaseVersion: "v2.6.4+rs.1" },
-  { relayURL: "https://s-h.day", releaseVersion: "v2.7.0" },
-];
-
-function formatRelayDisplayURL(url: string): string {
-  if (url === "https://portal.dawnfullstack.com") {
-    return "https://portal.dawnfullstack....";
-  }
-  if (url === "https://portal.naratteu.dynv6.net") {
-    return "https://portal.naratteu.dynv6....";
-  }
-  return url.length > 31 ? `${url.slice(0, 29)}...` : url;
-}
 
 // A card fades up the first time it comes into view on this page load; cards
 // that return through filters or a remount appear in place.
@@ -274,21 +211,14 @@ export function ServerListView({
   onTagToggle,
   onToggleFavorite,
   onVote,
+  landingPageEnabled = false,
 }: ServerListViewProps) {
   const [relayReleases, setRelayReleases] = useState<{
     versions: Record<string, string>;
     discovery?: DiscoveryResponse;
-  }>(() => ({
-    versions: Object.fromEntries(
-      SHOWCASE_RELAYS.map((entry) => [entry.relayURL, entry.releaseVersion])
-    ),
-  }));
-  const [knownRelays, setKnownRelays] = useState<KnownRelay[]>(() =>
-    SHOWCASE_RELAYS.map((entry, idx) => ({
-      relayURL: entry.relayURL,
-      isCurrent: idx === 0,
-    }))
-  );
+  }>({ versions: {} });
+  const [knownRelays, setKnownRelays] = useState<KnownRelay[]>([]);
+  const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(true);
   const [relaySearchQuery, setRelaySearchQuery] = useState("");
   const [showAllLiveApps, setShowAllLiveApps] = useState(false);
   const { copiedKey: copiedRelayURL, copy: copyRelayURL } = useCopy(1500);
@@ -296,12 +226,21 @@ export function ServerListView({
 
   useEffect(() => {
     let cancelled = false;
+    setRelayDiscoveryLoading(true);
+    setRelayReleases({ versions: {} });
+    setKnownRelays([]);
 
     void (async () => {
+      let nextKnownRelays = normalizeKnownRelays(undefined, currentRelayURL);
+      let nextReleases: {
+        versions: Record<string, string>;
+        discovery?: DiscoveryResponse;
+      } = { versions: {} };
+
       try {
         const discovery =
           await apiClient.get<DiscoveryResponse>(RELAY_API_PATHS.discovery);
-        const discoveredRelays = mergeIncompatibleRelays(
+        nextKnownRelays = mergeIncompatibleRelays(
           normalizeKnownRelays(discovery?.relays, currentRelayURL),
           discovery?.incompatible_relays,
           currentRelayURL
@@ -317,20 +256,24 @@ export function ServerListView({
             }
           }
         );
-
-        if (!cancelled && (discovery?.relays?.length ?? 0) > 0) {
-          setKnownRelays(discoveredRelays);
-          setRelayReleases({
-            versions,
-            discovery: {
-              release_version: discovery?.release_version,
-              protocol_version: discovery?.protocol_version,
-            },
-          });
-        }
+        nextReleases = {
+          versions,
+          discovery: {
+            release_version: discovery?.release_version,
+            protocol_version: discovery?.protocol_version,
+          },
+        };
       } catch {
-        // Keep the showcase relay directory when discovery is unavailable.
+        // Keep the current relay fallback when discovery is unavailable.
       }
+
+      if (cancelled) {
+        return;
+      }
+
+      setKnownRelays(nextKnownRelays);
+      setRelayReleases(nextReleases);
+      setRelayDiscoveryLoading(false);
     })();
 
     return () => {
@@ -341,11 +284,10 @@ export function ServerListView({
   const gridRef = useRef<HTMLDivElement>(null);
   const hasActiveFilters =
     searchQuery.trim() !== "" || status !== "all" || selectedTags.length > 0;
-  const activeServers =
-    filteredServers.length > 0 || hasActiveFilters
-      ? filteredServers
-      : SHOWCASE_SERVERS;
-  const renderedServerIds = activeServers.map((server) => server.id).join("\n");
+  // leases is null before the relay first answers and after a failed poll; an
+  // active filter explains an empty list either way.
+  const showConnecting = leases === null && !hasActiveFilters;
+  const renderedServerIds = filteredServers.map((server) => server.id).join("\n");
 
   useEffect(() => {
     const pending = gridRef.current?.querySelectorAll<HTMLElement>(
@@ -392,16 +334,17 @@ export function ServerListView({
   }, [renderedServerIds]);
 
   const handleToggleFavorite = (serverId: string) =>
-    animateReorder(() => onToggleFavorite(serverId), activeServers.length);
+    animateReorder(() => onToggleFavorite(serverId), filteredServers.length);
   const handleSortByChange = (value: SortOption) =>
-    animateReorder(() => onSortByChange(value), activeServers.length);
+    animateReorder(() => onSortByChange(value), filteredServers.length);
   const handleStatusChange = (value: StatusFilter) =>
     animateReorder(() => onStatusChange(value), leases?.length ?? Infinity);
   const handleTagToggle = (tag: string) =>
     animateReorder(() => onTagToggle(tag), leases?.length ?? Infinity);
 
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
-  const featuredServers = activeServers.slice(0, 2);
+  const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
+  const featuredServers = filteredServers.slice(0, 2);
 
   const filteredRelays = useMemo(() => {
     const q = relaySearchQuery.trim().toLowerCase();
@@ -490,19 +433,31 @@ export function ServerListView({
     </footer>
   );
 
+  const relayNotice = (message: string) => (
+    <div className="mt-[14px] rounded-[8px] border border-[#1b2c40] bg-[#0a1829]/90 px-[16px] py-[12px] text-[13px] text-[#8fa3b8]">
+      {message}
+    </div>
+  );
+
   return (
     <div className="relative flex min-h-screen w-full flex-col overflow-x-hidden bg-[#030e1e] text-white">
       <div className="flex h-full grow flex-col">
-        <div className="relative w-full border-b border-[#19334d] bg-linear-to-b from-[#041428] via-[#031022] to-[#020b18] lg:h-[360px]">
-          <HeroBackdropGraphic />
+        <div
+          className={`relative w-full border-b border-[#19334d] bg-linear-to-b from-[#041428] via-[#031022] to-[#020b18] ${
+            landingPageEnabled ? "lg:h-[360px]" : "pb-[12px]"
+          }`}
+        >
+          {landingPageEnabled && <HeroBackdropGraphic />}
 
           <div className="relative z-10 mx-auto w-full max-w-[1437px] px-4 pt-[12px] sm:px-6 lg:px-[32px]">
             <Header title={title} />
           </div>
 
-          <div className="relative z-10 mx-auto w-full max-w-[1437px] px-4 pt-[24px] pb-8 sm:px-6 lg:px-[32px] lg:pt-[37px] lg:pb-0">
-            <LandingHero />
-          </div>
+          {landingPageEnabled && (
+            <div className="relative z-10 mx-auto w-full max-w-[1437px] px-4 pt-[24px] pb-8 sm:px-6 lg:px-[32px] lg:pt-[70px] lg:pb-0">
+              <LandingHero />
+            </div>
+          )}
         </div>
 
         <main className="z-0 flex-1">
@@ -513,54 +468,71 @@ export function ServerListView({
           >
             <div className="mx-auto w-full max-w-[1437px] px-4 py-6 sm:px-6 lg:px-[32px] lg:pt-[21px] lg:pb-[19px]">
               <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-[19px]">
-                <div className="lg:w-[307px] lg:shrink-0 lg:pt-[2px]">
+                <div className="flex items-center justify-between gap-4 lg:w-[307px] lg:shrink-0 lg:flex-col lg:items-start">
                   <h2
                     id="live-servers-title"
                     className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
                   >
                     Live apps
                   </h2>
+                  {!landingPageEnabled && <TunnelCommandModal />}
                 </div>
 
-                <div
-                  ref={gridRef}
-                  className="grid min-w-0 flex-1 grid-cols-1 gap-[19px] md:grid-cols-2 lg:grid-cols-[462px_1fr]"
-                >
-                  {featuredServers.map((server, idx) => (
-                    <LiveAppCard key={server.id} serverId={server.id}>
-                      <ServerCard
-                        server={server}
-                        isFavorite={favoriteIds.has(server.id)}
-                        onToggleFavorite={handleToggleFavorite}
-                        onVote={onVote}
-                        action={
-                          idx === 1 ? (
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setShowAllLiveApps((prev) => !prev);
-                              }}
-                              className="pointer-events-auto relative z-30 inline-flex h-[36px] cursor-pointer items-center gap-[8px] rounded-[8px] border border-[#38bdf8]/45 bg-[#082238]/80 px-[14px] text-[12.5px] font-semibold text-[#bae6fd] backdrop-blur-md transition-colors hover:border-[#38bdf8]/75 hover:text-white"
-                            >
-                              <span>View all live apps</span>
-                              <ArrowRight className="size-[14px]" />
-                            </button>
-                          ) : undefined
-                        }
-                      />
-                    </LiveAppCard>
-                  ))}
-                </div>
+                {featuredServers.length > 0 ? (
+                  <div
+                    ref={gridRef}
+                    className="grid min-w-0 flex-1 grid-cols-1 gap-[19px] md:grid-cols-2 lg:grid-cols-[462px_1fr]"
+                  >
+                    {featuredServers.map((server, idx) => (
+                      <LiveAppCard key={server.id} serverId={server.id}>
+                        <ServerCard
+                          server={server}
+                          isFavorite={favoriteIds.has(server.id)}
+                          onToggleFavorite={handleToggleFavorite}
+                          onVote={onVote}
+                          action={
+                            idx === featuredServers.length - 1 ? (
+                              <button
+                                type="button"
+                                aria-expanded={showAllLiveApps}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setShowAllLiveApps((prev) => !prev);
+                                }}
+                                className="pointer-events-auto relative z-30 inline-flex h-[36px] cursor-pointer items-center gap-[8px] rounded-[8px] border border-[#38bdf8]/45 bg-[#082238]/80 px-[14px] text-[12.5px] font-semibold text-[#bae6fd] backdrop-blur-md transition-colors hover:border-[#38bdf8]/75 hover:text-white"
+                              >
+                                <span>View all live apps</span>
+                                <ArrowRight className="size-[14px]" />
+                              </button>
+                            ) : undefined
+                          }
+                        />
+                      </LiveAppCard>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex min-h-[165px] min-w-0 flex-1 items-center justify-center rounded-[12px] border border-dashed border-white/15 px-6 text-center text-[14px] text-[#8fa3b8]">
+                    {showConnecting
+                      ? "Connecting to relay…"
+                      : hasActiveFilters
+                        ? "No servers match these filters"
+                        : "No apps are live on this relay yet"}
+                  </div>
+                )}
               </div>
 
               {(showAllLiveApps || hasActiveFilters) && (
                 <div className="mt-6 border-t border-white/10 pt-4">
                   {searchBar}
-                  {activeServers.length > 2 && (
+                  <div className="px-1 pt-3 text-sm text-[#8fa3b8]">
+                    {filteredServers.length.toLocaleString()} services visible
+                    {paymentAppCount > 0 &&
+                      `, including ${paymentAppCount.toLocaleString()} paid app${paymentAppCount === 1 ? "" : "s"}`}
+                  </div>
+                  {filteredServers.length > 2 && (
                     <div className="mt-4 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
-                      {activeServers.slice(2).map((server) => (
+                      {filteredServers.slice(2).map((server) => (
                         <LiveAppCard key={server.id} serverId={server.id}>
                           <ServerCard
                             server={server}
@@ -583,17 +555,15 @@ export function ServerListView({
             className="scroll-mt-24 border-b border-[#182c44] bg-linear-to-b from-[#041020] to-[#030c1a]"
           >
             <div className="mx-auto w-full max-w-[1437px] px-4 py-6 sm:px-6 lg:px-[32px] lg:pt-[20px] lg:pb-[20px]">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <h2
-                    id="public-relays-title"
-                    className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
-                  >
-                    Public relays
-                  </h2>
-                </div>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <h2
+                  id="public-relays-title"
+                  className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
+                >
+                  Public relays
+                </h2>
 
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-[18px] lg:mt-[2px]">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-[18px]">
                   <label className="relative flex h-[44px] w-full items-center rounded-[8px] border border-[#1d3148] bg-[#081525]/90 px-[14px] focus-within:border-[#38bdf8]/50 sm:w-[520px]">
                     <Search className="h-[16px] w-[16px] shrink-0 text-[#64748b]" />
                     <input
@@ -618,57 +588,65 @@ export function ServerListView({
                 </div>
               </div>
 
-              <div className="mt-[6px] grid grid-cols-1 gap-x-[17px] gap-y-[9px] md:grid-cols-2 lg:grid-cols-3">
-                {filteredRelays.map((relay) => {
-                  const releaseLabel = relayReleaseLabel(
-                    relayReleases.versions,
-                    relay,
-                    relayReleases.discovery
-                  );
-                  const isCopied = copiedRelayURL === relay.relayURL;
+              {relayDiscoveryLoading ? (
+                relayNotice("Loading known relays...")
+              ) : knownRelays.length === 0 ? (
+                relayNotice("No known relays discovered from this relay.")
+              ) : filteredRelays.length === 0 ? (
+                relayNotice("No relays match this search.")
+              ) : (
+                <div className="mt-[14px] grid grid-cols-1 gap-x-[17px] gap-y-[9px] md:grid-cols-2 lg:grid-cols-3">
+                  {filteredRelays.map((relay) => {
+                    const releaseLabel = relayReleaseLabel(
+                      relayReleases.versions,
+                      relay,
+                      relayReleases.discovery
+                    );
+                    const isCopied = copiedRelayURL === relay.relayURL;
 
-                  return (
-                    <div
-                      key={relay.relayURL}
-                      className="flex h-[43px] min-w-0 items-center justify-between gap-3 rounded-[8px] border border-[#1b2c40] bg-[#0a1829]/90 px-[16px] transition-colors hover:border-[#294360]"
-                    >
-                      <div className="flex min-w-0 flex-1 items-center gap-[14px]">
-                        <Globe className="size-[18px] shrink-0 text-[#8ab4d8]" />
-                        <a
-                          href={relay.relayURL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={relay.relayURL}
-                          className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium text-[#e2e8f0] underline-offset-4 hover:text-white hover:underline"
-                        >
-                          {formatRelayDisplayURL(relay.relayURL)}
-                        </a>
-                      </div>
+                    return (
+                      <div
+                        key={relay.relayURL}
+                        className="flex h-[43px] min-w-0 items-center justify-between gap-3 rounded-[8px] border border-[#1b2c40] bg-[#0a1829]/90 px-[16px] transition-colors hover:border-[#294360]"
+                      >
+                        <div className="flex min-w-0 flex-1 items-center gap-[14px]">
+                          <Globe className="size-[18px] shrink-0 text-[#8ab4d8]" />
+                          <a
+                            href={relay.relayURL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={relay.relayURL}
+                            className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium text-[#e2e8f0] underline-offset-4 hover:text-white hover:underline"
+                          >
+                            {relay.relayURL}
+                          </a>
+                        </div>
 
-                      <div className="flex shrink-0 items-center gap-[18px]">
-                        {releaseLabel && (
-                          <span className="shrink-0 rounded-[5px] border border-[#2d4a73]/55 bg-[#1b2d52]/85 px-[10px] py-[3px] font-mono text-[11px] font-semibold text-[#7dd3fc]">
-                            {releaseLabel}
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => void copyRelayURL(relay.relayURL, relay.relayURL)}
-                          aria-label={`Copy ${relay.relayURL}`}
-                          title={isCopied ? "Copied!" : "Copy relay URL"}
-                          className="inline-flex cursor-pointer items-center justify-center text-[#94a3b8] transition-colors hover:text-white"
-                        >
-                          {isCopied ? (
-                            <Check className="size-[15px] text-[#48f0e8]" />
-                          ) : (
-                            <Copy className="size-[15px]" />
+                        <div className="flex shrink-0 items-center gap-[18px]">
+                          {releaseLabel && (
+                            <span className="shrink-0 rounded-[5px] border border-[#2d4a73]/55 bg-[#1b2d52]/85 px-[10px] py-[3px] font-mono text-[11px] font-semibold text-[#7dd3fc]">
+                              {releaseLabel}
+                            </span>
                           )}
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => void copyRelayURL(relay.relayURL, relay.relayURL)}
+                            aria-label={`Copy ${relay.relayURL}`}
+                            title={isCopied ? "Copied!" : "Copy relay URL"}
+                            className="inline-flex cursor-pointer items-center justify-center text-[#94a3b8] transition-colors hover:text-white"
+                          >
+                            {isCopied ? (
+                              <Check className="size-[15px] text-[#48f0e8]" />
+                            ) : (
+                              <Copy className="size-[15px]" />
+                            )}
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </section>
         </main>

@@ -1,10 +1,13 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ArrowRight, BookOpen, Zap } from "lucide-react";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 
-// 90x45 equirectangular world landmask (4° lon x 4° lat resolution)
+// 360x180 equirectangular landmask (1° cells, rows north to south, columns
+// west to east), rasterized from Natural Earth 1:50m land polygons (public
+// domain, naturalearthdata.com) with 4x4 supersampling; a cell is land at
+// >= 25% coverage.
 const WORLD_LANDMASK_B64 =
-  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/8AAAAAAAAAAAAD/8AAAAAAAAAAAAB/8AAAP//gAD//4AfwAf/////8H//4AfAA//////+D//4eAAD//////8AA//fAAZ7/////wAAf//gAbj////zgAAP//wAPz////wAAAP/8AAO7////wAAAP/4AAYd////4AAAH/wAADA///5QAAAD/gAAf5///4AAAAB9gAA/////4AAAAB8AAB//+P/wAAAAAeAAB//8HvAAAAAAHAAB//4HHAAAAAABgAB//8CHEAAAAAAfAA//8ADEAAAAAAfwAB/4ACIAAAAAAf4AA/wADYAAAAAAf+AA/gABwwAAAAAf/AA/gAAAEAAAAAP/AA/gAAAIAAAAAH+AA/gAAD4AAAAAH+AA/IAAP8AAAAAH8AAfIAAf+AAAAAH4AAeAAAf+AAAAAHwAAcAAAP+AAAAAHgAAAAAAAeAAAAAHAAAAAAAAACAAAAGAAAAAAAAAEAAAAGAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADf/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///8PX////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE////3////////AAAAAAAAAAAECAAAAhAAAAAAAAAAAAAAAAAAAAAAAAAAAA////9////////4AAAAA74AAH4+2AAQAPgAAAAAAAAAAAAAAAAAAAAAAAAAGA////A////////AAAAB//4AAAAAAAAAAf9gAAAAAAAAAAAAAAAAAAAAAAAcHzv//5////////8AAAAA/+AAAAAAAAAAAAf4AAAAAAAAAAAAAAAAAAAAAAd8IBxP/A////////+AAAAAPHAAAAAAAAAAAAA4AAAAAAAAAAAAAAAAAAAAAH/jG9///AP////////AAAAACAAAAAAAf4AAAAP/+AAAAAAAAAAAAAAAAAAAAAX/1/3/8AAAf//////AAAAAAAAAAAAP+AAAH////AAAB/vAAAAAAAAAAAAAAfQ8AA7/8AAAH/////8AAAAAAAAAAAAfAAAAP///+AAAAoDAAAAAAAAAAAAAAf+A4e+f/gAAD/////4AAAAAAAAAAAB8ACAP/////+HwAGAAAAAAAAAAAAAAA///5/8//4AAD/////wAAAAAAAAAAADwAHl////////4Af2AAAAAwAABAAAAAff/8P4///gAD/////wAAAAAAAAAAAHwAff////////8///gAAABAAA//8AACAP//B8f//8AB/////wAAAAAAD/gAAA7Afv/////////////8AAAAAD///+P//n//n+D5/+AB/////gAAAAAB///AAwA+f////////////////v+4Af/////////6Hfzwf+AAf///8AAAAAAP///4MP///v/////////////////+AH/////////////45/wA///4AAAAAAAP///+M////v//////////////////8M/////////////wD/8A///wAQYAAAAf///////////////////////////f4//////////////A/+YAf/6AA/8AAAA///+D///////////////////////Bgf/////////////w//gAP/wAA/8AAAD/4//f//////////////////////+AEB////////////HIA/wAP/gAAHgAAAP/z/////////////////////////+AAP///////////8Ay+fAAH/AAAAAAAB//H/////////////////////////+AAP///////////wAA/gAAB/AAAAAAAB/+H//////////////////////3//AAAX//3////////wAA/4AAAuAAAAAAAB//H//////////////////////A/4AAAA/7AH///////gAA/4wAAAAAAAAAAB//g/////////////////////+DgAAAAAr8AA///////4AB//4AAAAAAAABYB5+D///////////////////8AAPgAAAAAH4AAP//////8AAf/8AAAAAAAAB8AE+m///////////////////wAA/gAAAAAMAAAH///////wCf/+AAAAAAAAA4AO+H///////////////////AAB/gAAAABwAAAD////////g///gAAAAAAAB+AP4H//////////////////+AAB/AAAAAGAAAABf///////z///4AAAAAAAPfAP3////////////////////QAB/AAAABQAAAABP///////x///8AAAAAAAPPB//////////////////////6AA8AAAAAAAAAAAH///////5///8AAAAAAAPfz//////////////////////+AA4AAAAAAAAAAAD///////////8AAAAAAAIfn///////////////////////AAwAAAAAAAAAAAD///////////sAAAAAAAAff//////////////////////7ABAAAAAAAAAAAAB/////////+sPAAAAAAAAD///////////////////////7AAAAAAAAAAAAAAAf/////////wfgAAAAAAAf///////////////////////yAAAAAAAAAAAAAAAf/////////gfgAAAAAAAP///////////////////////iAAAAAAAAAAAAAAAP//////////AAAAAAAAAD//////v/x//////////////GAAAAAAAAAAAAAAAP/////////+AAAAAAAAAD/////H//H/////////////+EAAAAAAAAAAAAAAAf////////+4AAAAAAAAAD//n/+Gf+P/////////////8HAAAAAAAAAAAAAAAf////////wgAAAAAAAAH//jz/+AH/H/////////////4HgAAAAAAAAAAAAAAf////////gAAAAAAAAAH/4Nw/8AB/D////////////+AfAAAAAAAAAAAAAAAf////////wAAAAAAAAAH/4A8f/fh/i////////////8AIAAAAAAAAAAAAAAAf///////+AAAAAAAAAAH/gMPfP///z///////////v4AMAAAAAAAAAAAAAAAP///////8AAAAAAAAAAP/IMCOP///h//////////+dwAMAAAAAAAAAAAAAAAP///////4AAAAAAAAAAH/AAGHP///h//////////8B4AcAAAAAAAAAAAAAAAH///////wAAAAAAAAAAH+AE4GH///x///////////44A4AAAAAAAAAAAAAAAD///////wAAAAAAAAAAB4/+ACD///////////////g8D4AAAAAAAAAAAAAAAB///////wAAAAAAAAAAA7/+AAwF//////////////A8/4AAAAAAAAAAAAAAAB///////gAAAAAAAAAAB//+AAAJ//////////////Ax/AAAAAAAAAAAAAAAAAP/////+AAAAAAAAAAAH//+AAAB//////////////gD0AAAAAAAAAAAAAAAAAP/////8AAAAAAAAAAAP///4OAB//////////////gDAAAAAAAAAAAAAAAAAAH/////4AAAAAAAAAAAP///+P8z//////////////wCAAAAAAAAAAAAAAAAAADf////4AAAAAAAAAAAP/////////////////////wAAAAAAAAAAAAAAAAAAADf///g4AAAAAAAAAAAf/////////P///////////wAAAAAAAAAAAAAAAAAAABv//AAYAAAAAAAAAAA//////////n///////////wAAAAAAAAAAAAAAAAAAAB3/+AAcAAAAAAAAAAD///////9//j///////////gAAAAAAAAAAAAAAAAAAAA7/+AAMAAAAAAAAAAD///////8//w3//////////AAAAAAAAAAAAAAAAAAAAAZ/+AAMAAAAAAAAAAH///////+f/8b//////////AAAAAAAAAAAAAAAAAAAAAM/+AABAAAAAAAAAAP///////+f/84Af///////+wAAAAAAAAAAAAAAAAAAAAGf8AAAAAAAAAAAAAP////////P//+AP///////4wAAAAAAAAAAAAAAAAAAAAAP8AB+AAAAAAAAAAf////////n///AH///////wgAAAAAAAAAAAAAAAAAAAAAP+A4DwAAAAAAAAAf////////n//+AH//+P//8AAAAAAAAAAAAAAAAAAAAAAAP+B4A8AAAAAAAAAf////////n//+AA//4P/+QAAAAAAAAAAAAAAAgAAAAAAAH/B4ABwAAAAAAAAf////////j//8AA//gH/84AAAAAAAAAAAAAAAAAAAAAAAD//wAj9AAAAAAAAf////////x//4AA//AD/8wAwAAAAAAAAAAAAAAAAAAAAAA//wAgAAAAAAAAAf////////4//wAAf+AD/+AAwAAAAAAAAAAAAAAAAAAAAAAP/wAAAAAAAAAAAf////////4/+AAAf8AD//AAwAAAAAAAAAAAAAAAAAAAAAABP/AAAAAAAAAAAf////////8/8AAAf4AAf/gAwAAAAAAAAAAAAAAAAAAAAAAAH/gAAAAAAAAAAf////////+fwAAAPwAAP/gAwAAAAAAAAAAAAAAAAAAAAAAAA/gAAAAAAAAAAf/////////eAAAAPwAAP/wA8AAAAAAAAAAAAAAAAAAAAAAAAPgAgAAAAAAAAf/////////4BAAAHwAAN/gAWAAAAAAAAAAAAAAAAAAAAAAAAHADYAAAAAAAAP/////////g4AAAHwAAMfgALAAAAAAAAAAAAAAAAAAAAAAAADgP/eAAAAAAAH//////////4AAADwAAIfABOAAAAAAAAAAAAAAAAAAAAAAAABzP/+AAAAAAAD//////////4AAADoAAMEACPAAAAAAAAAAAAAAAAAAAAAAAAA9///AAAAAAAB//////////wAAABYAAMAAAHAAAAAAAAAAAAAAAAAAAAAAAAAN///wAAAAAAB//////////wAAAAcAAGAAAPgAAAAAAAAAAAAAAAAAAAAAAAAA///4AAAAAAAf/////////gAAAAMAAHAAMDAAAAAAAAAAAAAAAAAAAAAAAAAA////gAAAAAAP/B///////gAAAAAABjgAeAAAAAAAAAAAAAAAAAAAAAAAAAAA////4AAAAAAGAB///////AAAAAAABzwA8AAAAAAAAAAAAAAAAAAAAAAAAAAA////4AAAAAAAAAH/////+AAAAAAAA9wB8AAAAAAAAAAAAAAAAAAAAAAAAAAB////4AAAAAAAAAH/////8AAAAAAAAfwH8AAAAAAAAAAAAAAAAAAAAAAAAAAB////8AAAAAAAAAH/////4AAAAAAAAfwf+CYAAAAAAAAAAAAAAAAAAAAAAAAD////8AAAAAAAAAH/////gAAAAAAAAHwf8+QAAAAAAAAAAAAAAAAAAAAAACAH/////gAAAAAAAAH/////gAAAAAAAADwf9ITwAAAAAAAAAAAAAAAAAAAAAAAH/////4AAAAAAAAH/////AAAAAAAAAL8f55RxAAAAAAAAAAAAAAAAAAAAAAAH//////QAAAAAAAH////+AAAAAAAAAB/P5wI74AAAAAAAAAAAAAAAAAAAAAAH//////4AAAAAAAD////8AAAAAAAAAA8D54u//AAAAAAAAAAAAAAAAAAAAAAP//////+AAAAAAAB////8AAAAAAAAAAcAB4AH/wYAAAAAAAAAAAAAAAAAAAAH///////gAAAAAAA////4AAAAAAAAAAMABIAA/7yAAAAAAAAAAAAAAAAAAAAH///////gAAAAAAA////4AAAAAAAAAAHsAAAI/8BAAAAAAAAAAAAAAAAAAAAD///////gAAAAAAAf///8AAAAAAAAAAD/AABA/4AAAAAAAAAAAAAAAAAAAAAB///////gAAAAAAAf///8AAAAAAAAAAAH+xgBvMACAAAAAAAAAAAAAAAAAAAB///////gAAAAAAAf///8AAAAAAAAAAAABHAAGHgCAAAAAAAAAAAAAAAAAAAA///////AAAAAAAAf///+AAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAA//////+AAAAAAAAf///+AAAAAAAAAAAAAACgCAAAAAAAAAAAAAAAAAAAAAAAf/////8AAAAAAAAf///+AQAAAAAAAAAAAAD+GAAAAAAAAAAAAAAAAAAAAAAAf/////4AAAAAAAA////+AwAAAAAAAAAAAAD+HAAAAAAAAAAAAAAAAAAAAAAAP/////4AAAAAAAA////+BwAAAAAAAAAAAB38HgAAAAAAAAAAAAAAAAAAAAAAH/////4AAAAAAAA////+D4AAAAAAAAAAAD/+HwAACAAAAAAAAAAAAAAAAAAAD/////4AAAAAAAB////8PwAAAAAAAAAAAH//HwAAAABAAAAAAAAAAAAAAAAAA/////4AAAAAAAB////wPwAAAAAAAAAAAP///wAAAAGAAAAAAAAAAAAAAAAAAf////4AAAAAAAA////gPgAAAAAAAAAAAf///wAAAAAAAAAAAAAAAAAAAAAAAf////wAAAAAAAA///+APgAAAAAAAAAAA////8AAAAAAAAAAAAAAAAAAAAAAAf////wAAAAAAAAf//+APgAAAAAAAAAAH////+AAIAAAAAAAAAAAAAAAAAAAAf////gAAAAAAAAf//+AfAAAAAAAAAAAf////+AAEAAAAAAAAAAAAAAAAAAAAf////AAAAAAAAAP///AfAAAAAAAAAAB//////gAAAAAAAAAAAAAAAAAAAAAAf///4AAAAAAAAAP///AfAAAAAAAAAAB//////gAAAAAAAAAAAAAAAAAAAAAAf///gAAAAAAAAAP//+AeAAAAAAAAAAB//////wAAAAAAAAAAAAAAAAAAAAAAf///AAAAAAAAAAP//4AMAAAAAAAAAAB//////4AAAAAAAAAAAAAAAAAAAAAAf///AAAAAAAAAAH//4AAAAAAAAAAAAB//////4AAAAAAAAAAAAAAAAAAAAAAf///AAAAAAAAAAH//4AAAAAAAAAAAAA//////4AAAAAAAAAAAAAAAAAAAAAA///+AAAAAAAAAAD//4AAAAAAAAAAAAA//////8AAAAAAAAAAAAAAAAAAAAAA///8AAAAAAAAAAB//gAAAAAAAAAAAAA//////8AAAAAAAAAAAAAAAAAAAAAA///8AAAAAAAAAAB//gAAAAAAAAAAAAAf/////4AAAAAAAAAAAAAAAAAAAAAA///wAAAAAAAAAAA//AAAAAAAAAAAAAAf/////4AAAAAAAAAAAAAAAAAAAAAA///wAAAAAAAAAAA/+AAAAAAAAAAAAAAf/gf//wAAAAAAAAAAAAAAAAAAAAAA///gAAAAAAAAAAA/4AAAAAAAAAAAAAAf8AP//wAAAAAAAAAAAAAAAAAAAAAA///AAAAAAAAAAAAcAAAAAAAAAAAAAAAeAAF//gAAAAAAAAAAAAAAAAAAAAAB//4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB//gAABgAAAAAAAAAAAAAAAAAB//4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf/AAAAgAAAAAAAAAAAAAAAAAD//4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/AAAAwAAAAAAAAAAAAAAAAAD//wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHYAAAA8AAAAAAAAAAAAAAAAAD/8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4AAAAAAAAAAAAAAAAAD/8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACYAAAAAAAAAAAAAAAAAD/gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+AAAHQAAAAAAAAAAAAAAAAAH/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAHAAAAAAAAAAAAAAAAAAD/gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAeAAAAAAAAAAAAAAAAAAH/gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4AAAAAAAAAAAAAAAAAAH+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4AAAAAAAAAAAAAAAAAAP+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABwAAAAAAAAAAAAAAAAAAH/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8AAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH4BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/AAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB+AAAAAAAAAAAAAAAAAAP4AAAAD///vgPn/8AAAAAAAAAAAAAAAAAAAAAAAAHgAAAAAAAAAAAAAAAAAH///wAH//////////wAAAAAAAAAAAAAAAAAAAAAAADwAAAAAAAAAAAAAAAED////8A////////////+AAAAAAAAAAAAAAAAAAAAAB/8AAAAAAAAAAAAAAAP3////4P/////////////8AAAAAAAAAAAAAAAAAAAAM/8AAAAAAAADEH//nL//////5//////////////++AAAAAAAAAAAAAAAAAAAP/+AAAAAAAA/////////////x////////////////4AAAAAAAAAAAAAB/CgAB7/AAAAAAAD/////////////v////////////////wAAAAAAAAABmgAB///////AAAAAAAf//////////////////////////////AAAAAAAAAPn//cA//////+AAAAAAA//////////////////////////////4AAAAAAAB/////////////4AAAAAB///////////////////////////////gAAAAAAAf////////////8AAAAAB////////////////////////////////gAAAAAH/////////////+AAAAwAf////////////////////////////////zAAAABB/////////////AOAAD8A/////////////////////////////////+AAAADwD////////////w7BAH+AP///////////////////////////////+AAAAAAAA////////////4wXA/8A////////////////////////////////8AAAAADA///////////////4AAB//////////////////////////////////AAAAAAAf//////////////8H////////////////////////////////////+AAAP/////////////////////////////////////////////////////////g////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////";
 
 interface SpherePoint {
   lat: number;
@@ -23,8 +26,8 @@ const GLOBE_LAND_POINTS: ReadonlyArray<SpherePoint> = (() => {
     return [];
   }
 
-  const cols = 90;
-  const rows = 45;
+  const cols = 360;
+  const rows = 180;
   const isLandCell = (r: number, c: number): boolean => {
     if (r < 0 || r >= rows) return false;
     const wrappedCol = ((c % cols) + cols) % cols;
@@ -35,8 +38,8 @@ const GLOBE_LAND_POINTS: ReadonlyArray<SpherePoint> = (() => {
   };
 
   const sampleLand = (latDeg: number, lonDeg: number): { land: boolean; coastal: boolean } => {
-    const r = Math.floor((88 - latDeg) / 4);
-    const c = Math.floor((lonDeg + 180) / 4);
+    const r = Math.floor(90 - latDeg);
+    const c = Math.floor(lonDeg + 180);
     const land = isLandCell(r, c);
     if (!land) return { land: false, coastal: false };
     const coastal =
@@ -48,12 +51,12 @@ const GLOBE_LAND_POINTS: ReadonlyArray<SpherePoint> = (() => {
   };
 
   const points: SpherePoint[] = [];
-  // Uniform spherical lattice: latitude rings every 2.5°, longitude steps scaled by cos(lat)
-  for (let latDeg = -76; latDeg <= 82; latDeg += 2.5) {
+  // Uniform spherical lattice: latitude rings every 2°, longitude steps scaled by cos(lat)
+  for (let latDeg = -84; latDeg <= 84; latDeg += 2) {
     const lat = (latDeg * Math.PI) / 180;
     const cosLat = Math.cos(lat);
     const sinLat = Math.sin(lat);
-    const ringSteps = Math.max(12, Math.round(148 * cosLat));
+    const ringSteps = Math.max(12, Math.round(180 * cosLat));
     for (let i = 0; i < ringSteps; i += 1) {
       const lonDeg = -180 + (i / ringSteps) * 360;
       const { land, coastal } = sampleLand(latDeg, lonDeg);
@@ -449,30 +452,46 @@ function RotatingGlobe3DCanvas({ className }: { className?: string }) {
       return;
     }
 
+    // Only animate while visible: the desktop and mobile stages each mount a
+    // canvas, and the one hidden by the breakpoint never intersects.
     let rafId = 0;
     const start = performance.now();
     const tick = (now: number) => {
       renderFrame(now - start);
       rafId = window.requestAnimationFrame(tick);
     };
-    rafId = window.requestAnimationFrame(tick);
+    const observer = new IntersectionObserver(([entry]) => {
+      window.cancelAnimationFrame(rafId);
+      if (entry.isIntersecting) {
+        rafId = window.requestAnimationFrame(tick);
+      }
+    });
+    observer.observe(canvas);
 
-    return () => window.cancelAnimationFrame(rafId);
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(rafId);
+    };
   }, []);
 
   return <canvas ref={canvasRef} aria-hidden="true" className={className} />;
 }
 
+// The globe canvas sits between the two layers: the background holds the
+// glows and stars, the foreground holds the beams and the portal ring.
 function HeroSceneSVG({
-  viewBox = "0 0 1672 360",
-  className = "h-full w-full",
-  transparentBackground = false,
+  viewBox,
+  className,
+  layer,
 }: {
-  viewBox?: string;
-  className?: string;
-  transparentBackground?: boolean;
+  viewBox: string;
+  className: string;
+  layer: "background" | "foreground";
 }) {
   const uid = useId().replace(/:/g, "");
+  const [animate] = useState(
+    () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 
   return (
     <svg
@@ -507,6 +526,13 @@ function HeroSceneSVG({
           <stop offset="0%" stopColor="#5efce8" stopOpacity="0.52" />
           <stop offset="42%" stopColor="#22d3ee" stopOpacity="0.2" />
           <stop offset="100%" stopColor="#020c1b" stopOpacity="0" />
+        </radialGradient>
+
+        <radialGradient id={`${uid}-portal-void`} cx="1155" cy="196" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1155 196) scale(17.5 59.5) translate(-1155 -196)">
+          <stop offset="0%" stopColor="#0e4a6e" stopOpacity="0.95" />
+          <stop offset="55%" stopColor="#041427" stopOpacity="0.96" />
+          <stop offset="85%" stopColor="#06233d" stopOpacity="0.95" />
+          <stop offset="100%" stopColor="#2dd4bf" stopOpacity="0.55" />
         </radialGradient>
 
         <linearGradient id={`${uid}-ring-stroke`} x1="1134" y1="130" x2="1177" y2="262" gradientUnits="userSpaceOnUse">
@@ -549,7 +575,7 @@ function HeroSceneSVG({
         </filter>
       </defs>
 
-      {!transparentBackground && (
+      {layer === "background" ? (
         <>
           <rect width="1672" height="360" fill="#020c1b" />
           <circle cx="265" cy="292" r="220" fill={`url(#${uid}-cta-glow)`} />
@@ -576,107 +602,143 @@ function HeroSceneSVG({
             ))}
           </g>
         </>
-      )}
+      ) : (
+        <>
+          {/* Incoming light trails from the left */}
+          <path
+            d="M 650,304 Q 930,300 1148,206"
+            fill="none"
+            stroke={`url(#${uid}-left-trail)`}
+            strokeWidth="2.4"
+            filter={`url(#${uid}-glow-soft)`}
+          />
+          <path
+            d="M 900,152 Q 1045,156 1146,192"
+            fill="none"
+            stroke={`url(#${uid}-left-trail)`}
+            strokeWidth="1.3"
+            opacity="0.55"
+          />
+          <path
+            d="M 1075,220 C 1104,220 1124,212 1146,200"
+            fill="none"
+            stroke="#5efce8"
+            strokeWidth="2.6"
+            filter={`url(#${uid}-glow-soft)`}
+          />
 
-      {/* Sweeping Left Incoming Light Trails */}
-      <path
-        d="M 650,304 Q 930,300 1148,206"
-        fill="none"
-        stroke={`url(#${uid}-left-trail)`}
-        strokeWidth="2.4"
-        filter={`url(#${uid}-glow-soft)`}
-      />
-      <path
-        d="M 900,152 Q 1045,156 1146,192"
-        fill="none"
-        stroke={`url(#${uid}-left-trail)`}
-        strokeWidth="1.3"
-        opacity="0.55"
-      />
-      <path
-        d="M 1075,220 C 1104,220 1124,212 1146,200"
-        fill="none"
-        stroke="#5efce8"
-        strokeWidth="2.6"
-        filter={`url(#${uid}-glow-soft)`}
-      />
-
-      {/* Outgoing Relay Beams, Animated Pulses & Glowing Nodes */}
-      <g filter={`url(#${uid}-glow-soft)`}>
-        {OUTGOING_BEAMS.map((beam, idx) => (
-          <g key={idx}>
-            <path
-              id={`${uid}-beam-${idx}`}
-              d={beam.d}
-              fill="none"
-              stroke={`url(#${uid}-beam-grad)`}
-              strokeWidth="2.1"
-              strokeLinecap="round"
-            />
-            <circle r="2.3" fill="#ffffff">
-              <animateMotion
-                dur="2.6s"
-                begin={beam.delay}
-                repeatCount="indefinite"
-                path={beam.d}
-              />
-            </circle>
-            <circle cx={beam.nx} cy={beam.ny} r="6.5" fill={beam.color} opacity="0.38">
-              <animate
-                attributeName="r"
-                values="5;8;5"
-                dur="2.4s"
-                begin={beam.delay}
-                repeatCount="indefinite"
-              />
-            </circle>
-            <circle cx={beam.nx} cy={beam.ny} r="2.8" fill="#ffffff" />
+          {/* Outgoing relay beams with travelling packets and pulsing nodes */}
+          <g filter={`url(#${uid}-glow-soft)`}>
+            {OUTGOING_BEAMS.map((beam, idx) => (
+              <g key={idx}>
+                <path
+                  d={beam.d}
+                  fill="none"
+                  stroke={`url(#${uid}-beam-grad)`}
+                  strokeWidth="2.1"
+                  strokeLinecap="round"
+                />
+                {animate && (
+                  <circle r="2.3" fill="#ffffff">
+                    <animateMotion
+                      dur="2.6s"
+                      begin={beam.delay}
+                      repeatCount="indefinite"
+                      path={beam.d}
+                    />
+                  </circle>
+                )}
+                <circle cx={beam.nx} cy={beam.ny} r="6.5" fill={beam.color} opacity="0.38">
+                  {animate && (
+                    <animate
+                      attributeName="r"
+                      values="5;8;5"
+                      dur="2.4s"
+                      begin={beam.delay}
+                      repeatCount="indefinite"
+                    />
+                  )}
+                </circle>
+                <circle cx={beam.nx} cy={beam.ny} r="2.8" fill="#ffffff" />
+              </g>
+            ))}
           </g>
-        ))}
-      </g>
 
-      {/* Glowing 3D-Tilted Portal Ring */}
-      <g transform="rotate(5 1155 196)">
-        <ellipse
-          cx="1155"
-          cy="196"
-          rx="22.5"
-          ry="64.5"
-          fill="none"
-          stroke="#22d3ee"
-          strokeWidth="10"
-          opacity="0.68"
-          filter={`url(#${uid}-glow-strong)`}
-        />
-        <ellipse
-          cx="1155"
-          cy="196"
-          rx="17.5"
-          ry="59.5"
-          fill="#030d1e"
-          fillOpacity="0.94"
-        />
-        <ellipse
-          cx="1155"
-          cy="196"
-          rx="20.5"
-          ry="63.5"
-          fill="none"
-          stroke={`url(#${uid}-ring-stroke)`}
-          strokeWidth="5.6"
-          filter={`url(#${uid}-glow-soft)`}
-        />
-        <ellipse
-          cx="1155"
-          cy="196"
-          rx="20.5"
-          ry="63.5"
-          fill="none"
-          stroke="#ffffff"
-          strokeWidth="1.8"
-          opacity="0.94"
-        />
-      </g>
+          {/* Portal ring, tilted 5° */}
+          <g transform="rotate(5 1155 196)">
+            <ellipse
+              cx="1155"
+              cy="196"
+              rx="22.5"
+              ry="64.5"
+              fill="none"
+              stroke="#22d3ee"
+              strokeWidth="10"
+              opacity="0.72"
+              filter={`url(#${uid}-glow-strong)`}
+            >
+              {animate && (
+                <animate
+                  attributeName="opacity"
+                  values="0.6;0.9;0.6"
+                  dur="3.2s"
+                  repeatCount="indefinite"
+                />
+              )}
+            </ellipse>
+            {/* Void with a faint inner glow so the opening reads as depth */}
+            <ellipse
+              cx="1155"
+              cy="196"
+              rx="17.5"
+              ry="59.5"
+              fill={`url(#${uid}-portal-void)`}
+            />
+            <ellipse
+              cx="1155"
+              cy="196"
+              rx="20.5"
+              ry="63.5"
+              fill="none"
+              stroke={`url(#${uid}-ring-stroke)`}
+              strokeWidth="5.6"
+              filter={`url(#${uid}-glow-soft)`}
+            />
+            <ellipse
+              cx="1155"
+              cy="196"
+              rx="20.5"
+              ry="63.5"
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth="1.8"
+              opacity="0.94"
+            />
+            {animate && (
+              // Light streak circling the rim (ellipse perimeter ≈ 296)
+              <ellipse
+                cx="1155"
+                cy="196"
+                rx="20.5"
+                ry="63.5"
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth="3.2"
+                strokeLinecap="round"
+                strokeDasharray="34 262"
+                filter={`url(#${uid}-glow-soft)`}
+              >
+                <animate
+                  attributeName="stroke-dashoffset"
+                  values="0;-296"
+                  dur="2.8s"
+                  repeatCount="indefinite"
+                />
+              </ellipse>
+            )}
+          </g>
+        </>
+      )}
     </svg>
   );
 }
@@ -777,7 +839,7 @@ export function HeroBackdropGraphic() {
     >
       <div className="relative h-[360px] w-[1672px] shrink-0">
         {/* Base Cosmic Glows & Starfield */}
-        <HeroSceneSVG viewBox="0 0 1672 360" className="h-full w-full" />
+        <HeroSceneSVG viewBox="0 0 1672 360" className="h-full w-full" layer="background" />
 
         {/* Real 3D Rotating Globe Canvas (centered at x=1236, y=195) */}
         <RotatingGlobe3DCanvas className="absolute top-0 left-[1040px] h-[360px] w-[420px]" />
@@ -786,32 +848,24 @@ export function HeroBackdropGraphic() {
         <HeroSceneSVG
           viewBox="0 0 1672 360"
           className="absolute inset-0 h-full w-full"
-          transparentBackground
+          layer="foreground"
         />
 
-        {/* Callout 1: Your machine (localhost) */}
-        <div className="absolute top-[192px] left-[918px] flex h-[57px] w-[157px] items-center gap-[11px] whitespace-nowrap rounded-[12px] border border-[#38bdf8]/40 bg-[#07162c]/85 px-[13px] shadow-[0_0_24px_rgba(34,211,238,0.18)] backdrop-blur-md">
+        <div className="absolute top-[198px] left-[868px] flex h-[44px] items-center gap-[9px] whitespace-nowrap rounded-[11px] border border-[#38bdf8]/40 bg-[#07162c]/85 px-[12px] text-[12.5px] font-bold text-white shadow-[0_0_24px_rgba(34,211,238,0.18)] backdrop-blur-md">
           <CalloutLaptopIcon />
-          <div className="leading-[1.25]">
-            <p className="text-[12.5px] font-bold text-white">Your machine</p>
-            <p className="text-[11.5px] font-medium text-[#94a3b8]">(localhost)</p>
-          </div>
+          <span>
+            Your machine <span className="font-medium text-[#94a3b8]">(localhost)</span>
+          </span>
         </div>
 
-        {/* Callout 2: Public relays */}
-        <div className="absolute top-[102px] left-[1389px] flex h-[57px] w-[144px] items-center gap-[10px] whitespace-nowrap rounded-[12px] border border-[#818cf8]/40 bg-[#0b152e]/85 px-[12px] shadow-[0_0_22px_rgba(99,102,241,0.2)] backdrop-blur-md">
+        <div className="absolute top-[108px] left-[1395px] flex h-[44px] items-center gap-[9px] whitespace-nowrap rounded-[11px] border border-[#818cf8]/40 bg-[#0b152e]/85 px-[12px] text-[12.5px] font-bold text-white shadow-[0_0_22px_rgba(99,102,241,0.2)] backdrop-blur-md">
           <CalloutRelaysIcon />
-          <div className="leading-[1.25]">
-            <p className="text-[12.5px] font-bold text-white">Public relays</p>
-          </div>
+          Public relays
         </div>
 
-        {/* Callout 3: Public access */}
-        <div className="absolute top-[260px] left-[1430px] flex h-[55px] w-[144px] items-center gap-[10px] whitespace-nowrap rounded-[12px] border border-[#818cf8]/40 bg-[#0b152e]/85 px-[12px] shadow-[0_0_22px_rgba(99,102,241,0.2)] backdrop-blur-md">
+        <div className="absolute top-[266px] left-[1432px] flex h-[44px] items-center gap-[9px] whitespace-nowrap rounded-[11px] border border-[#818cf8]/40 bg-[#0b152e]/85 px-[12px] text-[12.5px] font-bold text-white shadow-[0_0_22px_rgba(99,102,241,0.2)] backdrop-blur-md">
           <CalloutPublicAccessIcon />
-          <div className="leading-[1.25]">
-            <p className="text-[12.5px] font-bold text-white">Public access</p>
-          </div>
+          Public access
         </div>
       </div>
     </div>
@@ -879,34 +933,29 @@ export function LandingHero() {
         {/* Responsive 3D Rotating Globe + Vector Stage for Tablet & Mobile (< lg) */}
         <div className="mt-6 flex justify-center lg:hidden">
           <div className="relative aspect-[710/320] w-full max-w-[620px] overflow-hidden rounded-xl border border-white/10 bg-[#020c1b]">
-            <HeroSceneSVG viewBox="890 30 710 320" className="h-full w-full" />
+            <HeroSceneSVG viewBox="890 30 710 320" className="h-full w-full" layer="background" />
             <RotatingGlobe3DCanvas className="absolute top-[-8%] left-[21%] h-[112%] w-[59%]" />
             <HeroSceneSVG
               viewBox="890 30 710 320"
               className="absolute inset-0 h-full w-full"
-              transparentBackground
+              layer="foreground"
             />
 
-            <div className="absolute top-[50%] left-[4%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#38bdf8]/40 bg-[#07162c]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(34,211,238,0.18)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
+            <div className="absolute bottom-[6%] left-[3%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#38bdf8]/40 bg-[#07162c]/85 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-[0_0_18px_rgba(34,211,238,0.18)] backdrop-blur-md sm:px-3 sm:py-2 sm:text-xs">
               <CalloutLaptopIcon />
-              <div className="leading-tight">
-                <p className="text-[10px] font-bold text-white sm:text-xs">Your machine</p>
-                <p className="text-[9px] font-medium text-[#94a3b8] sm:text-[11px]">(localhost)</p>
-              </div>
+              <span>
+                Your machine <span className="font-medium text-[#94a3b8]">(localhost)</span>
+              </span>
             </div>
 
-            <div className="absolute top-[22%] right-[3%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
+            <div className="absolute top-[22%] right-[3%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:px-3 sm:py-2 sm:text-xs">
               <CalloutRelaysIcon />
-              <div className="leading-tight">
-                <p className="text-[10px] font-bold text-white sm:text-xs">Public relays</p>
-              </div>
+              Public relays
             </div>
 
-            <div className="absolute right-[2%] bottom-[6%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
+            <div className="absolute right-[2%] bottom-[6%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:px-3 sm:py-2 sm:text-xs">
               <CalloutPublicAccessIcon />
-              <div className="leading-tight">
-                <p className="text-[10px] font-bold text-white sm:text-xs">Public access</p>
-              </div>
+              Public access
             </div>
           </div>
         </div>
