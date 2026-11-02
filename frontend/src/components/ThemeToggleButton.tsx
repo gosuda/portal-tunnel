@@ -18,7 +18,7 @@ export function ThemeToggleButton({ className }: ThemeToggleButtonProps) {
       size="icon"
       onClick={toggleTheme}
       className={clsx(
-        "h-[38px] w-[38px] cursor-pointer rounded-[9px] border border-white/14 bg-[#081526]/80 text-white shadow-sm transition-colors hover:border-[#38bdf8]/45 hover:bg-[#0c1f38] hover:text-[#4ef2e8]",
+        "h-[38px] w-[38px] cursor-pointer rounded-[9px] border border-border bg-card/80 text-foreground shadow-sm transition-colors hover:border-primary/45 hover:text-primary",
         className
       )}
       aria-label={`Switch to ${nextTheme} theme`}

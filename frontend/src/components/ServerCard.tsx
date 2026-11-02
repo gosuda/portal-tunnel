@@ -122,7 +122,7 @@ export function ServerCard({
     <article
       data-hero-key={`server-bg-${serverId}`}
       className={clsx(
-        "relative w-full overflow-hidden rounded-[12px] group border border-white/22 bg-card shadow-sm transition-shadow hover:shadow-md",
+        "relative w-full overflow-hidden rounded-[12px] group border border-black/10 bg-card shadow-sm dark:border-white/22 transition-shadow hover:shadow-md",
         children ? "h-71.5" : "h-[165px]"
       )}
     >
@@ -142,7 +142,7 @@ export function ServerCard({
         />
       )}
 
-      <div className="absolute inset-0 bg-linear-to-t from-[#020813]/75 via-[#020813]/12 to-transparent" />
+      <div className="absolute inset-0 bg-linear-to-t from-black/75 via-black/12 to-transparent" />
 
       <div
         className={clsx(
@@ -152,12 +152,12 @@ export function ServerCard({
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="flex h-[32px] items-center gap-[8px] rounded-[8px] border border-white/15 bg-[#061424]/75 px-[12px] backdrop-blur-md">
+            <div className="flex h-[32px] items-center gap-[8px] rounded-[8px] border border-white/15 bg-black/45 px-[12px] backdrop-blur-md">
               <div
                 className={clsx(
                   "size-[8px] rounded-full",
                   online
-                    ? "bg-[#10b981] shadow-[0_0_8px_#10b981]"
+                    ? "bg-green-status shadow-[0_0_8px_var(--green-status)]"
                     : "bg-gray-500"
                 )}
               />
@@ -186,8 +186,8 @@ export function ServerCard({
               className={clsx(
                 "pointer-events-auto relative z-30 flex size-[34px] items-center justify-center rounded-[8px] backdrop-blur-md transition-colors border border-white/15 cursor-pointer",
                 isFavorite
-                  ? "bg-primary text-black"
-                  : "bg-[#061424]/70 text-white/85 hover:bg-primary hover:text-black"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-black/45 text-white/85 hover:bg-primary hover:text-primary-foreground"
               )}
               aria-label={
                 isFavorite ? "Remove from favorites" : "Add to favorites"
@@ -223,7 +223,7 @@ export function ServerCard({
               )}
 
               {description && (
-                <p className="text-[12px] text-[#cbd5e1] line-clamp-1 font-medium">
+                <p className="text-[12px] text-white/80 line-clamp-1 font-medium">
                   {description}
                 </p>
               )}
@@ -253,7 +253,7 @@ export function ServerCard({
                       <button
                         type="button"
                         onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
-                        className="shrink-0 rounded-md border border-white/20 bg-black/40 px-2 py-1 text-[10px] font-bold text-white transition-colors hover:bg-primary hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                        className="shrink-0 rounded-md border border-white/20 bg-black/40 px-2 py-1 text-[10px] font-bold text-white transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                       >
                         {copiedProtocol === endpoint.protocol
                           ? "Copied!"
@@ -285,8 +285,8 @@ export function ServerCard({
                     "flex h-[28px] items-center gap-[6px] rounded-[6px] border px-[10px] text-[11px] font-bold backdrop-blur-md transition-colors",
                     isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
                     reputation.viewer_vote === "up"
-                      ? "border-primary/60 bg-primary/90 text-black"
-                      : "border-white/15 bg-[#061322]/80 text-white/90 hover:bg-primary hover:text-black"
+                      ? "border-primary/60 bg-primary/90 text-primary-foreground"
+                      : "border-white/15 bg-black/45 text-white/90 hover:bg-primary hover:text-primary-foreground"
                   )}
                 >
                   <ThumbsUp className="size-[13px] shrink-0" />
@@ -301,8 +301,8 @@ export function ServerCard({
                     "flex h-[28px] items-center gap-[6px] rounded-[6px] border px-[10px] text-[11px] font-bold backdrop-blur-md transition-colors",
                     isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
                     reputation.viewer_vote === "down"
-                      ? "border-primary/60 bg-primary/90 text-black"
-                      : "border-white/15 bg-[#061322]/80 text-white/90 hover:bg-primary hover:text-black"
+                      ? "border-primary/60 bg-primary/90 text-primary-foreground"
+                      : "border-white/15 bg-black/45 text-white/90 hover:bg-primary hover:text-primary-foreground"
                   )}
                 >
                   <ThumbsDown className="size-[13px] shrink-0" />

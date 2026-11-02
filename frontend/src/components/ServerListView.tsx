@@ -382,27 +382,27 @@ export function ServerListView({
   );
 
   const publicFooter = (
-    <footer className="relative w-full bg-[#020a18]">
+    <footer className="relative w-full bg-background">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 340px 48px at 58% 0%, rgba(45, 212, 191, 0.22), transparent 100%)",
+            "radial-gradient(ellipse 340px 48px at 58% 0%, rgb(var(--stage-accent) / calc(0.22 * var(--stage-glow))), transparent 100%)",
         }}
       />
       <div className="relative mx-auto flex w-full max-w-[1437px] flex-col items-center justify-between gap-3 px-4 py-4 sm:flex-row sm:px-6 lg:h-[52px] lg:px-[32px] lg:py-0">
         <div className="flex flex-wrap items-center gap-[15px]">
           <a
             href={ROUTE_PATHS.home}
-            className="inline-flex items-center gap-[15px] text-[15.5px] font-extrabold tracking-[0.02em] text-white transition-colors hover:text-primary"
+            className="inline-flex items-center gap-[15px] text-[15.5px] font-extrabold tracking-[0.02em] text-foreground transition-colors hover:text-primary"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="17"
               height="26"
               viewBox="0 0 906.26 1457.543"
-              className="h-[25px] w-[17px] text-[#48f0e8] drop-shadow-[0_0_6px_rgba(72,240,232,0.4)]"
+              className="h-[25px] w-[17px] text-primary drop-shadow-[0_0_6px_rgb(var(--stage-accent)/0.4)]"
             >
               <path
                 fill="currentColor"
@@ -415,16 +415,16 @@ export function ServerListView({
 
         <nav
           aria-label="Footer"
-          className="flex flex-wrap items-center gap-x-[32px] gap-y-2 text-[12.5px] font-medium text-[#cbd5e1]"
+          className="flex flex-wrap items-center gap-x-[32px] gap-y-2 text-[12.5px] font-medium text-foreground/80"
         >
-          <a href={ROUTE_PATHS.admin} className="transition-colors hover:text-white">
+          <a href={ROUTE_PATHS.admin} className="transition-colors hover:text-foreground">
             Admin
           </a>
           <a
             href={REPOSITORY_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="transition-colors hover:text-white"
+            className="transition-colors hover:text-foreground"
           >
             Source
           </a>
@@ -434,17 +434,17 @@ export function ServerListView({
   );
 
   const relayNotice = (message: string) => (
-    <div className="mt-[14px] rounded-[8px] border border-[#1b2c40] bg-[#0a1829]/90 px-[16px] py-[12px] text-[13px] text-[#8fa3b8]">
+    <div className="mt-[14px] rounded-[8px] border border-border bg-card/90 px-[16px] py-[12px] text-[13px] text-muted-foreground">
       {message}
     </div>
   );
 
   return (
-    <div className="relative flex min-h-screen w-full flex-col overflow-x-hidden bg-[#030e1e] text-white">
+    <div className="relative flex min-h-screen w-full flex-col overflow-x-hidden bg-background text-foreground">
       <div className="flex h-full grow flex-col">
         <div
-          className={`relative w-full border-b border-[#19334d] bg-linear-to-b from-[#041428] via-[#031022] to-[#020b18] ${
-            landingPageEnabled ? "lg:h-[360px]" : "pb-[12px]"
+          className={`relative w-full border-b border-border bg-linear-to-b from-[rgb(var(--stage-bg))] to-[rgb(var(--stage-bg-edge))] ${
+            landingPageEnabled ? "xl:h-[360px]" : "pb-[12px]"
           }`}
         >
           {landingPageEnabled && <HeroBackdropGraphic />}
@@ -454,7 +454,7 @@ export function ServerListView({
           </div>
 
           {landingPageEnabled && (
-            <div className="relative z-10 mx-auto w-full max-w-[1437px] px-4 pt-[24px] pb-8 sm:px-6 lg:px-[32px] lg:pt-[70px] lg:pb-0">
+            <div className="relative z-10 mx-auto w-full max-w-[1437px] px-4 pt-[24px] pb-8 sm:px-6 lg:px-[32px] xl:pt-[70px] xl:pb-0">
               <LandingHero />
             </div>
           )}
@@ -464,14 +464,14 @@ export function ServerListView({
           <section
             id="live-servers"
             aria-labelledby="live-servers-title"
-            className="scroll-mt-24 border-b border-[#15283e] bg-linear-to-b from-[#041224] via-[#051529] to-[#041122]"
+            className="scroll-mt-24 border-b border-border bg-muted/40"
           >
             <div className="mx-auto w-full max-w-[1437px] px-4 py-6 sm:px-6 lg:px-[32px] lg:pt-[21px] lg:pb-[19px]">
-              <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-[19px]">
-                <div className="flex items-center justify-between gap-4 lg:w-[307px] lg:shrink-0 lg:flex-col lg:items-start">
+              <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:gap-[19px]">
+                <div className="flex items-center justify-between gap-4 xl:w-[307px] xl:shrink-0 xl:flex-col xl:items-start">
                   <h2
                     id="live-servers-title"
-                    className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
+                    className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-foreground"
                   >
                     Live apps
                   </h2>
@@ -481,7 +481,7 @@ export function ServerListView({
                 {featuredServers.length > 0 ? (
                   <div
                     ref={gridRef}
-                    className="grid min-w-0 flex-1 grid-cols-1 gap-[19px] md:grid-cols-2 lg:grid-cols-[462px_1fr]"
+                    className="grid min-w-0 flex-1 grid-cols-1 gap-[19px] md:grid-cols-2"
                   >
                     {featuredServers.map((server, idx) => (
                       <LiveAppCard key={server.id} serverId={server.id}>
@@ -500,7 +500,7 @@ export function ServerListView({
                                   event.stopPropagation();
                                   setShowAllLiveApps((prev) => !prev);
                                 }}
-                                className="pointer-events-auto relative z-30 inline-flex h-[36px] cursor-pointer items-center gap-[8px] rounded-[8px] border border-[#38bdf8]/45 bg-[#082238]/80 px-[14px] text-[12.5px] font-semibold text-[#bae6fd] backdrop-blur-md transition-colors hover:border-[#38bdf8]/75 hover:text-white"
+                                className="pointer-events-auto relative z-30 inline-flex h-[36px] cursor-pointer items-center gap-[8px] rounded-[8px] border border-white/25 bg-black/45 px-[14px] text-[12.5px] font-semibold text-white backdrop-blur-md transition-colors hover:border-white/55"
                               >
                                 <span>View all live apps</span>
                                 <ArrowRight className="size-[14px]" />
@@ -512,7 +512,7 @@ export function ServerListView({
                     ))}
                   </div>
                 ) : (
-                  <div className="flex min-h-[165px] min-w-0 flex-1 items-center justify-center rounded-[12px] border border-dashed border-white/15 px-6 text-center text-[14px] text-[#8fa3b8]">
+                  <div className="flex min-h-[165px] min-w-0 flex-1 items-center justify-center rounded-[12px] border border-dashed border-border px-6 text-center text-[14px] text-muted-foreground">
                     {showConnecting
                       ? "Connecting to relay…"
                       : hasActiveFilters
@@ -523,9 +523,9 @@ export function ServerListView({
               </div>
 
               {(showAllLiveApps || hasActiveFilters) && (
-                <div className="mt-6 border-t border-white/10 pt-4">
+                <div className="mt-6 border-t border-border pt-4">
                   {searchBar}
-                  <div className="px-1 pt-3 text-sm text-[#8fa3b8]">
+                  <div className="px-1 pt-3 text-sm text-muted-foreground">
                     {filteredServers.length.toLocaleString()} services visible
                     {paymentAppCount > 0 &&
                       `, including ${paymentAppCount.toLocaleString()} paid app${paymentAppCount === 1 ? "" : "s"}`}
@@ -552,27 +552,27 @@ export function ServerListView({
           <section
             id="public-relays"
             aria-labelledby="public-relays-title"
-            className="scroll-mt-24 border-b border-[#182c44] bg-linear-to-b from-[#041020] to-[#030c1a]"
+            className="scroll-mt-24 border-b border-border bg-background"
           >
             <div className="mx-auto w-full max-w-[1437px] px-4 py-6 sm:px-6 lg:px-[32px] lg:pt-[20px] lg:pb-[20px]">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <h2
                   id="public-relays-title"
-                  className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
+                  className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-foreground"
                 >
                   Public relays
                 </h2>
 
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-[18px]">
-                  <label className="relative flex h-[44px] w-full items-center rounded-[8px] border border-[#1d3148] bg-[#081525]/90 px-[14px] focus-within:border-[#38bdf8]/50 sm:w-[520px]">
-                    <Search className="h-[16px] w-[16px] shrink-0 text-[#64748b]" />
+                  <label className="relative flex h-[44px] w-full items-center rounded-[8px] border border-border bg-card/90 px-[14px] focus-within:border-primary/50 sm:w-[520px]">
+                    <Search className="h-[16px] w-[16px] shrink-0 text-muted-foreground" />
                     <input
                       type="text"
                       value={relaySearchQuery}
                       onChange={(event) => setRelaySearchQuery(event.target.value)}
                       placeholder="Search relays by URL or version"
                       aria-label="Search relays"
-                      className="h-full w-full bg-transparent pl-[11px] text-[13px] text-white placeholder:text-[#64748b] outline-none"
+                      className="h-full w-full bg-transparent pl-[11px] text-[13px] text-foreground placeholder:text-muted-foreground outline-none"
                     />
                   </label>
 
@@ -580,10 +580,10 @@ export function ServerListView({
                     href={OFFICIAL_REGISTRY_SOURCE_URL}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex h-[44px] w-full shrink-0 items-center justify-center gap-[8px] whitespace-nowrap rounded-[8px] border border-[#1f3b58] bg-[#091c2e]/90 px-[14px] text-[12.5px] font-semibold text-[#7dd3fc] transition-colors hover:border-[#38bdf8]/55 hover:text-white sm:w-[158px]"
+                    className="inline-flex h-[44px] w-full shrink-0 items-center justify-center gap-[8px] whitespace-nowrap rounded-[8px] border border-border bg-card/90 px-[14px] text-[12.5px] font-semibold text-primary transition-colors hover:border-primary/55 sm:w-[158px]"
                   >
                     <span>Open registry.json</span>
-                    <ExternalLink className="h-[14px] w-[14px] shrink-0 text-[#7dd3fc]" />
+                    <ExternalLink className="h-[14px] w-[14px] shrink-0" />
                   </a>
                 </div>
               </div>
@@ -607,16 +607,16 @@ export function ServerListView({
                     return (
                       <div
                         key={relay.relayURL}
-                        className="flex h-[43px] min-w-0 items-center justify-between gap-3 rounded-[8px] border border-[#1b2c40] bg-[#0a1829]/90 px-[16px] transition-colors hover:border-[#294360]"
+                        className="flex h-[43px] min-w-0 items-center justify-between gap-3 rounded-[8px] border border-border bg-card/90 px-[16px] transition-colors hover:border-primary/40"
                       >
                         <div className="flex min-w-0 flex-1 items-center gap-[14px]">
-                          <Globe className="size-[18px] shrink-0 text-[#8ab4d8]" />
+                          <Globe className="size-[18px] shrink-0 text-muted-foreground" />
                           <a
                             href={relay.relayURL}
                             target="_blank"
                             rel="noopener noreferrer"
                             title={relay.relayURL}
-                            className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium text-[#e2e8f0] underline-offset-4 hover:text-white hover:underline"
+                            className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium text-foreground underline-offset-4 hover:underline"
                           >
                             {relay.relayURL}
                           </a>
@@ -624,7 +624,7 @@ export function ServerListView({
 
                         <div className="flex shrink-0 items-center gap-[18px]">
                           {releaseLabel && (
-                            <span className="shrink-0 rounded-[5px] border border-[#2d4a73]/55 bg-[#1b2d52]/85 px-[10px] py-[3px] font-mono text-[11px] font-semibold text-[#7dd3fc]">
+                            <span className="shrink-0 rounded-[5px] border border-primary/25 bg-primary/10 px-[10px] py-[3px] font-mono text-[11px] font-semibold text-primary">
                               {releaseLabel}
                             </span>
                           )}
@@ -633,10 +633,10 @@ export function ServerListView({
                             onClick={() => void copyRelayURL(relay.relayURL, relay.relayURL)}
                             aria-label={`Copy ${relay.relayURL}`}
                             title={isCopied ? "Copied!" : "Copy relay URL"}
-                            className="inline-flex cursor-pointer items-center justify-center text-[#94a3b8] transition-colors hover:text-white"
+                            className="inline-flex cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
                           >
                             {isCopied ? (
-                              <Check className="size-[15px] text-[#48f0e8]" />
+                              <Check className="size-[15px] text-primary" />
                             ) : (
                               <Copy className="size-[15px]" />
                             )}

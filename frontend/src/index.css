@@ -42,7 +42,7 @@
     --card-foreground: oklch(25% 0.02 250);
     --popover: oklch(100% 0 0);
     --popover-foreground: oklch(25% 0.02 250);
-    --primary: oklch(60% 0.11 195);
+    --primary: oklch(50% 0.1 195);
     --primary-foreground: oklch(100% 0 0);
     --secondary: oklch(92% 0.01 250);
     --secondary-foreground: oklch(45% 0.02 250);
@@ -54,18 +54,27 @@
     --destructive-foreground: oklch(100% 0 0);
     --border: oklch(90% 0.01 250);
     --input: oklch(95% 0.005 250);
-    --ring: oklch(60% 0.11 195);
+    --ring: oklch(50% 0.1 195);
 
     --green-status: oklch(55% 0.16 150);
     --text-muted: oklch(55% 0.03 250);
 
-    --hero-grid-dot: oklch(60% 0.11 195 / 0.14);
-    --hero-terminal-bg:
-      linear-gradient(180deg, oklch(19% 0.005 250 / 0.98), oklch(15% 0.006 250 / 0.98));
-    --hero-terminal-border: oklch(60% 0.11 195 / 0.22);
-    --hero-terminal-foreground: oklch(98% 0.01 0);
-    --hero-terminal-accent: var(--primary);
-    --hero-terminal-shadow: oklch(15% 0 0 / 0.12);
+    /* Landing hero stage. Values are bare "r g b" triplets so the globe
+       canvas and SVG can apply their own alpha: rgb(var(--stage-x) / a). */
+    --stage-bg: 238 244 250;
+    --stage-bg-edge: 247 249 252;
+    --stage-star: 148 163 184;
+    --stage-accent: 15 118 110;
+    --stage-accent-2: 3 105 161;
+    --stage-accent-3: 79 70 229;
+    --stage-on-accent: 255 255 255;
+    --stage-highlight: 255 255 255;
+    --stage-ocean-1: 240 247 255;
+    --stage-ocean-2: 220 235 249;
+    --stage-ocean-3: 195 216 238;
+    --stage-ocean-4: 169 195 223;
+    --stage-void: 6 26 46;
+    --stage-glow: 0.55;
   }
 
   .dark {
@@ -92,13 +101,20 @@
     --green-status: #10b981;
     --text-muted: #8fa3b8;
 
-    --hero-grid-dot: oklch(78% 0.1 195 / 0.18);
-    --hero-terminal-bg:
-      linear-gradient(180deg, oklch(18% 0 0 / 0.9), oklch(12% 0.01 250 / 0.94));
-    --hero-terminal-border: oklch(78% 0.1 195 / 0.28);
-    --hero-terminal-foreground: oklch(98% 0.01 0);
-    --hero-terminal-accent: var(--primary);
-    --hero-terminal-shadow: oklch(0% 0 0 / 0.28);
+    --stage-bg: 4 20 40;
+    --stage-bg-edge: 2 11 24;
+    --stage-star: 224 242 254;
+    --stage-accent: 94 252 232;
+    --stage-accent-2: 56 189 248;
+    --stage-accent-3: 129 140 248;
+    --stage-on-accent: 3 19 34;
+    --stage-highlight: 255 255 255;
+    --stage-ocean-1: 16 69 125;
+    --stage-ocean-2: 13 42 94;
+    --stage-ocean-3: 9 21 60;
+    --stage-ocean-4: 2 7 24;
+    --stage-void: 3 13 30;
+    --stage-glow: 1;
   }
 
   * {
@@ -137,7 +153,7 @@
   }
 
   .dark body {
-    background: #030e1e;
+    background: var(--background);
   }
 
   h1,

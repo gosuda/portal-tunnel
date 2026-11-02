@@ -98,7 +98,7 @@ export function Header({
                 width="19"
                 height="29"
                 viewBox="0 0 906.26 1457.543"
-                className="h-[29px] w-[19px] text-[#48f0e8] drop-shadow-[0_0_8px_rgba(72,240,232,0.45)]"
+                className="h-[29px] w-[19px] text-primary drop-shadow-[0_0_8px_rgb(var(--stage-accent)/0.45)]"
               >
                 <path
                   fill="currentColor"
@@ -108,11 +108,11 @@ export function Header({
             </a>
 
             <div className="ml-[19px] flex min-w-0 items-center gap-[12px]">
-              <h2 className="min-w-0 text-[21px] leading-none font-extrabold tracking-[0.02em] text-white">
+              <h2 className="min-w-0 text-[21px] leading-none font-extrabold tracking-[0.02em] text-foreground">
                 {title}
               </h2>
               {releaseVersion && (
-                <span className="inline-flex h-[24px] items-center rounded-[6px] border border-white/15 bg-[#0e2035]/85 px-[10px] font-mono text-[11px] font-semibold text-[#cbd5e1]">
+                <span className="inline-flex h-[24px] items-center rounded-[6px] border border-border bg-secondary/85 px-[10px] font-mono text-[11px] font-semibold text-foreground/80">
                   {releaseVersion}
                 </span>
               )}
@@ -127,17 +127,17 @@ export function Header({
           {!isAdmin && (
             <nav
               aria-label="Primary"
-              className="ml-[40px] hidden items-center gap-[27px] text-[13.5px] font-medium text-[#cbd5e1] md:flex"
+              className="ml-[40px] hidden items-center gap-[27px] text-[13.5px] font-medium text-foreground/80 md:flex"
             >
               <a
                 href="#live-servers"
-                className="whitespace-nowrap transition-colors hover:text-white"
+                className="whitespace-nowrap transition-colors hover:text-foreground"
               >
                 Live apps
               </a>
               <a
                 href="#public-relays"
-                className="whitespace-nowrap transition-colors hover:text-white"
+                className="whitespace-nowrap transition-colors hover:text-foreground"
               >
                 Public relays
               </a>
@@ -145,7 +145,7 @@ export function Header({
                 href="https://gosuda.github.io/portal-tunnel/features"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="whitespace-nowrap transition-colors hover:text-white"
+                className="whitespace-nowrap transition-colors hover:text-foreground"
               >
                 Features
               </a>
@@ -153,7 +153,7 @@ export function Header({
                 href="https://gosuda.github.io/portal-tunnel"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="whitespace-nowrap transition-colors hover:text-white"
+                className="whitespace-nowrap transition-colors hover:text-foreground"
               >
                 Docs
               </a>
@@ -167,7 +167,7 @@ export function Header({
               href={repoURL}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[9px] border border-white/14 bg-[#081526]/80 text-white shadow-sm transition-colors hover:border-[#38bdf8]/45 hover:bg-[#0c1f38] hover:text-[#4ef2e8]"
+              className="inline-flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[9px] border border-border bg-card/80 text-foreground shadow-sm transition-colors hover:border-primary/45 hover:text-primary"
               aria-label="View source on GitHub"
             >
               <svg
@@ -251,17 +251,17 @@ export function Header({
       {!isAdmin && (
         <nav
           aria-label="Mobile navigation"
-          className="flex items-center gap-5 overflow-x-auto border-t border-white/8 pt-2.5 text-xs font-medium text-[#cbd5e1] md:hidden"
+          className="flex items-center gap-5 overflow-x-auto border-t border-border pt-2.5 text-xs font-medium text-foreground/80 md:hidden"
         >
           <a
             href="#live-servers"
-            className="whitespace-nowrap transition-colors hover:text-white"
+            className="whitespace-nowrap transition-colors hover:text-foreground"
           >
             Live apps
           </a>
           <a
             href="#public-relays"
-            className="whitespace-nowrap transition-colors hover:text-white"
+            className="whitespace-nowrap transition-colors hover:text-foreground"
           >
             Public relays
           </a>
@@ -269,7 +269,7 @@ export function Header({
             href="https://gosuda.github.io/portal-tunnel/features"
             target="_blank"
             rel="noopener noreferrer"
-            className="whitespace-nowrap transition-colors hover:text-white"
+            className="whitespace-nowrap transition-colors hover:text-foreground"
           >
             Features
           </a>
@@ -277,7 +277,7 @@ export function Header({
             href="https://gosuda.github.io/portal-tunnel"
             target="_blank"
             rel="noopener noreferrer"
-            className="whitespace-nowrap transition-colors hover:text-white"
+            className="whitespace-nowrap transition-colors hover:text-foreground"
           >
             Docs
           </a>
