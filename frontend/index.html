@@ -23,7 +23,7 @@
     <title>Portal - Local to web. Instant access.</title>
     <script>
       (() => {
-        const defaultTheme = "light";
+        const defaultTheme = "dark";
 
         try {
           const storedTheme = localStorage.getItem("theme");
@@ -35,6 +35,7 @@
           document.documentElement.classList.toggle("dark", theme === "dark");
           document.documentElement.style.colorScheme = theme;
         } catch {
+          document.documentElement.classList.add("dark");
           document.documentElement.style.colorScheme = defaultTheme;
         }
       })();

@@ -9,7 +9,7 @@ import {
 
 export type Theme = "light" | "dark";
 
-const DEFAULT_THEME: Theme = "light";
+const DEFAULT_THEME: Theme = "dark";
 const THEME_STORAGE_KEY = "theme";
 
 interface ThemeContextValue {

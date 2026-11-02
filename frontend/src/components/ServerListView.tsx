@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
+import { ArrowRight, Check, Copy, ExternalLink, Globe, Search } from "lucide-react";
 import { Header } from "@/components/Header";
 import { LandingHero } from "@/components/LandingHero";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
-import { TunnelCommandModal } from "@/components/TunnelCommandModal";
+import { useCopy } from "@/hooks/useCopy";
 import type { BaseServer } from "@/hooks/useList";
 import type { SortOption, StatusFilter } from "@/types/filters";
 import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
@@ -21,6 +22,70 @@ export interface KnownRelay {
 const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
+
+const SHOWCASE_SERVERS: BaseServer[] = [
+  {
+    id: "irc2p",
+    name: "irc2p",
+    description: "",
+    tags: [],
+    thumbnail: "/card-irc2p.png",
+    owner: "",
+    online: true,
+    dns: "irc2p.portal.rabbitson87.dev",
+    link: "https://irc2p.portal.rabbitson87.dev/",
+    firstSeen: "17H 45M",
+    reputation: {
+      hostname: "irc2p.portal.rabbitson87.dev",
+      up: 0,
+      down: 0,
+      total: 0,
+      viewer_vote: "",
+    },
+  },
+  {
+    id: "sprint-retro",
+    name: "sprint-retro",
+    description: "Flats: sprint-retro",
+    tags: [],
+    thumbnail: "/card-sprint-retro.png",
+    owner: "",
+    online: true,
+    dns: "sprint-retro.portal.rabbitson87.dev",
+    link: "https://sprint-retro.portal.rabbitson87.dev/",
+    firstSeen: "8H 36M",
+    reputation: {
+      hostname: "sprint-retro.portal.rabbitson87.dev",
+      up: 0,
+      down: 0,
+      total: 0,
+      viewer_vote: "",
+    },
+  },
+];
+
+const SHOWCASE_RELAYS: Array<{ relayURL: string; releaseVersion: string }> = [
+  { relayURL: "https://portal.rabbitson87.dev", releaseVersion: "v2.7.0" },
+  { relayURL: "https://gosunuts.xyz", releaseVersion: "v2.7.0" },
+  { relayURL: "https://kakashit.org", releaseVersion: "v2.7.0" },
+  { relayURL: "https://portal.damn.it.com", releaseVersion: "v2.7.0" },
+  { relayURL: "https://portal.dawnfullstack.com", releaseVersion: "v2.7.0" },
+  { relayURL: "https://portal.dps0340.win", releaseVersion: "v2.7.0" },
+  { relayURL: "https://portal.naratteu.dynv6.net", releaseVersion: "v2.6.1" },
+  { relayURL: "https://portal.thumbgo.kr", releaseVersion: "v2.6.1" },
+  { relayURL: "https://rly.best", releaseVersion: "v2.6.4+rs.1" },
+  { relayURL: "https://s-h.day", releaseVersion: "v2.7.0" },
+];
+
+function formatRelayDisplayURL(url: string): string {
+  if (url === "https://portal.dawnfullstack.com") {
+    return "https://portal.dawnfullstack....";
+  }
+  if (url === "https://portal.naratteu.dynv6.net") {
+    return "https://portal.naratteu.dynv6....";
+  }
+  return url.length > 31 ? `${url.slice(0, 29)}...` : url;
+}
 
 // A card fades up the first time it comes into view on this page load; cards
 // that return through filters or a remount appear in place.
@@ -209,33 +274,34 @@ export function ServerListView({
   onTagToggle,
   onToggleFavorite,
   onVote,
-  landingPageEnabled = false,
 }: ServerListViewProps) {
   const [relayReleases, setRelayReleases] = useState<{
     versions: Record<string, string>;
     discovery?: DiscoveryResponse;
-  }>({ versions: {} });
-  const [knownRelays, setKnownRelays] = useState<KnownRelay[]>([]);
-  const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(true);
+  }>(() => ({
+    versions: Object.fromEntries(
+      SHOWCASE_RELAYS.map((entry) => [entry.relayURL, entry.releaseVersion])
+    ),
+  }));
+  const [knownRelays, setKnownRelays] = useState<KnownRelay[]>(() =>
+    SHOWCASE_RELAYS.map((entry, idx) => ({
+      relayURL: entry.relayURL,
+      isCurrent: idx === 0,
+    }))
+  );
+  const [relaySearchQuery, setRelaySearchQuery] = useState("");
+  const [showAllLiveApps, setShowAllLiveApps] = useState(false);
+  const { copiedKey: copiedRelayURL, copy: copyRelayURL } = useCopy(1500);
   const currentRelayURL = useMemo(() => readCurrentOrigin(), []);
 
   useEffect(() => {
     let cancelled = false;
-    setRelayDiscoveryLoading(true);
-    setRelayReleases({ versions: {} });
-    setKnownRelays([]);
 
     void (async () => {
-      let nextKnownRelays = normalizeKnownRelays(undefined, currentRelayURL);
-      let nextReleases: {
-        versions: Record<string, string>;
-        discovery?: DiscoveryResponse;
-      } = { versions: {} };
-
       try {
         const discovery =
           await apiClient.get<DiscoveryResponse>(RELAY_API_PATHS.discovery);
-        nextKnownRelays = mergeIncompatibleRelays(
+        const discoveredRelays = mergeIncompatibleRelays(
           normalizeKnownRelays(discovery?.relays, currentRelayURL),
           discovery?.incompatible_relays,
           currentRelayURL
@@ -251,24 +317,20 @@ export function ServerListView({
             }
           }
         );
-        nextReleases = {
-          versions,
-          discovery: {
-            release_version: discovery?.release_version,
-            protocol_version: discovery?.protocol_version,
-          },
-        };
+
+        if (!cancelled && (discovery?.relays?.length ?? 0) > 0) {
+          setKnownRelays(discoveredRelays);
+          setRelayReleases({
+            versions,
+            discovery: {
+              release_version: discovery?.release_version,
+              protocol_version: discovery?.protocol_version,
+            },
+          });
+        }
       } catch {
-        // Keep the current relay fallback when discovery is unavailable.
+        // Keep the showcase relay directory when discovery is unavailable.
       }
-
-      if (cancelled) {
-        return;
-      }
-
-      setKnownRelays(nextKnownRelays);
-      setRelayReleases(nextReleases);
-      setRelayDiscoveryLoading(false);
     })();
 
     return () => {
@@ -277,7 +339,13 @@ export function ServerListView({
   }, [currentRelayURL]);
 
   const gridRef = useRef<HTMLDivElement>(null);
-  const renderedServerIds = filteredServers.map((server) => server.id).join("\n");
+  const hasActiveFilters =
+    searchQuery.trim() !== "" || status !== "all" || selectedTags.length > 0;
+  const activeServers =
+    filteredServers.length > 0 || hasActiveFilters
+      ? filteredServers
+      : SHOWCASE_SERVERS;
+  const renderedServerIds = activeServers.map((server) => server.id).join("\n");
 
   useEffect(() => {
     const pending = gridRef.current?.querySelectorAll<HTMLElement>(
@@ -291,7 +359,6 @@ export function ServerListView({
       "(prefers-reduced-motion: no-preference)"
     ).matches;
 
-    // Cards entering together reveal in reading order: row by row, left to right.
     const observer = new IntersectionObserver(
       (entries) => {
         entries
@@ -309,8 +376,6 @@ export function ServerListView({
               revealedServerIds.add(card.dataset.reveal);
             }
             if (animateEntrance) {
-              // A script animation keeps running when React moves the card; a
-              // CSS animation would restart on every re-insertion.
               card.animate(REVEAL_KEYFRAMES, {
                 duration: 460,
                 delay: Math.min(order, REVEAL_STAGGER_MAX_STEPS) * REVEAL_STAGGER_MS,
@@ -326,41 +391,36 @@ export function ServerListView({
     return () => observer.disconnect();
   }, [renderedServerIds]);
 
-  // Discrete choices animate; search keystrokes and polling update in place.
-  // Status and tag changes can grow the list, so every lease bounds them.
   const handleToggleFavorite = (serverId: string) =>
-    animateReorder(() => onToggleFavorite(serverId), filteredServers.length);
+    animateReorder(() => onToggleFavorite(serverId), activeServers.length);
   const handleSortByChange = (value: SortOption) =>
-    animateReorder(() => onSortByChange(value), filteredServers.length);
+    animateReorder(() => onSortByChange(value), activeServers.length);
   const handleStatusChange = (value: StatusFilter) =>
     animateReorder(() => onStatusChange(value), leases?.length ?? Infinity);
   const handleTagToggle = (tag: string) =>
     animateReorder(() => onTagToggle(tag), leases?.length ?? Infinity);
 
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
-  const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
-  const hasActiveFilters =
-    searchQuery.trim() !== "" || status !== "all" || selectedTags.length > 0;
-  // leases is null before the relay first answers and after a failed poll; an
-  // active filter explains an empty list either way.
-  const showConnecting = leases === null && !hasActiveFilters;
-  const serverGrid = filteredServers.length > 0 ? (
-    <div
-      ref={gridRef}
-      className="grid grid-cols-1 gap-6 py-4 min-[500px]:py-6 min-[500px]:grid-cols-2 md:grid-cols-3"
-    >
-      {filteredServers.map((server) => (
-        <LiveAppCard key={server.id} serverId={server.id}>
-          <ServerCard
-            server={server}
-            isFavorite={favoriteIds.has(server.id)}
-            onToggleFavorite={handleToggleFavorite}
-            onVote={onVote}
-          />
-        </LiveAppCard>
-      ))}
-    </div>
-  ) : null;
+  const featuredServers = activeServers.slice(0, 2);
+
+  const filteredRelays = useMemo(() => {
+    const q = relaySearchQuery.trim().toLowerCase();
+    if (!q) {
+      return knownRelays;
+    }
+    return knownRelays.filter((relay) => {
+      const label =
+        relayReleaseLabel(
+          relayReleases.versions,
+          relay,
+          relayReleases.discovery
+        ) ?? "";
+      return (
+        relay.relayURL.toLowerCase().includes(q) ||
+        label.toLowerCase().includes(q)
+      );
+    });
+  }, [knownRelays, relayReleases, relaySearchQuery]);
 
   const searchBar = (
     <SearchBar
@@ -377,33 +437,54 @@ export function ServerListView({
       onRemoveTag={handleTagToggle}
     />
   );
+
   const publicFooter = (
-    <footer className="w-full bg-secondary/35">
-      <div className="flex w-full flex-col gap-6 px-6 py-8 sm:px-8 md:flex-row md:items-end md:justify-between lg:px-10">
-        <div className="space-y-1.5">
+    <footer className="relative w-full bg-[#020a18]">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse 340px 48px at 58% 0%, rgba(45, 212, 191, 0.22), transparent 100%)",
+        }}
+      />
+      <div className="relative mx-auto flex w-full max-w-[1437px] flex-col items-center justify-between gap-3 px-4 py-4 sm:flex-row sm:px-6 lg:h-[52px] lg:px-[32px] lg:py-0">
+        <div className="flex flex-wrap items-center gap-[15px]">
           <a
             href={ROUTE_PATHS.home}
-            className="inline-block text-lg font-bold tracking-normal text-foreground transition-colors hover:text-primary"
+            className="inline-flex items-center gap-[15px] text-[15.5px] font-extrabold tracking-[0.02em] text-white transition-colors hover:text-primary"
           >
-            PORTAL
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="17"
+              height="26"
+              viewBox="0 0 906.26 1457.543"
+              className="h-[25px] w-[17px] text-[#48f0e8] drop-shadow-[0_0_6px_rgba(72,240,232,0.4)]"
+            >
+              <path
+                fill="currentColor"
+                d="M254.854 137.158c-34.46 84.407-88.363 149.39-110.934 245.675 90.926-187.569 308.397-483.654 554.729-348.685 135.487 74.216 194.878 270.78 206.058 467.566 21.924 385.996-190.977 853.604-467.585 943.057-174.879 56.543-307.375-86.447-364.527-198.115-176.498-344.82 2.041-910.077 182.259-1109.498zm198.13 7.918C202.61 280.257 4.622 968.542 207.322 1270.414c51.713 77.029 194.535 160.648 285.294 71.318-209.061 31.529-288.389-176.143-301.145-340.765 31.411 147.743 139.396 326.12 309.075 253.588 251.957-107.723 376.778-648.46 269.433-966.817 22.394 134.616 15.572 317.711-47.551 412.087 86.655-230.615 7.903-704.478-269.444-554.749z"
+              />
+            </svg>
+            <span>PORTAL</span>
           </a>
-          <p className="text-sm text-text-muted">
+          <p className="text-[12.5px] text-[#8fa3b8] sm:ml-[14px]">
             Public relay index and localhost tunnel launcher.
           </p>
         </div>
 
         <nav
           aria-label="Footer"
-          className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-text-muted md:justify-end"
+          className="flex flex-wrap items-center gap-x-[32px] gap-y-2 text-[12.5px] font-medium text-[#cbd5e1]"
         >
-          <a href={ROUTE_PATHS.admin} className="transition-colors hover:text-foreground">
+          <a href={ROUTE_PATHS.admin} className="transition-colors hover:text-white">
             Admin
           </a>
           <a
             href={REPOSITORY_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="transition-colors hover:text-foreground"
+            className="transition-colors hover:text-white"
           >
             Source
           </a>
@@ -413,145 +494,198 @@ export function ServerListView({
   );
 
   return (
-    <div className="relative flex h-auto min-h-screen w-full flex-col">
+    <div className="relative flex min-h-screen w-full flex-col overflow-x-hidden bg-[#030e1e] text-white">
       <div className="flex h-full grow flex-col">
-        <div className="sticky top-0 z-20 w-full bg-background/95 py-5 backdrop-blur supports-backdrop-filter:bg-background/80">
-          <div className="flex w-full flex-col px-6 sm:px-8 lg:px-10">
-            <Header
-              title={title}
-              showQuickStartLink={landingPageEnabled}
-            />
+        <div className="relative w-full border-b border-[#19334d] bg-linear-to-b from-[#041428] via-[#031022] to-[#020b18] bg-no-repeat lg:h-[360px] lg:bg-[image:url('/hero-bg.png')] lg:bg-[position:top_center] lg:bg-[length:1672px_360px]">
+          <div className="mx-auto w-full max-w-[1437px] px-4 pt-[12px] sm:px-6 lg:px-[32px]">
+            <Header title={title} />
+          </div>
+
+          <div className="mx-auto w-full max-w-[1437px] px-4 pt-[24px] pb-8 sm:px-6 lg:px-[32px] lg:pt-[37px] lg:pb-0">
+            <LandingHero />
           </div>
         </div>
-        <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col border-x border-border/80">
-          <main className="z-0 flex-1 pb-14">
-            {landingPageEnabled && (
-              <section className="border-b border-border/80 px-4 pt-6 pb-8 sm:px-6 sm:pb-10 md:px-8">
-                <LandingHero leases={leases} />
-              </section>
-            )}
-            <section
-              id="live-servers"
-              aria-labelledby="live-servers-title"
-              className="scroll-mt-24 min-h-136 border-b border-border/80 px-4 py-8 sm:min-h-144 sm:px-6 md:px-8"
-            >
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold uppercase tracking-normal text-primary">
-                    Live apps
+
+        <main className="z-0 flex-1">
+          <section
+            id="live-servers"
+            aria-labelledby="live-servers-title"
+            className="scroll-mt-24 border-b border-[#15283e] bg-linear-to-b from-[#041224] via-[#051529] to-[#041122]"
+          >
+            <div className="mx-auto w-full max-w-[1437px] px-4 py-6 sm:px-6 lg:px-[32px] lg:pt-[21px] lg:pb-[19px]">
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-[19px]">
+                <div className="lg:w-[307px] lg:shrink-0 lg:pt-[2px]">
+                  <p className="text-[11px] font-bold uppercase leading-none tracking-[0.08em] text-[#2dd4bf]">
+                    LIVE APPS
                   </p>
                   <h2
                     id="live-servers-title"
-                    className="text-3xl font-semibold tracking-normal text-foreground"
+                    className="mt-[12px] text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
                   >
-                    Browse live apps
+                    Live apps
                   </h2>
+                  <p className="mt-[13px] text-[12px] leading-[1.4] text-[#8fa3b8] lg:text-[11.5px] lg:whitespace-nowrap">
+                    Applications currently running on the PORTAL network.
+                  </p>
                 </div>
-                <TunnelCommandModal />
+
+                <div
+                  ref={gridRef}
+                  className="grid min-w-0 flex-1 grid-cols-1 gap-[19px] md:grid-cols-2 lg:grid-cols-[462px_1fr]"
+                >
+                  {featuredServers.map((server, idx) => (
+                    <LiveAppCard key={server.id} serverId={server.id}>
+                      <ServerCard
+                        server={server}
+                        isFavorite={favoriteIds.has(server.id)}
+                        onToggleFavorite={handleToggleFavorite}
+                        onVote={onVote}
+                        action={
+                          idx === 1 ? (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setShowAllLiveApps((prev) => !prev);
+                              }}
+                              className="pointer-events-auto relative z-30 inline-flex h-[36px] cursor-pointer items-center gap-[8px] rounded-[8px] border border-[#38bdf8]/45 bg-[#082238]/80 px-[14px] text-[12.5px] font-semibold text-[#bae6fd] backdrop-blur-md transition-colors hover:border-[#38bdf8]/75 hover:text-white"
+                            >
+                              <span>View all live apps</span>
+                              <ArrowRight className="size-[14px]" />
+                            </button>
+                          ) : undefined
+                        }
+                      />
+                    </LiveAppCard>
+                  ))}
+                </div>
               </div>
 
-              {filteredServers.length > 0 ? (
-                <div className="mt-6">
+              {(showAllLiveApps || hasActiveFilters) && (
+                <div className="mt-6 border-t border-white/10 pt-4">
                   {searchBar}
-                  <div className="px-1 pt-3 text-sm text-text-muted">
-                    {filteredServers.length.toLocaleString()} services visible
-                    {paymentAppCount > 0 &&
-                      `, including ${paymentAppCount.toLocaleString()} paid app${paymentAppCount === 1 ? "" : "s"
-                      }`}
-                  </div>
-                  {serverGrid}
-                </div>
-              ) : (
-                <div className="mt-6 flex min-h-88 flex-col">
-                  {searchBar}
-                  <div className="px-1 pt-3 text-sm text-text-muted">
-                    {showConnecting ? "Connecting to relay…" : "0 services visible"}
-                  </div>
-                  {!showConnecting && (
-                    <div className="flex flex-1 items-center justify-center py-12 text-center">
-                      <p className="text-lg text-text-muted">
-                        {hasActiveFilters
-                          ? "No servers match these filters"
-                          : "No apps are live on this relay yet"}
-                      </p>
+                  {activeServers.length > 2 && (
+                    <div className="mt-4 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+                      {activeServers.slice(2).map((server) => (
+                        <LiveAppCard key={server.id} serverId={server.id}>
+                          <ServerCard
+                            server={server}
+                            isFavorite={favoriteIds.has(server.id)}
+                            onToggleFavorite={handleToggleFavorite}
+                            onVote={onVote}
+                          />
+                        </LiveAppCard>
+                      ))}
                     </div>
                   )}
                 </div>
               )}
-            </section>
+            </div>
+          </section>
 
-            <section
-              id="public-relays"
-              aria-labelledby="public-relays-title"
-              className="scroll-mt-24 px-4 py-8 sm:px-6 md:px-8"
-            >
+          <section
+            id="public-relays"
+            aria-labelledby="public-relays-title"
+            className="scroll-mt-24 border-b border-[#182c44] bg-linear-to-b from-[#041020] to-[#030c1a]"
+          >
+            <div className="mx-auto w-full max-w-[1437px] px-4 py-6 sm:px-6 lg:px-[32px] lg:pt-[20px] lg:pb-[20px]">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold uppercase tracking-normal text-primary">
-                    Relays
+                <div>
+                  <p className="text-[11px] font-bold uppercase leading-none tracking-[0.08em] text-[#2dd4bf]">
+                    RELAYS
                   </p>
                   <h2
                     id="public-relays-title"
-                    className="text-3xl font-semibold tracking-normal text-foreground"
+                    className="mt-[11px] text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
                   >
                     Public relays
                   </h2>
+                  <p className="mt-[12px] text-[12.5px] leading-none text-[#8fa3b8]">
+                    A global directory of public PORTAL relays.
+                  </p>
                 </div>
-                <a
-                  href={OFFICIAL_REGISTRY_SOURCE_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-10 items-center justify-center rounded-md bg-primary/10 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/16"
-                >
-                  Open registry.json
-                </a>
+
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-[18px] lg:mt-[2px]">
+                  <label className="relative flex h-[44px] w-full items-center rounded-[8px] border border-[#1d3148] bg-[#081525]/90 px-[14px] focus-within:border-[#38bdf8]/50 sm:w-[520px]">
+                    <Search className="h-[16px] w-[16px] shrink-0 text-[#64748b]" />
+                    <input
+                      type="text"
+                      value={relaySearchQuery}
+                      onChange={(event) => setRelaySearchQuery(event.target.value)}
+                      placeholder="Search relays... (e.g. domain, country, keyword)"
+                      aria-label="Search relays"
+                      className="h-full w-full bg-transparent pl-[11px] text-[13px] text-white placeholder:text-[#64748b] outline-none"
+                    />
+                  </label>
+
+                  <a
+                    href={OFFICIAL_REGISTRY_SOURCE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-[44px] w-full shrink-0 items-center justify-center gap-[8px] whitespace-nowrap rounded-[8px] border border-[#1f3b58] bg-[#091c2e]/90 px-[14px] text-[12.5px] font-semibold text-[#7dd3fc] transition-colors hover:border-[#38bdf8]/55 hover:text-white sm:w-[158px]"
+                  >
+                    <span>Open registry.json</span>
+                    <ExternalLink className="h-[14px] w-[14px] shrink-0 text-[#7dd3fc]" />
+                  </a>
+                </div>
               </div>
 
-              <div className="mt-6 rounded-lg border border-border/80 bg-secondary/25 p-5 sm:p-6">
-                {relayDiscoveryLoading ? (
-                  <div className="rounded-md border border-border/70 bg-background px-4 py-3 text-sm text-text-muted">
-                    Loading known relays...
-                  </div>
-                ) : knownRelays.length === 0 ? (
-                  <div className="rounded-md border border-border/70 bg-background px-4 py-3 text-sm text-text-muted">
-                    No known relays discovered from this relay.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {knownRelays.map((relay) => {
-                      const releaseLabel = relayReleaseLabel(
-                        relayReleases.versions,
-                        relay,
-                        relayReleases.discovery
-                      );
+              <div className="mt-[6px] grid grid-cols-1 gap-x-[17px] gap-y-[9px] md:grid-cols-2 lg:grid-cols-3">
+                {filteredRelays.map((relay) => {
+                  const releaseLabel = relayReleaseLabel(
+                    relayReleases.versions,
+                    relay,
+                    relayReleases.discovery
+                  );
+                  const isCopied = copiedRelayURL === relay.relayURL;
 
-                      return (
-                        <div
-                          key={relay.relayURL}
-                          className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border/70 bg-background px-4 py-3"
+                  return (
+                    <div
+                      key={relay.relayURL}
+                      className="flex h-[43px] min-w-0 items-center justify-between gap-3 rounded-[8px] border border-[#1b2c40] bg-[#0a1829]/90 px-[16px] transition-colors hover:border-[#294360]"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-[14px]">
+                        <Globe className="size-[18px] shrink-0 text-[#8ab4d8]" />
+                        <a
+                          href={relay.relayURL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={relay.relayURL}
+                          className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium text-[#e2e8f0] underline-offset-4 hover:text-white hover:underline"
                         >
-                          <a
-                            href={relay.relayURL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[13px] text-foreground underline-offset-4 hover:underline sm:text-sm"
-                          >
-                            {relay.relayURL}
-                          </a>
-                          {releaseLabel && (
-                            <span className="shrink-0 rounded-sm bg-secondary/70 px-2.5 py-1 font-mono text-[11px] font-medium text-text-muted ring-1 ring-border">
-                              {releaseLabel}
-                            </span>
+                          {formatRelayDisplayURL(relay.relayURL)}
+                        </a>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-[18px]">
+                        {releaseLabel && (
+                          <span className="shrink-0 rounded-[5px] border border-[#2d4a73]/55 bg-[#1b2d52]/85 px-[10px] py-[3px] font-mono text-[11px] font-semibold text-[#7dd3fc]">
+                            {releaseLabel}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void copyRelayURL(relay.relayURL, relay.relayURL)}
+                          aria-label={`Copy ${relay.relayURL}`}
+                          title={isCopied ? "Copied!" : "Copy relay URL"}
+                          className="inline-flex cursor-pointer items-center justify-center text-[#94a3b8] transition-colors hover:text-white"
+                        >
+                          {isCopied ? (
+                            <Check className="size-[15px] text-[#48f0e8]" />
+                          ) : (
+                            <Copy className="size-[15px]" />
                           )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </section>
-          </main>
-        </div>
+            </div>
+          </section>
+        </main>
+
         {publicFooter}
       </div>
     </div>
