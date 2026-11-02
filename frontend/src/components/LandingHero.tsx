@@ -1,6 +1,75 @@
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import { ArrowRight, BookOpen, Zap } from "lucide-react";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
+
+// 90x45 equirectangular world landmask (4° lon x 4° lat resolution)
+const WORLD_LANDMASK_B64 =
+  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/8AAAAAAAAAAAAD/8AAAAAAAAAAAAB/8AAAP//gAD//4AfwAf/////8H//4AfAA//////+D//4eAAD//////8AA//fAAZ7/////wAAf//gAbj////zgAAP//wAPz////wAAAP/8AAO7////wAAAP/4AAYd////4AAAH/wAADA///5QAAAD/gAAf5///4AAAAB9gAA/////4AAAAB8AAB//+P/wAAAAAeAAB//8HvAAAAAAHAAB//4HHAAAAAABgAB//8CHEAAAAAAfAA//8ADEAAAAAAfwAB/4ACIAAAAAAf4AA/wADYAAAAAAf+AA/gABwwAAAAAf/AA/gAAAEAAAAAP/AA/gAAAIAAAAAH+AA/gAAD4AAAAAH+AA/IAAP8AAAAAH8AAfIAAf+AAAAAH4AAeAAAf+AAAAAHwAAcAAAP+AAAAAHgAAAAAAAeAAAAAHAAAAAAAAACAAAAGAAAAAAAAAEAAAAGAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+interface SpherePoint {
+  lat: number;
+  lon: number;
+  cosLat: number;
+  sinLat: number;
+  coastal: boolean;
+}
+
+const GLOBE_LAND_POINTS: ReadonlyArray<SpherePoint> = (() => {
+  const binary =
+    typeof atob === "function"
+      ? atob(WORLD_LANDMASK_B64)
+      : "";
+  if (!binary) {
+    return [];
+  }
+
+  const cols = 90;
+  const rows = 45;
+  const isLandCell = (r: number, c: number): boolean => {
+    if (r < 0 || r >= rows) return false;
+    const wrappedCol = ((c % cols) + cols) % cols;
+    const bitIndex = r * cols + wrappedCol;
+    const byteIndex = bitIndex >> 3;
+    const bitOffset = 7 - (bitIndex & 7);
+    return ((binary.charCodeAt(byteIndex) >> bitOffset) & 1) === 1;
+  };
+
+  const sampleLand = (latDeg: number, lonDeg: number): { land: boolean; coastal: boolean } => {
+    const r = Math.floor((88 - latDeg) / 4);
+    const c = Math.floor((lonDeg + 180) / 4);
+    const land = isLandCell(r, c);
+    if (!land) return { land: false, coastal: false };
+    const coastal =
+      !isLandCell(r - 1, c) ||
+      !isLandCell(r + 1, c) ||
+      !isLandCell(r, c - 1) ||
+      !isLandCell(r, c + 1);
+    return { land: true, coastal };
+  };
+
+  const points: SpherePoint[] = [];
+  // Uniform spherical lattice: latitude rings every 2.5°, longitude steps scaled by cos(lat)
+  for (let latDeg = -76; latDeg <= 82; latDeg += 2.5) {
+    const lat = (latDeg * Math.PI) / 180;
+    const cosLat = Math.cos(lat);
+    const sinLat = Math.sin(lat);
+    const ringSteps = Math.max(12, Math.round(148 * cosLat));
+    for (let i = 0; i < ringSteps; i += 1) {
+      const lonDeg = -180 + (i / ringSteps) * 360;
+      const { land, coastal } = sampleLand(latDeg, lonDeg);
+      if (land) {
+        points.push({
+          lat,
+          lon: (lonDeg * Math.PI) / 180,
+          cosLat,
+          sinLat,
+          coastal,
+        });
+      }
+    }
+  }
+  return points;
+})();
 
 const STARS: ReadonlyArray<{ cx: number; cy: number; r: number; o: number }> = [
   { cx: 68, cy: 42, r: 0.9, o: 0.45 },
@@ -30,21 +99,378 @@ const OUTGOING_BEAMS: ReadonlyArray<{
   nx: number;
   ny: number;
   color: string;
+  delay: string;
 }> = [
-  { d: "M 1166,180 Q 1206,120 1264,95", nx: 1264, ny: 95, color: "#67f9f0" },
-  { d: "M 1170,185 Q 1264,112 1388,128", nx: 1388, ny: 128, color: "#7dd3fc" },
-  { d: "M 1172,191 Q 1252,148 1330,174", nx: 1330, ny: 174, color: "#5eead4" },
-  { d: "M 1172,198 Q 1295,192 1418,278", nx: 1418, ny: 278, color: "#67e8f9" },
-  { d: "M 1170,204 Q 1258,216 1338,286", nx: 1338, ny: 286, color: "#5eead4" },
-  { d: "M 1166,210 Q 1206,224 1246,252", nx: 1246, ny: 252, color: "#67f9f0" },
+  { d: "M 1166,180 Q 1206,120 1264,95", nx: 1264, ny: 95, color: "#67f9f0", delay: "0s" },
+  { d: "M 1170,185 Q 1264,112 1388,128", nx: 1388, ny: 128, color: "#7dd3fc", delay: "0.4s" },
+  { d: "M 1172,191 Q 1252,148 1330,174", nx: 1330, ny: 174, color: "#5eead4", delay: "0.8s" },
+  { d: "M 1172,198 Q 1295,192 1418,278", nx: 1418, ny: 278, color: "#67e8f9", delay: "0.2s" },
+  { d: "M 1170,204 Q 1258,216 1338,286", nx: 1338, ny: 286, color: "#5eead4", delay: "0.6s" },
+  { d: "M 1166,210 Q 1206,224 1246,252", nx: 1246, ny: 252, color: "#67f9f0", delay: "1.0s" },
 ];
+
+function RotatingGlobe3DCanvas({ className }: { className?: string }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const width = 420;
+    const height = 360;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+
+    const cx = 196;
+    const cy = 195;
+    const R = 154;
+
+    // 3D Axial tilt: pitch (-16°) and roll (+9°)
+    const pitch = (-16 * Math.PI) / 180;
+    const roll = (9 * Math.PI) / 180;
+    const cosPitch = Math.cos(pitch);
+    const sinPitch = Math.sin(pitch);
+    const cosRoll = Math.cos(roll);
+    const sinRoll = Math.sin(roll);
+
+    const project3D = (lat: number, lon: number, radius: number = R) => {
+      const cosLat = Math.cos(lat);
+      const sinLat = Math.sin(lat);
+      const x0 = cosLat * Math.sin(lon);
+      const y0 = -sinLat;
+      const z0 = cosLat * Math.cos(lon);
+
+      // Rotate around X (pitch)
+      const y1 = y0 * cosPitch - z0 * sinPitch;
+      const z1 = y0 * sinPitch + z0 * cosPitch;
+      // Rotate around Z (roll)
+      const x2 = x0 * cosRoll - y1 * sinRoll;
+      const y2 = x0 * sinRoll + y1 * cosRoll;
+
+      // Subtle perspective factor so front hemisphere pops out in 3D
+      const perspective = 1 + z1 * 0.12;
+      return {
+        x: cx + x2 * radius * perspective,
+        y: cy + y2 * radius * perspective,
+        nx: x2,
+        ny: y2,
+        nz: z1,
+      };
+    };
+
+    const drawOrbitHalf = (
+      frontHemisphere: boolean,
+      tiltX: number,
+      tiltZ: number,
+      orbitRadius: number,
+      timeSec: number,
+      color: string
+    ) => {
+      const steps = 96;
+      const cX = Math.cos(tiltX);
+      const sX = Math.sin(tiltX);
+      const cZ = Math.cos(tiltZ);
+      const sZ = Math.sin(tiltZ);
+
+      ctx.save();
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i <= steps; i += 1) {
+        const theta = (i / steps) * Math.PI * 2;
+        const ox = Math.cos(theta) * orbitRadius;
+        const oz = Math.sin(theta) * orbitRadius;
+        const oy1 = -oz * sX;
+        const oz1 = oz * cX;
+        const ox2 = ox * cZ - oy1 * sZ;
+        const oy2 = ox * sZ + oy1 * cZ;
+
+        const isFront = oz1 >= 0;
+        if (isFront === frontHemisphere) {
+          const px = cx + ox2;
+          const py = cy + oy2;
+          if (!started) {
+            ctx.moveTo(px, py);
+            started = true;
+          } else {
+            ctx.lineTo(px, py);
+          }
+        } else {
+          started = false;
+        }
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = frontHemisphere ? 1.25 : 0.8;
+      ctx.globalAlpha = frontHemisphere ? 0.42 : 0.14;
+      ctx.stroke();
+
+      // Orbiting satellite pulse along this ring
+      const satAngle = timeSec * 0.85 + (tiltZ > 0 ? 1.2 : 3.9);
+      const sx = Math.cos(satAngle) * orbitRadius;
+      const sz = Math.sin(satAngle) * orbitRadius;
+      const sy1 = -sz * sX;
+      const sz1 = sz * cX;
+      if ((sz1 >= 0) === frontHemisphere) {
+        const sx2 = sx * cZ - sy1 * sZ;
+        const sy2 = sx * sZ + sy1 * cZ;
+        const px = cx + sx2;
+        const py = cy + sy2;
+        const grad = ctx.createRadialGradient(px, py, 0, px, py, 8);
+        grad.addColorStop(0, "#ffffff");
+        grad.addColorStop(0.35, "#5efce8");
+        grad.addColorStop(1, "rgba(94, 252, 232, 0)");
+        ctx.globalAlpha = frontHemisphere ? 0.95 : 0.25;
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(px, py, 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    };
+
+    const renderFrame = (timeMs: number) => {
+      const timeSec = timeMs * 0.001;
+      // Start at lon = +18° so Americas (left), Europe/Africa (center-right), and Asia (right) align at t=0
+      const rotationLon = 0.32 + timeSec * 0.24;
+
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, width, height);
+
+      // 1. Back half of 3D orbital rings (occluded behind the sphere)
+      drawOrbitHalf(false, 1.18, -0.28, R * 1.16, timeSec, "#38bdf8");
+      drawOrbitHalf(false, 1.26, 0.36, R * 1.09, -timeSec * 0.8, "#818cf8");
+
+      // 2. Outer Atmospheric 3D Corona Halo
+      const corona = ctx.createRadialGradient(cx - 12, cy - 8, R * 0.72, cx, cy, R * 1.24);
+      corona.addColorStop(0, "rgba(56, 249, 240, 0.22)");
+      corona.addColorStop(0.55, "rgba(59, 130, 246, 0.24)");
+      corona.addColorStop(0.8, "rgba(129, 140, 248, 0.14)");
+      corona.addColorStop(1, "rgba(2, 12, 27, 0)");
+      ctx.fillStyle = corona;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R * 1.24, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 3. 3D Sphere Volumetric Body
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.clip();
+
+      // Deep ocean sphere gradient with top-left light source from the Portal Ring
+      const sphereGrad = ctx.createRadialGradient(
+        cx - R * 0.38,
+        cy - R * 0.24,
+        R * 0.06,
+        cx + R * 0.1,
+        cy + R * 0.12,
+        R * 1.08
+      );
+      sphereGrad.addColorStop(0, "#10457d");
+      sphereGrad.addColorStop(0.34, "#0d2a5e");
+      sphereGrad.addColorStop(0.68, "#09153c");
+      sphereGrad.addColorStop(1, "#020718");
+      ctx.fillStyle = sphereGrad;
+      ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+      // Eastern limb violet nebula reflection
+      const violetLimb = ctx.createRadialGradient(
+        cx + R * 0.55,
+        cy - R * 0.15,
+        R * 0.05,
+        cx + R * 0.45,
+        cy - R * 0.05,
+        R * 0.9
+      );
+      violetLimb.addColorStop(0, "rgba(139, 92, 246, 0.34)");
+      violetLimb.addColorStop(0.6, "rgba(79, 70, 229, 0.14)");
+      violetLimb.addColorStop(1, "rgba(15, 23, 42, 0)");
+      ctx.fillStyle = violetLimb;
+      ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+      // 4. Back-Hemisphere Translucent Continents (nz < 0) for true 3D glass depth
+      ctx.fillStyle = "rgba(99, 102, 241, 0.17)";
+      ctx.beginPath();
+      for (let i = 0; i < GLOBE_LAND_POINTS.length; i += 1) {
+        const pt = GLOBE_LAND_POINTS[i];
+        const lon = pt.lon + rotationLon;
+        const x0 = pt.cosLat * Math.sin(lon);
+        const y0 = -pt.sinLat;
+        const z0 = pt.cosLat * Math.cos(lon);
+        const y1 = y0 * cosPitch - z0 * sinPitch;
+        const z1 = y0 * sinPitch + z0 * cosPitch;
+        if (z1 < -0.05) {
+          const x2 = x0 * cosRoll - y1 * sinRoll;
+          const y2 = x0 * sinRoll + y1 * cosRoll;
+          const perspective = 1 + z1 * 0.12;
+          const sx = cx + x2 * R * perspective;
+          const sy = cy + y2 * R * perspective;
+          ctx.moveTo(sx + 0.85, sy);
+          ctx.arc(sx, sy, 0.85, 0, Math.PI * 2);
+        }
+      }
+      ctx.fill();
+
+      // 5. 3D Rotating Spherical Graticule (Meridians & Parallels)
+      ctx.lineWidth = 0.75;
+      ctx.strokeStyle = "rgba(94, 252, 232, 0.13)";
+      for (let m = 0; m < 12; m += 1) {
+        const merLon = rotationLon + (m * Math.PI) / 6;
+        ctx.beginPath();
+        let drawing = false;
+        for (let latStep = -80; latStep <= 80; latStep += 8) {
+          const p = project3D((latStep * Math.PI) / 180, merLon);
+          if (p.nz >= 0) {
+            if (!drawing) {
+              ctx.moveTo(p.x, p.y);
+              drawing = true;
+            } else {
+              ctx.lineTo(p.x, p.y);
+            }
+          } else {
+            drawing = false;
+          }
+        }
+        ctx.stroke();
+      }
+
+      for (let latDeg = -60; latDeg <= 60; latDeg += 30) {
+        const latRad = (latDeg * Math.PI) / 180;
+        ctx.beginPath();
+        let drawing = false;
+        for (let lonStep = 0; lonStep <= 360; lonStep += 8) {
+          const p = project3D(latRad, rotationLon + (lonStep * Math.PI) / 180);
+          if (p.nz >= 0) {
+            if (!drawing) {
+              ctx.moveTo(p.x, p.y);
+              drawing = true;
+            } else {
+              ctx.lineTo(p.x, p.y);
+            }
+          } else {
+            drawing = false;
+          }
+        }
+        ctx.stroke();
+      }
+
+      // 6. Front-Hemisphere 3D Continent Dot Matrix (nz >= 0) with 3D Portal Lighting
+      for (let i = 0; i < GLOBE_LAND_POINTS.length; i += 1) {
+        const pt = GLOBE_LAND_POINTS[i];
+        const lon = pt.lon + rotationLon;
+        const x0 = pt.cosLat * Math.sin(lon);
+        const y0 = -pt.sinLat;
+        const z0 = pt.cosLat * Math.cos(lon);
+        const y1 = y0 * cosPitch - z0 * sinPitch;
+        const z1 = y0 * sinPitch + z0 * cosPitch;
+
+        if (z1 >= 0) {
+          const x2 = x0 * cosRoll - y1 * sinRoll;
+          const y2 = x0 * sinRoll + y1 * cosRoll;
+          const perspective = 1 + z1 * 0.12;
+          const sx = cx + x2 * R * perspective;
+          const sy = cy + y2 * R * perspective;
+
+          // Distance to Portal Ring light source at (-0.52, 0.0, 0.85)
+          const portalLight = Math.max(0, -x2 * 0.55 - y2 * 0.1 + z1 * 0.82);
+          const dotRadius = (pt.coastal ? 1.15 : 0.95) + z1 * 0.55 + portalLight * 0.25;
+          const alpha = Math.min(1, 0.35 + z1 * 0.55 + (pt.coastal ? 0.18 : 0));
+
+          if (portalLight > 0.58) {
+            ctx.fillStyle = `rgba(110, 252, 242, ${alpha.toFixed(2)})`;
+          } else if (x2 < 0.18) {
+            ctx.fillStyle = `rgba(96, 185, 252, ${alpha.toFixed(2)})`;
+          } else {
+            ctx.fillStyle = `rgba(154, 146, 252, ${alpha.toFixed(2)})`;
+          }
+
+          ctx.beginPath();
+          ctx.arc(sx, sy, dotRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // 7. 3D Inner Fresnel Rim & Specular Glint
+      const fresnel = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, R);
+      fresnel.addColorStop(0, "rgba(56, 189, 248, 0)");
+      fresnel.addColorStop(0.76, "rgba(56, 189, 248, 0.08)");
+      fresnel.addColorStop(0.93, "rgba(94, 252, 232, 0.32)");
+      fresnel.addColorStop(1, "rgba(165, 180, 252, 0.68)");
+      ctx.fillStyle = fresnel;
+      ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+      // Specular highlight near top-left
+      const spec = ctx.createRadialGradient(
+        cx - R * 0.45,
+        cy - R * 0.45,
+        0,
+        cx - R * 0.45,
+        cy - R * 0.45,
+        R * 0.65
+      );
+      spec.addColorStop(0, "rgba(255, 255, 255, 0.22)");
+      spec.addColorStop(0.45, "rgba(94, 252, 232, 0.08)");
+      spec.addColorStop(1, "rgba(94, 252, 232, 0)");
+      ctx.fillStyle = spec;
+      ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+      ctx.restore();
+
+      // 8. Crisp 3D Outer Rim Highlight Arc
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, -Math.PI * 0.88, -Math.PI * 0.08);
+      const rimGrad = ctx.createLinearGradient(cx - R, cy - R * 0.6, cx + R, cy - R * 0.4);
+      rimGrad.addColorStop(0, "#5efce8");
+      rimGrad.addColorStop(0.5, "#38bdf8");
+      rimGrad.addColorStop(1, "#a78bfa");
+      ctx.strokeStyle = rimGrad;
+      ctx.lineWidth = 2.4;
+      ctx.shadowColor = "#38f9f0";
+      ctx.shadowBlur = 12;
+      ctx.stroke();
+      ctx.restore();
+
+      // 9. Front half of 3D orbital rings (crossing in front of the sphere)
+      drawOrbitHalf(true, 1.18, -0.28, R * 1.16, timeSec, "#5efce8");
+      drawOrbitHalf(true, 1.26, 0.36, R * 1.09, -timeSec * 0.8, "#a5b4fc");
+
+      ctx.restore();
+    };
+
+    // Draw initial frame synchronously so first paint & screenshots have full 3D globe
+    renderFrame(0);
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) {
+      return;
+    }
+
+    let rafId = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      renderFrame(now - start);
+      rafId = window.requestAnimationFrame(tick);
+    };
+    rafId = window.requestAnimationFrame(tick);
+
+    return () => window.cancelAnimationFrame(rafId);
+  }, []);
+
+  return <canvas ref={canvasRef} aria-hidden="true" className={className} />;
+}
 
 function HeroSceneSVG({
   viewBox = "0 0 1672 360",
   className = "h-full w-full",
+  transparentBackground = false,
 }: {
   viewBox?: string;
   className?: string;
+  transparentBackground?: boolean;
 }) {
   const uid = useId().replace(/:/g, "");
 
@@ -83,26 +509,6 @@ function HeroSceneSVG({
           <stop offset="100%" stopColor="#020c1b" stopOpacity="0" />
         </radialGradient>
 
-        <radialGradient id={`${uid}-sphere-fill`} cx="1185" cy="142" r="210" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#0d3b6e" />
-          <stop offset="42%" stopColor="#112255" />
-          <stop offset="78%" stopColor="#091336" />
-          <stop offset="100%" stopColor="#030a1c" />
-        </radialGradient>
-
-        <linearGradient id={`${uid}-sphere-rim`} x1="1090" y1="60" x2="1385" y2="310" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#5efce8" stopOpacity="0.95" />
-          <stop offset="36%" stopColor="#38bdf8" stopOpacity="0.75" />
-          <stop offset="72%" stopColor="#818cf8" stopOpacity="0.65" />
-          <stop offset="100%" stopColor="#1e1b4b" stopOpacity="0.15" />
-        </linearGradient>
-
-        <linearGradient id={`${uid}-continent-tint`} x1="1090" y1="70" x2="1390" y2="300" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#67f9f0" />
-          <stop offset="45%" stopColor="#60a5fa" />
-          <stop offset="100%" stopColor="#a78bfa" />
-        </linearGradient>
-
         <linearGradient id={`${uid}-ring-stroke`} x1="1134" y1="130" x2="1177" y2="262" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#5efce8" />
           <stop offset="32%" stopColor="#ffffff" />
@@ -124,39 +530,6 @@ function HeroSceneSVG({
           <stop offset="100%" stopColor="#ffffff" stopOpacity="0.98" />
         </linearGradient>
 
-        <pattern
-          id={`${uid}-dots`}
-          x="0"
-          y="0"
-          width="4.2"
-          height="4.2"
-          patternUnits="userSpaceOnUse"
-        >
-          <circle cx="2.1" cy="2.1" r="1.2" fill="#ffffff" />
-        </pattern>
-
-        <mask id={`${uid}-continent-mask`}>
-          <rect x="1070" y="30" width="340" height="330" fill="black" />
-          <g fill={`url(#${uid}-dots)`}>
-            {/* North & Central America */}
-            <path d="M1102,115 C1112,92 1138,76 1168,78 C1184,82 1192,98 1182,116 C1172,134 1154,142 1146,158 C1138,172 1152,186 1164,196 L1152,204 C1134,192 1118,174 1108,154 Z" />
-            {/* Greenland & Northern Islands */}
-            <path d="M1176,54 C1194,48 1218,52 1228,64 C1222,76 1204,82 1186,76 Z" />
-            {/* South America */}
-            <path d="M1168,208 C1186,206 1208,218 1216,238 C1224,258 1214,288 1198,318 C1186,332 1176,326 1174,304 C1172,276 1162,242 1168,208 Z" />
-            {/* Europe & Scandinavia */}
-            <path d="M1238,72 C1262,62 1294,68 1312,84 C1318,102 1304,122 1286,134 C1266,142 1244,138 1236,122 C1230,106 1232,86 1238,72 Z" />
-            {/* Africa */}
-            <path d="M1238,152 C1264,146 1296,156 1316,178 C1332,202 1328,242 1308,278 C1294,298 1276,296 1268,274 C1258,244 1232,192 1238,152 Z" />
-            {/* Asia */}
-            <path d="M1308,82 C1338,78 1368,96 1384,128 C1394,158 1386,196 1364,222 C1346,216 1328,194 1318,166 C1308,138 1302,104 1308,82 Z" />
-          </g>
-        </mask>
-
-        <clipPath id={`${uid}-globe-clip`}>
-          <circle cx="1236" cy="195" r="154" />
-        </clipPath>
-
         <filter id={`${uid}-glow-strong`} x="-40%" y="-40%" width="180%" height="180%">
           <feGaussianBlur stdDeviation="8" result="blur1" />
           <feGaussianBlur stdDeviation="3" result="blur2" />
@@ -176,79 +549,34 @@ function HeroSceneSVG({
         </filter>
       </defs>
 
-      {/* Cosmic Background Glows */}
-      <rect width="1672" height="360" fill="#020c1b" />
-      <circle cx="265" cy="292" r="220" fill={`url(#${uid}-cta-glow)`} />
-      <circle cx="1256" cy="188" r="250" fill={`url(#${uid}-globe-nebula)`} />
-      <circle cx="1155" cy="196" r="230" fill={`url(#${uid}-portal-halo)`} />
-      <circle cx="1578" cy="352" r="130" fill={`url(#${uid}-corner-flare)`} />
+      {!transparentBackground && (
+        <>
+          <rect width="1672" height="360" fill="#020c1b" />
+          <circle cx="265" cy="292" r="220" fill={`url(#${uid}-cta-glow)`} />
+          <circle cx="1256" cy="188" r="250" fill={`url(#${uid}-globe-nebula)`} />
+          <circle cx="1155" cy="196" r="230" fill={`url(#${uid}-portal-halo)`} />
+          <circle cx="1578" cy="352" r="130" fill={`url(#${uid}-corner-flare)`} />
 
-      {/* Bottom-Right Lens Flare Rays */}
-      <g stroke="#5efce8" strokeOpacity="0.28" strokeWidth="1">
-        <line x1="1510" y1="360" x2="1625" y2="318" />
-        <line x1="1548" y1="360" x2="1604" y2="305" />
-      </g>
+          {/* Bottom-Right Lens Flare Rays */}
+          <g stroke="#5efce8" strokeOpacity="0.28" strokeWidth="1">
+            <line x1="1510" y1="360" x2="1625" y2="318" />
+            <line x1="1548" y1="360" x2="1604" y2="305" />
+          </g>
 
-      {/* Starfield */}
-      <g fill="#e0f2fe">
-        {STARS.map((star, idx) => (
-          <circle
-            key={idx}
-            cx={star.cx}
-            cy={star.cy}
-            r={star.r}
-            opacity={star.o}
-          />
-        ))}
-      </g>
-
-      {/* 3D Globe */}
-      <g clipPath={`url(#${uid}-globe-clip)`}>
-        <circle cx="1236" cy="195" r="154" fill={`url(#${uid}-sphere-fill)`} />
-
-        {/* Subtle Graticule Lines */}
-        <g fill="none" stroke="#38bdf8" strokeOpacity="0.11" strokeWidth="0.9">
-          <ellipse cx="1236" cy="195" rx="154" ry="52" />
-          <ellipse cx="1236" cy="195" rx="154" ry="108" />
-          <ellipse cx="1236" cy="195" rx="56" ry="154" />
-          <ellipse cx="1236" cy="195" rx="112" ry="154" />
-          <line x1="1082" y1="195" x2="1390" y2="195" />
-          <line x1="1236" y1="41" x2="1236" y2="349" />
-        </g>
-
-        {/* Dotted World Continents */}
-        <rect
-          x="1080"
-          y="40"
-          width="315"
-          height="310"
-          fill={`url(#${uid}-continent-tint)`}
-          mask={`url(#${uid}-continent-mask)`}
-          opacity="0.88"
-        />
-
-        {/* Inner Atmospheric Horizon Glow */}
-        <circle
-          cx="1236"
-          cy="195"
-          r="153"
-          fill="none"
-          stroke={`url(#${uid}-sphere-rim)`}
-          strokeWidth="4.5"
-          opacity="0.7"
-        />
-      </g>
-
-      {/* Outer Globe Rim Highlight Arc */}
-      <path
-        d="M 1104,116 A 154,154 0 0,1 1378,136"
-        fill="none"
-        stroke="#5efce8"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        filter={`url(#${uid}-glow-soft)`}
-        opacity="0.85"
-      />
+          {/* Starfield */}
+          <g fill="#e0f2fe">
+            {STARS.map((star, idx) => (
+              <circle
+                key={idx}
+                cx={star.cx}
+                cy={star.cy}
+                r={star.r}
+                opacity={star.o}
+              />
+            ))}
+          </g>
+        </>
+      )}
 
       {/* Sweeping Left Incoming Light Trails */}
       <path
@@ -273,38 +601,53 @@ function HeroSceneSVG({
         filter={`url(#${uid}-glow-soft)`}
       />
 
-      {/* Outgoing Relay Beams & Glowing Nodes */}
+      {/* Outgoing Relay Beams, Animated Pulses & Glowing Nodes */}
       <g filter={`url(#${uid}-glow-soft)`}>
         {OUTGOING_BEAMS.map((beam, idx) => (
           <g key={idx}>
             <path
+              id={`${uid}-beam-${idx}`}
               d={beam.d}
               fill="none"
               stroke={`url(#${uid}-beam-grad)`}
               strokeWidth="2.1"
               strokeLinecap="round"
             />
-            <circle cx={beam.nx} cy={beam.ny} r="5.5" fill={beam.color} opacity="0.38" />
-            <circle cx={beam.nx} cy={beam.ny} r="2.7" fill="#ffffff" />
+            <circle r="2.3" fill="#ffffff">
+              <animateMotion
+                dur="2.6s"
+                begin={beam.delay}
+                repeatCount="indefinite"
+                path={beam.d}
+              />
+            </circle>
+            <circle cx={beam.nx} cy={beam.ny} r="6.5" fill={beam.color} opacity="0.38">
+              <animate
+                attributeName="r"
+                values="5;8;5"
+                dur="2.4s"
+                begin={beam.delay}
+                repeatCount="indefinite"
+              />
+            </circle>
+            <circle cx={beam.nx} cy={beam.ny} r="2.8" fill="#ffffff" />
           </g>
         ))}
       </g>
 
-      {/* Glowing Portal Ring */}
+      {/* Glowing 3D-Tilted Portal Ring */}
       <g transform="rotate(5 1155 196)">
-        {/* Outer Neon Bloom */}
         <ellipse
           cx="1155"
           cy="196"
-          rx="22"
+          rx="22.5"
           ry="64.5"
           fill="none"
           stroke="#22d3ee"
           strokeWidth="10"
-          opacity="0.65"
+          opacity="0.68"
           filter={`url(#${uid}-glow-strong)`}
         />
-        {/* Portal Void Interior */}
         <ellipse
           cx="1155"
           cy="196"
@@ -313,7 +656,6 @@ function HeroSceneSVG({
           fill="#030d1e"
           fillOpacity="0.94"
         />
-        {/* Main Beveled Ring */}
         <ellipse
           cx="1155"
           cy="196"
@@ -321,10 +663,9 @@ function HeroSceneSVG({
           ry="63.5"
           fill="none"
           stroke={`url(#${uid}-ring-stroke)`}
-          strokeWidth="5.5"
+          strokeWidth="5.6"
           filter={`url(#${uid}-glow-soft)`}
         />
-        {/* Crisp White Inner Core */}
         <ellipse
           cx="1155"
           cy="196"
@@ -333,7 +674,7 @@ function HeroSceneSVG({
           fill="none"
           stroke="#ffffff"
           strokeWidth="1.8"
-          opacity="0.92"
+          opacity="0.94"
         />
       </g>
     </svg>
@@ -435,7 +776,18 @@ export function HeroBackdropGraphic() {
       className="pointer-events-none absolute inset-0 hidden justify-center overflow-hidden lg:flex"
     >
       <div className="relative h-[360px] w-[1672px] shrink-0">
+        {/* Base Cosmic Glows & Starfield */}
         <HeroSceneSVG viewBox="0 0 1672 360" className="h-full w-full" />
+
+        {/* Real 3D Rotating Globe Canvas (centered at x=1236, y=195) */}
+        <RotatingGlobe3DCanvas className="absolute top-0 left-[1040px] h-[360px] w-[420px]" />
+
+        {/* Foreground Portal Ring & Animated Beams */}
+        <HeroSceneSVG
+          viewBox="0 0 1672 360"
+          className="absolute inset-0 h-full w-full"
+          transparentBackground
+        />
 
         {/* Callout 1: Your machine (localhost) */}
         <div className="absolute top-[192px] left-[918px] flex h-[57px] w-[157px] items-center gap-[11px] whitespace-nowrap rounded-[12px] border border-[#38bdf8]/40 bg-[#07162c]/85 px-[13px] shadow-[0_0_24px_rgba(34,211,238,0.18)] backdrop-blur-md">
@@ -537,12 +889,18 @@ export function LandingHero() {
           </div>
         </div>
 
-        {/* Responsive Vector Graphic Stage for Tablet & Mobile (< lg) */}
+        {/* Responsive 3D Rotating Globe + Vector Stage for Tablet & Mobile (< lg) */}
         <div className="mt-6 flex justify-center lg:hidden">
           <div className="relative aspect-[710/320] w-full max-w-[620px] overflow-hidden rounded-xl border border-white/10 bg-[#020c1b]">
             <HeroSceneSVG viewBox="890 30 710 320" className="h-full w-full" />
+            <RotatingGlobe3DCanvas className="absolute top-[-8%] left-[21%] h-[112%] w-[59%]" />
+            <HeroSceneSVG
+              viewBox="890 30 710 320"
+              className="absolute inset-0 h-full w-full"
+              transparentBackground
+            />
 
-            <div className="absolute top-[50%] left-[4%] flex items-center gap-2 rounded-lg border border-[#38bdf8]/40 bg-[#07162c]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(34,211,238,0.18)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
+            <div className="absolute top-[50%] left-[4%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#38bdf8]/40 bg-[#07162c]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(34,211,238,0.18)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
               <CalloutLaptopIcon />
               <div className="leading-tight">
                 <p className="text-[10px] font-bold text-white sm:text-xs">Your machine</p>
@@ -550,7 +908,7 @@ export function LandingHero() {
               </div>
             </div>
 
-            <div className="absolute top-[22%] right-[3%] flex items-center gap-2 rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
+            <div className="absolute top-[22%] right-[3%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
               <CalloutRelaysIcon />
               <div className="leading-tight">
                 <p className="text-[10px] font-bold text-white sm:text-xs">Global relays</p>
@@ -558,7 +916,7 @@ export function LandingHero() {
               </div>
             </div>
 
-            <div className="absolute right-[2%] bottom-[6%] flex items-center gap-2 rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
+            <div className="absolute right-[2%] bottom-[6%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
               <CalloutPublicAccessIcon />
               <div className="leading-tight">
                 <p className="text-[10px] font-bold text-white sm:text-xs">Public access</p>
