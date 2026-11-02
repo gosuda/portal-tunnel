@@ -468,9 +468,6 @@ export function ServerListView({
             </svg>
             <span>PORTAL</span>
           </a>
-          <p className="text-[12.5px] text-[#8fa3b8] sm:ml-[14px]">
-            Public relay index and localhost tunnel launcher.
-          </p>
         </div>
 
         <nav
@@ -517,18 +514,12 @@ export function ServerListView({
             <div className="mx-auto w-full max-w-[1437px] px-4 py-6 sm:px-6 lg:px-[32px] lg:pt-[21px] lg:pb-[19px]">
               <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-[19px]">
                 <div className="lg:w-[307px] lg:shrink-0 lg:pt-[2px]">
-                  <p className="text-[11px] font-bold uppercase leading-none tracking-[0.08em] text-[#2dd4bf]">
-                    LIVE APPS
-                  </p>
                   <h2
                     id="live-servers-title"
-                    className="mt-[12px] text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
+                    className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
                   >
                     Live apps
                   </h2>
-                  <p className="mt-[13px] text-[12px] leading-[1.4] text-[#8fa3b8] lg:text-[11.5px] lg:whitespace-nowrap">
-                    Applications currently running on the PORTAL network.
-                  </p>
                 </div>
 
                 <div
@@ -594,18 +585,12 @@ export function ServerListView({
             <div className="mx-auto w-full max-w-[1437px] px-4 py-6 sm:px-6 lg:px-[32px] lg:pt-[20px] lg:pb-[20px]">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <p className="text-[11px] font-bold uppercase leading-none tracking-[0.08em] text-[#2dd4bf]">
-                    RELAYS
-                  </p>
                   <h2
                     id="public-relays-title"
-                    className="mt-[11px] text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
+                    className="text-[30px] font-extrabold leading-none tracking-[-0.01em] text-white"
                   >
                     Public relays
                   </h2>
-                  <p className="mt-[12px] text-[12.5px] leading-none text-[#8fa3b8]">
-                    A global directory of public PORTAL relays.
-                  </p>
                 </div>
 
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-[18px] lg:mt-[2px]">
@@ -615,7 +600,7 @@ export function ServerListView({
                       type="text"
                       value={relaySearchQuery}
                       onChange={(event) => setRelaySearchQuery(event.target.value)}
-                      placeholder="Search relays... (e.g. domain, country, keyword)"
+                      placeholder="Search relays by URL or version"
                       aria-label="Search relays"
                       className="h-full w-full bg-transparent pl-[11px] text-[13px] text-white placeholder:text-[#64748b] outline-none"
                     />

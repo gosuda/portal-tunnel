@@ -798,21 +798,19 @@ export function HeroBackdropGraphic() {
           </div>
         </div>
 
-        {/* Callout 2: Global relays worldwide */}
+        {/* Callout 2: Public relays */}
         <div className="absolute top-[102px] left-[1389px] flex h-[57px] w-[144px] items-center gap-[10px] whitespace-nowrap rounded-[12px] border border-[#818cf8]/40 bg-[#0b152e]/85 px-[12px] shadow-[0_0_22px_rgba(99,102,241,0.2)] backdrop-blur-md">
           <CalloutRelaysIcon />
           <div className="leading-[1.25]">
-            <p className="text-[12.5px] font-bold text-white">Global relays</p>
-            <p className="text-[11.5px] font-medium text-[#94a3b8]">worldwide</p>
+            <p className="text-[12.5px] font-bold text-white">Public relays</p>
           </div>
         </div>
 
-        {/* Callout 3: Public access for everyone */}
+        {/* Callout 3: Public access */}
         <div className="absolute top-[260px] left-[1430px] flex h-[55px] w-[144px] items-center gap-[10px] whitespace-nowrap rounded-[12px] border border-[#818cf8]/40 bg-[#0b152e]/85 px-[12px] shadow-[0_0_22px_rgba(99,102,241,0.2)] backdrop-blur-md">
           <CalloutPublicAccessIcon />
           <div className="leading-[1.25]">
             <p className="text-[12.5px] font-bold text-white">Public access</p>
-            <p className="text-[11.5px] font-medium text-[#94a3b8]">for everyone</p>
           </div>
         </div>
       </div>
@@ -835,29 +833,18 @@ export function LandingHero() {
 
       <div className="relative z-10 flex flex-col lg:block">
         <div className="w-full min-w-0 max-w-[785px]">
-          <div className="inline-flex h-[31px] max-w-full items-center gap-[9px] rounded-full border border-[#283c54] bg-[#071525]/85 px-[12px] backdrop-blur-sm sm:px-[14px]">
-            <span
-              aria-hidden="true"
-              className="h-[7px] w-[7px] shrink-0 rounded-full bg-[#22e58b] shadow-[0_0_8px_#22e58b]"
-            />
-            <span className="truncate font-mono text-[9.5px] font-medium uppercase tracking-[0.06em] text-[#cbd5e1] sm:text-[10.5px] sm:tracking-[0.09em]">
-              OPEN SOURCE &nbsp;·&nbsp; SELF-HOSTABLE &nbsp;·&nbsp; GLOBAL ACCESS
-            </span>
-          </div>
-
           <h1
             id="landing-title"
-            className="mt-[11px] font-display text-[30px] font-extrabold leading-[1.08] tracking-[-0.025em] text-white sm:text-[44px] lg:text-[55px] lg:whitespace-nowrap"
+            className="font-display text-[30px] font-extrabold leading-[1.08] tracking-[-0.025em] text-white sm:text-[44px] lg:text-[55px] lg:whitespace-nowrap"
           >
-            <span>Ship locally. </span>
+            <span>Tunnels for </span>
             <span className="bg-linear-to-r from-[#5bf7ea] via-[#3dddf4] to-[#26bae8] bg-clip-text text-transparent">
-              Share globally.
+              local services
             </span>
           </h1>
 
           <p className="mt-[9px] max-w-[575px] text-[14px] leading-[22px] font-normal text-[#b4c4d8] sm:text-[15.5px] sm:leading-[24px]">
-            Expose your local projects to the internet through a global network
-            <br className="hidden sm:inline" /> of public relays. Simple, fast, and open source.
+            Connect a local service to a public URL through a relay.
           </p>
 
           <div
@@ -911,8 +898,7 @@ export function LandingHero() {
             <div className="absolute top-[22%] right-[3%] flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#818cf8]/40 bg-[#0b152e]/85 px-2.5 py-1.5 shadow-[0_0_18px_rgba(99,102,241,0.2)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2">
               <CalloutRelaysIcon />
               <div className="leading-tight">
-                <p className="text-[10px] font-bold text-white sm:text-xs">Global relays</p>
-                <p className="text-[9px] font-medium text-[#94a3b8] sm:text-[11px]">worldwide</p>
+                <p className="text-[10px] font-bold text-white sm:text-xs">Public relays</p>
               </div>
             </div>
 
@@ -920,7 +906,6 @@ export function LandingHero() {
               <CalloutPublicAccessIcon />
               <div className="leading-tight">
                 <p className="text-[10px] font-bold text-white sm:text-xs">Public access</p>
-                <p className="text-[9px] font-medium text-[#94a3b8] sm:text-[11px]">for everyone</p>
               </div>
             </div>
           </div>
