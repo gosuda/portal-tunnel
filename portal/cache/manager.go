@@ -12,6 +12,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var (
+	errCacheDirectoryIsRequired = errors.New("cache directory is required")
+	errRelayCacheIsFull         = errors.New("relay cache is full")
+)
+
 // Manager owns both staging and published bytes. Registry operations only
 // mutate metadata; disk work never holds the registry's lock.
 type Manager struct {
@@ -47,7 +52,7 @@ func New(cfg Config, dir string) (*Manager, error) {
 		return nil, nil
 	}
 	if strings.TrimSpace(dir) == "" {
-		return nil, errors.New("cache directory is required")
+		return nil, errCacheDirectoryIsRequired
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -342,7 +347,7 @@ func (c *Manager) reserve(size int64) error {
 		}
 		if oldest == nil {
 			c.mu.Unlock()
-			return errors.New("relay cache is full")
+			return errRelayCacheIsFull
 		}
 		c.retireLocked(oldest)
 		c.mu.Unlock()

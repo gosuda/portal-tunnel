@@ -12,6 +12,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRegisterChallengeDomainOrURIExceeds = errors.New("register challenge domain or URI exceeds limits")
+	errSIWEMessageDoesNotMatchRegister     = errors.New("siwe message does not match register challenge")
+)
+
 const (
 	maxRegisterSIWEMessageBytes = 4 << 10
 	maxRegisterSIWETimeSkew     = time.Minute
@@ -36,7 +41,7 @@ func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string
 	// Host-derived fields are retained in the SIWE message and are not covered
 	// by the HTTP JSON body limit.
 	if len(domain) > 1024 || len(uri) > 4096 {
-		return nil, errors.New("register challenge domain or URI exceeds limits")
+		return nil, errRegisterChallengeDomainOrURIExceeds
 	}
 	if err := req.Metadata.Validate(); err != nil {
 		return nil, err
@@ -77,7 +82,7 @@ func (c *RegisterChallenge) Verify(req types.RegisterRequest, now time.Time) err
 		return ErrRegisterChallengeNotFound
 	}
 	if req.SIWEMessage != c.SIWEMessage {
-		return errors.New("siwe message does not match register challenge")
+		return errSIWEMessageDoesNotMatchRegister
 	}
 	if err := VerifySIWEMessage(c.SIWEMessage, req.SIWESignature, c.Request.Identity.Address, c.ExpiresAt, now); err != nil {
 		return ErrRegisterChallengeInvalidSignature
@@ -90,7 +95,7 @@ func (c *RegisterChallenge) Verify(req types.RegisterRequest, now time.Time) err
 // Only the challenge ID, nonce, and timing values come from the relay.
 func ValidateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, relayURL *url.URL, address string, now time.Time) error {
 	if challenge.ChallengeID == "" || !now.Before(challenge.ExpiresAt) {
-		return errors.New("relay returned an invalid or expired registration challenge")
+		return ErrInvalidRegisterSIWEChallenge
 	}
 	if invalidRegisterRelayURL(relayURL) || len(challenge.SIWEMessage) > maxRegisterSIWEMessageBytes {
 		return ErrInvalidRegisterSIWEChallenge

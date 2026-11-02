@@ -15,6 +15,12 @@ import (
 	"github.com/miekg/dns"
 )
 
+var (
+	errDnssecKeyPathIsRequired   = errors.New("dnssec key path is required")
+	errDnssecKeyDoesNotMatchZone = errors.New("dnssec key does not match zone or supported CSK parameters")
+	errInvalidDnssecPrivateKey   = errors.New("invalid dnssec private key")
+)
+
 const signatureLifetime = 24 * time.Hour
 const signatureRefresh = 12 * time.Hour
 const signatureSkew = 5 * time.Minute
@@ -23,7 +29,7 @@ const signatureSkew = 5 * time.Minute
 // an unreadable or malformed existing key: the parent DS may already trust it.
 func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if strings.TrimSpace(path) == "" {
-		return nil, nil, errors.New("dnssec key path is required")
+		return nil, nil, errDnssecKeyPathIsRequired
 	}
 	key := &dns.DNSKEY{Hdr: dns.RR_Header{Name: zone, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: recordTTL}, Flags: 257, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}
 	type storedKey struct {
@@ -82,12 +88,12 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	}
 	loaded, ok := rr.(*dns.DNSKEY)
 	if !ok {
-		return nil, nil, errors.New("dnssec key does not match zone or supported CSK parameters")
+		return nil, nil, errDnssecKeyDoesNotMatchZone
 	}
 	matchesZone := loaded.Hdr.Name == zone && loaded.Hdr.Class == dns.ClassINET
 	matchesCSK := loaded.Flags == key.Flags && loaded.Protocol == key.Protocol && loaded.Algorithm == key.Algorithm
 	if !matchesZone || !matchesCSK {
-		return nil, nil, errors.New("dnssec key does not match zone or supported CSK parameters")
+		return nil, nil, errDnssecKeyDoesNotMatchZone
 	}
 	loaded.Hdr.Ttl = recordTTL
 	private, err := loaded.NewPrivateKey(stored.PrivateKey)
@@ -96,7 +102,7 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	}
 	signer, ok := private.(crypto.Signer)
 	if !ok {
-		return nil, nil, errors.New("invalid dnssec private key")
+		return nil, nil, errInvalidDnssecPrivateKey
 	}
 	// The BIND parser does not check that the public and private keys match.
 	sig := &dns.RRSIG{KeyTag: loaded.KeyTag(), SignerName: zone, Algorithm: loaded.Algorithm, Inception: 1, Expiration: 2}

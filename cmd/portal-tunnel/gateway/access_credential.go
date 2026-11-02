@@ -13,6 +13,21 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var (
+	errIdentityProofAuthIdentityProofAuth     = errors.New("identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers")
+	errOIDCSettingsRequireOIDCApplicationAuth = errors.New("oidc settings require the oidc application auth provider")
+	errOIDCRequiresLeastOneAuthAllow          = errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+	errOIDCClientIDIsRequired                 = errors.New("oidc client id is required")
+	errTunnelIdentityIsRequired               = errors.New("tunnel identity is required")
+	errApplicationCredentialExpiryMustFuture  = errors.New("application credential expiry must be in the future")
+	errApplicationCredentialIsRequired        = errors.New("application credential is required")
+	errApplicationAuthHostIsRequired          = errors.New("application auth host is required")
+	errApplicationAuthHostMustHTTPSURL        = errors.New("application auth host must be an HTTPS URL or hostname without a path")
+	errApplicationCredentialIsInvalid         = errors.New("application credential is invalid")
+	errApplicationCredentialInvalidOrExpired  = errors.New("application credential is invalid or expired")
+	errApplicationCredentialSubjectMust1256   = errors.New("application credential subject must be 1 to 256 printable characters")
+)
+
 const (
 	ApplicationAuthProviderSIWE       = "siwe"
 	ApplicationAuthProviderCredential = "credential"
@@ -92,7 +107,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	proof := cfg.IdentityProof
 	if proof != "" {
 		if !cfg.IdentityHeaders {
-			return applicationAuthSettings{}, errors.New("identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers")
+			return applicationAuthSettings{}, errIdentityProofAuthIdentityProofAuth
 		}
 		if len(proof) < minIdentityProofLength || strings.ContainsFunc(proof, func(r rune) bool { return r < 0x21 || r > 0x7e }) {
 			return applicationAuthSettings{}, fmt.Errorf("identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least %d characters of visible ASCII without spaces", minIdentityProofLength)
@@ -103,21 +118,21 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	clientSecret := strings.TrimSpace(cfg.OIDCClientSecret)
 	if provider != ApplicationAuthProviderOIDC {
 		if issuer != "" || clientID != "" || clientSecret != "" {
-			return applicationAuthSettings{}, errors.New("oidc settings require the oidc application auth provider")
+			return applicationAuthSettings{}, errOIDCSettingsRequireOIDCApplicationAuth
 		}
 		return applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof}, nil
 	}
 	// An identity provider authenticates accounts it does not restrict to
 	// this application, so without an allowlist every one of them would pass.
 	if len(allowed) == 0 {
-		return applicationAuthSettings{}, errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+		return applicationAuthSettings{}, errOIDCRequiresLeastOneAuthAllow
 	}
 	issuerURL, err := normalizeOIDCIssuerURL(issuer)
 	if err != nil {
 		return applicationAuthSettings{}, err
 	}
 	if clientID == "" {
-		return applicationAuthSettings{}, errors.New("oidc client id is required")
+		return applicationAuthSettings{}, errOIDCClientIDIsRequired
 	}
 	return applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof, issuerURL: issuerURL, clientID: clientID, clientSecret: clientSecret}, nil
 }
@@ -169,7 +184,7 @@ func NormalizeApplicationAuthSubjects(values []string) ([]string, error) {
 // can be exchanged for the tunnel-local application session cookie.
 func IssueApplicationCredential(tunnelIdentity types.Identity, host, subject string, expiresAt time.Time) (string, error) {
 	if tunnelIdentity.Key() == "" {
-		return "", errors.New("tunnel identity is required")
+		return "", errTunnelIdentityIsRequired
 	}
 	host, err := NormalizeApplicationAuthHost(host)
 	if err != nil {
@@ -180,7 +195,7 @@ func IssueApplicationCredential(tunnelIdentity types.Identity, host, subject str
 		return "", err
 	}
 	if expiresAt.UTC().Unix() <= time.Now().UTC().Unix() {
-		return "", errors.New("application credential expiry must be in the future")
+		return "", errApplicationCredentialExpiryMustFuture
 	}
 	key, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
 	if err != nil {
@@ -206,7 +221,7 @@ func ApplicationCredentialRedeemURL(host, credential string) (string, error) {
 	}
 	credential = strings.TrimSpace(credential)
 	if credential == "" {
-		return "", errors.New("application credential is required")
+		return "", errApplicationCredentialIsRequired
 	}
 	return "https://" + host + applicationAuthLoginPath + "#credential=" + url.QueryEscape(credential), nil
 }
@@ -217,19 +232,19 @@ func ApplicationCredentialRedeemURL(host, credential string) (string, error) {
 func NormalizeApplicationAuthHost(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", errors.New("application auth host is required")
+		return "", errApplicationAuthHostIsRequired
 	}
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", errors.New("application auth host must be an HTTPS URL or hostname without a path")
+		return "", fmt.Errorf("%w: %w", errApplicationAuthHostMustHTTPSURL, err)
 	}
 	validAuthority := strings.EqualFold(parsed.Scheme, "https") && parsed.Host != "" && parsed.User == nil
 	rootPath := parsed.Path == "" || parsed.Path == "/"
 	if !validAuthority || !rootPath || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("application auth host must be an HTTPS URL or hostname without a path")
+		return "", errApplicationAuthHostMustHTTPSURL
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Host), ":443")
 	return strings.TrimSuffix(host, "."), nil
@@ -253,20 +268,20 @@ func sameApplicationHost(a, b string) bool {
 func verifyApplicationCredential(key []byte, tunnelIdentity types.Identity, host, credential string, now time.Time) (applicationCredentialClaims, error) {
 	credential = strings.TrimSpace(credential)
 	if !strings.HasPrefix(credential, applicationCredentialPrefix) {
-		return applicationCredentialClaims{}, errors.New("application credential is invalid")
+		return applicationCredentialClaims{}, errApplicationCredentialIsInvalid
 	}
 	var claims applicationCredentialClaims
 	if err := decodeSignedApplicationAuthJSON(key, strings.TrimPrefix(credential, applicationCredentialPrefix), &claims); err != nil || claims.Version != applicationCredentialVersion || claims.Tunnel != tunnelIdentity.Key() {
-		return applicationCredentialClaims{}, errors.New("application credential is invalid")
+		return applicationCredentialClaims{}, errApplicationCredentialIsInvalid
 	}
 	// A credential issued before the default port was dropped from the name still
 	// carries it, and names the same application.
 	if !sameApplicationHost(claims.Host, host) || !now.UTC().Before(time.Unix(claims.ExpiresAt, 0)) {
-		return applicationCredentialClaims{}, errors.New("application credential is invalid or expired")
+		return applicationCredentialClaims{}, errApplicationCredentialInvalidOrExpired
 	}
 	subject, err := normalizeApplicationAuthSubject(claims.Subject)
 	if err != nil {
-		return applicationCredentialClaims{}, errors.New("application credential is invalid")
+		return applicationCredentialClaims{}, errApplicationCredentialIsInvalid
 	}
 	claims.Subject = subject
 	return claims, nil
@@ -275,7 +290,7 @@ func verifyApplicationCredential(key []byte, tunnelIdentity types.Identity, host
 func normalizeApplicationAuthSubject(subject string) (string, error) {
 	subject = strings.TrimSpace(subject)
 	if subject == "" || len(subject) > 256 || strings.ContainsFunc(subject, unicode.IsControl) {
-		return "", errors.New("application credential subject must be 1 to 256 printable characters")
+		return "", errApplicationCredentialSubjectMust1256
 	}
 	return subject, nil
 }

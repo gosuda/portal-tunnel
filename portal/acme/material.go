@@ -14,6 +14,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var errRelayCertificateIsNotLoaded = errors.New("relay certificate is not loaded")
+
 // TLSMaterial is the relay certificate chain with its private key, as served.
 // A renewal replaces the whole value, so the chain PEM and the parsed
 // certificate with its key always belong together.
@@ -45,7 +47,7 @@ func (m *Manager) TLSMaterial() *TLSMaterial {
 func (m *Manager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	material := m.TLSMaterial()
 	if material == nil {
-		return nil, errors.New("relay certificate is not loaded")
+		return nil, errRelayCertificateIsNotLoaded
 	}
 	return &material.Certificate, nil
 }

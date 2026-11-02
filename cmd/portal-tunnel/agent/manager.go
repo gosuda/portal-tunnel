@@ -20,6 +20,16 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errTunnelUpdateRequiresLeastOneField  = errors.New("tunnel update requires at least one field")
+	errMaxActiveRelaysMustPositiveInteger = errors.New("max_active_relays must be a positive integer")
+	errAuthEmptyWhichTurnsSignOff         = errors.New("auth is empty, which turns sign-in off: leave out the other auth fields")
+	errTunnelNameIsRequired               = errors.New("tunnel name is required")
+	errTargetCannotCombinedHTTPRoutes     = errors.New("target cannot be combined with http_routes")
+	errMaxActiveRelaysCannotNegative      = errors.New("max_active_relays cannot be negative")
+	errTunnelIDIsRequired                 = errors.New("tunnel id is required")
+)
+
 const managedTunnelRetryInterval = 30 * time.Second
 
 type manager struct {
@@ -130,14 +140,14 @@ func (m *manager) DisconnectRelay(id, relayURL string) error {
 
 func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 	if req.Empty() {
-		return errors.New("tunnel update requires at least one field")
+		return errTunnelUpdateRequiresLeastOneField
 	}
 	updateMetadata := req.Metadata != nil && !req.Metadata.Empty()
 	updateMaxActiveRelays := req.MaxActiveRelays != nil
 	if err := m.updateTunnelConfig(id, func(tunnel *TunnelConfig) error {
 		if req.MaxActiveRelays != nil {
 			if *req.MaxActiveRelays <= 0 {
-				return errors.New("max_active_relays must be a positive integer")
+				return errMaxActiveRelaysMustPositiveInteger
 			}
 			tunnel.MaxActiveRelays = *req.MaxActiveRelays
 		}
@@ -178,7 +188,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) error {
 		tunnel.Auth = *r.Auth
 		if strings.TrimSpace(tunnel.Auth) == "" {
 			if r.AuthAllowedWallets != nil || r.AuthIdentityHeaders != nil || r.AuthOIDCIssuer != nil || r.AuthOIDCClientID != nil || r.AuthOIDCClientSecret != nil {
-				return errors.New("auth is empty, which turns sign-in off: leave out the other auth fields")
+				return errAuthEmptyWhichTurnsSignOff
 			}
 			tunnel.AuthAllowedWallets = nil
 			tunnel.AuthIdentityHeaders = false
@@ -217,7 +227,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	name := strings.TrimSpace(req.Name)
 	id = cmp.Or(id, agentTunnelID(name))
 	if id == "" {
-		return errors.New("tunnel name is required")
+		return errTunnelNameIsRequired
 	}
 	if err := validateAgentPathComponent("tunnel id", id); err != nil {
 		return err
@@ -234,7 +244,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		})
 	}
 	if target != "" && len(httpRoutes) > 0 {
-		return errors.New("target cannot be combined with http_routes")
+		return errTargetCannotCombinedHTTPRoutes
 	}
 	if target == "" && serve == "" && len(httpRoutes) == 0 {
 		target = defaultTargetAddr
@@ -249,7 +259,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		discovery = *req.Discovery
 	}
 	if req.MaxActiveRelays < 0 {
-		return errors.New("max_active_relays cannot be negative")
+		return errMaxActiveRelaysCannotNegative
 	}
 	x402 := req.Copy()
 	x402.PayTo = strings.TrimSpace(x402.PayTo)
@@ -376,7 +386,7 @@ func (m *manager) DeleteTunnel(id string) error {
 
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return errors.New("tunnel id is required")
+		return errTunnelIDIsRequired
 	}
 	cfg, path, mode, err := m.loadConfigDocument()
 	if err != nil {

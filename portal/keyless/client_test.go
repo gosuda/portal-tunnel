@@ -27,6 +27,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var errSignerCloseFailed = errors.New("signer close failed")
+
 func TestClientAccessTokenUpdateChangesSignerHeaders(t *testing.T) {
 	t.Parallel()
 	client := &Client{}
@@ -306,7 +308,7 @@ type failingCloseResource struct {
 
 func (c *failingCloseResource) Close() error {
 	c.calls++
-	return errors.New("signer close failed")
+	return errSignerCloseFailed
 }
 
 // TestClientTerminateConnExportsKeyingMaterial is the MITM self-probe

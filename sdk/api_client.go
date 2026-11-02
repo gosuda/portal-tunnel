@@ -16,6 +16,17 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRelayDidNotReturnAccessToken              = errors.New("relay did not return access token")
+	errRelayReturnedMismatchedLeaseIdentity      = errors.New("relay returned mismatched lease identity")
+	errRelayDidNotReturnCanonicalHostname        = errors.New("relay did not return canonical hostname")
+	errRelayDidNotReturnRenewedAccess            = errors.New("relay did not return renewed access token")
+	errRelayReturnedIncompleteReverseEndpoint    = errors.New("relay returned incomplete reverse endpoint")
+	errRelayReturnedInvalidReverseEndpointURL    = errors.New("relay returned invalid reverse endpoint URL")
+	errRelayReturnedInvalidReverseEndpointTarget = errors.New("relay returned invalid reverse endpoint target")
+	errRelayReturnedInvalidReverseEndpointExpiry = errors.New("relay returned invalid reverse endpoint expiry")
+)
+
 const (
 	defaultAPIBootstrapTimeout = 45 * time.Second
 	defaultAPIRequestTimeout   = 30 * time.Second
@@ -177,17 +188,17 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	}
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {
-		return types.RegisterResponse{}, errors.New("relay did not return access token")
+		return types.RegisterResponse{}, errRelayDidNotReturnAccessToken
 	}
 	if resp.Identity.Key() != registerReq.Identity.Key() {
 		_ = c.unregister(context.Background(), resp.AccessToken)
-		return types.RegisterResponse{}, errors.New("relay returned mismatched lease identity")
+		return types.RegisterResponse{}, errRelayReturnedMismatchedLeaseIdentity
 	}
 	resp.Hostname = utils.NormalizeHostname(resp.Hostname)
 	resp.CanonicalHostname = utils.NormalizeHostname(resp.CanonicalHostname)
 	if resp.CanonicalHostname == "" {
 		_ = c.unregister(context.Background(), resp.AccessToken)
-		return types.RegisterResponse{}, errors.New("relay did not return canonical hostname")
+		return types.RegisterResponse{}, errRelayDidNotReturnCanonicalHostname
 	}
 	if !aliasHostnameMatches(resp.Hostname, registerReq.Identity.Name, resp.CanonicalHostname) {
 		resp.Hostname = ""
@@ -223,7 +234,7 @@ func (c *apiClient) renew(ctx context.Context, req types.RenewRequest) (types.Re
 	}
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {
-		return types.RenewResponse{}, errors.New("relay did not return renewed access token")
+		return types.RenewResponse{}, errRelayDidNotReturnRenewedAccess
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
 	if err != nil {
@@ -250,17 +261,20 @@ func validateReverseEndpoint(endpoint types.ReverseEndpoint, leaseExpiresAt time
 	endpoint.URL = strings.TrimSpace(endpoint.URL)
 	endpoint.Capability = strings.TrimSpace(endpoint.Capability)
 	if endpoint.URL == "" || endpoint.Capability == "" {
-		return types.ReverseEndpoint{}, errors.New("relay returned incomplete reverse endpoint")
+		return types.ReverseEndpoint{}, errRelayReturnedIncompleteReverseEndpoint
 	}
 	parsed, err := url.Parse(endpoint.URL)
-	if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Scheme, "https") {
-		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint URL")
+	if err != nil {
+		return types.ReverseEndpoint{}, fmt.Errorf("%w: %w", errRelayReturnedInvalidReverseEndpointURL, err)
+	}
+	if parsed.Host == "" || !strings.EqualFold(parsed.Scheme, "https") {
+		return types.ReverseEndpoint{}, errRelayReturnedInvalidReverseEndpointURL
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.EscapedPath() != types.PathSDKConnect {
-		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint target")
+		return types.ReverseEndpoint{}, errRelayReturnedInvalidReverseEndpointTarget
 	}
 	if !endpoint.ExpiresAt.After(time.Now().UTC()) || endpoint.ExpiresAt.After(leaseExpiresAt) {
-		return types.ReverseEndpoint{}, errors.New("relay returned invalid reverse endpoint expiry")
+		return types.ReverseEndpoint{}, errRelayReturnedInvalidReverseEndpointExpiry
 	}
 	endpoint.URL = parsed.String()
 	return endpoint, nil

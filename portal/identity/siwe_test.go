@@ -1,10 +1,27 @@
 package identity
 
 import (
+	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSIWEMessagePreservesURLParseErrors(t *testing.T) {
+	for name, message := range map[string]SIWEMessage{
+		"domain": {Domain: "example.com:invalid"},
+		"uri":    {Domain: "example.com", URI: "https://example.com/%zz"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := FormatSIWEMessage(message)
+			var parseErr *url.Error
+			if !errors.As(err, &parseErr) {
+				t.Fatalf("FormatSIWEMessage() error = %v, want wrapped URL error", err)
+			}
+		})
+	}
+}
 
 func TestSIWEMessageFormat(t *testing.T) {
 	// EIP-4361's ABNF defines the literal field order and LF separators:

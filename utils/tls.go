@@ -22,14 +22,27 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var (
+	errRelayURLIsRequired              = errors.New("relay url is required")
+	errRelayHostnameIsRequired         = errors.New("relay hostname is required")
+	errFailedParseRelayRootCA          = errors.New("failed to parse relay root ca")
+	errEndpointIsRequired              = errors.New("endpoint is required")
+	errRelayEndpointMustUseHTTPS       = errors.New("relay endpoint must use https")
+	errEndpointHostnameIsEmpty         = errors.New("endpoint hostname is empty")
+	errNoPeerCertificatesRelayEndpoint = errors.New("no peer certificates from relay endpoint")
+	errNoPEMBlockFound                 = errors.New("no pem block found")
+	errInvalidPrivateKeyPEM            = errors.New("invalid private key pem")
+	errUnsupportedPrivateKeyType       = errors.New("unsupported private key type")
+)
+
 func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Duration) (*tls.Config, *http.Client, *http.Transport, error) {
 	if relayURL == nil {
-		return nil, nil, nil, errors.New("relay url is required")
+		return nil, nil, nil, errRelayURLIsRequired
 	}
 
 	serverName := relayURL.Hostname()
 	if serverName == "" {
-		return nil, nil, nil, errors.New("relay hostname is required")
+		return nil, nil, nil, errRelayHostnameIsRequired
 	}
 
 	var rootCAs *x509.CertPool
@@ -40,7 +53,7 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 		}
 		rootCAs = x509.NewCertPool()
 		if !rootCAs.AppendCertsFromPEM(rootCAPEM) {
-			return nil, nil, nil, errors.New("failed to parse relay root ca")
+			return nil, nil, nil, errFailedParseRelayRootCA
 		}
 	}
 
@@ -64,7 +77,7 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
 	raw := strings.TrimSpace(endpoint)
 	if raw == "" {
-		return nil, errors.New("endpoint is required")
+		return nil, errEndpointIsRequired
 	}
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw
@@ -75,7 +88,7 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 		return nil, fmt.Errorf("parse endpoint url: %w", err)
 	}
 	if !strings.EqualFold(u.Scheme, "https") {
-		return nil, errors.New("relay endpoint must use https")
+		return nil, errRelayEndpointMustUseHTTPS
 	}
 	if runtime.GOOS == "js" {
 		u.Path = types.PathSDKCertificateChain
@@ -100,7 +113,7 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 
 	host := u.Hostname()
 	if host == "" {
-		return nil, errors.New("endpoint hostname is empty")
+		return nil, errEndpointHostnameIsEmpty
 	}
 	port := u.Port()
 	port = cmp.Or(port, "443")
@@ -125,7 +138,7 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 
 	peerCerts := tlsConn.ConnectionState().PeerCertificates
 	if len(peerCerts) == 0 {
-		return nil, errors.New("no peer certificates from relay endpoint")
+		return nil, errNoPeerCertificatesRelayEndpoint
 	}
 
 	var chainPEM []byte
@@ -141,7 +154,7 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(pemData)
 	if block == nil {
-		return nil, errors.New("no pem block found")
+		return nil, errNoPEMBlockFound
 	}
 	return x509.ParseCertificate(block.Bytes)
 }
@@ -149,7 +162,7 @@ func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
 func ParsePrivateKeyPEM(keyPEM []byte) (crypto.PrivateKey, error) {
 	block, _ := pem.Decode(keyPEM)
 	if block == nil {
-		return nil, errors.New("invalid private key pem")
+		return nil, errInvalidPrivateKeyPEM
 	}
 	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
 		switch typed := key.(type) {
@@ -165,5 +178,5 @@ func ParsePrivateKeyPEM(keyPEM []byte) (crypto.PrivateKey, error) {
 	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
 		return key, nil
 	}
-	return nil, errors.New("unsupported private key type")
+	return nil, errUnsupportedPrivateKeyType
 }

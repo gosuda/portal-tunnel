@@ -22,6 +22,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var errDialFailed = errors.New("dial failed")
+
 type endpointStub struct {
 	destination string
 	dial        func(context.Context, string, string) (net.Conn, error)
@@ -168,7 +170,7 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 		destination: testDestination("gateway"),
 		dial: func(context.Context, string, string) (net.Conn, error) {
 			dials++
-			return nil, errors.New("dial failed")
+			return nil, errDialFailed
 		},
 	}
 	// A fresh ingress signer is enough to pass signature checks. Source
@@ -208,7 +210,7 @@ func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 			case <-release:
 			case <-ctx.Done():
 			}
-			return nil, errors.New("dial failed")
+			return nil, errDialFailed
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())

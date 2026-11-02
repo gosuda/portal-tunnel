@@ -31,6 +31,14 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errRelayHostnameIsRequired                      = errors.New("relay hostname is required")
+	errKeylessHostnameIsRequired                    = errors.New("keyless hostname is required")
+	errKeylessPinnedRelayCertificateChainUnparsable = errors.New("keyless pinned relay certificate chain is unparsable")
+	errKeylessClientIsUnavailable                   = errors.New("keyless client is unavailable")
+	errKeylessCertificateChainIsRequired            = errors.New("keyless certificate chain is required")
+)
+
 // ClientConfig contains the lease-scoped inputs for a tenant TLS client.
 type ClientConfig struct {
 	RelayURL    string
@@ -89,7 +97,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 	serverName := parsed.Hostname()
 	if serverName == "" {
-		return nil, errors.New("relay hostname is required")
+		return nil, errRelayHostnameIsRequired
 	}
 
 	chainPEM, err := relayChain(context.Background(), normalizedRelayURL, serverName)
@@ -98,7 +106,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 	hostname := strings.TrimSpace(config.Hostname)
 	if hostname == "" {
-		return nil, errors.New("keyless hostname is required")
+		return nil, errKeylessHostnameIsRequired
 	}
 	client := &Client{
 		accessToken: strings.TrimSpace(config.AccessToken),
@@ -122,7 +130,7 @@ func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(chainPEM) {
-		return nil, errors.New("keyless pinned relay certificate chain is unparsable")
+		return nil, errKeylessPinnedRelayCertificateChainUnparsable
 	}
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
 		Endpoint:   c.relayURL,
@@ -195,7 +203,7 @@ func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
 // lease that costs at most a few fetches per burst.
 func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, error) {
 	if c.pinned() == nil {
-		return false, errors.New("keyless client is unavailable")
+		return false, errKeylessClientIsUnavailable
 	}
 	// Serialized so that a slower fetch cannot pin a chain the relay already
 	// replaced.
@@ -251,7 +259,7 @@ func pinIsStale(err error) bool {
 func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte) (net.Conn, error) {
 	pin := c.pinned()
 	if pin == nil {
-		return nil, errors.New("keyless client is unavailable")
+		return nil, errKeylessClientIsUnavailable
 	}
 	conn := pin.server.NewConn(raw, binding)
 	if err := conn.HandshakeContext(ctx); err != nil {
@@ -315,7 +323,7 @@ func relayChain(ctx context.Context, endpoint, serverName string) ([]byte, error
 		return nil, fmt.Errorf("fetch signer certificate chain: %w", err)
 	}
 	if len(chainPEM) == 0 {
-		return nil, errors.New("keyless certificate chain is required")
+		return nil, errKeylessCertificateChainIsRequired
 	}
 	return chainPEM, nil
 }

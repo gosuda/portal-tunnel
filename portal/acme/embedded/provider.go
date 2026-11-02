@@ -28,6 +28,14 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errEmbeddedDNSBaseDomainRequired = errors.New("embedded dns base domain is required")
+	errEmbeddedDNSProviderIsNil      = errors.New("embedded dns provider is nil")
+	errTxtRecordValueIsRequired      = errors.New("txt record value is required")
+	errTxtRecordMatchPrefixRequired  = errors.New("txt record match prefix is required")
+	errRecordNameIsRequired          = errors.New("record name is required")
+)
+
 const (
 	defaultListenAddr         = ":53"
 	recordTTL          uint32 = 60
@@ -91,7 +99,7 @@ type Provider struct {
 func New(cfg Config) (*Provider, error) {
 	baseDomain := utils.NormalizeBaseDomain(cfg.BaseDomain)
 	if baseDomain == "" {
-		return nil, errors.New("embedded dns base domain is required")
+		return nil, errEmbeddedDNSBaseDomainRequired
 	}
 	if _, valid := dns.IsDomainName(dns.Fqdn(baseDomain)); !valid {
 		return nil, fmt.Errorf("invalid embedded dns zone %q", baseDomain)
@@ -227,7 +235,7 @@ func (p *Provider) CleanUp(domain, _, keyAuth string) error {
 // and every covered name. The other family's address remains unchanged.
 func (p *Provider) EnsureAddressRecords(_ context.Context, baseDomain, publicIP string) error {
 	if p == nil {
-		return errors.New("embedded dns provider is nil")
+		return errEmbeddedDNSProviderIsNil
 	}
 	baseDomain, recordType, publicIP, err := dnsrecord.AddressRecordsInputs(baseDomain, publicIP)
 	if err != nil {
@@ -305,7 +313,7 @@ func (p *Provider) verifyDelegatedPath(ip net.IP) {
 // from the relay's last discovered addresses rather than stored per hostname.
 func (p *Provider) EnsureAddressRecord(_ context.Context, name, publicIP string) error {
 	if p == nil {
-		return errors.New("embedded dns provider is nil")
+		return errEmbeddedDNSProviderIsNil
 	}
 	if _, err := p.zoneHostname(name); err != nil {
 		return err
@@ -317,14 +325,14 @@ func (p *Provider) EnsureAddressRecord(_ context.Context, name, publicIP string)
 // DeleteAddressRecords is a no-op because address answers are synthesized, not stored.
 func (p *Provider) DeleteAddressRecords(context.Context, string) error {
 	if p == nil {
-		return errors.New("embedded dns provider is nil")
+		return errEmbeddedDNSProviderIsNil
 	}
 	return nil
 }
 
 func (p *Provider) EnsureTXTRecord(_ context.Context, name, value string) error {
 	if p == nil {
-		return errors.New("embedded dns provider is nil")
+		return errEmbeddedDNSProviderIsNil
 	}
 	fqdn, err := p.zoneHostname(name)
 	if err != nil {
@@ -332,7 +340,7 @@ func (p *Provider) EnsureTXTRecord(_ context.Context, name, value string) error 
 	}
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return errors.New("txt record value is required")
+		return errTxtRecordValueIsRequired
 	}
 
 	p.mu.Lock()
@@ -348,7 +356,7 @@ func (p *Provider) EnsureTXTRecord(_ context.Context, name, value string) error 
 
 func (p *Provider) DeleteTXTRecords(_ context.Context, name, matchPrefix string) error {
 	if p == nil {
-		return errors.New("embedded dns provider is nil")
+		return errEmbeddedDNSProviderIsNil
 	}
 	fqdn, err := p.zoneHostname(name)
 	if err != nil {
@@ -356,7 +364,7 @@ func (p *Provider) DeleteTXTRecords(_ context.Context, name, matchPrefix string)
 	}
 	matchPrefix = strings.TrimSpace(matchPrefix)
 	if matchPrefix == "" {
-		return errors.New("txt record match prefix is required")
+		return errTxtRecordMatchPrefixRequired
 	}
 
 	p.mu.Lock()
@@ -382,7 +390,7 @@ func (p *Provider) DeleteTXTRecords(_ context.Context, name, matchPrefix string)
 // not performed here. Local signing alone must not mark ENS as verified.
 func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, dsRecord, message string, err error) {
 	if p == nil {
-		return "", "", "", errors.New("embedded dns provider is nil")
+		return "", "", "", errEmbeddedDNSProviderIsNil
 	}
 	if utils.NormalizeBaseDomain(baseDomain) != p.baseDomain {
 		return "", "", "", fmt.Errorf("domain %q is not embedded dns zone %q", baseDomain, p.baseDomain)
@@ -394,7 +402,7 @@ func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, ds
 func (p *Provider) zoneHostname(name string) (string, error) {
 	name = utils.NormalizeHostname(name)
 	if name == "" {
-		return "", errors.New("record name is required")
+		return "", errRecordNameIsRequired
 	}
 	if _, valid := dns.IsDomainName(dns.Fqdn(name)); !valid {
 		return "", fmt.Errorf("invalid dns record name %q", name)

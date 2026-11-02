@@ -15,12 +15,20 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errDiscoveredRelayMustHavePublicHTTPS = errors.New("discovered relay must have a public HTTPS URL")
+	errDiscoveryRedirectsAreNotAllowed    = errors.New("discovery redirects are not allowed")
+)
+
 // requirePublicRelayURL checks the static part of the discovery trust boundary.
 // Names must also pass the resolved-address check on every new connection.
 func requirePublicRelayURL(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
-		return errors.New("discovered relay must have a public HTTPS URL")
+	if err != nil {
+		return fmt.Errorf("%w: %w", errDiscoveredRelayMustHavePublicHTTPS, err)
+	}
+	if u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+		return errDiscoveredRelayMustHavePublicHTTPS
 	}
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	if utils.IsLocalOnlyRelayHost(host) {
@@ -75,5 +83,5 @@ func dialPublicRelay(ctx context.Context, network, address string) (net.Conn, er
 }
 
 func rejectDiscoveryRedirect(_ *http.Request, _ []*http.Request) error {
-	return errors.New("discovery redirects are not allowed")
+	return errDiscoveryRedirectsAreNotAllowed
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var errIdentityTokenSecretIsRequired = errors.New("identity token secret is required")
+
 func ensureTokenSecret(identity types.Identity) (types.Identity, error) {
 	identity = identity.Copy()
 	identity.TokenSecret = strings.TrimSpace(identity.TokenSecret)
@@ -33,7 +35,7 @@ func ensureTokenSecret(identity types.Identity) (types.Identity, error) {
 func DeriveToken(identity types.Identity, parts ...string) (string, error) {
 	tokenSecret := strings.TrimSpace(identity.TokenSecret)
 	if tokenSecret == "" {
-		return "", errors.New("identity token secret is required")
+		return "", errIdentityTokenSecretIsRequired
 	}
 
 	mac := hmac.New(sha256.New, []byte(tokenSecret))

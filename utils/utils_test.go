@@ -1,9 +1,39 @@
 package utils
 
 import (
+	"encoding/hex"
+	"errors"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestNormalizeRelayURLPreservesParseErrors(t *testing.T) {
+	_, err := NormalizeRelayURL("https://relay.example/%zz")
+	var parseErr *url.Error
+	if !errors.As(err, &parseErr) {
+		t.Fatalf("NormalizeRelayURL() error = %v, want wrapped URL error", err)
+	}
+	var escapeErr url.EscapeError
+	if !errors.As(err, &escapeErr) {
+		t.Fatalf("NormalizeRelayURL() error = %v, want wrapped escape error", err)
+	}
+
+	_, err = NormalizeRelayURL("https://relay.example:" + strings.Repeat("9", 30))
+	var numErr *strconv.NumError
+	if !errors.As(err, &numErr) || !errors.Is(err, strconv.ErrRange) {
+		t.Fatalf("NormalizeRelayURL() error = %v, want wrapped port overflow", err)
+	}
+}
+
+func TestCanonicalLeaseHostnamePreservesAddressDecodeError(t *testing.T) {
+	_, err := CanonicalLeaseHostname("demo", "0x"+strings.Repeat("z", 40), "example.com")
+	var invalidByte hex.InvalidByteError
+	if !errors.As(err, &invalidByte) || invalidByte != 'z' {
+		t.Fatalf("CanonicalLeaseHostname() error = %v, want wrapped hex error", err)
+	}
+}
 
 func TestHostnameMatchesPattern(t *testing.T) {
 	t.Parallel()

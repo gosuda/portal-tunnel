@@ -22,6 +22,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var errWaitPortalAgentShutdownAgentStill = errors.New("wait for portal agent shutdown: agent is still running")
+
 func runAgentCommand(args []string) error {
 	return utils.RunCommands(args, os.Stdout, os.Stderr, printAgentUsage, map[string]utils.CommandFunc{
 		"run":       runAgentRunCommand,
@@ -366,7 +368,7 @@ func waitAgentStopped(ctx context.Context, stateDir string) error {
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("wait for portal agent shutdown: agent is still running")
+			return errWaitPortalAgentShutdownAgentStill
 		case <-ticker.C:
 		}
 	}

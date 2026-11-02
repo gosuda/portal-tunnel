@@ -16,6 +16,15 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errEnsGaslessAddressRequiredWhenEns       = errors.New("ens gasless address is required when ens gasless import is enabled")
+	errACMEKeyDirectoryIsRequired             = errors.New("acme key directory is required")
+	errACMEBaseDomainIsRequired               = errors.New("acme base domain is required")
+	errACMEManagerIsNil                       = errors.New("acme manager is nil")
+	errRelayCertificateFilesDoNotExist        = errors.New("relay certificate files do not exist")
+	errACMEObtainResponseMissingCertificateOr = errors.New("acme obtain response missing certificate or private key")
+)
+
 const (
 	fullChainFileName      = "fullchain.pem"
 	keyFileName            = "privatekey.pem"
@@ -92,7 +101,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	cfg.NjallaToken = strings.TrimSpace(cfg.NjallaToken)
 	if cfg.ENSGaslessEnabled {
 		if cfg.ENSGaslessAddress == "" {
-			return nil, errors.New("ens gasless address is required when ens gasless import is enabled")
+			return nil, errEnsGaslessAddressRequiredWhenEns
 		}
 		address, err := identity.NormalizeEVMAddress(cfg.ENSGaslessAddress)
 		if err != nil {
@@ -102,10 +111,10 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 
 	if cfg.KeyDir == "" {
-		return nil, errors.New("acme key directory is required")
+		return nil, errACMEKeyDirectoryIsRequired
 	}
 	if cfg.BaseDomain == "" {
-		return nil, errors.New("acme base domain is required")
+		return nil, errACMEBaseDomainIsRequired
 	}
 	if utils.IsLocalRelayHost(cfg.BaseDomain) {
 		return &Manager{
@@ -135,7 +144,7 @@ func NewManager(cfg Config) (*Manager, error) {
 
 func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error) {
 	if m == nil {
-		return "", "", errors.New("acme manager is nil")
+		return "", "", errACMEManagerIsNil
 	}
 
 	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
@@ -223,11 +232,11 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 func (m *Manager) TLSFiles() (string, string, error) {
 	if m == nil {
-		return "", "", errors.New("acme manager is nil")
+		return "", "", errACMEManagerIsNil
 	}
 	certFile, keyFile := m.certificateFiles()
 	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
-		return "", "", errors.New("relay certificate files do not exist")
+		return "", "", errRelayCertificateFilesDoNotExist
 	}
 	return certFile, keyFile, nil
 }
@@ -288,7 +297,7 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 		return fmt.Errorf("obtain certificate: %w", err)
 	}
 	if len(obtained.Certificate) == 0 || len(obtained.PrivateKey) == 0 {
-		return errors.New("acme obtain response missing certificate or private key")
+		return errACMEObtainResponseMissingCertificateOr
 	}
 
 	// Every issuance carries a new private key, so what the relay serves must

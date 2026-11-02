@@ -30,6 +30,25 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errOIDCIssuerURLIsRequired            = errors.New("oidc issuer url is required")
+	errOIDCIssuerURLMustValidURL          = errors.New("oidc issuer url must be a valid URL without query or fragment")
+	errOIDCIssuerURLMustUseHTTPS          = errors.New("oidc issuer url must use https (or http on a loopback host)")
+	errOIDCProviderRedirectedTooManyTimes = errors.New("oidc provider redirected too many times")
+	errOIDCEmailPrincipalsMustAsciiWrite  = errors.New("oidc email principals must be ASCII; write internationalized domains in punycode")
+	errApplicationAuthHandlerIsRequired   = errors.New("application auth handler is required")
+	errMissingIDTokenTokenResponse        = errors.New("missing id_token in token response")
+	errIDTokenExpiryIsRequired            = errors.New("id_token expiry is required")
+	errIDTokenNonceMismatch               = errors.New("id_token nonce mismatch")
+	errIDTokenSubjectIsRequired           = errors.New("id_token subject is required")
+	errIncompleteOIDCDiscoveryDocument    = errors.New("incomplete oidc discovery document")
+	errOIDCDiscoveryIssuerMismatch        = errors.New("oidc discovery issuer mismatch")
+	errOIDCJwksContainsNoKeys             = errors.New("oidc jwks contains no keys")
+	errInvalidSignedValue                 = errors.New("invalid signed value")
+	errInvalidJSONRequest                 = errors.New("invalid JSON request")
+	errRequestMustContainOneJSONValue     = errors.New("request must contain one JSON value")
+)
+
 const (
 	applicationAuthLoginPath       = "/_portal/auth/login"
 	applicationAuthChallengePath   = "/_portal/auth/challenge"
@@ -208,14 +227,17 @@ func newOIDCAuthenticator(settings applicationAuthSettings, stateKey []byte) *oi
 func normalizeOIDCIssuerURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", errors.New("oidc issuer url is required")
+		return "", errOIDCIssuerURLIsRequired
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("oidc issuer url must be a valid URL without query or fragment")
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errOIDCIssuerURLMustValidURL, err)
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errOIDCIssuerURLMustValidURL
 	}
 	if parsed.Scheme != "https" && !isLoopbackHTTP(parsed) {
-		return "", errors.New("oidc issuer url must use https (or http on a loopback host)")
+		return "", errOIDCIssuerURLMustUseHTTPS
 	}
 	return strings.TrimRight(raw, "/"), nil
 }
@@ -250,7 +272,7 @@ func validateOIDCEndpoint(issuerURL, endpoint string) error {
 // must be https, or loopback http when the chain is already plain http.
 func checkOIDCRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= oidcMaxRedirects {
-		return errors.New("oidc provider redirected too many times")
+		return errOIDCProviderRedirectedTooManyTimes
 	}
 	if req.URL.Scheme == "https" {
 		return nil
@@ -334,7 +356,7 @@ func normalizeOIDCPrincipal(raw string) (string, error) {
 		return oidcSubjectPrefix + subject, nil
 	}
 	if strings.ContainsFunc(subject, func(r rune) bool { return r > unicode.MaxASCII }) {
-		return "", errors.New("oidc email principals must be ASCII; write internationalized domains in punycode")
+		return "", errOIDCEmailPrincipalsMustAsciiWrite
 	}
 	if strings.Contains(subject, "@") {
 		subject = strings.ToLower(subject)
@@ -376,7 +398,7 @@ func isUnsafeRedirectRune(r rune) bool {
 // authentication. Its reserved login endpoints are the only bypass paths.
 func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg ApplicationAuthConfig) (http.Handler, error) {
 	if next == nil {
-		return nil, errors.New("application auth handler is required")
+		return nil, errApplicationAuthHandlerIsRequired
 	}
 	settings, err := resolveApplicationAuthConfig(cfg)
 	if err != nil {
@@ -820,7 +842,7 @@ func (o *oidcAuthenticator) exchangeAndVerify(ctx context.Context, code string, 
 	}
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok || strings.TrimSpace(rawIDToken) == "" {
-		return oidcIDTokenClaims{}, errors.New("missing id_token in token response")
+		return oidcIDTokenClaims{}, errMissingIDTokenTokenResponse
 	}
 
 	claims, err := o.verifyIDToken(rawIDToken, state.Nonce, doc.Issuer, jwks, now)
@@ -847,7 +869,7 @@ func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce, issuer string
 		return oidcIDTokenClaims{}, err
 	}
 	if claims.Expiry == nil {
-		return oidcIDTokenClaims{}, errors.New("id_token expiry is required")
+		return oidcIDTokenClaims{}, errIDTokenExpiryIsRequired
 	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
 		Issuer:      issuer,
@@ -857,10 +879,10 @@ func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce, issuer string
 		return oidcIDTokenClaims{}, err
 	}
 	if subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(expectedNonce)) != 1 {
-		return oidcIDTokenClaims{}, errors.New("id_token nonce mismatch")
+		return oidcIDTokenClaims{}, errIDTokenNonceMismatch
 	}
 	if strings.TrimSpace(claims.Subject) == "" {
-		return oidcIDTokenClaims{}, errors.New("id_token subject is required")
+		return oidcIDTokenClaims{}, errIDTokenSubjectIsRequired
 	}
 	return claims, nil
 }
@@ -937,10 +959,10 @@ func (o *oidcAuthenticator) fetchDiscovery(ctx context.Context) (oidcDiscoveryDo
 	doc.TokenEndpoint = strings.TrimSpace(doc.TokenEndpoint)
 	doc.JWKSURI = strings.TrimSpace(doc.JWKSURI)
 	if doc.Issuer == "" || doc.AuthorizationEndpoint == "" || doc.TokenEndpoint == "" || doc.JWKSURI == "" {
-		return oidcDiscoveryDocument{}, errors.New("incomplete oidc discovery document")
+		return oidcDiscoveryDocument{}, errIncompleteOIDCDiscoveryDocument
 	}
 	if strings.TrimRight(doc.Issuer, "/") != o.issuerURL {
-		return oidcDiscoveryDocument{}, errors.New("oidc discovery issuer mismatch")
+		return oidcDiscoveryDocument{}, errOIDCDiscoveryIssuerMismatch
 	}
 	for _, endpoint := range []string{doc.AuthorizationEndpoint, doc.TokenEndpoint, doc.JWKSURI} {
 		if err := validateOIDCEndpoint(o.issuerURL, endpoint); err != nil {
@@ -960,7 +982,7 @@ func (o *oidcAuthenticator) fetchJWKS(ctx context.Context) (jose.JSONWebKeySet, 
 		return jose.JSONWebKeySet{}, fmt.Errorf("fetch oidc jwks: %w", err)
 	}
 	if len(jwks.Keys) == 0 {
-		return jose.JSONWebKeySet{}, errors.New("oidc jwks contains no keys")
+		return jose.JSONWebKeySet{}, errOIDCJwksContainsNoKeys
 	}
 	return jwks, nil
 }
@@ -1197,15 +1219,15 @@ func encodeSignedApplicationAuthJSON(key []byte, value any) (string, error) {
 func decodeSignedApplicationAuthJSON(key []byte, token string, dst any) error {
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
-		return errors.New("invalid signed value")
+		return errInvalidSignedValue
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return errors.New("invalid signed value")
+		return errInvalidSignedValue
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || !hmac.Equal(signature, signApplicationAuthPayload(key, payload)) {
-		return errors.New("invalid signed value")
+		return errInvalidSignedValue
 	}
 	return json.Unmarshal(payload, dst)
 }
@@ -1238,10 +1260,10 @@ func decodeApplicationAuthJSON(w http.ResponseWriter, r *http.Request, dst any) 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
-		return errors.New("invalid JSON request")
+		return errInvalidJSONRequest
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("request must contain one JSON value")
+		return errRequestMustContainOneJSONValue
 	}
 	return nil
 }

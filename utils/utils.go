@@ -22,6 +22,31 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+var (
+	errNameIsRequired                            = errors.New("name is required")
+	errNameIsInvalid                             = errors.New("name is invalid")
+	errNameMustSingleDNSLabel                    = errors.New("name must be a single dns label")
+	errNameMust63CharactersOrFewer               = errors.New("name must be 63 characters or fewer")
+	errNameMustNotStartOrEnd                     = errors.New("name must not start or end with hyphen")
+	errNameMustContainOnlyLettersNumbers         = errors.New("name must contain only letters, numbers, or hyphen")
+	errRelayURLIsEmpty                           = errors.New("relay url is empty")
+	errRelayURLIsInvalid                         = errors.New("relay url is invalid")
+	errRelayURLHostIsEmpty                       = errors.New("relay url host is empty")
+	errRelayURLMustNotIncludeCredentials         = errors.New("relay url must not include credentials")
+	errRelayURLHasInvalidPort                    = errors.New("relay url has an invalid port")
+	errRelayURLPortMustBetween1                  = errors.New("relay url port must be between 1 and 65535")
+	errRelayURLMustUseHTTPS                      = errors.New("relay url must use https")
+	errRootHostIsRequired                        = errors.New("root host is required")
+	errNameMustNotLookLikeCanonical              = errors.New("name must not look like a canonical hostname (40 hexadecimal characters, alone or after a hyphen)")
+	errHostnameDoesNotContainCanonicalLease      = errors.New("hostname does not contain a canonical lease address")
+	errAddressMustContain40HexadecimalCharacters = errors.New("address must contain 40 hexadecimal characters")
+	errTargetAddressIsRequired                   = errors.New("target address is required")
+	errTargetURLHostIsEmpty                      = errors.New("target url host is empty")
+	errTargetURLPathNotSupported                 = errors.New("target url path is not supported")
+	errTargetURLQueryNotSupported                = errors.New("target url query is not supported")
+	errTargetURLFragmentNotSupported             = errors.New("target url fragment is not supported")
+)
+
 func SplitCSV(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
@@ -49,31 +74,31 @@ func TrimHexPrefix(raw string) string {
 func NormalizeDNSLabel(raw string) (string, error) {
 	label := sanitizeDNSLabelInput(raw)
 	if label == "" {
-		return "", errors.New("name is required")
+		return "", errNameIsRequired
 	}
 
 	if !isPlainDNSLabel(label) {
 		ascii, err := idna.Lookup.ToASCII(label)
 		if err != nil {
-			return "", errors.New("name is invalid")
+			return "", fmt.Errorf("%w: %w", errNameIsInvalid, err)
 		}
 		label = NormalizeHostname(ascii)
 	}
 	if strings.Contains(label, ".") {
-		return "", errors.New("name must be a single dns label")
+		return "", errNameMustSingleDNSLabel
 	}
 	if len(label) > 63 {
-		return "", errors.New("name must be 63 characters or fewer")
+		return "", errNameMust63CharactersOrFewer
 	}
 	if label[0] == '-' || label[len(label)-1] == '-' {
-		return "", errors.New("name must not start or end with hyphen")
+		return "", errNameMustNotStartOrEnd
 	}
 	for _, r := range label {
 		validRune := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
 		if validRune {
 			continue
 		}
-		return "", errors.New("name must contain only letters, numbers, or hyphen")
+		return "", errNameMustContainOnlyLettersNumbers
 	}
 	return label, nil
 }
@@ -118,7 +143,7 @@ func isPlainDNSLabel(label string) bool {
 func NormalizeRelayURL(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "", errors.New("relay url is empty")
+		return "", errRelayURLIsEmpty
 	}
 	if !strings.Contains(trimmed, "://") {
 		trimmed = "https://" + strings.TrimPrefix(trimmed, "//")
@@ -126,34 +151,37 @@ func NormalizeRelayURL(raw string) (string, error) {
 
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return "", errors.New("relay url is invalid")
+		return "", fmt.Errorf("%w: %w", errRelayURLIsInvalid, err)
 	}
 	if parsed.Host == "" && parsed.Path != "" && !strings.Contains(parsed.Path, "/") {
 		parsed, err = url.Parse("https://" + strings.TrimSpace(parsed.Path))
 		if err != nil {
-			return "", errors.New("relay url is invalid")
+			return "", fmt.Errorf("%w: %w", errRelayURLIsInvalid, err)
 		}
 	}
 	if parsed.Host == "" {
-		return "", errors.New("relay url host is empty")
+		return "", errRelayURLHostIsEmpty
 	}
 	if parsed.User != nil {
-		return "", errors.New("relay url must not include credentials")
+		return "", errRelayURLMustNotIncludeCredentials
 	}
 	if strings.HasSuffix(parsed.Host, ":") {
-		return "", errors.New("relay url has an invalid port")
+		return "", errRelayURLHasInvalidPort
 	}
 	if port := parsed.Port(); port != "" {
 		n, err := strconv.Atoi(port)
-		if err != nil || n < 1 || n > 65535 {
-			return "", errors.New("relay url port must be between 1 and 65535")
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", errRelayURLPortMustBetween1, err)
+		}
+		if n < 1 || n > 65535 {
+			return "", errRelayURLPortMustBetween1
 		}
 	}
 	if strings.EqualFold(parsed.Scheme, "http") && IsLocalRelayHost(parsed.Hostname()) {
 		parsed.Scheme = "https"
 	}
 	if !strings.EqualFold(parsed.Scheme, "https") {
-		return "", errors.New("relay url must use https")
+		return "", errRelayURLMustUseHTTPS
 	}
 
 	parsed.RawQuery = ""
@@ -315,7 +343,7 @@ func LeaseHostname(name, rootHost string) (string, error) {
 	}
 	rootHost = NormalizeHostname(rootHost)
 	if rootHost == "" {
-		return "", errors.New("root host is required")
+		return "", errRootHostIsRequired
 	}
 	if ip := net.ParseIP(rootHost); ip != nil && ip.IsLoopback() {
 		rootHost = "localhost"
@@ -332,7 +360,7 @@ func NormalizeServiceName(raw string) (string, error) {
 		return "", err
 	}
 	if hasCanonicalShape(label) {
-		return "", errors.New("name must not look like a canonical hostname (40 hexadecimal characters, alone or after a hyphen)")
+		return "", errNameMustNotLookLikeCanonical
 	}
 	return label, nil
 }
@@ -344,7 +372,7 @@ func NormalizeServiceName(raw string) (string, error) {
 func ExtractCanonicalHostnameAddress(hostname string) (string, error) {
 	label, rest, ok := strings.Cut(NormalizeHostWithoutPort(hostname), ".")
 	if !ok || label == "" || rest == "" || !hasCanonicalShape(label) {
-		return "", errors.New("hostname does not contain a canonical lease address")
+		return "", errHostnameDoesNotContainCanonicalLease
 	}
 	address := label[len(label)-40:]
 	return "0x" + strings.ToLower(address), nil
@@ -387,10 +415,10 @@ func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
 	name = strings.TrimSpace(name)
 	address = strings.ToLower(TrimHexPrefix(strings.TrimSpace(address)))
 	if len(address) != 40 {
-		return "", errors.New("address must contain 40 hexadecimal characters")
+		return "", errAddressMustContain40HexadecimalCharacters
 	}
 	if _, err := hex.DecodeString(address); err != nil {
-		return "", errors.New("address must contain 40 hexadecimal characters")
+		return "", fmt.Errorf("%w: %w", errAddressMustContain40HexadecimalCharacters, err)
 	}
 	if name == "" {
 		return LeaseHostname(address, rootHost)
@@ -408,7 +436,7 @@ func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
 func NormalizeTargetAddr(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", errors.New("target address is required")
+		return "", errTargetAddressIsRequired
 	}
 
 	if strings.Contains(raw, "://") {
@@ -420,16 +448,16 @@ func NormalizeTargetAddr(raw string) (string, error) {
 			return "", fmt.Errorf("unsupported target url scheme %q", targetURL.Scheme)
 		}
 		if targetURL.Host == "" {
-			return "", errors.New("target url host is empty")
+			return "", errTargetURLHostIsEmpty
 		}
 		if targetURL.Path != "" && targetURL.Path != "/" {
-			return "", errors.New("target url path is not supported")
+			return "", errTargetURLPathNotSupported
 		}
 		if targetURL.RawQuery != "" {
-			return "", errors.New("target url query is not supported")
+			return "", errTargetURLQueryNotSupported
 		}
 		if targetURL.Fragment != "" {
-			return "", errors.New("target url fragment is not supported")
+			return "", errTargetURLFragmentNotSupported
 		}
 		raw = targetURL.Host
 	}
