@@ -85,16 +85,12 @@ func newHarnessWithName(t *testing.T, name, host, attack string, opts ...sdk.Opt
 		ingressAddr = net.JoinHostPort(host, strconv.Itoa(harnessPort(t, host)))
 	}
 	relayURL := "https://" + sniAddr
-	relayConfig := portal.ServerConfig{
+	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     relayURL,
 		StateDir:      stateDir,
 		SNIListenAddr: ingressAddr,
 		SNIPort:       sniPort,
-	}
-	if attack == "proxy-v2" {
-		relayConfig.ProxyProtocolTrustedIPs = []string{"127.0.0.1"}
-	}
-	relay, err := portal.NewServer(relayConfig)
+	})
 	if err != nil {
 		cancel()
 		service.Close()
@@ -106,9 +102,7 @@ func newHarnessWithName(t *testing.T, name, host, attack string, opts ...sdk.Opt
 		t.Fatalf("start relay: %v", err)
 	}
 	var ingress *mitmIngress
-	if attack == "proxy-v2" {
-		startProxyV2Ingress(t, ctx, sniAddr, ingressAddr)
-	} else if attack != "" {
+	if attack != "" {
 		ingress = startMITMIngress(t, ctx, sniAddr, ingressAddr, stateDir, attack)
 	}
 

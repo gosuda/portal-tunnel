@@ -114,7 +114,6 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.StringFlagEnv(fs, &cfg.Relay.HTTPRedirect.Addr, "http-redirect-addr", types.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
 	utils.BoolFlagEnv(fs, &cfg.Relay.HTTPRedirect.HSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
 	utils.IntFlagEnv(fs, &cfg.Relay.SNIPort, "sni-port", 0, utils.ParsePortNumber, "local TCP SNI router listen port (0 follows the PORTAL_URL port when it names one, else 443)", "SNI_PORT")
-	utils.CSVFlagEnv(fs, &cfg.Relay.ProxyProtocolTrustedIPs, "proxy-protocol-trusted-ips", "", "require PROXY protocol v2 on SNI ingress from these exact upstream IPs; empty keeps plain TLS", "PROXY_PROTOCOL_TRUSTED_IPS")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
 
