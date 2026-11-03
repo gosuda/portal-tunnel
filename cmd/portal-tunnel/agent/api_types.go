@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -113,15 +114,22 @@ func (r *AgentTunnelUpdateRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	auth := make(map[string]json.RawMessage)
 	for key, value := range fields {
 		key = strings.ToLower(key)
-		if (key != "auth" && !strings.HasPrefix(key, "auth_")) || bytes.Equal(value, []byte("null")) {
+		if key != "auth" && !strings.HasPrefix(key, "auth_") {
 			continue
 		}
-		if named.Auth == nil {
-			named.Auth = make(map[string]json.RawMessage)
+		// Field names match without regard to case, so two spellings of one
+		// field would leave the outcome to the order of the map.
+		if _, ok := auth[key]; ok {
+			return fmt.Errorf("auth field %q is sent more than once", key)
 		}
-		named.Auth[key] = value
+		auth[key] = value
+	}
+	maps.DeleteFunc(auth, func(_ string, value json.RawMessage) bool { return bytes.Equal(value, []byte("null")) })
+	if len(auth) > 0 {
+		named.Auth = auth
 	}
 	*r = AgentTunnelUpdateRequest(named)
 	return nil
@@ -181,7 +189,9 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *gateway.ApplicationAuthConfig)
 // authChanges is the auth part of an update that turns the stored settings into
 // desired: each field that differs, and each emptied one with its empty value.
 // Both are compared as a status shows them, so the write-only client secret is
-// never among the changes; a client that changes it names it itself.
+// never among the changes; a client that changes it names it itself. An update
+// decodes over the stored settings, so it can empty a string, a number, a
+// boolean or a list, and a setting must be one of these.
 func authChanges(stored, desired gateway.ApplicationAuthConfig) map[string]json.RawMessage {
 	fields := func(auth gateway.ApplicationAuthConfig) map[string]json.RawMessage {
 		data, _ := json.Marshal(auth.Public())
@@ -200,14 +210,19 @@ func authChanges(stored, desired gateway.ApplicationAuthConfig) map[string]json.
 		if _, ok := to[key]; ok {
 			continue
 		}
-		// Every field is omitted when empty, so a field only stored is emptied.
-		switch value[0] {
-		case '"':
+		// Every field is omitted when empty, so a field only stored is emptied,
+		// with the empty value of the type it is stored as.
+		var storedValue any
+		_ = json.Unmarshal(value, &storedValue)
+		switch storedValue.(type) {
+		case string:
 			changes[key] = json.RawMessage(`""`)
-		case '[':
-			changes[key] = json.RawMessage(`[]`)
-		default:
+		case float64:
+			changes[key] = json.RawMessage(`0`)
+		case bool:
 			changes[key] = json.RawMessage(`false`)
+		case []any:
+			changes[key] = json.RawMessage(`[]`)
 		}
 	}
 	if len(changes) == 0 {

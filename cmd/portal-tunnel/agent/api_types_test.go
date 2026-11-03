@@ -3,13 +3,15 @@ package agent
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 )
 
 // The auth fields of an update sit next to its other fields on the wire, as
-// they did when each had a field of its own; a null one is left out.
+// they did when each had a field of its own; a null one is left out. Field names
+// match without regard to case, so one field sent in two spellings is refused.
 func TestAgentTunnelUpdateRequestJSON(t *testing.T) {
 	var req AgentTunnelUpdateRequest
 	body := `{"max_active_relays":2,"Auth":"oidc","auth_allowed_wallets":null,"auth_oidc_issuer":"https://idp.example","unknown":1}`
@@ -27,6 +29,9 @@ func TestAgentTunnelUpdateRequestJSON(t *testing.T) {
 	var again AgentTunnelUpdateRequest
 	if err := json.Unmarshal(data, &again); err != nil || !reflect.DeepEqual(again, req) {
 		t.Fatalf("round trip of %s = %+v (err %v)", data, again, err)
+	}
+	if err := json.Unmarshal([]byte(`{"auth":"oidc","AUTH":null}`), &again); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("auth in two spellings: err = %v", err)
 	}
 }
 
