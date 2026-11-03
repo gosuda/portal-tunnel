@@ -32,6 +32,34 @@ Admin bearer tokens are separate from SDK lease tokens.
 | `POST` | `/api/policy` | Bearer | `PolicySettings` | `PolicySettings` |
 | `GET` | `/api/policy/state` | Bearer | none | `PolicyStateResponse` |
 | `POST` | `/api/policy/leases` | Bearer | `LeasePolicyUpdate` | `{}` |
+| `GET` | `/api/admin/metrics` | Bearer | none | Prometheus text exposition |
+
+## Relay Metrics
+
+`GET /api/admin/metrics` uses the same `ADMIN_TOKEN` bearer check as the other
+admin endpoints. Configure the scraper with a bearer token and restrict access
+to this operator route. When `ADMIN_TOKEN` is unset, the endpoint cannot be
+scraped. The relay uses the standard Prometheus handler on this existing route;
+there is no separate metrics listener or exporter setting, and no public
+`/metrics` endpoint.
+
+| Metric | Type | Meaning |
+|--------|------|---------|
+| `portal_relay_active_leases` | gauge | Non-expired lease registrations; one lease counts once even if it enables both TCP and UDP. |
+| `portal_relay_active_connections` | gauge | Bridged HTTP/SNI and raw TCP streams, including overlay streams. |
+| `portal_relay_active_udp_flows` | gauge | Tracked flows on active leases, including idle flows until expiry. |
+| `portal_relay_forwarded_stream_bytes_total` | counter | Successful stream bytes written in both directions; excludes UDP payloads. |
+| `portal_relay_http_requests_total{method,code}` | counter | Requests through the relay HTTP handler; methods outside the standard set use `unknown`. |
+| `portal_relay_http_request_duration_seconds{code}` | histogram | Time spent in the relay HTTP handler, in seconds. |
+
+The HTTP series include control API and frontend requests, but not SNI-routed
+tenant streams or raw TCP/UDP traffic. They have no URL, host, tenant, or
+application labels. The snapshot series read `portal.Server.Stats()` during
+each scrape and can reflect concurrent changes between fields. The forwarded
+byte counter resets with a new Server instance; HTTP counters reset with a new
+relay metrics registry. Standard Go and process metrics are included.
+The current snapshot cannot provide separate HTTP/SNI, raw TCP, and UDP traffic
+panels; that requires a separate relay stats contract change.
 
 ## Auth Payloads
 

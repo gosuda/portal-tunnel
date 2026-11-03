@@ -248,6 +248,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	handler := policy.Mux(server, base, ingress,
 		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 		access, cfg.PreAuth)
+	handler = relayAPI.metrics.instrument(handler)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)
 	}
@@ -275,6 +276,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 		serveErr = fmt.Errorf("serve pprof: %w", err)
 		cancel()
 		<-serveDone
+		serveErr = errors.Join(serveErr, relayErr)
 	}
 	cancel()
 

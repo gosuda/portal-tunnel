@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
 	portaltunnel "github.com/gosuda/portal-tunnel/v2"
@@ -49,6 +48,7 @@ const (
 
 type RelayAPI struct {
 	server               *portal.Server
+	metrics              *relayMetrics
 	access               *policy.Access
 	ingress              *policy.Ingress
 	adminToken           string
@@ -90,6 +90,7 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 
 	api := &RelayAPI{
 		server:               server,
+		metrics:              newRelayMetrics(server),
 		access:               access,
 		ingress:              ingress,
 		adminToken:           strings.TrimSpace(adminToken),
@@ -226,7 +227,7 @@ func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
 
 	switch path {
 	case types.PathAdmin + "/metrics":
-		promhttp.Handler().ServeHTTP(w, r)
+		api.metrics.handler.ServeHTTP(w, r)
 		return
 	default:
 		http.NotFound(w, r)
