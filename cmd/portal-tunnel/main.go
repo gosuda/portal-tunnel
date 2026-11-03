@@ -258,8 +258,8 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 		cfg.IdentityProof = ""
 	}
 	auth := cfg.ApplicationAuthConfig
-	if len(cfg.StripRequestHeaders) > 0 && strings.TrimSpace(cfg.Serve) == "" && len(cfg.HTTPRoutes) == 0 &&
-		strings.TrimSpace(cfg.TargetAddr) == "" && auth.IsZero() && cfg.Cache == nil {
+	hasHTTPSource := strings.TrimSpace(cfg.Serve) != "" || len(cfg.HTTPRoutes) > 0 || strings.TrimSpace(cfg.TargetAddr) != ""
+	if len(cfg.StripRequestHeaders) > 0 && !hasHTTPSource && auth.IsZero() && cfg.Cache == nil {
 		return tunnel.Spec{}, errStripRequestHeaderRequiresHTTPRoute
 	}
 	return cfg.Spec()
