@@ -49,7 +49,9 @@ type samlTestIdP struct {
 	metadata string
 }
 
-func newSAMLTestKey(t *testing.T) (*rsa.PrivateKey, []byte) {
+// newSAMLTestKey makes a signing key with a self-signed certificate that is
+// valid until notAfter.
+func newSAMLTestKey(t *testing.T, notAfter time.Time) (*rsa.PrivateKey, []byte) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -59,7 +61,7 @@ func newSAMLTestKey(t *testing.T) (*rsa.PrivateKey, []byte) {
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "saml test idp"},
 		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotAfter:     notAfter,
 	}
 	cert, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
@@ -71,7 +73,7 @@ func newSAMLTestKey(t *testing.T) (*rsa.PrivateKey, []byte) {
 func newSAMLTestIdP(t *testing.T) *samlTestIdP {
 	t.Helper()
 	idp := &samlTestIdP{}
-	idp.key, idp.cert = newSAMLTestKey(t)
+	idp.key, idp.cert = newSAMLTestKey(t, time.Now().Add(24*time.Hour))
 	idp.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/metadata" {
 			http.NotFound(w, r)
@@ -438,7 +440,7 @@ func TestApplicationAuthSAMLLandsOnNext(t *testing.T) {
 func TestApplicationAuthSAMLRefusals(t *testing.T) {
 	t.Parallel()
 
-	otherKey, otherCert := newSAMLTestKey(t)
+	otherKey, otherCert := newSAMLTestKey(t, time.Now().Add(24*time.Hour))
 	past := time.Now().Add(-10 * time.Minute)
 	future := time.Now().Add(10 * time.Minute)
 	tests := []struct {
@@ -809,6 +811,13 @@ func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 	if err := os.WriteFile(noKey, []byte(strings.Replace(idp.metadata, `use="signing"`, `use="encryption"`, 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The certificate expired before the check, as with an IdP that keeps a
+	// self-signed certificate past its NotAfter.
+	_, expiredCert := newSAMLTestKey(t, time.Now().Add(-time.Minute))
+	expired := filepath.Join(t.TempDir(), "expired.xml")
+	if err := os.WriteFile(expired, []byte(idp.metadataXML(base64.StdEncoding.EncodeToString(expiredCert))), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for name, tt := range map[string]struct {
 		cfg    ApplicationAuthConfig
 		usable bool
@@ -819,7 +828,8 @@ func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 		"metadata file that is missing": {samlConfig(func(cfg *ApplicationAuthConfig) {
 			cfg.SAMLMetadataFile = filepath.Join(t.TempDir(), "absent.xml")
 		}), false},
-		"metadata without a signing key": {samlConfig(func(cfg *ApplicationAuthConfig) { cfg.SAMLMetadataFile = noKey }), false},
+		"metadata without a signing key":    {samlConfig(func(cfg *ApplicationAuthConfig) { cfg.SAMLMetadataFile = noKey }), false},
+		"metadata with only an expired key": {samlConfig(func(cfg *ApplicationAuthConfig) { cfg.SAMLMetadataFile = expired }), false},
 	} {
 		if err := CheckApplicationAuthProvider(t.Context(), tt.cfg); (err == nil) != tt.usable {
 			t.Errorf("%s: CheckApplicationAuthProvider() = %v; want usable = %v", name, err, tt.usable)

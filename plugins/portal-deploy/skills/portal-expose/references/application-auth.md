@@ -98,7 +98,7 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 
 - No secret is involved, so you can run the command yourself.
 - `AUTH_SAML_METADATA_URL`, `AUTH_SAML_METADATA_FILE`, `AUTH_SAML_ENTITY_ID` and `AUTH_SAML_SUBJECT_ATTRIBUTE` stand in for the four flags, and are used only together with `--auth saml`. An `--auth-saml-*` flag without `--auth saml` is refused.
-- At start Portal reads the metadata once and logs `application auth provider is not usable` when that fails; it reads the metadata again every 15 minutes. The tunnel keeps running.
+- At start Portal reads the metadata once and logs `application auth provider is not usable` when that fails; it reads the metadata again every 15 minutes. The tunnel keeps running. Metadata in which every signing certificate has expired is refused, because a signature by an expired certificate is never accepted: the user renews the certificate at the provider.
 - Visitors must start at the tunnel URL: a sign-in started from the provider's app list (IdP-initiated) is refused. Single logout is not supported.
 - A session follows the provider's `SessionNotOnOrAfter`, between 15 minutes and 24 hours (24 hours when the provider sends none). Sessions are re-checked against `--auth-allow` on every request. Changing the metadata source, the entity ID or the subject attribute signs everyone out.
 

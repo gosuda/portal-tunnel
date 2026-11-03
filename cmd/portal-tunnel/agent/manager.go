@@ -187,8 +187,9 @@ func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) error {
 	if r.Auth != nil {
 		tunnel.Auth = *r.Auth
 		if strings.TrimSpace(tunnel.Auth) == "" {
-			if r.AuthAllowedWallets != nil || r.AuthIdentityHeaders != nil || r.AuthOIDCIssuer != nil || r.AuthOIDCClientID != nil || r.AuthOIDCClientSecret != nil ||
-				r.AuthSAMLMetadataURL != nil || r.AuthSAMLMetadataFile != nil || r.AuthSAMLEntityID != nil || r.AuthSAMLSubjectAttribute != nil {
+			namesOIDC := r.AuthOIDCIssuer != nil || r.AuthOIDCClientID != nil || r.AuthOIDCClientSecret != nil
+			namesSAML := r.AuthSAMLMetadataURL != nil || r.AuthSAMLMetadataFile != nil || r.AuthSAMLEntityID != nil || r.AuthSAMLSubjectAttribute != nil
+			if r.AuthAllowedWallets != nil || r.AuthIdentityHeaders != nil || namesOIDC || namesSAML {
 				return errAuthEmptyWhichTurnsSignOff
 			}
 			tunnel.AuthAllowedWallets = nil

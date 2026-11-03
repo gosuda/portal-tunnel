@@ -134,10 +134,12 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	metadataFile := strings.TrimSpace(cfg.SAMLMetadataFile)
 	entityID := strings.TrimSpace(cfg.SAMLEntityID)
 	subjectAttribute := strings.TrimSpace(cfg.SAMLSubjectAttribute)
-	if provider != ApplicationAuthProviderOIDC && (issuer != "" || clientID != "" || clientSecret != "") {
+	hasOIDCSettings := issuer != "" || clientID != "" || clientSecret != ""
+	hasSAMLSettings := metadataURL != "" || metadataFile != "" || entityID != "" || subjectAttribute != ""
+	if hasOIDCSettings && provider != ApplicationAuthProviderOIDC {
 		return applicationAuthSettings{}, errOIDCSettingsRequireOIDCApplicationAuth
 	}
-	if provider != ApplicationAuthProviderSAML && (metadataURL != "" || metadataFile != "" || entityID != "" || subjectAttribute != "") {
+	if hasSAMLSettings && provider != ApplicationAuthProviderSAML {
 		return applicationAuthSettings{}, errSAMLSettingsRequireSAMLApplicationAuth
 	}
 	settings := applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof}

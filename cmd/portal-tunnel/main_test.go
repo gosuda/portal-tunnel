@@ -95,8 +95,11 @@ func TestExposeAuthSAMLEnv(t *testing.T) {
 			t.Errorf("portal expose %v: %v", args, err)
 			continue
 		}
-		if spec.HTTP != nil && spec.HTTP.Auth != nil && (spec.HTTP.Auth.SAMLMetadataURL != "" || spec.HTTP.Auth.SAMLEntityID != "") {
-			t.Errorf("portal expose %v carried AUTH_SAML_* into %+v", args, spec.HTTP.Auth)
+		if spec.HTTP == nil || spec.HTTP.Auth == nil {
+			continue
+		}
+		if auth := spec.HTTP.Auth; auth.SAMLMetadataURL != "" || auth.SAMLEntityID != "" {
+			t.Errorf("portal expose %v carried AUTH_SAML_* into %+v", args, auth)
 		}
 	}
 	spec, err := exposeSpec(t, "--auth", "saml", "--auth-allow", "@example.com", "3000")

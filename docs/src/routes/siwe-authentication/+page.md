@@ -228,9 +228,11 @@ ACS address of every host with it. To keep that list short, pin one relay with
 If the IdP publishes no metadata URL, save its metadata XML to a file and use
 `--auth-saml-metadata-file <path>` instead. Set one of the two sources. Portal
 reads the metadata again every 15 minutes, so a new signing key in the metadata
-takes effect without a restart. At start, Portal reads the metadata once and
-logs `application auth provider is not usable` if that fails. The tunnel keeps
-running.
+takes effect without a restart. Portal refuses metadata in which every signing
+certificate has expired, because no signature by such a certificate is
+accepted. If the IdP keeps signing with an expired certificate, renew it at the
+IdP. At start, Portal reads the metadata once and logs `application auth
+provider is not usable` if that fails. The tunnel keeps running.
 
 ### Who may sign in with SAML
 

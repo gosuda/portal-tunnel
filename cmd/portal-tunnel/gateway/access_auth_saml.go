@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ var (
 	errSAMLMetadataNoEntityID         = errors.New("saml metadata has no identity provider entity id")
 	errSAMLMetadataNoRedirectSSO      = errors.New("saml metadata has no HTTP-Redirect single sign-on service")
 	errSAMLMetadataNoSigningKey       = errors.New("saml metadata has no signing certificate")
+	errSAMLMetadataNoValidSigningKey  = errors.New("saml metadata has no signing certificate that is valid now: every one has expired or is not yet valid")
 	errSAMLDestinationMismatch        = errors.New("saml response destination is not this tunnel's acs url")
 	errSAMLInResponseToMismatch       = errors.New("saml response does not answer this login")
 	errSAMLNeedsOneAssertion          = errors.New("saml response must carry exactly one assertion")
@@ -151,10 +153,17 @@ func normalizeSAMLMetadataURL(raw string) (string, error) {
 	if parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 		return "", errSAMLMetadataURLMustValidURL
 	}
-	if parsed.Scheme != "https" && !isLoopbackHTTP(parsed) {
+	if !secureSAMLProviderURL(parsed) {
 		return "", errSAMLMetadataURLMustUseHTTPS
 	}
 	return raw, nil
+}
+
+// secureSAMLProviderURL reports whether u reaches the identity provider over
+// https, or over http on a loopback host. The metadata and the login request
+// travel to these URLs.
+func secureSAMLProviderURL(u *url.URL) bool {
+	return u.Scheme == "https" || isLoopbackHTTP(u)
 }
 
 // validateSAMLName checks an optional setting that names something to the
@@ -256,8 +265,8 @@ func parseSAMLMetadata(data []byte) (samlIdentityProvider, error) {
 			continue
 		}
 		location, err := url.Parse(strings.TrimSpace(service.Location))
-		if err != nil || location.Host == "" || location.User != nil || location.Fragment != "" ||
-			(location.Scheme != "https" && !isLoopbackHTTP(location)) {
+		wellFormed := err == nil && location.Host != "" && location.User == nil && location.Fragment == ""
+		if !wellFormed || !secureSAMLProviderURL(location) {
 			return samlIdentityProvider{}, fmt.Errorf("saml single sign-on service must be an https url (or http on a loopback host): %q", service.Location)
 		}
 		idp.ssoURL = location.String()
@@ -284,6 +293,15 @@ func parseSAMLMetadata(data []byte) (samlIdentityProvider, error) {
 	}
 	if len(idp.certs) == 0 {
 		return samlIdentityProvider{}, errSAMLMetadataNoSigningKey
+	}
+	// goxmldsig refuses a signature by a certificate outside its validity, so
+	// metadata whose certificates have all expired could never sign anyone in.
+	// Refusing it here makes the startup check report it.
+	now := time.Now()
+	if !slices.ContainsFunc(idp.certs, func(cert *x509.Certificate) bool {
+		return !now.Before(cert.NotBefore) && !now.After(cert.NotAfter)
+	}) {
+		return samlIdentityProvider{}, errSAMLMetadataNoValidSigningKey
 	}
 	return idp, nil
 }
