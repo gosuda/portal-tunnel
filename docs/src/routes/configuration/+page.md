@@ -699,7 +699,7 @@ IP addresses are never durable moderation identities.
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `PREAUTH_SOURCE_PER_MINUTE` | `10` | Source-IP units refilled per minute |
-| `PREAUTH_SOURCE_BURST` | `20` | Source-IP burst capacity |
+| `PREAUTH_SOURCE_BURST` | `100` | Source-IP burst capacity |
 | `PREAUTH_GLOBAL_PER_MINUTE` | `600` | Relay-wide units refilled per minute |
 | `PREAUTH_GLOBAL_BURST` | `200` | Relay-wide burst capacity |
 | `PREAUTH_CHALLENGE_COST` | `1` | Units per registration challenge |
@@ -707,7 +707,11 @@ IP addresses are never durable moderation identities.
 | `PREAUTH_REGISTER_COST` | `5` | Units per registration attempt |
 
 Positive values are required; zero selects the default. Both burst capacities
-must cover the largest endpoint cost. The global default allows approximately
+must cover the largest endpoint cost. The source burst allows 16 complete
+challenge-plus-registration flows from one IP, accommodating concurrent startups
+behind a shared NAT or TCP proxy. Those clients still share a source bucket,
+refilled at 10 units per minute by default; this does not restore original client IPs.
+The global default allows approximately
 100 complete challenge-plus-registration flows per minute, with a burst of 33.
 This is an initial operational budget, not a measured capacity guarantee: tune
 it to relay resources and observed rejection rates.
