@@ -641,8 +641,10 @@ func (r *samlReplaySet) claim(id string, until, now time.Time) error {
 
 // serveSAMLMetadata publishes the service provider metadata for the host it
 // is read at, for the identity provider to import: the entity ID and the ACS
-// URL. It asks for signed assertions and offers no key, because this tunnel
-// neither signs its requests nor accepts encrypted assertions.
+// URL. It leaves WantAssertionsSigned false, because verify accepts a signed
+// response as well as signed assertions (never a response with neither), and
+// it offers no key, because this tunnel neither signs its requests nor accepts
+// encrypted assertions.
 func (a *applicationAuth) serveSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	if a.provider != ApplicationAuthProviderSAML || a.saml == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
@@ -665,7 +667,6 @@ func (a *applicationAuth) serveSAMLMetadata(w http.ResponseWriter, r *http.Reque
 	err = encoder.Encode(samlSPMetadata{
 		EntityID: a.saml.spEntityID(host),
 		SPSSODescriptor: samltypes.SPSSODescriptor{
-			WantAssertionsSigned:       true,
 			ProtocolSupportEnumeration: saml2.SAMLProtocolNamespace,
 			AssertionConsumerServices: []samltypes.IndexedEndpoint{{
 				Binding:  saml2.BindingHttpPost,

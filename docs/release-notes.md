@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Agent control API: provider check fields renamed
+
+`GET /agent/status` reports the startup check of an OIDC or SAML identity
+provider as `auth_provider_checked` and `auth_provider_error`. The fields were
+named `auth_oidc_provider_checked` and `auth_oidc_provider_error`, and the old
+names are no longer sent. A client that reads them must read the new names. The
+`portal agent dashboard` of the same release already does.
+
 ### Breaking SDK change: UDP replies preserve lease ownership
 
 Applications using `Exposure.AcceptDatagram` and `Exposure.SendDatagram` must

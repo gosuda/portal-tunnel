@@ -728,7 +728,9 @@ func TestApplicationAuthSAMLFailureScreens(t *testing.T) {
 }
 
 // The service provider metadata names the entity ID and the ACS URL of the
-// host it is read at, or the configured entity ID.
+// host it is read at, or the configured entity ID. It does not claim to want
+// signed assertions, since a signed response is accepted too
+// (TestApplicationAuthSAMLAcceptsEitherSignature).
 func TestApplicationAuthSAMLMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -753,7 +755,7 @@ func TestApplicationAuthSAMLMetadata(t *testing.T) {
 		if err := xml.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got.EntityID != want || !got.SP.WantAssertionsSigned || len(got.SP.ACS) != 1 ||
+		if got.EntityID != want || got.SP.WantAssertionsSigned || len(got.SP.ACS) != 1 ||
 			got.SP.ACS[0].Location != samlTestACSURL || got.SP.ACS[0].Binding != "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" {
 			t.Fatalf("metadata = %+v; want entity ID %q and the POST ACS at %s", got, want, samlTestACSURL)
 		}

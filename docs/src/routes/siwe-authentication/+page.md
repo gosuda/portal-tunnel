@@ -264,6 +264,16 @@ true:
 - The assertion is inside its `NotBefore` and `NotOnOrAfter` window, with one minute of clock skew.
 - Portal did not accept the assertion ID before. Portal remembers each accepted ID until the login state that it answered expires.
 
+Portal accepts a signed response with an unsigned assertion inside, as well as
+signed assertions in an unsigned response. It never accepts a response in which
+neither is signed. For this reason, the SP metadata does not set
+`WantAssertionsSigned`.
+
+Portal keeps the accepted assertion IDs in memory, so a restart of the tunnel
+forgets them. An assertion that Portal accepted just before a restart can then
+be presented once more until its 10-minute login state expires. Only someone
+who holds both the response and the visitor's state cookie can do that.
+
 IdP-initiated sign-in, which starts at the IdP's application list, is refused,
 because such a response answers no request of this tunnel. Visitors start at
 the tunnel address instead. Portal does not support single logout.
