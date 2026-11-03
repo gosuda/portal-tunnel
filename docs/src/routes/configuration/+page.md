@@ -531,7 +531,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `http_routes` | table array | HTTP route mappings; cannot be combined with `target`, `serve`, `tcp`, or `udp` |
 | `serve` | string | Static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`. Directories use `index.html`; unknown paths fall back to the entry file, which must exist when the tunnel starts |
 | `relays` | string array | Explicit relay API URLs |
-| `discovery` | bool | Include registry and relay discovery expansion |
+| `discovery` | bool | Include registry and relay discovery expansion; defaults to `true` |
 | `overlay` | bool | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
@@ -556,6 +556,13 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `x402_facilitator_token` | string | Casper facilitator authorization token; when omitted, the agent uses `CSPR_CLOUD_API_KEY` |
 | `http_routes[].amount` | string | Optional human payment amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
 | `http_routes[].methods` | string array | Optional HTTP methods that require payment on that route; empty means every method |
+
+When the agent saves `config.toml`, it writes the values that were set and
+leaves out the defaults that were not. For example, an omitted `discovery`,
+`ban_mitm`, or `max_active_relays` stays out of the file, and an explicit
+`discovery = false` stays in it. The agent always writes `id` and
+`identity_path`, because they name the tunnel and its identity. Each value must
+have the type that the table gives: the agent refuses `max_active_relays = "3"`.
 
 When any routed HTTP entry has `amount`, the tunnel also serves
 `/x402/client.js` and `/x402/prepare` on the public tunnel origin. Browser

@@ -585,12 +585,10 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 		upstreamAuth = r.Header.Get(types.HeaderPortalAuth)
 		w.WriteHeader(http.StatusNoContent)
 	}), tunnelIdentity, ApplicationAuthConfig{
-		Provider:         ApplicationAuthProviderOIDC,
-		AllowedWallets:   []string{"alice@example.com"},
-		IdentityHeaders:  true,
-		OIDCIssuerURL:    issuerURL,
-		OIDCClientID:     "portal-client",
-		OIDCClientSecret: "portal-secret",
+		Provider:        ApplicationAuthProviderOIDC,
+		AllowedWallets:  []string{"alice@example.com"},
+		IdentityHeaders: true,
+		OIDCConfig:      OIDCConfig{OIDCIssuerURL: issuerURL, OIDCClientID: "portal-client", OIDCClientSecret: "portal-secret"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -658,12 +656,10 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 	revokedGate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}), tunnelIdentity, ApplicationAuthConfig{
-		Provider:         ApplicationAuthProviderOIDC,
-		AllowedWallets:   []string{"bob@example.com"},
-		IdentityHeaders:  true,
-		OIDCIssuerURL:    issuerURL,
-		OIDCClientID:     "portal-client",
-		OIDCClientSecret: "portal-secret",
+		Provider:        ApplicationAuthProviderOIDC,
+		AllowedWallets:  []string{"bob@example.com"},
+		IdentityHeaders: true,
+		OIDCConfig:      OIDCConfig{OIDCIssuerURL: issuerURL, OIDCClientID: "portal-client", OIDCClientSecret: "portal-secret"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -965,7 +961,7 @@ func TestSanitizeApplicationAuthNext(t *testing.T) {
 func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
 	t.Parallel()
 
-	cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}
+	cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
 	if err := ValidateApplicationAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
 		t.Fatalf("ValidateApplicationAuthConfig without an allowlist = %v; want an error naming --auth-allow", err)
 	}
@@ -1001,11 +997,9 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		{
 			name: "oidc values are trimmed and normalized",
 			cfg: ApplicationAuthConfig{
-				Provider:         " OIDC ",
-				AllowedWallets:   []string{"Alice@Example.com", "alice@example.com"},
-				OIDCIssuerURL:    " https://idp.example/ ",
-				OIDCClientID:     " portal-client ",
-				OIDCClientSecret: " secret ",
+				Provider:       " OIDC ",
+				AllowedWallets: []string{"Alice@Example.com", "alice@example.com"},
+				OIDCConfig:     OIDCConfig{OIDCIssuerURL: " https://idp.example/ ", OIDCClientID: " portal-client ", OIDCClientSecret: " secret "},
 			},
 			want: applicationAuthSettings{
 				provider:     ApplicationAuthProviderOIDC,
@@ -1038,8 +1032,7 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 				AllowedWallets:  []string{"alice@example.com"},
 				IdentityHeaders: true,
 				IdentityProof:   identityProofTestValue,
-				OIDCIssuerURL:   "https://idp.example",
-				OIDCClientID:    oidcTestClientID,
+				OIDCConfig:      OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
 			},
 			want: applicationAuthSettings{
 				provider:      ApplicationAuthProviderOIDC,
@@ -1091,37 +1084,35 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		},
 		{
 			name:    "oidc settings with another provider",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, OIDCClientID: oidcTestClientID},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
 			wantErr: "oidc settings require the oidc application auth provider",
 		},
 		{
 			name:    "oidc without an allowlist",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}},
 			wantErr: "--auth-allow",
 		},
 		{
 			name:    "oidc without an issuer",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCClientID: oidcTestClientID},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
 			wantErr: "issuer url is required",
 		},
 		{
 			name:    "oidc with a cleartext issuer",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCIssuerURL: "http://idp.example", OIDCClientID: oidcTestClientID},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "http://idp.example", OIDCClientID: oidcTestClientID}},
 			wantErr: "must use https",
 		},
 		{
 			name:    "oidc without a client id",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCIssuerURL: "https://idp.example", OIDCClientID: "  "},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: "  "}},
 			wantErr: "client id is required",
 		},
 		{
 			name: "saml values are trimmed and normalized",
 			cfg: ApplicationAuthConfig{
-				Provider:             " SAML ",
-				AllowedWallets:       []string{"Alice@Example.com", "@example.org", "sub:A1"},
-				SAMLMetadataURL:      " https://login.example/federationmetadata.xml?appid=1 ",
-				SAMLEntityID:         " urn:portal:app ",
-				SAMLSubjectAttribute: " email ",
+				Provider:       " SAML ",
+				AllowedWallets: []string{"Alice@Example.com", "@example.org", "sub:A1"},
+				SAMLConfig:     SAMLConfig{SAMLMetadataURL: " https://login.example/federationmetadata.xml?appid=1 ", SAMLEntityID: " urn:portal:app ", SAMLSubjectAttribute: " email "},
 			},
 			want: applicationAuthSettings{
 				provider:             ApplicationAuthProviderSAML,
@@ -1133,22 +1124,22 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		},
 		{
 			name: "saml metadata from a file",
-			cfg:  ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataFile: " idp.xml "},
+			cfg:  ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: " idp.xml "}},
 			want: applicationAuthSettings{provider: ApplicationAuthProviderSAML, allowed: []string{"alice@example.com"}, samlMetadataFile: "idp.xml"},
 		},
 		{
 			name:    "saml settings with another provider",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID, SAMLEntityID: "urn:portal:app"},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}, SAMLConfig: SAMLConfig{SAMLEntityID: "urn:portal:app"}},
 			wantErr: "saml settings require the saml application auth provider",
 		},
 		{
 			name:    "oidc settings with saml",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataFile: "idp.xml", OIDCClientID: oidcTestClientID},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: "idp.xml"}, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
 			wantErr: "oidc settings require the oidc application auth provider",
 		},
 		{
 			name:    "saml without an allowlist",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, SAMLMetadataURL: "https://idp.example/metadata"},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, SAMLConfig: SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"}},
 			wantErr: "--auth-allow",
 		},
 		{
@@ -1158,17 +1149,17 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		},
 		{
 			name:    "saml with two metadata sources",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataURL: "https://idp.example/metadata", SAMLMetadataFile: "idp.xml"},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLMetadataFile: "idp.xml"}},
 			wantErr: "not both",
 		},
 		{
 			name:    "saml with cleartext metadata",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataURL: "http://idp.example/metadata"},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataURL: "http://idp.example/metadata"}},
 			wantErr: "must use https",
 		},
 		{
 			name:    "saml entity id longer than SAML allows",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataFile: "idp.xml", SAMLEntityID: "urn:" + strings.Repeat("a", 1024)},
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: "idp.xml", SAMLEntityID: "urn:" + strings.Repeat("a", 1024)}},
 			wantErr: "saml entity id must be at most 1024 characters",
 		},
 	}
@@ -1204,8 +1195,7 @@ func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
 	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
 		Provider:       ApplicationAuthProviderOIDC,
 		AllowedWallets: []string{"sub:" + sub},
-		OIDCIssuerURL:  "https://idp.example",
-		OIDCClientID:   oidcTestClientID,
+		OIDCConfig:     OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1238,11 +1228,9 @@ func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 	newGate := func(t *testing.T, issuer, clientID, clientSecret string) *applicationAuth {
 		t.Helper()
 		handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
-			Provider:         ApplicationAuthProviderOIDC,
-			AllowedWallets:   []string{"alice@example.com"},
-			OIDCIssuerURL:    issuer,
-			OIDCClientID:     clientID,
-			OIDCClientSecret: clientSecret,
+			Provider:       ApplicationAuthProviderOIDC,
+			AllowedWallets: []string{"alice@example.com"},
+			OIDCConfig:     OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: clientID, OIDCClientSecret: clientSecret},
 		})
 		if err != nil {
 			t.Fatal(err)

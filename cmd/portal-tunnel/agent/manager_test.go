@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -28,7 +30,7 @@ const unreachableIssuer = "http://127.0.0.1:1"
 
 func testTunnel(id string) TunnelConfig {
 	discovery := false
-	return TunnelConfig{ID: id, TargetAddr: "127.0.0.1:3000", RelayURLs: []string{unreachableRelay}, Discovery: &discovery}
+	return TunnelConfig{ID: id, Config: tunnel.Config{TargetAddr: "127.0.0.1:3000", RelayURLs: []string{unreachableRelay}, Discovery: &discovery}}
 }
 
 // testManager builds a manager from a config file written and loaded the way
@@ -92,18 +94,18 @@ func tunnelStatus(t *testing.T, m *manager, id string) AgentTunnelStatus {
 
 func oidcTunnel(id, issuer, secret string) TunnelConfig {
 	cfg := testTunnel(id)
-	cfg.Auth = "oidc"
-	cfg.AuthAllowedWallets = []string{"alice@example.com"}
-	cfg.AuthOIDCIssuer = issuer
-	cfg.AuthOIDCClientID = "client-123"
-	cfg.AuthOIDCClientSecret = secret
+	cfg.Provider = "oidc"
+	cfg.AllowedWallets = []string{"alice@example.com"}
+	cfg.OIDCIssuerURL = issuer
+	cfg.OIDCClientID = "client-123"
+	cfg.OIDCClientSecret = secret
 	return cfg
 }
 
 func TestTunnelStatusAuthSettings(t *testing.T) {
 	const secret = "s3cret-client-secret"
 	credential := testTunnel("credential")
-	credential.Auth = "credential"
+	credential.Provider = "credential"
 	m, _ := testManager(t,
 		oidcTunnel("oidc", "https://accounts.example.com", secret),
 		credential,
@@ -159,7 +161,7 @@ func toStrings(value any) []string {
 // the check for a running OIDC tunnel and for no other tunnel.
 func TestTunnelStatusOIDCProviderCheck(t *testing.T) {
 	siwe := testTunnel("siwe")
-	siwe.Auth = "siwe"
+	siwe.Provider = "siwe"
 	m, _ := testManager(t, oidcTunnel("oidc", unreachableIssuer, ""), siwe)
 	startManager(t, m)
 
@@ -214,8 +216,8 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 			name: "metadata leaves sign-in alone",
 			body: `{"metadata":{"description":"hello"}}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if saved.Description != "hello" || saved.Auth != "oidc" || saved.AuthOIDCClientSecret != oldSecret ||
-					!slices.Equal(saved.AuthAllowedWallets, []string{"alice@example.com"}) {
+				if saved.Description != "hello" || saved.Provider != "oidc" || saved.OIDCClientSecret != oldSecret ||
+					!slices.Equal(saved.AllowedWallets, []string{"alice@example.com"}) {
 					t.Fatalf("saved = %+v", saved)
 				}
 			},
@@ -224,10 +226,19 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 			name: "allowlist replaces only the allowlist",
 			body: `{"auth_allowed_wallets":["Bob@Example.com","sub:42"]}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if !slices.Equal(saved.AuthAllowedWallets, []string{"bob@example.com", "sub:42"}) ||
-					!slices.Equal(status.AuthAllowedWallets, saved.AuthAllowedWallets) ||
-					saved.AuthOIDCIssuer != unreachableIssuer || saved.AuthOIDCClientID != "client-123" || saved.AuthOIDCClientSecret != oldSecret {
-					t.Fatalf("saved = %+v, status allowlist = %v", saved, status.AuthAllowedWallets)
+				if !slices.Equal(saved.AllowedWallets, []string{"bob@example.com", "sub:42"}) ||
+					!slices.Equal(status.AllowedWallets, saved.AllowedWallets) ||
+					saved.OIDCIssuerURL != unreachableIssuer || saved.OIDCClientID != "client-123" || saved.OIDCClientSecret != oldSecret {
+					t.Fatalf("saved = %+v, status allowlist = %v", saved, status.AllowedWallets)
+				}
+			},
+		},
+		{
+			name: "null leaves a field as it is",
+			body: `{"metadata":{"description":"again"},"auth_allowed_wallets":null,"auth_oidc_issuer":null}`,
+			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
+				if !slices.Equal(saved.AllowedWallets, []string{"bob@example.com", "sub:42"}) || saved.OIDCIssuerURL != unreachableIssuer {
+					t.Fatalf("saved = %+v", saved)
 				}
 			},
 		},
@@ -235,8 +246,8 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 			name: "secret is replaced and never echoed",
 			body: `{"auth_oidc_client_secret":"` + newSecret + `"}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if saved.AuthOIDCClientSecret != newSecret || !status.AuthOIDCClientSecretSet {
-					t.Fatalf("saved secret = %q, secret set = %v", saved.AuthOIDCClientSecret, status.AuthOIDCClientSecretSet)
+				if saved.OIDCClientSecret != newSecret || !status.AuthOIDCClientSecretSet {
+					t.Fatalf("saved secret = %q, secret set = %v", saved.OIDCClientSecret, status.AuthOIDCClientSecretSet)
 				}
 				if data, _ := json.Marshal(status); strings.Contains(string(data), newSecret) {
 					t.Fatalf("status exposes the client secret: %s", data)
@@ -247,7 +258,7 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 			name: "empty secret clears it",
 			body: `{"auth_oidc_client_secret":""}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if saved.AuthOIDCClientSecret != "" || status.AuthOIDCClientSecretSet || saved.Auth != "oidc" {
+				if saved.OIDCClientSecret != "" || status.AuthOIDCClientSecretSet || saved.Provider != "oidc" {
 					t.Fatalf("saved = %+v, secret set = %v", saved, status.AuthOIDCClientSecretSet)
 				}
 			},
@@ -268,7 +279,7 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 
 func TestUpdateTunnelEmptyAuthTurnsSignInOff(t *testing.T) {
 	cfg := oidcTunnel("app", unreachableIssuer, "client-secret")
-	cfg.AuthIdentityHeaders = true
+	cfg.IdentityHeaders = true
 	m, path := testManager(t, cfg)
 	startManager(t, m)
 
@@ -277,8 +288,8 @@ func TestUpdateTunnelEmptyAuthTurnsSignInOff(t *testing.T) {
 	}
 	saved := savedTunnel(t, path, "app")
 	status := tunnelStatus(t, m, "app")
-	if !reflect.DeepEqual(saved.applicationAuth(), TunnelConfig{}.applicationAuth()) {
-		t.Fatalf("saved auth = %+v", saved.applicationAuth())
+	if auth := saved.ApplicationAuthConfig; !auth.IsZero() {
+		t.Fatalf("saved auth = %+v", auth)
 	}
 	// Every sign-in field is omitted from the status when it is empty.
 	if data, _ := json.Marshal(status); strings.Contains(string(data), `"auth`) {
@@ -290,8 +301,8 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 	const secret = "rejected-client-secret"
 	wallet := "0x0000000000000000000000000000000000000001"
 	signedIn := testTunnel("signedin")
-	signedIn.Auth = "siwe"
-	signedIn.AuthAllowedWallets = []string{wallet}
+	signedIn.Provider = "siwe"
+	signedIn.AllowedWallets = []string{wallet}
 	tcp := testTunnel("tcp")
 	tcp.TCPEnabled = true
 	udp := testTunnel("udp")
@@ -312,6 +323,7 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 		{name: "allowlist without provider", id: "plain", want: "unsupported application auth provider", body: `{"auth_allowed_wallets":["` + wallet + `"]}`},
 		{name: "settings together with sign-in turned off", id: "signedin", want: "leave out the other auth fields",
 			body: `{"auth":"","auth_oidc_issuer":"https://accounts.example.com"}`},
+		{name: "unknown auth field", id: "signedin", want: "unknown field", body: `{"auth_oidc_isuer":"https://accounts.example.com"}`},
 		{name: "tcp", id: "tcp", want: "cannot be combined with TCP or UDP", body: `{"auth":"siwe"}`},
 		{name: "udp", id: "udp", want: "cannot be combined with TCP or UDP", body: `{"auth":"credential"}`},
 	} {
@@ -353,7 +365,7 @@ func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 		t.Fatal(err)
 	}
 	edited := testTunnel("a")
-	edited.Auth = "credential"
+	edited.Provider = "credential"
 	m, _ := testManager(t, edited, testTunnel("b"))
 	startManager(t, m)
 	eventually(t, "both tunnels to run", func() bool {
@@ -416,13 +428,13 @@ func TestAddTunnelWithAuth(t *testing.T) {
 		}
 
 		siwe := savedTunnel(t, path, "siwe")
-		if siwe.Auth != "siwe" || !slices.Equal(siwe.AuthAllowedWallets, []string{wallet}) || !siwe.AuthIdentityHeaders {
+		if siwe.Provider != "siwe" || !slices.Equal(siwe.AllowedWallets, []string{wallet}) || !siwe.IdentityHeaders {
 			t.Fatalf("saved siwe tunnel = %+v", siwe)
 		}
-		if oidc := savedTunnel(t, path, "oidc"); oidc.Auth != "oidc" || oidc.AuthOIDCClientID != "client-123" || oidc.AuthOIDCClientSecret != secret {
+		if oidc := savedTunnel(t, path, "oidc"); oidc.Provider != "oidc" || oidc.OIDCClientID != "client-123" || oidc.OIDCClientSecret != secret {
 			t.Fatalf("saved oidc tunnel = %+v", oidc)
 		}
-		if got := tunnelStatus(t, m, "oidc"); !got.AuthOIDCClientSecretSet || got.AuthOIDCClientID != "client-123" {
+		if got := tunnelStatus(t, m, "oidc"); !got.AuthOIDCClientSecretSet || got.OIDCClientID != "client-123" {
 			t.Fatalf("oidc tunnel status = %+v", got)
 		}
 	})
@@ -497,4 +509,26 @@ func TestAddTunnelStaticSite(t *testing.T) {
 			t.Fatalf("refused tunnel changed the config file (err %v):\n%s", err, fileAfter)
 		}
 	})
+}
+
+// A tunnel added through the API is saved with what the request set, explicit
+// false included, and without the defaults it left out; the status reports
+// them resolved.
+func TestAddTunnelSavesOnlyWhatWasSent(t *testing.T) {
+	m, path := testManager(t)
+	startManager(t, m)
+	body := `{"id":"web","discovery":false,"relays":["` + unreachableRelay + `"]}`
+	if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body); code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", code, resp)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "max_active_relays") || !strings.Contains(string(saved), "discovery = false") {
+		t.Fatalf("saved config:\n%s", saved)
+	}
+	if status := tunnelStatus(t, m, "web"); status.Discovery || status.MaxActiveRelays != discovery.DefaultMaxActiveRelays {
+		t.Fatalf("status = %+v", status)
+	}
 }

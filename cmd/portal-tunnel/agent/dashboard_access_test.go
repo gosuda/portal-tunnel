@@ -36,21 +36,21 @@ const fakeSecret = "not-a-real-secret-0123"
 func testAccessStatus() AgentStatusResponse {
 	status := testDashboardStatus()
 	web, api, paid, idle := &status.Tunnels[0], &status.Tunnels[1], &status.Tunnels[2], &status.Tunnels[4]
-	web.Auth = gateway.ApplicationAuthProviderOIDC
-	web.AuthAllowedWallets = []string{"alice@example.com", "@corp.example.com", "sub:4f2a9c"}
-	web.AuthIdentityHeaders = true
-	web.AuthOIDCIssuer = "https://accounts.example.com"
-	web.AuthOIDCClientID = "portal-web"
+	web.Provider = gateway.ApplicationAuthProviderOIDC
+	web.AllowedWallets = []string{"alice@example.com", "@corp.example.com", "sub:4f2a9c"}
+	web.IdentityHeaders = true
+	web.OIDCIssuerURL = "https://accounts.example.com"
+	web.OIDCClientID = "portal-web"
 	web.AuthOIDCClientSecretSet = true
 	web.AuthProviderChecked = true
 	web.AuthProviderError = "fetch oidc discovery: no such host"
-	api.Auth = gateway.ApplicationAuthProviderSIWE
-	api.AuthAllowedWallets = []string{"0x52908400098527886E0F7030069857D2E4169EE7"}
-	paid.Auth = gateway.ApplicationAuthProviderCredential
-	idle.Auth = gateway.ApplicationAuthProviderOIDC
-	idle.AuthAllowedWallets = []string{"bob@example.com"}
-	idle.AuthOIDCIssuer = "https://login.example.org"
-	idle.AuthOIDCClientID = "portal-idle"
+	api.Provider = gateway.ApplicationAuthProviderSIWE
+	api.AllowedWallets = []string{"0x52908400098527886E0F7030069857D2E4169EE7"}
+	paid.Provider = gateway.ApplicationAuthProviderCredential
+	idle.Provider = gateway.ApplicationAuthProviderOIDC
+	idle.AllowedWallets = []string{"bob@example.com"}
+	idle.OIDCIssuerURL = "https://login.example.org"
+	idle.OIDCClientID = "portal-idle"
 	return status
 }
 
@@ -121,7 +121,7 @@ func TestDashboardSettingsListOnlyTheFirstEntriesOfALongAllowList(t *testing.T) 
 	for _, name := range []string{"a", "b", "c", "d", "e", "f"} {
 		entries = append(entries, name+"@example.com")
 	}
-	status.Tunnels[0].AuthAllowedWallets = entries
+	status.Tunnels[0].AllowedWallets = entries
 	view := settingsOf(t, status, 0)
 	if !strings.Contains(view, "d@example.com") || strings.Contains(view, "e@example.com") || !strings.Contains(view, "+2 more") {
 		t.Fatalf("the allow list should list four entries and count the rest:\n%s", view)
@@ -224,6 +224,19 @@ func accessBody(t *testing.T, model agentDashboardModel) string {
 		t.Fatal(err)
 	}
 	return string(body)
+}
+
+// sameJSON reports whether two JSON objects hold the same fields, in any order.
+func sameJSON(t *testing.T, a, b string) bool {
+	t.Helper()
+	var x, y map[string]any
+	if err := json.Unmarshal([]byte(a), &x); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(b), &y); err != nil {
+		t.Fatal(err)
+	}
+	return reflect.DeepEqual(x, y)
 }
 
 func TestNewSecretInputMasksByDefault(t *testing.T) {
@@ -360,7 +373,7 @@ func TestDashboardAccessRequestNamesOnlyWhatChanged(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			model := accessScreen(t, theme, testAccessStatus(), tt.down, tt.keys...)
-			if got := accessBody(t, model); got != tt.want {
+			if got := accessBody(t, model); !sameJSON(t, got, tt.want) {
 				t.Fatalf("request body = %s\nwant           %s", got, tt.want)
 			}
 			applied, cmd := press(model, keyF2)
@@ -446,7 +459,7 @@ func TestDashboardAccessApply(t *testing.T) {
 func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	added := testAccessStatus()
-	added.Tunnels[accessWeb].AuthAllowedWallets = append(added.Tunnels[accessWeb].AuthAllowedWallets, "carol@example.com")
+	added.Tunnels[accessWeb].AllowedWallets = append(added.Tunnels[accessWeb].AllowedWallets, "carol@example.com")
 
 	model := accessScreen(t, theme, testAccessStatus(), accessWeb, append(downs(4), keyRunes("carol@example.com"), keyEnter)...)
 	model = send(press1(model, keyF2), agentDashboardAccessMsg{tunnelID: "web"})
@@ -472,8 +485,8 @@ func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) 
 func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	elsewhere := testAccessStatus()
-	elsewhere.Tunnels[accessWeb].AuthAllowedWallets = []string{"alice@example.com", "dave@example.com"}
-	elsewhere.Tunnels[accessWeb].AuthOIDCClientID = "portal-web-2"
+	elsewhere.Tunnels[accessWeb].AllowedWallets = []string{"alice@example.com", "dave@example.com"}
+	elsewhere.Tunnels[accessWeb].OIDCClientID = "portal-web-2"
 
 	for _, tt := range []struct {
 		name string
@@ -548,7 +561,7 @@ func TestDashboardAccessAppliesOneAtATime(t *testing.T) {
 
 	t.Run("an edit made while it runs is dropped for the stored settings", func(t *testing.T) {
 		applied := testAccessStatus()
-		applied.Tunnels[accessWeb].AuthAllowedWallets = append(applied.Tunnels[accessWeb].AuthAllowedWallets, "carol@example.com")
+		applied.Tunnels[accessWeb].AllowedWallets = append(applied.Tunnels[accessWeb].AllowedWallets, "carol@example.com")
 		model := press1(accessScreen(t, theme, testAccessStatus(), accessWeb, typedEntry...), keyF2)
 		model = press1(model, keyRunes("erin@example.com"), keyEnter)
 		model = send(model, agentDashboardStatusMsg{status: applied})
@@ -779,7 +792,7 @@ func TestDashboardAccessFollowsTheFocusInALongList(t *testing.T) {
 	for i := range entries {
 		entries[i] = fmt.Sprintf("user%02d@example.com", i)
 	}
-	status.Tunnels[accessWeb].AuthAllowedWallets = entries
+	status.Tunnels[accessWeb].AllowedWallets = entries
 
 	for _, size := range [][2]int{{80, 24}, {100, 30}} {
 		model := newTestDashboard(t, theme, size[0], size[1], agentDashboardStatusMsg{status: status}, keyF4)
@@ -805,7 +818,7 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 	const storedSecret = "stored-fake-secret"
 	const wallet = "0x52908400098527886E0F7030069857D2E4169EE7"
 	app := oidcTunnel("app", unreachableIssuer, storedSecret)
-	app.AuthIdentityHeaders = true
+	app.IdentityHeaders = true
 	m, path := testManager(t, app, testTunnel("site"))
 	startManager(t, m)
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
@@ -820,49 +833,49 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 		// app has one entry, so its focus ring is mode, entry 1, add 2, headers 3, issuer 4, client ID 5, secret 6.
 		{"remove the stored secret and add an entry", 0, []tea.Msg{keyUp, keyF6, keyDown, keyDown, keyDown, typed("carol@example.com"), keyEnter},
 			func(t *testing.T, saved TunnelConfig) {
-				if !slices.Equal(saved.AuthAllowedWallets, []string{"alice@example.com", "carol@example.com"}) || saved.AuthOIDCClientSecret != "" {
+				if !slices.Equal(saved.AllowedWallets, []string{"alice@example.com", "carol@example.com"}) || saved.OIDCClientSecret != "" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"type a secret and turn the identity headers off", 0, []tea.Msg{keyUp, typed("replacement-fake-secret"), keyUp, keyUp, keyUp, keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.AuthOIDCClientSecret != "replacement-fake-secret" || saved.AuthIdentityHeaders {
+				if saved.OIDCClientSecret != "replacement-fake-secret" || saved.IdentityHeaders {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"leave the stored secret alone while the issuer changes", 0, []tea.Msg{keyUp, keyUp, keyUp, typed("/")},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.AuthOIDCClientSecret != "replacement-fake-secret" || saved.AuthOIDCIssuer != unreachableIssuer+"/" {
+				if saved.OIDCClientSecret != "replacement-fake-secret" || saved.OIDCIssuerURL != unreachableIssuer+"/" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"remove the secret", 0, []tea.Msg{keyUp, keyF6},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.AuthOIDCClientSecret != "" || saved.Auth != "oidc" {
+				if saved.OIDCClientSecret != "" || saved.Provider != "oidc" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"OIDC to wallet", 0, []tea.Msg{keyLeft, keyDown, typed(wallet), keyEnter},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.Auth != "siwe" || len(saved.AuthAllowedWallets) != 1 || saved.AuthOIDCIssuer != "" || saved.AuthOIDCClientID != "" || saved.AuthOIDCClientSecret != "" {
+				if saved.Provider != "siwe" || len(saved.AllowedWallets) != 1 || saved.OIDCIssuerURL != "" || saved.OIDCClientID != "" || saved.OIDCClientSecret != "" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"wallet to credential", 0, []tea.Msg{keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.Auth != "credential" || len(saved.AuthAllowedWallets) != 0 {
+				if saved.Provider != "credential" || len(saved.AllowedWallets) != 0 {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"credential to open", 0, []tea.Msg{keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if !reflect.DeepEqual(saved.applicationAuth(), TunnelConfig{}.applicationAuth()) {
+				if auth := saved.ApplicationAuthConfig; !auth.IsZero() {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"open to OIDC", 1, []tea.Msg{keyRight, keyRight, keyRight, keyDown, typed("bob@example.com"), keyEnter, keyDown, keyDown, typed(unreachableIssuer), keyDown, typed("client-1"), keyDown, typed("first-fake-secret")},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.Auth != "oidc" || saved.AuthOIDCIssuer != unreachableIssuer || saved.AuthOIDCClientID != "client-1" || saved.AuthOIDCClientSecret != "first-fake-secret" {
+				if saved.Provider != "oidc" || saved.OIDCIssuerURL != unreachableIssuer || saved.OIDCClientID != "client-1" || saved.OIDCClientSecret != "first-fake-secret" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},

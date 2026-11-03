@@ -79,7 +79,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// A wallet session is read-only and may be open to any wallet, so it
 			// does not learn who may sign in to a tunnel.
 			for i := range status.Tunnels {
-				status.Tunnels[i].AuthAllowedWallets = nil
+				status.Tunnels[i].AllowedWallets = nil
 			}
 		}
 		utils.WriteAPIData(w, http.StatusOK, status)

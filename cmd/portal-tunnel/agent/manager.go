@@ -153,22 +153,22 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 		}
 		if req.Metadata != nil {
 			if req.Metadata.Description != nil {
-				tunnel.Description = strings.TrimSpace(*req.Metadata.Description)
+				tunnel.Description = *req.Metadata.Description
 			}
 			if req.Metadata.Owner != nil {
-				tunnel.Owner = strings.TrimSpace(*req.Metadata.Owner)
+				tunnel.Owner = *req.Metadata.Owner
 			}
 			if req.Metadata.Thumbnail != nil {
-				tunnel.Thumbnail = strings.TrimSpace(*req.Metadata.Thumbnail)
+				tunnel.Thumbnail = *req.Metadata.Thumbnail
 			}
 			if req.Metadata.Tags != nil {
-				tunnel.Tags = normalizeAgentMetadataTags(*req.Metadata.Tags)
+				tunnel.Tags = *req.Metadata.Tags
 			}
 			if req.Metadata.Hide != nil {
 				tunnel.Hide = *req.Metadata.Hide
 			}
 		}
-		return req.applyAuth(tunnel)
+		return req.applyAuth(&tunnel.ApplicationAuthConfig)
 	}); err != nil {
 		return err
 	}
@@ -181,56 +181,6 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 		return fmt.Errorf("tunnel %q not found", id)
 	}
 	return tunnel.UpdateSettings(updateMetadata, updateMaxActiveRelays)
-}
-
-func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) error {
-	if r.Auth != nil {
-		tunnel.Auth = *r.Auth
-		if strings.TrimSpace(tunnel.Auth) == "" {
-			namesOIDC := r.AuthOIDCIssuer != nil || r.AuthOIDCClientID != nil || r.AuthOIDCClientSecret != nil
-			namesSAML := r.AuthSAMLMetadataURL != nil || r.AuthSAMLMetadataFile != nil || r.AuthSAMLEntityID != nil || r.AuthSAMLSubjectAttribute != nil
-			if r.AuthAllowedWallets != nil || r.AuthIdentityHeaders != nil || namesOIDC || namesSAML {
-				return errAuthEmptyWhichTurnsSignOff
-			}
-			tunnel.AuthAllowedWallets = nil
-			tunnel.AuthIdentityHeaders = false
-			tunnel.AuthOIDCIssuer = ""
-			tunnel.AuthOIDCClientID = ""
-			tunnel.AuthOIDCClientSecret = ""
-			tunnel.AuthSAMLMetadataURL = ""
-			tunnel.AuthSAMLMetadataFile = ""
-			tunnel.AuthSAMLEntityID = ""
-			tunnel.AuthSAMLSubjectAttribute = ""
-		}
-	}
-	if r.AuthAllowedWallets != nil {
-		tunnel.AuthAllowedWallets = append([]string(nil), *r.AuthAllowedWallets...)
-	}
-	if r.AuthIdentityHeaders != nil {
-		tunnel.AuthIdentityHeaders = *r.AuthIdentityHeaders
-	}
-	if r.AuthOIDCIssuer != nil {
-		tunnel.AuthOIDCIssuer = *r.AuthOIDCIssuer
-	}
-	if r.AuthOIDCClientID != nil {
-		tunnel.AuthOIDCClientID = *r.AuthOIDCClientID
-	}
-	if r.AuthOIDCClientSecret != nil {
-		tunnel.AuthOIDCClientSecret = *r.AuthOIDCClientSecret
-	}
-	if r.AuthSAMLMetadataURL != nil {
-		tunnel.AuthSAMLMetadataURL = *r.AuthSAMLMetadataURL
-	}
-	if r.AuthSAMLMetadataFile != nil {
-		tunnel.AuthSAMLMetadataFile = *r.AuthSAMLMetadataFile
-	}
-	if r.AuthSAMLEntityID != nil {
-		tunnel.AuthSAMLEntityID = *r.AuthSAMLEntityID
-	}
-	if r.AuthSAMLSubjectAttribute != nil {
-		tunnel.AuthSAMLSubjectAttribute = *r.AuthSAMLSubjectAttribute
-	}
-	return nil
 }
 
 func (m *manager) AddTunnel(req AgentTunnelRequest) error {
@@ -251,62 +201,28 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		return err
 	}
 	target := strings.TrimSpace(req.TargetAddr)
-	serve := strings.TrimSpace(req.Serve)
-	httpRoutes := make([]tunnel.HTTPRoute, 0, len(req.HTTPRoutes))
-	for _, route := range req.HTTPRoutes {
-		httpRoutes = append(httpRoutes, tunnel.HTTPRoute{
-			Prefix:   strings.TrimSpace(route.Prefix),
-			Upstream: strings.TrimSpace(route.Upstream),
-			Methods:  normalizeAgentHTTPRouteMethods(route.Methods),
-			Amount:   strings.TrimSpace(route.Amount),
-		})
-	}
-	if target != "" && len(httpRoutes) > 0 {
+	if target != "" && len(req.HTTPRoutes) > 0 {
 		return errTargetCannotCombinedHTTPRoutes
 	}
-	if target == "" && serve == "" && len(httpRoutes) == 0 {
+	if target == "" && strings.TrimSpace(req.Serve) == "" && len(req.HTTPRoutes) == 0 {
 		target = defaultTargetAddr
-	}
-	name = cmp.Or(name, id)
-	relayURLs, err := utils.NormalizeRelayURLs(req.RelayURLs...)
-	if err != nil {
-		return err
-	}
-	discovery := true
-	if req.Discovery != nil {
-		discovery = *req.Discovery
 	}
 	if req.MaxActiveRelays < 0 {
 		return errMaxActiveRelaysCannotNegative
 	}
-	x402 := req.Copy()
-	x402.PayTo = strings.TrimSpace(x402.PayTo)
-	x402.Network = strings.ToLower(strings.TrimSpace(x402.Network))
-	x402.Asset = strings.TrimSpace(x402.Asset)
-	x402.Endpoints = compactStrings(x402.Endpoints)
-	tunnelCfg := TunnelConfig{
-		ID:                       id,
-		Name:                     name,
-		TargetAddr:               target,
-		Serve:                    serve,
-		HTTPRoutes:               httpRoutes,
-		StripRequestHeaders:      append([]string(nil), req.StripRequestHeaders...),
-		RelayURLs:                relayURLs,
-		Discovery:                &discovery,
-		Overlay:                  req.Overlay,
-		MaxActiveRelays:          req.MaxActiveRelays,
-		Auth:                     req.Auth,
-		AuthAllowedWallets:       append([]string(nil), req.AuthAllowedWallets...),
-		AuthIdentityHeaders:      req.AuthIdentityHeaders,
-		AuthOIDCIssuer:           req.AuthOIDCIssuer,
-		AuthOIDCClientID:         req.AuthOIDCClientID,
-		AuthOIDCClientSecret:     req.AuthOIDCClientSecret,
-		AuthSAMLMetadataURL:      req.AuthSAMLMetadataURL,
-		AuthSAMLMetadataFile:     req.AuthSAMLMetadataFile,
-		AuthSAMLEntityID:         req.AuthSAMLEntityID,
-		AuthSAMLSubjectAttribute: req.AuthSAMLSubjectAttribute,
-		X402Config:               x402,
-	}
+	tunnelCfg := TunnelConfig{ID: id, Config: tunnel.Config{
+		Name:                  cmp.Or(name, id),
+		TargetAddr:            target,
+		Serve:                 req.Serve,
+		HTTPRoutes:            req.HTTPRoutes,
+		StripRequestHeaders:   req.StripRequestHeaders,
+		RelayURLs:             req.RelayURLs,
+		Discovery:             req.Discovery,
+		Overlay:               req.Overlay,
+		MaxActiveRelays:       req.MaxActiveRelays,
+		ApplicationAuthConfig: req.ApplicationAuthConfig,
+		X402Config:            req.X402Config,
+	}}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
 		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
 	}
@@ -330,17 +246,6 @@ func agentTunnelID(name string) string {
 		dash = false
 	}
 	return strings.Trim(out.String(), "-")
-}
-
-func normalizeAgentHTTPRouteMethods(methods []string) []string {
-	out := make([]string, 0, len(methods))
-	for _, raw := range methods {
-		method := strings.ToUpper(strings.TrimSpace(raw))
-		if method != "" && !slices.Contains(out, method) {
-			out = append(out, method)
-		}
-	}
-	return out
 }
 
 func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error) error {
@@ -368,7 +273,7 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 		return nil
 	}
 	cfg.sourcePath = path
-	if err := cfg.ApplyDefaults(path); err != nil {
+	if err := cfg.normalize(path); err != nil {
 		return err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -394,7 +299,7 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 	// takes effect by restarting this tunnel the way ApplyConfig restarts a
 	// changed one; the other tunnels are left alone. The tunnel starts again
 	// from its saved config, which drops relays connected to it at runtime.
-	if tunnel == nil || reflect.DeepEqual(before.applicationAuth(), nextTunnelCfg.applicationAuth()) {
+	if tunnel == nil || reflect.DeepEqual(before.ApplicationAuthConfig, nextTunnelCfg.ApplicationAuthConfig) {
 		return nil
 	}
 	_ = tunnel.Stop(context.Background())
@@ -443,7 +348,7 @@ func (m *manager) loadConfigDocument() (Config, string, os.FileMode, error) {
 
 func (m *manager) writeConfigAndApply(path string, mode os.FileMode, cfg Config) error {
 	cfg.sourcePath = path
-	if err := cfg.ApplyDefaults(path); err != nil {
+	if err := cfg.normalize(path); err != nil {
 		return err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -620,12 +525,14 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 	if runtime == nil {
 		return nil
 	}
+	// The config passed validation before it was saved.
+	spec, _ := cfg.Spec()
 	var err error
 	if updateMetadata {
-		err = errors.Join(err, runtime.Exposure.UpdateMetadata(metadataFromTunnelConfig(cfg)))
+		err = errors.Join(err, runtime.Exposure.UpdateMetadata(spec.Metadata))
 	}
 	if updateMaxActiveRelays {
-		err = errors.Join(err, runtime.Exposure.SetMaxActiveRelays(cfg.MaxActiveRelays))
+		err = errors.Join(err, runtime.Exposure.SetMaxActiveRelays(spec.Relays.MaxActive))
 	}
 	return err
 }
@@ -658,38 +565,27 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	case running:
 		state = "starting"
 	}
-	discovery := true
-	if cfg.Discovery != nil {
-		discovery = *cfg.Discovery
-	}
 
-	x402 := cfg.Copy()
-	x402.PayTo = strings.TrimSpace(x402.PayTo)
+	// The config passed validation before it was saved, so it resolves.
+	spec, _ := cfg.Spec()
+	auth := cfg.ApplicationAuthConfig
 	status := AgentTunnelStatus{
-		ID:                  cfg.ID,
-		Name:                cfg.Name,
-		State:               state,
-		TargetAddr:          cfg.TargetAddr,
-		LastError:           lastError,
-		Serve:               cfg.Serve,
-		Discovery:           discovery,
-		Overlay:             cfg.Overlay,
-		MaxActiveRelays:     cfg.MaxActiveRelays,
-		Metadata:            metadataFromTunnelConfig(cfg),
-		Auth:                cfg.Auth,
-		AuthAllowedWallets:  append([]string(nil), cfg.AuthAllowedWallets...),
-		AuthIdentityHeaders: cfg.AuthIdentityHeaders,
-		AuthOIDCIssuer:      cfg.AuthOIDCIssuer,
-		AuthOIDCClientID:    cfg.AuthOIDCClientID,
-		X402Config:          x402,
-
-		AuthOIDCClientSecretSet:  cfg.AuthOIDCClientSecret != "",
-		AuthSAMLMetadataURL:      cfg.AuthSAMLMetadataURL,
-		AuthSAMLMetadataFile:     cfg.AuthSAMLMetadataFile,
-		AuthSAMLEntityID:         cfg.AuthSAMLEntityID,
-		AuthSAMLSubjectAttribute: cfg.AuthSAMLSubjectAttribute,
+		ID:                      cfg.ID,
+		Name:                    cfg.Name,
+		State:                   state,
+		TargetAddr:              cfg.TargetAddr,
+		LastError:               lastError,
+		Serve:                   cfg.Serve,
+		Discovery:               spec.Relays.Discovery,
+		Overlay:                 cfg.Overlay,
+		MaxActiveRelays:         spec.Relays.MaxActive,
+		Metadata:                spec.Metadata,
+		ApplicationAuthConfig:   auth.Public(),
+		AuthOIDCClientSecretSet: auth.OIDCClientSecret != "",
+		X402Config:              cfg.X402Config,
 	}
-	if runtime != nil && (cfg.Auth == gateway.ApplicationAuthProviderOIDC || cfg.Auth == gateway.ApplicationAuthProviderSAML) {
+	status.Endpoints = slices.Clone(status.Endpoints)
+	if runtime != nil && (cfg.Provider == gateway.ApplicationAuthProviderOIDC || cfg.Provider == gateway.ApplicationAuthProviderSAML) {
 		checked, err := runtime.AuthProviderCheck()
 		status.AuthProviderChecked = checked
 		if err != nil {
@@ -775,7 +671,10 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
-	spec := tunnelSpecFromConfig(cfg)
+	spec, err := cfg.Spec()
+	if err != nil {
+		return err
+	}
 	runtime, err := tunnel.Start(ctx, spec)
 	if err != nil {
 		return err
