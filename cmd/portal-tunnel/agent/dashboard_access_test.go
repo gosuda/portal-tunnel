@@ -869,7 +869,7 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 			}},
 		{"credential to open", 0, []tea.Msg{keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if !saved.ApplicationAuthConfig.IsZero() {
+				if auth := saved.ApplicationAuthConfig; !auth.IsZero() {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},

@@ -257,8 +257,9 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 	if !cfg.IdentityHeaders && !proofFlagGiven {
 		cfg.IdentityProof = ""
 	}
+	auth := cfg.ApplicationAuthConfig
 	if len(cfg.StripRequestHeaders) > 0 && strings.TrimSpace(cfg.Serve) == "" && len(cfg.HTTPRoutes) == 0 &&
-		strings.TrimSpace(cfg.TargetAddr) == "" && cfg.ApplicationAuthConfig.IsZero() && cfg.Cache == nil {
+		strings.TrimSpace(cfg.TargetAddr) == "" && auth.IsZero() && cfg.Cache == nil {
 		return tunnel.Spec{}, errStripRequestHeaderRequiresHTTPRoute
 	}
 	return cfg.Spec()

@@ -288,8 +288,8 @@ func TestUpdateTunnelEmptyAuthTurnsSignInOff(t *testing.T) {
 	}
 	saved := savedTunnel(t, path, "app")
 	status := tunnelStatus(t, m, "app")
-	if !saved.ApplicationAuthConfig.IsZero() {
-		t.Fatalf("saved auth = %+v", saved.ApplicationAuthConfig)
+	if auth := saved.ApplicationAuthConfig; !auth.IsZero() {
+		t.Fatalf("saved auth = %+v", auth)
 	}
 	// Every sign-in field is omitted from the status when it is empty.
 	if data, _ := json.Marshal(status); strings.Contains(string(data), `"auth`) {

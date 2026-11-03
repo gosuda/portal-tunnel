@@ -123,8 +123,8 @@ func (c Config) Spec() (Spec, error) {
 	if c.UDPEnabled {
 		spec.Transport.UDP = &UDPConfig{Target: c.UDPAddr}
 	}
-	auth := !c.ApplicationAuthConfig.IsZero()
-	if c.Serve != "" || len(c.HTTPRoutes) > 0 || auth || c.Cache != nil || len(c.StripRequestHeaders) > 0 {
+	auth := c.ApplicationAuthConfig
+	if c.Serve != "" || len(c.HTTPRoutes) > 0 || !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) > 0 {
 		payment := gateway.X402Payment{X402Config: c.X402Config}
 		payment.FacilitatorToken = cmp.Or(payment.FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
 		spec.HTTP = &HTTPConfig{
@@ -134,8 +134,8 @@ func (c Config) Spec() (Spec, error) {
 			Payment:             payment,
 			Cache:               c.Cache,
 		}
-		if auth {
-			spec.HTTP.Auth = &c.ApplicationAuthConfig
+		if !auth.IsZero() {
+			spec.HTTP.Auth = &auth
 		}
 	}
 	return spec, spec.Validate()

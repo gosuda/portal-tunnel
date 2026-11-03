@@ -568,6 +568,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 
 	// The config passed validation before it was saved, so it resolves.
 	spec, _ := cfg.Spec()
+	auth := cfg.ApplicationAuthConfig
 	status := AgentTunnelStatus{
 		ID:                      cfg.ID,
 		Name:                    cfg.Name,
@@ -579,8 +580,8 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		Overlay:                 cfg.Overlay,
 		MaxActiveRelays:         spec.Relays.MaxActive,
 		Metadata:                spec.Metadata,
-		ApplicationAuthConfig:   cfg.ApplicationAuthConfig.Public(),
-		AuthOIDCClientSecretSet: cfg.OIDCClientSecret != "",
+		ApplicationAuthConfig:   auth.Public(),
+		AuthOIDCClientSecretSet: auth.OIDCClientSecret != "",
 		X402Config:              cfg.X402Config,
 	}
 	status.Endpoints = slices.Clone(status.Endpoints)

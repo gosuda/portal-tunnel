@@ -184,7 +184,7 @@ func (cfg *Config) normalize(configPath string) error {
 	for i := range cfg.Tunnels {
 		t := &cfg.Tunnels[i]
 		t.ID = cmp.Or(strings.TrimSpace(t.ID), strings.TrimSpace(t.Name), fmt.Sprintf("tunnel-%d", i+1))
-		if err := t.Config.Normalize(); err != nil {
+		if err := t.Normalize(); err != nil {
 			return fmt.Errorf("tunnel %q: %w", t.ID, err)
 		}
 		t.Serve = resolvePath(t.Serve)
