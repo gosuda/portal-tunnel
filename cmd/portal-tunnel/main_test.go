@@ -11,18 +11,15 @@ import (
 // way runExposeCommand does before it starts the tunnel.
 func exposeSpec(t *testing.T, args ...string) (tunnel.Spec, error) {
 	t.Helper()
+	var cfg tunnel.Config
 	var flags exposeFlags
 	fs := utils.NewFlagSet("expose", printExposeUsage)
-	registerExposeFlags(fs, &flags)
+	registerExposeFlags(fs, &cfg, &flags)
 	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		t.Fatalf("parse portal expose %v: %v", args, err)
 	}
-	flags.targetAddr = fs.Arg(0)
-	spec, err := tunnelSpecFromExposeFlags(fs, flags)
-	if err != nil {
-		return spec, err
-	}
-	return spec, spec.Validate()
+	cfg.TargetAddr = fs.Arg(0)
+	return tunnelSpecFromExposeFlags(fs, cfg, flags)
 }
 
 func setOIDCEnv(t *testing.T) {

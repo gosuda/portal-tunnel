@@ -53,19 +53,26 @@ const (
 	defaultMaxTimeoutSeconds = 60
 )
 
-// X402Config is the gateway-owned x402 configuration shared by frontends and
-// tunnel runtime assembly.
+// X402Config is the payment component of a tunnel config: the agent config,
+// the Agent API and the runtime carry it as it is, under its x402_* keys. The
+// facilitator token is a secret, so the Agent API neither takes nor returns it.
 type X402Config struct {
-	Testnet          bool     `json:"x402_testnet,omitempty" koanf:"x402_testnet"`
-	Network          string   `json:"x402_network,omitempty" koanf:"x402_network"`
-	Asset            string   `json:"x402_asset,omitempty" koanf:"x402_asset"`
-	PayTo            string   `json:"x402_pay_to,omitempty" koanf:"x402_pay_to"`
-	Endpoints        []string `json:"x402_endpoints,omitempty" koanf:"x402_endpoints"`
-	FacilitatorToken string   `json:"-" koanf:"x402_facilitator_token"`
+	Testnet          bool     `json:"x402_testnet,omitempty" toml:"x402_testnet,omitempty"`
+	Network          string   `json:"x402_network,omitempty" toml:"x402_network,omitempty"`
+	Asset            string   `json:"x402_asset,omitempty" toml:"x402_asset,omitempty"`
+	PayTo            string   `json:"x402_pay_to,omitempty" toml:"x402_pay_to,omitempty"`
+	Endpoints        []string `json:"x402_endpoints,omitempty" toml:"x402_endpoints,omitempty"`
+	FacilitatorToken string   `json:"-" toml:"x402_facilitator_token,omitempty"`
 }
 
-func (c X402Config) Copy() X402Config {
-	c.Endpoints = append([]string(nil), c.Endpoints...)
+// Normalize returns c in the form a config stores: values without surrounding
+// spaces, the network in lower case, and no empty endpoint.
+func (c X402Config) Normalize() X402Config {
+	c.Network = strings.ToLower(strings.TrimSpace(c.Network))
+	c.Asset = strings.TrimSpace(c.Asset)
+	c.PayTo = strings.TrimSpace(c.PayTo)
+	c.Endpoints = utils.CompactStrings(c.Endpoints)
+	c.FacilitatorToken = strings.TrimSpace(c.FacilitatorToken)
 	return c
 }
 

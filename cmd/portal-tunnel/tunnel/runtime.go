@@ -35,8 +35,9 @@ var (
 	errCasperPaymentsRequireAnAsset            = errors.New("casper payments require an asset")
 )
 
-// Spec is Portal's canonical description of one tunnel. Frontends own parsing
-// and serialization; runtime assembly starts at this boundary.
+// Spec is the resolved description of one tunnel that the runtime is built
+// from. Config.Spec makes it from what the user set; runtime assembly starts
+// at this boundary.
 type Spec struct {
 	Identity  IdentitySpec
 	Relays    RelaySpec
@@ -82,10 +83,10 @@ type HTTPConfig struct {
 }
 
 type HTTPRoute struct {
-	Prefix   string   `json:"prefix" koanf:"prefix"`
-	Upstream string   `json:"upstream" koanf:"upstream"`
-	Methods  []string `json:"methods,omitempty" koanf:"methods"`
-	Amount   string   `json:"amount,omitempty" koanf:"amount"`
+	Prefix   string   `json:"prefix" toml:"prefix,omitempty"`
+	Upstream string   `json:"upstream" toml:"upstream,omitempty"`
+	Methods  []string `json:"methods,omitempty" toml:"methods,omitempty"`
+	Amount   string   `json:"amount,omitempty" toml:"amount,omitempty"`
 }
 
 type CacheConfig struct {

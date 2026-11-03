@@ -54,28 +54,26 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 		{name: "oidc valid", edit: func(spec *Spec) {
 			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
 				Provider:       "oidc",
-				OIDCIssuerURL:  "https://accounts.google.com",
-				OIDCClientID:   "client-123",
+				OIDCConfig:     gateway.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123"},
 				AllowedWallets: []string{"alice@example.com"},
 			}
 		}, valid: true},
 		{name: "oidc missing client id", edit: func(spec *Spec) {
 			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
-				Provider:      "oidc",
-				OIDCIssuerURL: "https://accounts.google.com",
+				Provider:   "oidc",
+				OIDCConfig: gateway.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com"},
 			}
 		}},
 		{name: "oidc non-https issuer", edit: func(spec *Spec) {
 			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
-				Provider:      "oidc",
-				OIDCIssuerURL: "http://idp.example.com",
-				OIDCClientID:  "client-123",
+				Provider:   "oidc",
+				OIDCConfig: gateway.OIDCConfig{OIDCIssuerURL: "http://idp.example.com", OIDCClientID: "client-123"},
 			}
 		}},
 		{name: "oidc settings with siwe provider", edit: func(spec *Spec) {
 			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
-				Provider:      "siwe",
-				OIDCIssuerURL: "https://accounts.google.com",
+				Provider:   "siwe",
+				OIDCConfig: gateway.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com"},
 			}
 		}},
 		{name: "paid route", edit: func(spec *Spec) {

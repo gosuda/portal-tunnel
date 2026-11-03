@@ -88,8 +88,8 @@ func TestControlHandlerRejectsUntrustedHostBeforeAuthorization(t *testing.T) {
 // The control token still sees the list.
 func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	tunnelCfg := testTunnel("web")
-	tunnelCfg.Auth = "credential"
-	tunnelCfg.AuthAllowedWallets = []string{"alice", "bob"}
+	tunnelCfg.Provider = "credential"
+	tunnelCfg.AllowedWallets = []string{"alice", "bob"}
 	m, _ := testManager(t, tunnelCfg)
 
 	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
@@ -143,7 +143,7 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 		if len(body.Data.Tunnels) != 1 {
 			t.Fatalf("status lists %d tunnels, want 1", len(body.Data.Tunnels))
 		}
-		return body.Data.Tunnels[0].AuthAllowedWallets
+		return body.Data.Tunnels[0].AllowedWallets
 	}
 
 	if got := allowlist(func(r *http.Request) { r.Header.Set("Authorization", "Bearer control-token") }); !slices.Equal(got, []string{"alice", "bob"}) {

@@ -893,8 +893,7 @@ func newOIDCTLSGate(t *testing.T, serve func(w http.ResponseWriter, r *http.Requ
 	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
 		Provider:       ApplicationAuthProviderOIDC,
 		AllowedWallets: []string{"alice@example.com"},
-		OIDCIssuerURL:  provider.URL,
-		OIDCClientID:   oidcTestClientID,
+		OIDCConfig:     OIDCConfig{OIDCIssuerURL: provider.URL, OIDCClientID: oidcTestClientID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -988,11 +987,9 @@ func newOIDCTestGate(t *testing.T, idp *oidcTestIdP, allowed ...string) *applica
 		allowed = []string{"alice@example.com"}
 	}
 	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
-		Provider:         ApplicationAuthProviderOIDC,
-		AllowedWallets:   allowed,
-		OIDCIssuerURL:    idp.issuerURL,
-		OIDCClientID:     oidcTestClientID,
-		OIDCClientSecret: idp.clientSecret,
+		Provider:       ApplicationAuthProviderOIDC,
+		AllowedWallets: allowed,
+		OIDCConfig:     OIDCConfig{OIDCIssuerURL: idp.issuerURL, OIDCClientID: oidcTestClientID, OIDCClientSecret: idp.clientSecret},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1215,8 +1212,7 @@ func TestCheckApplicationAuthProvider(t *testing.T) {
 		return ApplicationAuthConfig{
 			Provider:       ApplicationAuthProviderOIDC,
 			AllowedWallets: []string{"alice@example.com"},
-			OIDCIssuerURL:  issuer,
-			OIDCClientID:   oidcTestClientID,
+			OIDCConfig:     OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: oidcTestClientID},
 		}
 	}
 
@@ -1244,7 +1240,7 @@ func TestCheckApplicationAuthProvider(t *testing.T) {
 	})
 	t.Run("configuration the resolver rejects", func(t *testing.T) {
 		t.Parallel()
-		cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}
+		cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
 		if err := CheckApplicationAuthProvider(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
 			t.Fatalf("CheckApplicationAuthProvider() = %v; want the resolver's error about the missing allowlist", err)
 		}

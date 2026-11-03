@@ -31,8 +31,7 @@ func startOIDCRuntime(t *testing.T, issuer string) *Runtime {
 		HTTP: &HTTPConfig{Auth: &gateway.ApplicationAuthConfig{
 			Provider:       gateway.ApplicationAuthProviderOIDC,
 			AllowedWallets: []string{"alice@example.com"},
-			OIDCIssuerURL:  issuer,
-			OIDCClientID:   "client-123",
+			OIDCConfig:     gateway.OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: "client-123"},
 		}},
 	})
 	if err != nil {

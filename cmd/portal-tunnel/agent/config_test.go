@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 )
 
@@ -49,89 +51,15 @@ func TestStaticServeConfigRoundTrip(t *testing.T) {
 	}
 }
 
-func TestStaticServeConfigModes(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		cfg   TunnelConfig
-		valid bool
-	}{
-		{name: "static", cfg: TunnelConfig{Serve: "./dist"}, valid: true},
-		{name: "missing source", cfg: TunnelConfig{}},
-		{name: "target", cfg: TunnelConfig{Serve: "./dist", TargetAddr: "localhost:3000"}},
-		{name: "routes", cfg: TunnelConfig{Serve: "./dist", HTTPRoutes: []tunnel.HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}}},
-		{name: "tcp", cfg: TunnelConfig{Serve: "./dist", TCPEnabled: true}},
-		{name: "udp", cfg: TunnelConfig{Serve: "./dist", UDPEnabled: true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.cfg.ID = "site"
-			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
-				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
-			}
-		})
-	}
-}
-
-func TestHTTPRoutesConfigModes(t *testing.T) {
-	routes := []tunnel.HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}
-	for _, tc := range []struct {
-		name  string
-		cfg   TunnelConfig
-		valid bool
-	}{
-		{name: "routes", cfg: TunnelConfig{HTTPRoutes: routes}, valid: true},
-		{name: "tcp", cfg: TunnelConfig{HTTPRoutes: routes, TCPEnabled: true}},
-		{name: "udp", cfg: TunnelConfig{HTTPRoutes: routes, UDPEnabled: true}},
-		{name: "strip request headers", cfg: TunnelConfig{HTTPRoutes: routes, StripRequestHeaders: []string{"X-Tenant-User"}}, valid: true},
-		{name: "strip request headers on static", cfg: TunnelConfig{Serve: "./dist", StripRequestHeaders: []string{"X-Tenant-User"}}},
-		{name: "strip request header without upstream", cfg: TunnelConfig{Auth: "siwe", TargetAddr: "", StripRequestHeaders: []string{"X-Tenant-User"}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.cfg.ID = "routed"
-			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
-				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
-			}
-		})
-	}
-}
-
-func TestApplicationAuthConfig(t *testing.T) {
-	validWallet := "0x0000000000000000000000000000000000000001"
-	for _, tc := range []struct {
-		name  string
-		cfg   TunnelConfig
-		valid bool
-	}{
-		{name: "target", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe"}, valid: true},
-		{name: "credential", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential"}, valid: true},
-		{name: "unknown provider", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "unknown"}},
-		{name: "credential allowlist", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential", AuthAllowedWallets: []string{"alice"}}, valid: true},
-		{name: "credential invalid allowlist", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "credential", AuthAllowedWallets: []string{""}}},
-		{name: "siwe invalid allowlist", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe", AuthAllowedWallets: []string{"alice"}}},
-		{name: "oidc", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "oidc", AuthOIDCIssuer: "https://accounts.google.com", AuthOIDCClientID: "client-123", AuthAllowedWallets: []string{"alice@example.com"}}, valid: true},
-		{name: "oidc missing issuer", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "oidc", AuthOIDCClientID: "client-123"}},
-		{name: "oidc fields without oidc provider", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe", AuthOIDCIssuer: "https://accounts.google.com"}},
-		{name: "static", cfg: TunnelConfig{Serve: "./dist", Auth: "siwe", AuthAllowedWallets: []string{validWallet}}, valid: true},
-		{name: "allowlist without auth", cfg: TunnelConfig{TargetAddr: "localhost:3000", AuthAllowedWallets: []string{validWallet}}},
-		{name: "headers without auth", cfg: TunnelConfig{TargetAddr: "localhost:3000", AuthIdentityHeaders: true}},
-		{name: "tcp", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe", TCPEnabled: true}},
-		{name: "udp", cfg: TunnelConfig{TargetAddr: "localhost:3000", Auth: "siwe", UDPEnabled: true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.cfg.ID = "authenticated"
-			if err := tc.cfg.Validate(); (err == nil) != tc.valid {
-				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
-			}
-		})
-	}
-}
-
 // tunnelsDocument sets every tunnel key, each to a value that differs from its
-// default, so a key the writer drops shows up as a difference after a save. The
-// keys are spread over several tunnels because loading validates each one and
-// some keys exclude each other (HTTP routes and TCP, a static site and a target).
-// The check below finds a key as a line that starts with it and has one space
-// before `=`, so keep the keys unindented in that form. A key inside a nested
-// struct such as an HTTP route is not walked and has to be set here by hand.
+// default, so a key the writer drops shows up as a difference after a save. It
+// is written the way configs of earlier versions are, with the flat auth_* and
+// x402_* keys that the typed components keep. The keys are spread over several
+// tunnels because loading validates each one and some keys exclude each other
+// (HTTP routes and TCP, a static site and a target). The check below finds a key
+// as a line that starts with it and has one space before `=`, so keep the keys
+// unindented in that form. A key inside a nested struct such as an HTTP route is
+// not walked and has to be set here by hand.
 const tunnelsDocument = `
 [[tunnels]]
 id = "web"
@@ -205,7 +133,9 @@ udp_addr = "127.0.0.1:19133"
 `
 
 // Saving the config after any dashboard action rewrites the whole file, so
-// every key the loader reads must come back out of the writer.
+// every key the loader reads must come back out of the writer, under the name
+// it was read by: an agent of an earlier version and the documentation read
+// the same keys.
 func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(tunnelsDocument), 0o600); err != nil {
@@ -218,7 +148,8 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 
 	// A key added to TunnelConfig must be added to the document above too, or
 	// this test would not notice the writer forgetting it.
-	for _, key := range tunnelConfigKeys(reflect.TypeOf(TunnelConfig{})) {
+	keys := tunnelConfigKeys(reflect.TypeOf(TunnelConfig{}))
+	for _, key := range keys {
 		if !strings.Contains(tunnelsDocument, "\n"+key+" =") && !strings.Contains(tunnelsDocument, "\n[[tunnels."+key+"]]") {
 			t.Errorf("tunnelsDocument does not set %q", key)
 		}
@@ -226,6 +157,15 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 
 	if err := writeConfigDocument(path, 0o600, loaded); err != nil {
 		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if !strings.Contains(string(saved), "\n"+key+" =") && !strings.Contains(string(saved), "\n[[tunnels."+key+"]]") {
+			t.Errorf("saved config does not keep %q:\n%s", key, saved)
+		}
 	}
 	reloaded, err := LoadExistingConfig(path)
 	if err != nil {
@@ -239,6 +179,119 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 			t.Errorf("tunnel %q changed by a save:\n before: %+v\n after:  %+v", loaded.Tunnels[i].ID, loaded.Tunnels[i], reloaded.Tunnels[i])
 		}
 	}
+	if err := writeConfigDocument(path, 0o600, reloaded); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := os.ReadFile(path); err != nil || !bytes.Equal(again, saved) {
+		t.Fatalf("a second save wrote another document (err %v):\n%s", err, again)
+	}
+}
+
+// The flat keys of a config fill the typed components the runtime is built
+// from.
+func TestExistingConfigKeysFillComponents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(tunnelsDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specs := make(map[string]tunnel.Spec, len(cfg.Tunnels))
+	for _, tunnelCfg := range cfg.Tunnels {
+		if specs[tunnelCfg.ID], err = tunnelCfg.Spec(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oidc := gateway.ApplicationAuthConfig{
+		Provider:        gateway.ApplicationAuthProviderOIDC,
+		AllowedWallets:  []string{"alice@example.com"},
+		IdentityHeaders: true,
+		OIDCConfig:      gateway.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-id", OIDCClientSecret: "client-secret"},
+	}
+	saml := gateway.ApplicationAuthConfig{
+		Provider:       gateway.ApplicationAuthProviderSAML,
+		AllowedWallets: []string{"@example.com"},
+		SAMLConfig:     gateway.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLEntityID: "urn:portal:sso", SAMLSubjectAttribute: "email"},
+	}
+	payment := gateway.X402Config{
+		Testnet: true, Network: "base", Asset: "usdc", PayTo: "0x1234567890abcdef1234567890abcdef12345678",
+		Endpoints: []string{"/paid"}, FacilitatorToken: "facilitator-token",
+	}
+	if got := *specs["web"].HTTP.Auth; !reflect.DeepEqual(got, oidc) {
+		t.Errorf("web auth = %+v, want %+v", got, oidc)
+	}
+	if got := *specs["sso"].HTTP.Auth; !reflect.DeepEqual(got, saml) {
+		t.Errorf("sso auth = %+v, want %+v", got, saml)
+	}
+	if got := specs["paid"].HTTP.Payment.X402Config; !reflect.DeepEqual(got, payment) {
+		t.Errorf("paid payment = %+v, want %+v", got, payment)
+	}
+	if got := specs["web"].Relays; got.Discovery || !got.BanMITM || got.MaxActive != 5 || !got.Overlay {
+		t.Errorf("web relays = %+v", got)
+	}
+}
+
+// A saved tunnel keeps what was set, explicit false and default values
+// included, and no default that was left out: Spec fills those in each time.
+// The ID and the identity path are kept, since they name the tunnel and its
+// identity.
+func TestSavedConfigKeepsOnlyWhatWasSet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	document := `
+[agent]
+state_dir = "state"
+
+[[tunnels]]
+name = "web"
+target = "127.0.0.1:3000"
+
+[[tunnels]]
+id = "explicit"
+target = "127.0.0.1:3001"
+discovery = true
+ban_mitm = false
+max_active_relays = 3
+`
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web, explicit, ok := strings.Cut(string(saved), "id = 'explicit'")
+	if !ok {
+		t.Fatalf("saved config:\n%s", saved)
+	}
+	for _, key := range []string{"discovery", "ban_mitm", "max_active_relays"} {
+		if strings.Contains(web, key) {
+			t.Errorf("saved web tunnel repeats the default %s:\n%s", key, saved)
+		}
+	}
+	for _, line := range []string{"discovery = true", "ban_mitm = false", "max_active_relays = 3"} {
+		if !strings.Contains(explicit, line) {
+			t.Errorf("saved explicit tunnel lost %q:\n%s", line, saved)
+		}
+	}
+	for _, line := range []string{
+		"id = 'web'",
+		"identity_path = '" + filepath.Join(dir, "state", "web", defaultIdentityFilename) + "'",
+		"identity_path = '" + filepath.Join(dir, "state", "explicit", defaultIdentityFilename) + "'",
+	} {
+		if !strings.Contains(string(saved), line) {
+			t.Errorf("saved config lost %q:\n%s", line, saved)
+		}
+	}
 }
 
 // Linux and macOS keep the mode a file already has, so the agent restricts a
@@ -249,19 +302,19 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 		t.Skip("Windows restricts the file with an ACL instead of a mode")
 	}
 
-	plain := TunnelConfig{ID: "web", TargetAddr: "127.0.0.1:3000"}
+	plain := TunnelConfig{ID: "web", Config: tunnel.Config{TargetAddr: "127.0.0.1:3000"}}
 	for _, tt := range []struct {
 		name   string
 		before os.FileMode
 		tunnel TunnelConfig
 		want   os.FileMode
 	}{
-		{"OIDC client secret in a world-readable file", 0o644, TunnelConfig{ID: "web", Auth: "oidc", AuthOIDCClientSecret: "fake-secret"}, 0o600},
-		{"identity with a private key in a group-readable file", 0o640, TunnelConfig{ID: "web", IdentityJSON: `{"private_key":"fake"}`}, 0o600},
-		{"x402 facilitator token in a group-writable file", 0o660, TunnelConfig{ID: "web", FacilitatorToken: "fake-token"}, 0o600},
-		{"a secret in a file that is already private", 0o600, TunnelConfig{ID: "web", AuthOIDCClientSecret: "fake-secret"}, 0o600},
-		{"the owner's other bits are kept", 0o755, TunnelConfig{ID: "web", AuthOIDCClientSecret: "fake-secret"}, 0o700},
-		{"a blank secret is not one", 0o644, TunnelConfig{ID: "web", AuthOIDCClientSecret: "  "}, 0o644},
+		{"OIDC client secret in a world-readable file", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{ApplicationAuthConfig: gateway.ApplicationAuthConfig{Provider: "oidc", OIDCConfig: gateway.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o600},
+		{"identity with a private key in a group-readable file", 0o640, TunnelConfig{ID: "web", Config: tunnel.Config{IdentityJSON: `{"private_key":"fake"}`}}, 0o600},
+		{"x402 facilitator token in a group-writable file", 0o660, TunnelConfig{ID: "web", Config: tunnel.Config{X402Config: gateway.X402Config{FacilitatorToken: "fake-token"}}}, 0o600},
+		{"a secret in a file that is already private", 0o600, TunnelConfig{ID: "web", Config: tunnel.Config{ApplicationAuthConfig: gateway.ApplicationAuthConfig{OIDCConfig: gateway.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o600},
+		{"the owner's other bits are kept", 0o755, TunnelConfig{ID: "web", Config: tunnel.Config{ApplicationAuthConfig: gateway.ApplicationAuthConfig{OIDCConfig: gateway.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o700},
+		{"a blank secret is not one", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{ApplicationAuthConfig: gateway.ApplicationAuthConfig{OIDCConfig: gateway.OIDCConfig{OIDCClientSecret: "  "}}}}, 0o644},
 		{"no secret", 0o644, plain, 0o644},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -293,11 +346,11 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 	var found int
 	for _, field := range reflect.VisibleFields(reflect.TypeOf(TunnelConfig{})) {
-		key, _, _ := strings.Cut(field.Tag.Get("koanf"), ",")
+		key, _, _ := strings.Cut(field.Tag.Get("toml"), ",")
 		credential := key == "identity_json" || slices.ContainsFunc([]string{"secret", "token", "key", "password"}, func(word string) bool {
 			return strings.Contains(key, word)
 		})
-		if !field.IsExported() || key == "" || !credential {
+		if !field.IsExported() || key == "" || key == "-" || !credential {
 			continue
 		}
 		found++
@@ -320,12 +373,12 @@ func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 func tunnelConfigKeys(typ reflect.Type) []string {
 	var keys []string
 	for field := range typ.Fields() {
-		tag := field.Tag.Get("koanf")
+		key, _, _ := strings.Cut(field.Tag.Get("toml"), ",")
 		switch {
-		case strings.HasSuffix(tag, ",squash"):
+		case field.Anonymous:
 			keys = append(keys, tunnelConfigKeys(field.Type)...)
-		case tag != "":
-			keys = append(keys, tag)
+		case key != "" && key != "-":
+			keys = append(keys, key)
 		}
 	}
 	return keys

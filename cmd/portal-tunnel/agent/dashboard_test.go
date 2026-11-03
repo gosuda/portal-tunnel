@@ -79,7 +79,7 @@ func testDashboardScenarios() []dashboardScenario {
 	signIn := agentDashboardStatusMsg{status: testAccessStatus()}
 	longAllowList := testAccessStatus()
 	for i := range 12 {
-		longAllowList.Tunnels[accessWeb].AuthAllowedWallets = append(longAllowList.Tunnels[accessWeb].AuthAllowedWallets, fmt.Sprintf("a-rather-long-address-%d@a-long-company-name.example.com", i))
+		longAllowList.Tunnels[accessWeb].AllowedWallets = append(longAllowList.Tunnels[accessWeb].AllowedWallets, fmt.Sprintf("a-rather-long-address-%d@a-long-company-name.example.com", i))
 	}
 	openAccess := func(down int, keys ...tea.Msg) []tea.Msg {
 		steps := []tea.Msg{signIn}

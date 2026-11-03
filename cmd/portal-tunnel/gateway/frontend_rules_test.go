@@ -74,8 +74,7 @@ func TestFrontendAuthRulesMatchTheGateway(t *testing.T) {
 			err := ValidateApplicationAuthConfig(ApplicationAuthConfig{
 				Provider:       ApplicationAuthProviderOIDC,
 				AllowedWallets: []string{"alice@example.com"},
-				OIDCIssuerURL:  row.Value,
-				OIDCClientID:   "client",
+				OIDCConfig:     OIDCConfig{OIDCIssuerURL: row.Value, OIDCClientID: "client"},
 			})
 			if (err == nil) != row.Valid {
 				t.Errorf("issuer %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)
@@ -87,9 +86,9 @@ func TestFrontendAuthRulesMatchTheGateway(t *testing.T) {
 		t.Parallel()
 		for _, row := range rules.SAMLMetadata {
 			err := ValidateApplicationAuthConfig(ApplicationAuthConfig{
-				Provider:        ApplicationAuthProviderSAML,
-				AllowedWallets:  []string{"alice@example.com"},
-				SAMLMetadataURL: row.Value,
+				Provider:       ApplicationAuthProviderSAML,
+				AllowedWallets: []string{"alice@example.com"},
+				SAMLConfig:     SAMLConfig{SAMLMetadataURL: row.Value},
 			})
 			if (err == nil) != row.Valid {
 				t.Errorf("metadata URL %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)

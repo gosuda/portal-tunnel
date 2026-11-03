@@ -94,24 +94,83 @@ var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
 type verifiedIdentityHeadersContextKey struct{}
 
 // ApplicationAuthConfig configures the tunnel-local application access gate.
+// It is the auth component of a tunnel config: the agent config, the Agent API
+// and the runtime carry it as it is, under its auth and auth_* keys, so a new
+// provider setting is added here and in resolveApplicationAuthConfig only.
 // AllowedWallets holds the provider-scoped principal allowlist (Ethereum
 // wallet addresses for siwe, credential subjects for credential, or verified
 // emails, @domain entries, or sub: subjects for oidc and saml). IdentityProof
 // is a secret, like OIDCClientSecret: it is sent upstream with the identity
-// headers and must not be logged. The SAML identity provider is described by
-// its metadata, read from SAMLMetadataURL or from the SAMLMetadataFile path.
+// headers and must not be logged. Only portal expose sets it; the agent config
+// and the Agent API have no key for it.
 type ApplicationAuthConfig struct {
-	Provider             string
-	AllowedWallets       []string
-	IdentityHeaders      bool
-	IdentityProof        string
-	OIDCIssuerURL        string
-	OIDCClientID         string
-	OIDCClientSecret     string
-	SAMLMetadataURL      string
-	SAMLMetadataFile     string
-	SAMLEntityID         string
-	SAMLSubjectAttribute string
+	Provider        string   `json:"auth,omitempty" toml:"auth,omitempty"`
+	AllowedWallets  []string `json:"auth_allowed_wallets,omitempty" toml:"auth_allowed_wallets,omitempty"`
+	IdentityHeaders bool     `json:"auth_identity_headers,omitempty" toml:"auth_identity_headers,omitempty"`
+	IdentityProof   string   `json:"-" toml:"-"`
+	OIDCConfig
+	SAMLConfig
+}
+
+// OIDCConfig holds the settings of the oidc provider; any other provider
+// refuses them.
+type OIDCConfig struct {
+	OIDCIssuerURL    string `json:"auth_oidc_issuer,omitempty" toml:"auth_oidc_issuer,omitempty"`
+	OIDCClientID     string `json:"auth_oidc_client_id,omitempty" toml:"auth_oidc_client_id,omitempty"`
+	OIDCClientSecret string `json:"auth_oidc_client_secret,omitempty" toml:"auth_oidc_client_secret,omitempty"`
+}
+
+// SAMLConfig holds the settings of the saml provider; any other provider
+// refuses them. The identity provider is described by its metadata, read from
+// SAMLMetadataURL or from the SAMLMetadataFile path.
+type SAMLConfig struct {
+	SAMLMetadataURL      string `json:"auth_saml_metadata_url,omitempty" toml:"auth_saml_metadata_url,omitempty"`
+	SAMLMetadataFile     string `json:"auth_saml_metadata_file,omitempty" toml:"auth_saml_metadata_file,omitempty"`
+	SAMLEntityID         string `json:"auth_saml_entity_id,omitempty" toml:"auth_saml_entity_id,omitempty"`
+	SAMLSubjectAttribute string `json:"auth_saml_subject_attribute,omitempty" toml:"auth_saml_subject_attribute,omitempty"`
+}
+
+// IsZero reports whether no auth setting is given. Any setting asks for the
+// sign-in gate, so an incomplete one fails validation instead of leaving the
+// application open.
+func (c ApplicationAuthConfig) IsZero() bool {
+	return c.Provider == "" && len(c.AllowedWallets) == 0 && !c.IdentityHeaders && c.IdentityProof == "" &&
+		c.OIDCConfig == (OIDCConfig{}) && c.SAMLConfig == (SAMLConfig{})
+}
+
+// Normalize returns c in the form a config stores: the provider in lower case,
+// the allowlist normalized for that provider, and the provider settings without
+// surrounding spaces. The identity proof is kept byte for byte. Validation stays
+// with resolveApplicationAuthConfig, except that an allowlist next to an
+// unknown provider is refused here already.
+func (c ApplicationAuthConfig) Normalize() (ApplicationAuthConfig, error) {
+	c.Provider = strings.ToLower(strings.TrimSpace(c.Provider))
+	c.OIDCIssuerURL = strings.TrimSpace(c.OIDCIssuerURL)
+	c.OIDCClientID = strings.TrimSpace(c.OIDCClientID)
+	c.OIDCClientSecret = strings.TrimSpace(c.OIDCClientSecret)
+	c.SAMLMetadataURL = strings.TrimSpace(c.SAMLMetadataURL)
+	c.SAMLMetadataFile = strings.TrimSpace(c.SAMLMetadataFile)
+	c.SAMLEntityID = strings.TrimSpace(c.SAMLEntityID)
+	c.SAMLSubjectAttribute = strings.TrimSpace(c.SAMLSubjectAttribute)
+	if c.Provider == "" || len(c.AllowedWallets) == 0 {
+		c.AllowedWallets = slices.Clone(c.AllowedWallets)
+		return c, nil
+	}
+	allowed, err := NormalizeApplicationAuthAllowed(c.Provider, c.AllowedWallets)
+	if err != nil {
+		return c, err
+	}
+	c.AllowedWallets = allowed
+	return c, nil
+}
+
+// Public returns c without its secrets, the identity proof and the OIDC client
+// secret, for a status that must not reveal them.
+func (c ApplicationAuthConfig) Public() ApplicationAuthConfig {
+	c.AllowedWallets = slices.Clone(c.AllowedWallets)
+	c.IdentityProof = ""
+	c.OIDCClientSecret = ""
+	return c
 }
 
 type applicationAuth struct {

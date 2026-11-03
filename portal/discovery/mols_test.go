@@ -35,8 +35,8 @@ func TestSelectPriorityLimitsAutomaticRelays(t *testing.T) {
 	if selected := SelectPriority(relays, routeState{MaxActiveRelays: 3}); len(selected) != 3 {
 		t.Fatalf("len(SelectPriority()) = %d, want 3", len(selected))
 	}
-	if selected := SelectPriority(relays, routeState{}); len(selected) != defaultMaxActiveRelays {
-		t.Fatalf("len(SelectPriority()) = %d, want default limit %d", len(selected), defaultMaxActiveRelays)
+	if selected := SelectPriority(relays, routeState{}); len(selected) != DefaultMaxActiveRelays {
+		t.Fatalf("len(SelectPriority()) = %d, want default limit %d", len(selected), DefaultMaxActiveRelays)
 	}
 }
 

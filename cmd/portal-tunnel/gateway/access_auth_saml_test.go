@@ -259,9 +259,9 @@ func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
 func newSAMLTestGate(t *testing.T, idp *samlTestIdP, next http.Handler, configure func(*ApplicationAuthConfig)) *applicationAuth {
 	t.Helper()
 	cfg := ApplicationAuthConfig{
-		Provider:        ApplicationAuthProviderSAML,
-		AllowedWallets:  []string{"alice@example.com"},
-		SAMLMetadataURL: idp.metadataURL(),
+		Provider:       ApplicationAuthProviderSAML,
+		AllowedWallets: []string{"alice@example.com"},
+		SAMLConfig:     SAMLConfig{SAMLMetadataURL: idp.metadataURL()},
 	}
 	if configure != nil {
 		configure(&cfg)
