@@ -50,34 +50,38 @@ type AgentConfig struct {
 }
 
 type TunnelConfig struct {
-	ID                   string             `koanf:"id"`
-	Name                 string             `koanf:"name"`
-	TargetAddr           string             `koanf:"target"`
-	Serve                string             `koanf:"serve"`
-	StripRequestHeaders  []string           `koanf:"strip_request_headers"`
-	HTTPRoutes           []tunnel.HTTPRoute `koanf:"http_routes"`
-	RelayURLs            []string           `koanf:"relays"`
-	Discovery            *bool              `koanf:"discovery"`
-	Overlay              bool               `koanf:"overlay"`
-	IdentityPath         string             `koanf:"identity_path"`
-	IdentityJSON         string             `koanf:"identity_json"`
-	UDPEnabled           bool               `koanf:"udp"`
-	UDPAddr              string             `koanf:"udp_addr"`
-	TCPEnabled           bool               `koanf:"tcp"`
-	BanMITM              *bool              `koanf:"ban_mitm"`
-	MaxActiveRelays      int                `koanf:"max_active_relays"`
-	Description          string             `koanf:"description"`
-	Tags                 []string           `koanf:"tags"`
-	Owner                string             `koanf:"owner"`
-	Thumbnail            string             `koanf:"thumbnail"`
-	Hide                 bool               `koanf:"hide"`
-	Auth                 string             `koanf:"auth"`
-	AuthAllowedWallets   []string           `koanf:"auth_allowed_wallets"`
-	AuthIdentityHeaders  bool               `koanf:"auth_identity_headers"`
-	AuthOIDCIssuer       string             `koanf:"auth_oidc_issuer"`
-	AuthOIDCClientID     string             `koanf:"auth_oidc_client_id"`
-	AuthOIDCClientSecret string             `koanf:"auth_oidc_client_secret"`
-	gateway.X402Config   `koanf:",squash"`
+	ID                       string             `koanf:"id"`
+	Name                     string             `koanf:"name"`
+	TargetAddr               string             `koanf:"target"`
+	Serve                    string             `koanf:"serve"`
+	StripRequestHeaders      []string           `koanf:"strip_request_headers"`
+	HTTPRoutes               []tunnel.HTTPRoute `koanf:"http_routes"`
+	RelayURLs                []string           `koanf:"relays"`
+	Discovery                *bool              `koanf:"discovery"`
+	Overlay                  bool               `koanf:"overlay"`
+	IdentityPath             string             `koanf:"identity_path"`
+	IdentityJSON             string             `koanf:"identity_json"`
+	UDPEnabled               bool               `koanf:"udp"`
+	UDPAddr                  string             `koanf:"udp_addr"`
+	TCPEnabled               bool               `koanf:"tcp"`
+	BanMITM                  *bool              `koanf:"ban_mitm"`
+	MaxActiveRelays          int                `koanf:"max_active_relays"`
+	Description              string             `koanf:"description"`
+	Tags                     []string           `koanf:"tags"`
+	Owner                    string             `koanf:"owner"`
+	Thumbnail                string             `koanf:"thumbnail"`
+	Hide                     bool               `koanf:"hide"`
+	Auth                     string             `koanf:"auth"`
+	AuthAllowedWallets       []string           `koanf:"auth_allowed_wallets"`
+	AuthIdentityHeaders      bool               `koanf:"auth_identity_headers"`
+	AuthOIDCIssuer           string             `koanf:"auth_oidc_issuer"`
+	AuthOIDCClientID         string             `koanf:"auth_oidc_client_id"`
+	AuthOIDCClientSecret     string             `koanf:"auth_oidc_client_secret"`
+	AuthSAMLMetadataURL      string             `koanf:"auth_saml_metadata_url"`
+	AuthSAMLMetadataFile     string             `koanf:"auth_saml_metadata_file"`
+	AuthSAMLEntityID         string             `koanf:"auth_saml_entity_id"`
+	AuthSAMLSubjectAttribute string             `koanf:"auth_saml_subject_attribute"`
+	gateway.X402Config       `koanf:",squash"`
 }
 
 func LoadExistingConfig(path string) (Config, error) {
@@ -260,6 +264,10 @@ func tunnelConfigDocumentMap(cfg TunnelConfig) map[string]any {
 	addStringDocumentField(out, "auth_oidc_issuer", cfg.AuthOIDCIssuer)
 	addStringDocumentField(out, "auth_oidc_client_id", cfg.AuthOIDCClientID)
 	addStringDocumentField(out, "auth_oidc_client_secret", cfg.AuthOIDCClientSecret)
+	addStringDocumentField(out, "auth_saml_metadata_url", cfg.AuthSAMLMetadataURL)
+	addStringDocumentField(out, "auth_saml_metadata_file", cfg.AuthSAMLMetadataFile)
+	addStringDocumentField(out, "auth_saml_entity_id", cfg.AuthSAMLEntityID)
+	addStringDocumentField(out, "auth_saml_subject_attribute", cfg.AuthSAMLSubjectAttribute)
 	addStringDocumentField(out, "x402_pay_to", cfg.PayTo)
 	if cfg.Testnet {
 		out["x402_testnet"] = cfg.Testnet
@@ -324,6 +332,13 @@ func (cfg *Config) ApplyDefaults(configPath string) error {
 		t.AuthOIDCIssuer = strings.TrimSpace(t.AuthOIDCIssuer)
 		t.AuthOIDCClientID = strings.TrimSpace(t.AuthOIDCClientID)
 		t.AuthOIDCClientSecret = strings.TrimSpace(t.AuthOIDCClientSecret)
+		t.AuthSAMLMetadataURL = strings.TrimSpace(t.AuthSAMLMetadataURL)
+		t.AuthSAMLMetadataFile = strings.TrimSpace(t.AuthSAMLMetadataFile)
+		if t.AuthSAMLMetadataFile != "" && !filepath.IsAbs(t.AuthSAMLMetadataFile) {
+			t.AuthSAMLMetadataFile = filepath.Join(configDir, t.AuthSAMLMetadataFile)
+		}
+		t.AuthSAMLEntityID = strings.TrimSpace(t.AuthSAMLEntityID)
+		t.AuthSAMLSubjectAttribute = strings.TrimSpace(t.AuthSAMLSubjectAttribute)
 		t.Asset = strings.TrimSpace(t.Asset)
 		t.Endpoints = compactStrings(t.Endpoints)
 		t.FacilitatorToken = strings.TrimSpace(t.FacilitatorToken)
@@ -418,7 +433,8 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: cfg.UDPAddr}
 	}
 	hasAuth := cfg.Auth != "" || len(cfg.AuthAllowedWallets) > 0 || cfg.AuthIdentityHeaders ||
-		cfg.AuthOIDCIssuer != "" || cfg.AuthOIDCClientID != "" || cfg.AuthOIDCClientSecret != ""
+		cfg.AuthOIDCIssuer != "" || cfg.AuthOIDCClientID != "" || cfg.AuthOIDCClientSecret != "" ||
+		cfg.AuthSAMLMetadataURL != "" || cfg.AuthSAMLMetadataFile != "" || cfg.AuthSAMLEntityID != "" || cfg.AuthSAMLSubjectAttribute != ""
 	hasHTTPSource := cfg.Serve != "" || len(cfg.HTTPRoutes) > 0 || hasAuth || len(cfg.StripRequestHeaders) > 0
 	if hasHTTPSource {
 		routes := make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
@@ -447,12 +463,16 @@ func tunnelSpecFromConfig(cfg TunnelConfig) tunnel.Spec {
 // when its runtime starts.
 func (cfg TunnelConfig) applicationAuth() gateway.ApplicationAuthConfig {
 	return gateway.ApplicationAuthConfig{
-		Provider:         cfg.Auth,
-		AllowedWallets:   append([]string(nil), cfg.AuthAllowedWallets...),
-		IdentityHeaders:  cfg.AuthIdentityHeaders,
-		OIDCIssuerURL:    cfg.AuthOIDCIssuer,
-		OIDCClientID:     cfg.AuthOIDCClientID,
-		OIDCClientSecret: cfg.AuthOIDCClientSecret,
+		Provider:             cfg.Auth,
+		AllowedWallets:       append([]string(nil), cfg.AuthAllowedWallets...),
+		IdentityHeaders:      cfg.AuthIdentityHeaders,
+		OIDCIssuerURL:        cfg.AuthOIDCIssuer,
+		OIDCClientID:         cfg.AuthOIDCClientID,
+		OIDCClientSecret:     cfg.AuthOIDCClientSecret,
+		SAMLMetadataURL:      cfg.AuthSAMLMetadataURL,
+		SAMLMetadataFile:     cfg.AuthSAMLMetadataFile,
+		SAMLEntityID:         cfg.AuthSAMLEntityID,
+		SAMLSubjectAttribute: cfg.AuthSAMLSubjectAttribute,
 	}
 }
 

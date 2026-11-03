@@ -381,11 +381,15 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--owner` | | string | | Service owner metadata |
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
-| `--auth` | | string | | Protect the complete HTTP application with `siwe`, `credential`, or `oidc`; excludes cache, TCP, and UDP |
-| `--auth-allow` | | string | | Allowed principal (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc`); repeatable; empty allows any valid principal, except for `oidc`, which requires at least one entry; requires `--auth` |
+| `--auth` | | string | | Protect the complete HTTP application with `siwe`, `credential`, `oidc`, or `saml`; excludes cache, TCP, and UDP |
+| `--auth-allow` | | string | | Allowed principal (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc` and `saml`); repeatable; empty allows any valid principal, except for `oidc` and `saml`, which require at least one entry; requires `--auth` |
 | `--auth-oidc-issuer` | `AUTH_OIDC_ISSUER` | string | | OIDC issuer URL for `--auth oidc` |
 | `--auth-oidc-client-id` | `AUTH_OIDC_CLIENT_ID` | string | | OIDC client ID for `--auth oidc` |
 | `--auth-oidc-client-secret` | `AUTH_OIDC_CLIENT_SECRET` | string | | Optional OIDC client secret for `--auth oidc` |
+| `--auth-saml-metadata-url` | `AUTH_SAML_METADATA_URL` | string | | SAML identity provider metadata URL for `--auth saml` |
+| `--auth-saml-metadata-file` | `AUTH_SAML_METADATA_FILE` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` |
+| `--auth-saml-entity-id` | `AUTH_SAML_ENTITY_ID` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` |
+| `--auth-saml-subject-attribute` | `AUTH_SAML_SUBJECT_ATTRIBUTE` | string | NameID | SAML attribute that names the visitor for `--auth saml` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
 | `--auth-identity-proof` | `AUTH_IDENTITY_PROOF` | string | | Secret sent as `X-Portal-Proof` with the identity headers; at least 16 visible ASCII characters; requires `--auth-identity-headers`; set it by environment variable, not on the command line, because process lists show arguments |
 | `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive, and the underscore spelling of a name (`X_Custom` for `X-Custom`) goes with it; applies to HTTP and WebSocket upgrades; `Host` and `X-Forwarded-Proto` cannot be stripped (always regenerated before this middleware runs); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth`/`Proof` are allowed; requires `--http-route`, `--target`, or `--auth` |
@@ -533,11 +537,15 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
-| `auth` | string | Application login provider: `siwe`, `credential`, or `oidc`; cannot be combined with TCP or UDP |
-| `auth_allowed_wallets` | string array | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc`); empty allows any valid principal, except for `oidc`, which requires at least one entry; requires `auth` when set |
+| `auth` | string | Application login provider: `siwe`, `credential`, `oidc`, or `saml`; cannot be combined with TCP or UDP |
+| `auth_allowed_wallets` | string array | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc` and `saml`); empty allows any valid principal, except for `oidc` and `saml`, which require at least one entry; requires `auth` when set |
 | `auth_oidc_issuer` | string | OIDC issuer URL; required when `auth = "oidc"` |
 | `auth_oidc_client_id` | string | OIDC client ID; required when `auth = "oidc"` |
 | `auth_oidc_client_secret` | string | Optional OIDC client secret for `auth = "oidc"` |
+| `auth_saml_metadata_url` | string | SAML identity provider metadata URL; `auth = "saml"` needs it or `auth_saml_metadata_file` |
+| `auth_saml_metadata_file` | string | SAML identity provider metadata file, relative to the config file |
+| `auth_saml_entity_id` | string | SAML service provider entity ID; defaults to the metadata URL of each host |
+| `auth_saml_subject_attribute` | string | SAML attribute that names the visitor; defaults to the NameID |
 | `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
 | `strip_request_headers` | string array | Client request headers removed before routed HTTP forwards them upstream; case-insensitive; `Host` and `X-Forwarded-Proto` cannot be listed (always regenerated); `X-Portal-User`/`Auth` conflict with `auth_identity_headers`; requires `http_routes` or a `target` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |

@@ -140,29 +140,29 @@ const v=await post('/_portal/auth/verify',{challenge_id:c.data.challenge_id,mess
 }catch(e){if(e&&e.code===4001){show('form');return}fail(e&&e.message)}};
 document.addEventListener('click',(e)=>{const b=e.target.closest('[data-connect]');if(b)connect(b.dataset.connect==='fresh')});`
 
-// An OIDC login leaves for the provider at once, so its only screens are the
-// ways it can come back without a session. They are rendered by the server and
-// need no script. @@ISSUER@@ is the provider's host, @@RETRY@@ the login link
+// An OIDC or SAML login leaves for the provider at once, so its only screens
+// are the ways it can come back without a session. They are rendered by the
+// server and need no script. @@ISSUER@@ is the provider's host, @@RETRY@@ the login link
 // that keeps the visitor's target, and @@ACCOUNT@@ the account the provider
 // signed in, in the form an allowlist entry takes.
 const (
-	signinOIDCExpiredBody = `<section><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-clock"/></svg></div><h1>Sign-in took too long</h1><p class="body">This sign-in expired, or a newer one was started in another tab. Start it again from here.</p><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
+	signinProviderExpiredBody = `<section><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-clock"/></svg></div><h1>Sign-in took too long</h1><p class="body">This sign-in expired, or a newer one was started in another tab. Start it again from here.</p><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
 
-	signinOIDCCanceledBody = `<section><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>Sign-in was canceled</h1><p class="body"><span class="mono">@@ISSUER@@</span> did not finish signing you in. If you did not cancel, your account may not have access to this app; ask its owner.</p><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
+	signinProviderCanceledBody = `<section><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>Sign-in was canceled</h1><p class="body"><span class="mono">@@ISSUER@@</span> did not finish signing you in. If you did not cancel, your account may not have access to this app; ask its owner.</p><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
 
-	signinOIDCDeniedBody = `<section><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>This account is not allowed</h1><p class="body">Ask the owner of this app to add it, or sign in with a different account. You may need to sign out of <span class="mono">@@ISSUER@@</span> first.</p><div class="who"><small>Signed in as</small><b>@@ACCOUNT@@</b></div><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
+	signinProviderDeniedBody = `<section><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>This account is not allowed</h1><p class="body">Ask the owner of this app to add it, or sign in with a different account. You may need to sign out of <span class="mono">@@ISSUER@@</span> first.</p><div class="who"><small>Signed in as</small><b>@@ACCOUNT@@</b></div><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
 
-	signinOIDCFailedBody = `<section><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>Sign-in could not be completed</h1><p class="body"><span class="mono">@@ISSUER@@</span> did not respond or could not finish the sign-in. Try again in a moment. If this keeps happening, tell the owner of this app.</p><a class="btn" href="@@RETRY@@">Try again</a></section>`
+	signinProviderFailedBody = `<section><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1>Sign-in could not be completed</h1><p class="body"><span class="mono">@@ISSUER@@</span> did not respond or could not finish the sign-in. Try again in a moment. If this keeps happening, tell the owner of this app.</p><a class="btn" href="@@RETRY@@">Try again</a></section>`
 )
 
 var (
 	signinCredentialPage = newSigninPage(signinCredentialBody, signinScriptPrelude+signinCredentialScript)
 	signinWalletPage     = newSigninPage(signinWalletBody, signinScriptPrelude+signinWalletScript)
 
-	signinOIDCExpiredPage  = newSigninPage(signinOIDCExpiredBody, "")
-	signinOIDCCanceledPage = newSigninPage(signinOIDCCanceledBody, "")
-	signinOIDCDeniedPage   = newSigninPage(signinOIDCDeniedBody, "")
-	signinOIDCFailedPage   = newSigninPage(signinOIDCFailedBody, "")
+	signinProviderExpiredPage  = newSigninPage(signinProviderExpiredBody, "")
+	signinProviderCanceledPage = newSigninPage(signinProviderCanceledBody, "")
+	signinProviderDeniedPage   = newSigninPage(signinProviderDeniedBody, "")
+	signinProviderFailedPage   = newSigninPage(signinProviderFailedBody, "")
 )
 
 func newSigninPage(body, script string) string {

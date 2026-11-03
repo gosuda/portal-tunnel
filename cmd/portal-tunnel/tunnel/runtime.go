@@ -279,8 +279,8 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 
 // AuthProviderCheck reports whether the startup check of the application auth
 // provider has finished and, if it failed, why the provider is not usable.
-// Only the oidc provider depends on anything outside the tunnel; the check
-// passes at once for the others.
+// Only the oidc and saml providers depend on anything outside the tunnel; the
+// check passes at once for the others.
 func (runtime *Runtime) AuthProviderCheck() (checked bool, err error) {
 	if check := runtime.authProvider.Load(); check != nil {
 		return true, check.err

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +32,8 @@ func agentDashboardAccessMode(provider string) string {
 		return "wallet (siwe)"
 	case gateway.ApplicationAuthProviderOIDC:
 		return "OIDC"
+	case gateway.ApplicationAuthProviderSAML:
+		return "SAML"
 	default:
 		return provider
 	}
@@ -38,14 +41,14 @@ func agentDashboardAccessMode(provider string) string {
 
 // agentDashboardAllowedHint says what an empty allow list means for a
 // provider, following the gateway rules: credential and siwe accept any valid
-// principal, while OIDC refuses to run without at least one entry.
+// principal, while OIDC and SAML refuse to run without at least one entry.
 func agentDashboardAllowedHint(provider string) string {
 	switch provider {
 	case gateway.ApplicationAuthProviderCredential:
 		return "any valid credential"
 	case gateway.ApplicationAuthProviderSIWE:
 		return "any wallet"
-	case gateway.ApplicationAuthProviderOIDC:
+	case gateway.ApplicationAuthProviderOIDC, gateway.ApplicationAuthProviderSAML:
 		return "needs one entry"
 	default:
 		return ""
@@ -70,13 +73,13 @@ func agentDashboardSecretState(set bool) string {
 }
 
 // agentDashboardProviderCheck is the LED, the word and the style that report
-// the check of a tunnel's OIDC provider, made once when the tunnel starts. The
-// reason of a failure is the error in the tunnel status.
+// the check of a tunnel's OIDC or SAML identity provider, made once when the
+// tunnel starts. The reason of a failure is the error in the tunnel status.
 func agentDashboardProviderCheck(th *agentDashboardTheme, tunnel AgentTunnelStatus) (string, lipgloss.Style) {
 	switch {
-	case tunnel.AuthOIDCProviderError != "":
+	case tunnel.AuthProviderError != "":
 		return th.glyph.ledFailed + " failed", th.failed
-	case tunnel.AuthOIDCProviderChecked:
+	case tunnel.AuthProviderChecked:
 		return th.glyph.ledLive + " ok", th.bright
 	case tunnel.State == "running" || tunnel.State == "starting":
 		return th.glyph.ledConnecting + " checking...", th.pending
@@ -96,11 +99,11 @@ func (v *agentDashboardView) addAccessValue(th *agentDashboardTheme, width int, 
 }
 
 // addAccessSummary shows how the tunnel is protected, one detail per line. An
-// open tunnel needs only the first line, and a failed OIDC provider check shows
+// open tunnel needs only the first line, and a failed provider check shows
 // there too, so that it is seen without scrolling.
 func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) {
 	mode, style := agentDashboardAccessMode(tunnel.Auth), th.text
-	if tunnel.AuthOIDCProviderError != "" {
+	if tunnel.AuthProviderError != "" {
 		mode, style = mode+" "+th.glyph.ledFailed+" check failed", th.failed
 	}
 	v.addAccessValue(th, width, "Access", mode, style)
@@ -123,15 +126,21 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 		v.addAccessValue(th, width, "", fmt.Sprintf("+%d more", more), th.muted)
 	}
 	v.addAccessValue(th, width, "Headers", agentDashboardIdentityHeaders(tunnel.AuthIdentityHeaders), th.text)
-	if tunnel.Auth != gateway.ApplicationAuthProviderOIDC {
+	switch tunnel.Auth {
+	case gateway.ApplicationAuthProviderOIDC:
+		v.addAccessValue(th, width, "Issuer", tunnel.AuthOIDCIssuer, th.text)
+		v.addAccessValue(th, width, "Client ID", tunnel.AuthOIDCClientID, th.text)
+		v.addAccessValue(th, width, "Client secret", agentDashboardSecretState(tunnel.AuthOIDCClientSecretSet), th.text)
+	case gateway.ApplicationAuthProviderSAML:
+		v.addAccessValue(th, width, "Metadata", cmp.Or(tunnel.AuthSAMLMetadataURL, tunnel.AuthSAMLMetadataFile), th.text)
+		v.addAccessValue(th, width, "Entity ID", cmp.Or(tunnel.AuthSAMLEntityID, agentDashboardSAMLEntityIDDefault), th.text)
+		v.addAccessValue(th, width, "Subject", cmp.Or(tunnel.AuthSAMLSubjectAttribute, agentDashboardSAMLSubjectDefault), th.text)
+	default:
 		return
 	}
-	v.addAccessValue(th, width, "Issuer", tunnel.AuthOIDCIssuer, th.text)
-	v.addAccessValue(th, width, "Client ID", tunnel.AuthOIDCClientID, th.text)
-	v.addAccessValue(th, width, "Client secret", agentDashboardSecretState(tunnel.AuthOIDCClientSecretSet), th.text)
 	check, checkStyle := agentDashboardProviderCheck(th, tunnel)
-	if tunnel.AuthOIDCProviderError != "" {
-		check += ": " + tunnel.AuthOIDCProviderError
+	if tunnel.AuthProviderError != "" {
+		check += ": " + tunnel.AuthProviderError
 	}
 	v.addAccessValue(th, width, "Provider check", check, checkStyle)
 }
@@ -143,7 +152,14 @@ var agentDashboardAccessProviders = []string{
 	gateway.ApplicationAuthProviderCredential,
 	gateway.ApplicationAuthProviderSIWE,
 	gateway.ApplicationAuthProviderOIDC,
+	gateway.ApplicationAuthProviderSAML,
 }
+
+// What an empty SAML entity ID or subject attribute stands for.
+const (
+	agentDashboardSAMLEntityIDDefault = "metadata URL of each host"
+	agentDashboardSAMLSubjectDefault  = "NameID"
+)
 
 // agentDashboardAccessMessageLines is how many lines of an error, or of the
 // reason a provider check failed, the Access screen keeps.
@@ -159,6 +175,10 @@ const (
 	agentDashboardAccessRowIssuer
 	agentDashboardAccessRowClientID
 	agentDashboardAccessRowSecret
+	agentDashboardAccessRowMetadataURL
+	agentDashboardAccessRowMetadataFile
+	agentDashboardAccessRowEntityID
+	agentDashboardAccessRowSubjectAttribute
 )
 
 // agentDashboardAccessField is one stop of the focus ring of the Access screen.
@@ -186,7 +206,8 @@ type agentDashboardAccess struct {
 	// someone else changed the tunnel under the draft (see syncAccess).
 	base AgentTunnelStatus
 
-	add, issuer, clientID, secret textinput.Model
+	add, issuer, clientID, secret                         textinput.Model
+	metadataURL, metadataFile, entityID, subjectAttribute textinput.Model
 }
 
 // agentDashboardAccessMsg is the answer to the PATCH that applies a draft.
@@ -201,6 +222,11 @@ func newAgentDashboardAccess(theme agentDashboardTheme) agentDashboardAccess {
 		issuer:   theme.newInput("https://idp.example"),
 		clientID: theme.newInput("client id"),
 		secret:   theme.newSecretInput(),
+
+		metadataURL:      theme.newInput("https://idp.example/metadata"),
+		metadataFile:     theme.newInput("or a metadata file path"),
+		entityID:         theme.newInput(agentDashboardSAMLEntityIDDefault),
+		subjectAttribute: theme.newInput(agentDashboardSAMLSubjectDefault),
 	}
 }
 
@@ -234,8 +260,7 @@ func (m *agentDashboardModel) closeAccess() {
 	a := &m.access
 	a.forgetSecret()
 	a.add.Reset()
-	a.issuer.Reset()
-	a.clientID.Reset()
+	a.resetProviderInputs()
 	a.blur()
 	a.tunnelID = ""
 	a.allowed = nil
@@ -278,7 +303,11 @@ func sameAccessSettings(a, b AgentTunnelStatus) bool {
 		a.AuthIdentityHeaders == b.AuthIdentityHeaders &&
 		a.AuthOIDCIssuer == b.AuthOIDCIssuer &&
 		a.AuthOIDCClientID == b.AuthOIDCClientID &&
-		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet
+		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet &&
+		a.AuthSAMLMetadataURL == b.AuthSAMLMetadataURL &&
+		a.AuthSAMLMetadataFile == b.AuthSAMLMetadataFile &&
+		a.AuthSAMLEntityID == b.AuthSAMLEntityID &&
+		a.AuthSAMLSubjectAttribute == b.AuthSAMLSubjectAttribute
 }
 
 // load makes the draft equal to what the tunnel has stored. The secret input
@@ -292,10 +321,24 @@ func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
 	a.allowed = slices.Clone(tunnel.AuthAllowedWallets)
 	a.err = nil
 	a.add.Reset()
-	a.issuer.SetValue(tunnel.AuthOIDCIssuer)
-	a.issuer.CursorEnd()
-	a.clientID.SetValue(tunnel.AuthOIDCClientID)
-	a.clientID.CursorEnd()
+	for input, value := range map[*textinput.Model]string{
+		&a.issuer:           tunnel.AuthOIDCIssuer,
+		&a.clientID:         tunnel.AuthOIDCClientID,
+		&a.metadataURL:      tunnel.AuthSAMLMetadataURL,
+		&a.metadataFile:     tunnel.AuthSAMLMetadataFile,
+		&a.entityID:         tunnel.AuthSAMLEntityID,
+		&a.subjectAttribute: tunnel.AuthSAMLSubjectAttribute,
+	} {
+		input.SetValue(value)
+		input.CursorEnd()
+	}
+}
+
+// resetProviderInputs empties the OIDC and SAML settings of the draft.
+func (a *agentDashboardAccess) resetProviderInputs() {
+	for _, input := range []*textinput.Model{&a.issuer, &a.clientID, &a.metadataURL, &a.metadataFile, &a.entityID, &a.subjectAttribute} {
+		input.Reset()
+	}
 }
 
 // forgetSecret drops a typed secret, a pending removal of the stored one, and
@@ -307,7 +350,7 @@ func (a *agentDashboardAccess) forgetSecret() {
 }
 
 // setProvider switches the draft to provider and drops a typed secret. The
-// allow list and the OIDC settings belong to one provider, so another provider
+// allow list and the OIDC or SAML settings belong to one provider, so another provider
 // than the stored one starts without them; coming back to the stored one
 // restores what is stored.
 func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelStatus) {
@@ -324,13 +367,12 @@ func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelSt
 	a.allowed = nil
 	a.err = nil
 	a.add.Reset()
-	a.issuer.Reset()
-	a.clientID.Reset()
+	a.resetProviderInputs()
 }
 
 // fields is the focus ring: the mode, then, unless the tunnel is open, the
-// allow list entries, the entry input, the identity headers and, for OIDC, the
-// provider settings.
+// allow list entries, the entry input, the identity headers and, for OIDC or
+// SAML, the provider settings.
 func (a agentDashboardAccess) fields() []agentDashboardAccessField {
 	fields := []agentDashboardAccessField{{row: agentDashboardAccessRowMode}}
 	if a.provider == "" {
@@ -340,11 +382,19 @@ func (a agentDashboardAccess) fields() []agentDashboardAccessField {
 		fields = append(fields, agentDashboardAccessField{row: agentDashboardAccessRowEntry, entry: i})
 	}
 	fields = append(fields, agentDashboardAccessField{row: agentDashboardAccessRowAdd}, agentDashboardAccessField{row: agentDashboardAccessRowHeaders})
-	if a.provider == gateway.ApplicationAuthProviderOIDC {
+	switch a.provider {
+	case gateway.ApplicationAuthProviderOIDC:
 		fields = append(fields,
 			agentDashboardAccessField{row: agentDashboardAccessRowIssuer},
 			agentDashboardAccessField{row: agentDashboardAccessRowClientID},
 			agentDashboardAccessField{row: agentDashboardAccessRowSecret},
+		)
+	case gateway.ApplicationAuthProviderSAML:
+		fields = append(fields,
+			agentDashboardAccessField{row: agentDashboardAccessRowMetadataURL},
+			agentDashboardAccessField{row: agentDashboardAccessRowMetadataFile},
+			agentDashboardAccessField{row: agentDashboardAccessRowEntityID},
+			agentDashboardAccessField{row: agentDashboardAccessRowSubjectAttribute},
 		)
 	}
 	return fields
@@ -368,13 +418,21 @@ func (a *agentDashboardAccess) focusedInput() *textinput.Model {
 		return &a.clientID
 	case agentDashboardAccessRowSecret:
 		return &a.secret
+	case agentDashboardAccessRowMetadataURL:
+		return &a.metadataURL
+	case agentDashboardAccessRowMetadataFile:
+		return &a.metadataFile
+	case agentDashboardAccessRowEntityID:
+		return &a.entityID
+	case agentDashboardAccessRowSubjectAttribute:
+		return &a.subjectAttribute
 	default:
 		return nil
 	}
 }
 
 func (a *agentDashboardAccess) blur() {
-	for _, input := range []*textinput.Model{&a.add, &a.issuer, &a.clientID, &a.secret} {
+	for _, input := range []*textinput.Model{&a.add, &a.issuer, &a.clientID, &a.secret, &a.metadataURL, &a.metadataFile, &a.entityID, &a.subjectAttribute} {
 		input.Blur()
 	}
 }
@@ -428,6 +486,27 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	removeSecret := stored.AuthOIDCClientSecretSet && (a.provider != gateway.ApplicationAuthProviderOIDC || a.clearSecret)
 	if secret != "" || removeSecret {
 		req.AuthOIDCClientSecret = &secret
+	}
+
+	// Leaving SAML clears its settings in the same way.
+	var metadataURL, metadataFile, entityID, subjectAttribute string
+	if a.provider == gateway.ApplicationAuthProviderSAML {
+		metadataURL = strings.TrimSpace(a.metadataURL.Value())
+		metadataFile = strings.TrimSpace(a.metadataFile.Value())
+		entityID = strings.TrimSpace(a.entityID.Value())
+		subjectAttribute = strings.TrimSpace(a.subjectAttribute.Value())
+	}
+	if metadataURL != stored.AuthSAMLMetadataURL {
+		req.AuthSAMLMetadataURL = &metadataURL
+	}
+	if metadataFile != stored.AuthSAMLMetadataFile {
+		req.AuthSAMLMetadataFile = &metadataFile
+	}
+	if entityID != stored.AuthSAMLEntityID {
+		req.AuthSAMLEntityID = &entityID
+	}
+	if subjectAttribute != stored.AuthSAMLSubjectAttribute {
+		req.AuthSAMLSubjectAttribute = &subjectAttribute
 	}
 	return req
 }
@@ -600,13 +679,21 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 				label = "Secret (shown)"
 			}
 			body.addInputRow(th, inner, label, input, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowMetadataURL:
+			body.addInputRow(th, inner, "Metadata URL", a.metadataURL, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowMetadataFile:
+			body.addInputRow(th, inner, "Metadata file", a.metadataFile, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowEntityID:
+			body.addInputRow(th, inner, "Entity ID", a.entityID, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowSubjectAttribute:
+			body.addInputRow(th, inner, "Subject attr", a.subjectAttribute, agentDashboardActionFocusAccessField, index, focused)
 		}
 	}
 	body.addLine("")
-	if tunnel.Auth == gateway.ApplicationAuthProviderOIDC {
+	if tunnel.Auth == gateway.ApplicationAuthProviderOIDC || tunnel.Auth == gateway.ApplicationAuthProviderSAML {
 		check, style := agentDashboardProviderCheck(th, tunnel)
 		body.addAccessValue(th, inner, "Provider check", check, style)
-		for _, line := range agentDashboardWrap(tunnel.AuthOIDCProviderError, inner, agentDashboardAccessMessageLines) {
+		for _, line := range agentDashboardWrap(tunnel.AuthProviderError, inner, agentDashboardAccessMessageLines) {
 			body.addLine(style.Render(line))
 		}
 	}
@@ -630,7 +717,7 @@ func agentDashboardAccessEntryPlaceholder(provider string) string {
 	switch provider {
 	case gateway.ApplicationAuthProviderSIWE:
 		return "0x... wallet address"
-	case gateway.ApplicationAuthProviderOIDC:
+	case gateway.ApplicationAuthProviderOIDC, gateway.ApplicationAuthProviderSAML:
 		return "email, @domain, sub:id"
 	default:
 		return "subject"

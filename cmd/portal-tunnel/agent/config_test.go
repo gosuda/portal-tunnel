@@ -157,6 +157,22 @@ auth_oidc_client_id = "client-id"
 auth_oidc_client_secret = "client-secret"
 
 [[tunnels]]
+id = "sso"
+target = "localhost:3001"
+auth = "saml"
+auth_allowed_wallets = ["@example.com"]
+auth_saml_metadata_url = "https://idp.example/metadata"
+auth_saml_entity_id = "urn:portal:sso"
+auth_saml_subject_attribute = "email"
+
+[[tunnels]]
+id = "sso-file"
+target = "localhost:3002"
+auth = "saml"
+auth_allowed_wallets = ["sub:G-7f3a"]
+auth_saml_metadata_file = "/absolute/idp.xml"
+
+[[tunnels]]
 id = "site"
 serve = "./site"
 identity_json = "{}"
