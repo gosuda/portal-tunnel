@@ -1,6 +1,6 @@
 ---
 title: Application Access Authentication
-description: Let only chosen people open a tunnel, with Portal credential links, an Ethereum wallet, or OpenID Connect sign-in.
+description: Let only chosen people open a tunnel, with Portal credential links, an Ethereum wallet, OpenID Connect, or SAML 2.0 sign-in.
 ---
 
 # Application Access Authentication
@@ -17,6 +17,7 @@ routed path. Pick one method:
 | A few named people, nothing to set up | [`--auth credential`](#portal-credentials) | A link you create with `portal auth issue` | Nothing |
 | People who own an Ethereum wallet | [`--auth siwe`](#siwe-application-access) | A browser wallet | Nothing |
 | People who sign in with Google, Microsoft, Keycloak, GitLab or another OpenID Connect provider | [`--auth oidc`](#openid-connect-oidc) | An account at that provider | An OAuth client registered at the provider |
+| People who sign in at a SAML identity provider such as Okta, Entra ID, ADFS, Keycloak or Shibboleth | [`--auth saml`](#saml-20) | An account at that provider | A SAML application registered at the provider |
 
 [Check that sign-in is on](#check-that-sign-in-is-on) once the tunnel runs. An AI
 coding agent that follows the `portal-expose` skill reads the same steps in
@@ -100,7 +101,7 @@ are not used for application access.
 
 Inbound `X-Portal-User`, `X-Portal-Auth`, and `X-Portal-Proof` headers are always removed. Add
 `--auth-identity-headers` to inject the verified subject and provider (`siwe`,
-`credential`, or `oidc`) after login. Upstreams must only trust these headers when they cannot be
+`credential`, `oidc`, or `saml`) after login. Upstreams must only trust these headers when they cannot be
 reached except through this local Portal proxy.
 
 ### Verifying the identity headers
@@ -177,6 +178,116 @@ $secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_
 
 At start Portal fetches the provider's discovery document and keys once and logs `application auth provider is not usable` if that fails; the tunnel keeps running and visitors can sign in once the provider is reachable.
 
+## SAML 2.0
+
+Use `--auth saml` to sign visitors in at a SAML 2.0 identity provider (IdP),
+such as Keycloak, Okta, Microsoft Entra ID, ADFS or Shibboleth. Use it when the
+provider issues no OpenID Connect client. Portal reads the IdP metadata and
+verifies each signed response on your machine. The relay never sees the
+assertion.
+
+```bash
+portal expose 3000 \
+  --name myapp \
+  --auth saml \
+  --auth-saml-metadata-url https://idp.example.com/realms/main/protocol/saml/descriptor \
+  --auth-allow @example.com
+```
+
+### Set up the identity provider
+
+Portal is the service provider (SP), the application that the IdP signs
+visitors in to. Portal serves two addresses on every host a visitor opens:
+
+| Address | Use |
+|---|---|
+| `https://<tunnel-host>/_portal/auth/saml/metadata` | The SP metadata to import at the IdP |
+| `https://<tunnel-host>/_portal/auth/saml/acs` | The assertion consumer service (ACS), with the HTTP-POST binding |
+
+1. Start the tunnel once and note each host that Portal prints after `service ready at`.
+2. At the IdP, add a SAML application. Import the SP metadata from the metadata address, or enter the ACS address and the entity ID by hand.
+3. Set the IdP to sign the response, the assertion, or both.
+4. Set the IdP to send unencrypted assertions. Portal sends unsigned requests, so the IdP must not require a signed `AuthnRequest`.
+5. Choose the subject: a NameID format, or an attribute that you name with `--auth-saml-subject-attribute`. The next section explains the choice.
+6. Copy the IdP metadata address into `--auth-saml-metadata-url`.
+
+In Keycloak, create a client with the client type SAML. The client ID is the
+entity ID, and the realm metadata is at
+`https://<keycloak-host>/realms/<realm>/protocol/saml/descriptor`. Keep Sign
+documents on, and turn Client signature required and Encrypt assertions off.
+
+The SP entity ID is the metadata address of the host the visitor opened,
+unless you set `--auth-saml-entity-id`. The ACS address also follows that
+host, as the OIDC redirect URI does. A tunnel has a short
+`<name>.<relay-domain>` URL and an identity-bound URL on every relay that
+publishes it. If visitors use more than one host, set one
+`--auth-saml-entity-id`, so that the IdP sees one application, and register the
+ACS address of every host with it. To keep that list short, pin one relay with
+`--relays <url> --discovery=false`.
+
+If the IdP publishes no metadata URL, save its metadata XML to a file and use
+`--auth-saml-metadata-file <path>` instead. Set one of the two sources. Portal
+reads the metadata again every 15 minutes, so a new signing key in the metadata
+takes effect without a restart. Portal refuses metadata in which every signing
+certificate has expired, because no signature by such a certificate is
+accepted. If the IdP keeps signing with an expired certificate, renew it at the
+IdP. At start, Portal reads the metadata once and logs `application auth
+provider is not usable` if that fails. The tunnel keeps running.
+
+### Who may sign in with SAML
+
+`--auth-allow` is required with `--auth saml`, for the same reason as with OIDC.
+The subject is the `NameID` of the assertion, or the single value of the
+attribute that `--auth-saml-subject-attribute` names, for example `email`. The
+allowlist entries take the OIDC forms:
+
+- An email address, or an `@example.com` domain, matches a subject that is an email address. A domain entry matches that exact domain only, not its subdomains.
+- A `sub:<subject>` entry matches the subject exactly, including case, whatever the subject holds.
+
+SAML has no `email_verified` claim, so Portal treats an email that the IdP signs
+as verified. Set the IdP to release only an address that its users cannot
+change. If the IdP cannot guarantee this, allow a stable NameID with `sub:`
+entries, for example one in the persistent format. A transient NameID changes
+at every login, so it never matches a `sub:` entry.
+
+### What Portal checks
+
+Portal checks the XML signature with the maintained `gosaml2` and `goxmldsig`
+libraries. Portal accepts a response only when all of these conditions are
+true:
+
+- The response is signed, or every assertion in it is signed, with a certificate from the IdP metadata. A response that mixes signed and unsigned assertions is refused.
+- The response carries exactly one assertion.
+- The issuer is the entity ID in the IdP metadata, and the status is success.
+- The destination and the recipient are the ACS address of this host, and the audience is the SP entity ID.
+- The response and the assertion answer the `AuthnRequest` of this browser (`InResponseTo`). Portal keeps the request ID in a signed cookie for 10 minutes.
+- The assertion is inside its `NotBefore` and `NotOnOrAfter` window, with one minute of clock skew.
+- Portal did not accept the assertion ID before. Portal remembers each accepted ID until the login state that it answered expires.
+
+Portal accepts a signed response with an unsigned assertion inside, as well as
+signed assertions in an unsigned response. It never accepts a response in which
+neither is signed. For this reason, the SP metadata does not set
+`WantAssertionsSigned`.
+
+Portal keeps the accepted assertion IDs in memory, so a restart of the tunnel
+forgets them. An assertion that Portal accepted just before a restart can then
+be presented once more until its 10-minute login state expires. Only someone
+who holds both the response and the visitor's state cookie can do that.
+
+IdP-initiated sign-in, which starts at the IdP's application list, is refused,
+because such a response answers no request of this tunnel. Visitors start at
+the tunnel address instead. Portal does not support single logout.
+
+A SAML session follows the `SessionNotOnOrAfter` of the assertion when the IdP
+sends one, but never lasts less than 15 minutes or more than 24 hours. Without
+it, the session lasts 24 hours. The `NotOnOrAfter` of the assertion only limits
+when Portal accepts the assertion. Portal checks `--auth-allow` on every
+request, so a removed entry ends its sessions at once. A session is also bound
+to the metadata source, the entity ID and the subject attribute: a change to one
+of them signs every visitor out. With `--auth-identity-headers`,
+`X-Portal-User` carries the email or the `sub:` subject, and `X-Portal-Auth`
+carries `saml`.
+
 ## Check That Sign-In Is On
 
 An unauthenticated `GET` or `HEAD` request is sent to the login page, and any
@@ -188,8 +299,8 @@ curl -s -X POST https://myapp.example.com/     # 401 {"error":"authentication re
 ```
 
 A `200` means the gate is not on: check that `--auth` is on the command you ran.
-With OIDC, use `GET` for `/_portal/auth/login`, which answers `303` to the
-provider; a `HEAD` request is refused with `405`.
+With OIDC or SAML, use `GET` for `/_portal/auth/login`, which answers `303` to
+the provider; a `HEAD` request is refused with `405`.
 
 ## Agent Wallet Status Access
 

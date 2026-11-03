@@ -18,6 +18,10 @@ var (
 	errOIDCSettingsRequireOIDCApplicationAuth = errors.New("oidc settings require the oidc application auth provider")
 	errOIDCRequiresLeastOneAuthAllow          = errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
 	errOIDCClientIDIsRequired                 = errors.New("oidc client id is required")
+	errSAMLSettingsRequireSAMLApplicationAuth = errors.New("saml settings require the saml application auth provider")
+	errSAMLRequiresLeastOneAuthAllow          = errors.New("saml requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+	errSAMLMetadataIsRequired                 = errors.New("saml requires identity provider metadata: --auth-saml-metadata-url or --auth-saml-metadata-file")
+	errSAMLMetadataSourcesConflict            = errors.New("saml metadata comes from --auth-saml-metadata-url or --auth-saml-metadata-file, not both")
 	errTunnelIdentityIsRequired               = errors.New("tunnel identity is required")
 	errApplicationCredentialExpiryMustFuture  = errors.New("application credential expiry must be in the future")
 	errApplicationCredentialIsRequired        = errors.New("application credential is required")
@@ -32,6 +36,7 @@ const (
 	ApplicationAuthProviderSIWE       = "siwe"
 	ApplicationAuthProviderCredential = "credential"
 	ApplicationAuthProviderOIDC       = "oidc"
+	ApplicationAuthProviderSAML       = "saml"
 
 	applicationCredentialPrefix  = "pcred_"
 	applicationCredentialVersion = 1
@@ -55,6 +60,8 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 		return ApplicationAuthProviderCredential, nil
 	case ApplicationAuthProviderOIDC:
 		return ApplicationAuthProviderOIDC, nil
+	case ApplicationAuthProviderSAML:
+		return ApplicationAuthProviderSAML, nil
 	default:
 		return "", fmt.Errorf("unsupported application auth provider %q", provider)
 	}
@@ -75,11 +82,18 @@ type applicationAuthSettings struct {
 	issuerURL    string
 	clientID     string
 	clientSecret string
+	// The SAML fields are set only for the saml provider, with exactly one of
+	// the metadata sources. An empty entity ID or subject attribute takes its
+	// default: the metadata URL of the host and the NameID.
+	samlMetadataURL      string
+	samlMetadataFile     string
+	samlEntityID         string
+	samlSubjectAttribute string
 }
 
 // ValidateApplicationAuthConfig validates the complete tunnel-local
 // application authentication configuration, including provider-specific OIDC
-// fields and principal allowlists.
+// and SAML fields and principal allowlists.
 func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
 	_, err := resolveApplicationAuthConfig(cfg)
 	return err
@@ -89,7 +103,7 @@ func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
 const minIdentityProofLength = 16
 
 // resolveApplicationAuthConfig is the one place that validates and normalizes
-// the provider, the allowlist, the identity proof and the OIDC settings.
+// the provider, the allowlist, the identity proof and the OIDC and SAML settings.
 func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSettings, error) {
 	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
 	if err != nil {
@@ -116,31 +130,65 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	issuer := strings.TrimSpace(cfg.OIDCIssuerURL)
 	clientID := strings.TrimSpace(cfg.OIDCClientID)
 	clientSecret := strings.TrimSpace(cfg.OIDCClientSecret)
-	if provider != ApplicationAuthProviderOIDC {
-		if issuer != "" || clientID != "" || clientSecret != "" {
-			return applicationAuthSettings{}, errOIDCSettingsRequireOIDCApplicationAuth
+	metadataURL := strings.TrimSpace(cfg.SAMLMetadataURL)
+	metadataFile := strings.TrimSpace(cfg.SAMLMetadataFile)
+	entityID := strings.TrimSpace(cfg.SAMLEntityID)
+	subjectAttribute := strings.TrimSpace(cfg.SAMLSubjectAttribute)
+	hasOIDCSettings := issuer != "" || clientID != "" || clientSecret != ""
+	hasSAMLSettings := metadataURL != "" || metadataFile != "" || entityID != "" || subjectAttribute != ""
+	if hasOIDCSettings && provider != ApplicationAuthProviderOIDC {
+		return applicationAuthSettings{}, errOIDCSettingsRequireOIDCApplicationAuth
+	}
+	if hasSAMLSettings && provider != ApplicationAuthProviderSAML {
+		return applicationAuthSettings{}, errSAMLSettingsRequireSAMLApplicationAuth
+	}
+	settings := applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof}
+	switch provider {
+	case ApplicationAuthProviderOIDC:
+		// An identity provider authenticates accounts it does not restrict to
+		// this application, so without an allowlist every one of them would pass.
+		if len(allowed) == 0 {
+			return applicationAuthSettings{}, errOIDCRequiresLeastOneAuthAllow
 		}
-		return applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof}, nil
+		settings.issuerURL, err = normalizeOIDCIssuerURL(issuer)
+		if err != nil {
+			return applicationAuthSettings{}, err
+		}
+		if clientID == "" {
+			return applicationAuthSettings{}, errOIDCClientIDIsRequired
+		}
+		settings.clientID, settings.clientSecret = clientID, clientSecret
+	case ApplicationAuthProviderSAML:
+		if len(allowed) == 0 {
+			return applicationAuthSettings{}, errSAMLRequiresLeastOneAuthAllow
+		}
+		switch {
+		case metadataURL == "" && metadataFile == "":
+			return applicationAuthSettings{}, errSAMLMetadataIsRequired
+		case metadataURL != "" && metadataFile != "":
+			return applicationAuthSettings{}, errSAMLMetadataSourcesConflict
+		case metadataURL != "":
+			if settings.samlMetadataURL, err = normalizeSAMLMetadataURL(metadataURL); err != nil {
+				return applicationAuthSettings{}, err
+			}
+		default:
+			settings.samlMetadataFile = metadataFile
+		}
+		if err := validateSAMLName("saml entity id", entityID, samlEntityIDLimit); err != nil {
+			return applicationAuthSettings{}, err
+		}
+		if err := validateSAMLName("saml subject attribute", subjectAttribute, samlSubjectAttributeLimit); err != nil {
+			return applicationAuthSettings{}, err
+		}
+		settings.samlEntityID, settings.samlSubjectAttribute = entityID, subjectAttribute
 	}
-	// An identity provider authenticates accounts it does not restrict to
-	// this application, so without an allowlist every one of them would pass.
-	if len(allowed) == 0 {
-		return applicationAuthSettings{}, errOIDCRequiresLeastOneAuthAllow
-	}
-	issuerURL, err := normalizeOIDCIssuerURL(issuer)
-	if err != nil {
-		return applicationAuthSettings{}, err
-	}
-	if clientID == "" {
-		return applicationAuthSettings{}, errOIDCClientIDIsRequired
-	}
-	return applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof, issuerURL: issuerURL, clientID: clientID, clientSecret: clientSecret}, nil
+	return settings, nil
 }
 
 // NormalizeApplicationAuthAllowed validates and normalizes the provider-scoped
 // principal allowlist (`--auth-allow` / `auth_allowed_wallets`): Ethereum
 // addresses for `siwe`, credential subjects for `credential`, and emails or
-// subjects for `oidc`.
+// subjects for `oidc` and `saml`.
 func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string, error) {
 	provider, err := NormalizeApplicationAuthProvider(provider)
 	if err != nil {
@@ -151,8 +199,8 @@ func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string
 		return siweauth.NormalizeAddresses(values)
 	case ApplicationAuthProviderCredential:
 		return NormalizeApplicationAuthSubjects(values)
-	case ApplicationAuthProviderOIDC:
-		return NormalizeApplicationAuthOIDCPrincipals(values)
+	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML:
+		return NormalizeApplicationAuthProviderPrincipals(values)
 	default:
 		return nil, fmt.Errorf("unsupported application auth provider %q", provider)
 	}

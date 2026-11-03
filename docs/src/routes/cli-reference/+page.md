@@ -110,11 +110,15 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
-| `--auth` | string | | Protect HTTP application access with `siwe`, `credential`, or `oidc`; cannot be combined with `--cache` |
-| `--auth-allow` | string | | Principal allowed to sign in (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc`); repeat for multiple principals (empty allows any valid principal, except for `oidc`, which requires at least one entry); requires `--auth` |
+| `--auth` | string | | Protect HTTP application access with `siwe`, `credential`, `oidc`, or `saml`; cannot be combined with `--cache` |
+| `--auth-allow` | string | | Principal allowed to sign in (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc` and `saml`); repeat for multiple principals (empty allows any valid principal, except for `oidc` and `saml`, which require at least one entry); requires `--auth` |
 | `--auth-oidc-issuer` | string | | OIDC issuer URL for `--auth oidc` (env: `AUTH_OIDC_ISSUER`) |
 | `--auth-oidc-client-id` | string | | OIDC client ID for `--auth oidc` (env: `AUTH_OIDC_CLIENT_ID`) |
 | `--auth-oidc-client-secret` | string | | Optional OIDC client secret for `--auth oidc` (env: `AUTH_OIDC_CLIENT_SECRET`) |
+| `--auth-saml-metadata-url` | string | | SAML identity provider metadata URL for `--auth saml` (env: `AUTH_SAML_METADATA_URL`) |
+| `--auth-saml-metadata-file` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` (env: `AUTH_SAML_METADATA_FILE`) |
+| `--auth-saml-entity-id` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` (env: `AUTH_SAML_ENTITY_ID`) |
+| `--auth-saml-subject-attribute` | string | NameID | SAML attribute that names the visitor for `--auth saml`, such as `email` (env: `AUTH_SAML_SUBJECT_ATTRIBUTE`) |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
@@ -279,6 +283,19 @@ portal expose 3000 --auth oidc \
 read only with `--auth oidc`, so exporting them for one service does not affect
 another `portal expose`. An `--auth-oidc-*` flag given on the command line
 without `--auth oidc` is rejected.
+
+Protect it with a SAML 2.0 identity provider (see
+[SAML 2.0](/siwe-authentication#saml-20)):
+
+```bash
+portal expose 3000 --auth saml \
+  --auth-saml-metadata-url https://idp.example.com/realms/main/protocol/saml/descriptor \
+  --auth-allow @example.com
+```
+
+`--auth-allow` is required with `--auth saml`. The `AUTH_SAML_*` variables
+follow the `AUTH_OIDC_*` rule: Portal reads them only with `--auth saml`, and
+it rejects an `--auth-saml-*` flag on the command line without `--auth saml`.
 
 Portal protects the complete HTTP gateway, including routed, static, and x402
 paths. It always strips inbound Portal identity headers. The auth gate cannot be

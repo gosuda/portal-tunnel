@@ -11,6 +11,7 @@ Use this when only chosen people should open the public URL ("only me", "my team
 | A few named people, nothing external to set up | `credential` | A link from `portal auth issue` | Nothing |
 | People who own an Ethereum wallet | `siwe` | A browser wallet | Nothing |
 | People who already sign in at Google, Microsoft, Keycloak or another OpenID Connect provider | `oidc` | An account at that provider | An OAuth client registered at the provider |
+| People who sign in at a SAML identity provider (Okta, Entra ID, ADFS, Keycloak, Shibboleth) that issues no OpenID Connect client | `saml` | An account at that provider | A SAML application registered at the provider |
 
 When the user does not say which, use `credential`: it needs no external setup. A credential link is a bearer token, not a password; whoever holds the link gets in until it expires.
 
@@ -77,9 +78,33 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 - At start Portal fetches the provider's discovery document and keys once and logs `application auth provider is not usable` when that fails. The tunnel keeps running; visitors cannot sign in until the provider is reachable.
 - A session follows the provider's token lifetime, between 15 minutes and 24 hours. Sessions are re-checked against `--auth-allow` on every request. Changing the list takes effect when the tunnel restarts.
 
+## saml
+
+Do these in order. Stop and ask the user for the missing value instead of guessing it.
+
+1. Decide the hosts visitors will use, as in step 1 of the oidc section.
+2. Find the identity provider's metadata URL, for example Keycloak's `https://<keycloak-host>/realms/<realm>/protocol/saml/descriptor`. It must be `https`. When the provider gives only a metadata file, use `--auth-saml-metadata-file <absolute path>` instead. Give one of the two, not both.
+3. At the provider, the user adds a SAML application. Portal serves its service provider metadata at `https://<host>/_portal/auth/saml/metadata` and receives the response at `https://<host>/_portal/auth/saml/acs` (HTTP-POST binding). Both follow the host the visitor opened, and so does the default entity ID, which is the metadata address. When visitors use more than one host, pass one `--auth-saml-entity-id` (for example `urn:portal:my-app`) and register the ACS address of every host with it. The provider must sign the response or the assertion, must not encrypt assertions, and must not require signed requests. The service provider metadata leaves `WantAssertionsSigned` off because either signature is accepted; a response with neither is refused.
+4. Decide the subject. By default it is the `NameID`; `--auth-saml-subject-attribute email` uses that attribute instead, which must carry one value.
+5. Decide who may sign in. `--auth-allow` is required with `saml`; without at least one entry Portal refuses to start.
+   - `alice@example.com` or `@example.com`: match a subject that is an email address, the domain entry on exactly that domain. SAML has no `email_verified`, so Portal trusts the email the provider signs; tell the user to release only addresses that their users cannot change.
+   - `sub:<id>`: the subject exactly, including case. Use it for a persistent `NameID`. A transient `NameID` changes at every login and never matches.
+
+```sh
+portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json \
+  --auth saml --auth-saml-metadata-url https://<idp-host>/realms/<realm>/protocol/saml/descriptor \
+  --auth-allow @example.com
+```
+
+- No secret is involved, so you can run the command yourself.
+- `AUTH_SAML_METADATA_URL`, `AUTH_SAML_METADATA_FILE`, `AUTH_SAML_ENTITY_ID` and `AUTH_SAML_SUBJECT_ATTRIBUTE` stand in for the four flags, and are used only together with `--auth saml`. An `--auth-saml-*` flag without `--auth saml` is refused.
+- At start Portal reads the metadata once and logs `application auth provider is not usable` when that fails; it reads the metadata again every 15 minutes. The tunnel keeps running. Metadata in which every signing certificate has expired is refused, because a signature by an expired certificate is never accepted: the user renews the certificate at the provider.
+- Visitors must start at the tunnel URL: a sign-in started from the provider's app list (IdP-initiated) is refused. Single logout is not supported.
+- A session follows the provider's `SessionNotOnOrAfter`, between 15 minutes and 24 hours (24 hours when the provider sends none). Sessions are re-checked against `--auth-allow` on every request. Changing the metadata source, the entity ID or the subject attribute signs everyone out.
+
 ## Common options
 
-- `--auth-identity-headers` passes the verified identity to the app as `X-Portal-User` (wallet address, credential subject, or `alice@example.com` / `sub:<id>` for OIDC) and `X-Portal-Auth` (`siwe`, `credential`, `oidc`). Portal strips any client-supplied copies. Tell the user the app may trust these headers only when nothing but Portal can reach the app's port: binding the app to loopback keeps other machines out, but any other process on the same machine can still connect to that port and send forged headers. When other local processes can reach it, add `--auth-identity-proof` (only with `--auth-identity-headers`, and only when the user's app will check it): Portal then also sends `X-Portal-Proof: <secret>`, always strips a visitor's copy, and the app compares the header with the same secret in constant time and ignores the identity headers when it differs or is missing. Pass the secret as `AUTH_IDENTITY_PROOF`, never as a flag value, where `ps` would show it. Generate it once into a file only the user can read, outside the repository, and set the variable for the one command, so it is never typed or printed:
+- `--auth-identity-headers` passes the verified identity to the app as `X-Portal-User` (wallet address, credential subject, or `alice@example.com` / `sub:<id>` for OIDC and SAML) and `X-Portal-Auth` (`siwe`, `credential`, `oidc`, `saml`). Portal strips any client-supplied copies. Tell the user the app may trust these headers only when nothing but Portal can reach the app's port: binding the app to loopback keeps other machines out, but any other process on the same machine can still connect to that port and send forged headers. When other local processes can reach it, add `--auth-identity-proof` (only with `--auth-identity-headers`, and only when the user's app will check it): Portal then also sends `X-Portal-Proof: <secret>`, always strips a visitor's copy, and the app compares the header with the same secret in constant time and ignores the identity headers when it differs or is missing. Pass the secret as `AUTH_IDENTITY_PROOF`, never as a flag value, where `ps` would show it. Generate it once into a file only the user can read, outside the repository, and set the variable for the one command, so it is never typed or printed:
 
   ```sh
   (umask 077 && mkdir -p ~/.config/portal && openssl rand -hex 32 > ~/.config/portal/my-app.proof)
@@ -87,7 +112,7 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
   ```
 
   The app reads the same file. Never print the file or the header value, and tell the user that the app must not log `X-Portal-Proof`. Use one secret per tunnel: it reaches every upstream of the tunnel, in cleartext over a plain `http` upstream. A persistent agent tunnel cannot send the proof.
-- Sign-in cannot be combined with `--tcp`, `--udp` or `--cache`; the tunnel refuses to start. Portal answers six exact paths itself and never forwards them to the app: `/_portal/auth/login`, `/_portal/auth/challenge`, `/_portal/auth/verify`, `/_portal/auth/redeem`, `/_portal/auth/callback` and `/_portal/auth/logout`. The app must not need those paths; other paths under `/_portal/auth/` reach it behind the sign-in check.
+- Sign-in cannot be combined with `--tcp`, `--udp` or `--cache`; the tunnel refuses to start. Portal answers eight exact paths itself and never forwards them to the app: `/_portal/auth/login`, `/_portal/auth/challenge`, `/_portal/auth/verify`, `/_portal/auth/redeem`, `/_portal/auth/callback`, `/_portal/auth/saml/acs`, `/_portal/auth/saml/metadata` and `/_portal/auth/logout`. The app must not need those paths; other paths under `/_portal/auth/` reach it behind the sign-in check.
 - Sessions use a `Secure`, `HttpOnly` cookie that Portal removes before forwarding the request to the app.
 
 ## Persistent agent
@@ -113,6 +138,8 @@ auth_allowed_wallets = ["alice@example.com"]
 auth_identity_headers = true
 ```
 
+A `saml` entry takes `auth = "saml"`, `auth_saml_metadata_url` (or `auth_saml_metadata_file`, relative to the config file), and the optional `auth_saml_entity_id` and `auth_saml_subject_attribute`. It holds no secret.
+
 `auth_allowed_wallets` holds the allowlist for every method, not only wallets. To change it on a running agent tunnel, edit the file and run `portal agent restart`, which restarts every tunnel of the service, or have the user change it in the dashboard's Access screen (`F4`), or send `PATCH /agent/tunnels/{id}` (documented on the agent page), which restarts only that tunnel and writes the file too.
 
 ## Verify
@@ -122,7 +149,8 @@ Without signing in as the user:
 1. `curl -sI https://<host>/` returns `303` with `Location: /_portal/auth/login?next=%2F`. A `200` means the gate is not on; stop and report it.
 2. `curl -s -X POST https://<host>/` returns `401` with `{"error":"authentication required"}`.
 3. `credential`: `curl -s -H "X-Portal-Access-Credential: $C" https://<host>/` returns the app's real response. Use the credential you already issued for the subject you hand over (from the captured output, kept in a shell variable); do not issue one just to verify, and do not paste it into the final answer. If you do not hold one, skip this step and say so.
-4. `oidc`: `curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://<host>/_portal/auth/login` prints `303` and the provider's authorization endpoint. Use GET: a login starts only on GET, and HEAD answers `405`. Do not complete a provider login on the user's behalf.
+4. `oidc` and `saml`: `curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://<host>/_portal/auth/login` prints `303` and the provider's authorization endpoint or SAML single sign-on URL. Use GET: a login starts only on GET, and HEAD answers `405`. Do not complete a provider login on the user's behalf.
+5. `saml`: `curl -s https://<host>/_portal/auth/saml/metadata` returns the service provider metadata with the entity ID and the ACS address that the provider must have.
 
 ## When it fails
 
@@ -131,12 +159,17 @@ Without signing in as the user:
 | `oidc requires at least one --auth-allow entry` | Add an allowlist entry. |
 | `oidc issuer url is required` / `must use https` | Pass an `https` issuer. |
 | `oidc client id is required` | Pass `--auth-oidc-client-id`. |
-| `oidc settings require the oidc application auth provider` | An `--auth-oidc-*` flag was given together with `--auth siwe` or `--auth credential`. |
-| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers`, `--auth-identity-proof` or an `--auth-oidc-*` flag was given without `--auth`. |
+| `oidc settings require the oidc application auth provider` | An `--auth-oidc-*` flag was given together with another `--auth` provider. |
+| `saml requires at least one --auth-allow entry` | Add an allowlist entry. |
+| `saml requires identity provider metadata` / `not both` | Pass exactly one of `--auth-saml-metadata-url` and `--auth-saml-metadata-file`. |
+| `saml metadata url must use https` | Pass an `https` metadata URL. |
+| `saml settings require the saml application auth provider` | An `--auth-saml-*` flag was given together with another `--auth` provider. |
+| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers`, `--auth-identity-proof`, or an `--auth-oidc-*` or `--auth-saml-*` flag was given without `--auth`. |
 | `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers` | Add `--auth-identity-headers`, or drop the proof. |
 | `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least 16 characters of visible ASCII without spaces` | Generate the value with `openssl rand -hex 32` as above. |
 | `HTTP tunnel cannot be combined with TCP or UDP` | Remove `--tcp` / `--udp`, or drop sign-in. |
 | `application auth cannot be combined with relay cache` | Remove `--cache`, or drop sign-in. |
 | "This account is not allowed" comes back on Sign in again | The browser is still signed in to the provider with the refused account, and the provider lets it straight back in. Sign in again asks the provider for its account chooser, so pick another account there, or sign out of the provider first. |
 | The provider reports a redirect URI mismatch | No callback is registered for the host the visitor opened. Register `https://<host>/_portal/auth/callback` for that exact host too: the short and the address-bound host differ, and so does each relay's. |
-| `application auth provider is not usable` in the log | The issuer is wrong or unreachable from this machine. |
+| `application auth provider is not usable` in the log | The OIDC issuer or the SAML metadata source is wrong or unreachable from this machine. |
+| A SAML login ends on "Sign-in could not be completed" | The response failed a check: the entity ID or ACS address registered at the provider does not match this host, the provider encrypts assertions, signs nothing, or the login started at the provider's app list. Compare the provider's settings with `https://<host>/_portal/auth/saml/metadata`. |

@@ -78,11 +78,11 @@ The entry file must exist when the tunnel starts. Edit `serve` in TOML and
 restart the tunnel or agent to change the site path.
 
 Set `auth = "credential"` on a target, routed HTTP, or static tunnel for
-Portal-native credentials, or use `auth = "siwe"` or `auth = "oidc"`.
-`auth_allowed_wallets` restricts login to listed principals (Ethereum addresses for `siwe`, credential subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc`). It is optional, except that `oidc` requires at least one entry.
+Portal-native credentials, or use `auth = "siwe"`, `auth = "oidc"` or `auth = "saml"`.
+`auth_allowed_wallets` restricts login to listed principals (Ethereum addresses for `siwe`, credential subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc` and `saml`). It is optional, except that `oidc` and `saml` require at least one entry.
 `auth_identity_headers = true` injects the verified wallet address and `siwe`
 for SIWE, the credential subject and `credential` for credential auth, or the
-verified email (or `sub:` subject) and `oidc` for OIDC, as
+verified email (or `sub:` subject) and `oidc` or `saml` for OIDC or SAML, as
 `X-Portal-User` and `X-Portal-Auth`; Portal always strips client-supplied copies
 first. An agent tunnel cannot send the `X-Portal-Proof` identity proof yet: the
 tunnel config has no key for it, and the agent does not read the CLI's
@@ -103,6 +103,19 @@ auth_allowed_wallets = ["alice@example.com"]
 ```
 
 See [OpenID Connect](/siwe-authentication#openid-connect-oidc) for the redirect URI and allowlist rules.
+
+`saml` needs `auth_saml_metadata_url`, or `auth_saml_metadata_file` for an identity provider that publishes no metadata URL. A relative file path is read from the directory of `config.toml`. `auth_saml_entity_id` and `auth_saml_subject_attribute` are optional. The agent takes them from the tunnel config, not from the CLI's `AUTH_SAML_*` variables:
+
+```toml
+[[tunnels]]
+id = "web"
+target = "127.0.0.1:3000"
+auth = "saml"
+auth_saml_metadata_url = "https://idp.example.com/realms/main/protocol/saml/descriptor"
+auth_allowed_wallets = ["@example.com"]
+```
+
+See [SAML 2.0](/siwe-authentication#saml-20) for the ACS and metadata addresses and the allowlist rules.
 
 Routed HTTP config:
 
@@ -340,19 +353,21 @@ identity JSON are also configured in
 ### Access screen
 
 The Settings pane shows how the selected tunnel's public address is protected:
-open to anyone, `credential`, wallet (`siwe`), or `oidc`, with the allow list,
-the identity headers and, for OIDC, the issuer, the client ID, whether a client
-secret is stored, and the result of the provider check made when the tunnel
-started. An empty allow list means any valid credential or wallet for
+open to anyone, `credential`, wallet (`siwe`), `oidc`, or `saml`, with the allow
+list, the identity headers and, for OIDC, the issuer, the client ID, and whether a
+client secret is stored, or, for SAML, the metadata source, the entity ID, and the
+subject. OIDC and SAML also show the result of the provider check made when the
+tunnel started. An empty allow list means any valid credential or wallet for
 `credential` and `siwe`, so removing the last entry opens the tunnel to all of
-them; `oidc` needs at least one entry.
+them; `oidc` and `saml` need at least one entry.
 
 `F4`, `s`, or the Access button in the Settings pane opens the Access screen in
 place of the panes to change these settings. The Mode row picks the provider;
 the other rows are the allow list, an input for the next entry (a wallet address
 for `siwe`, a subject for `credential`, or an email, `@example.com` for a domain,
-or `sub:<id>` for `oidc`), the identity headers, and the OIDC issuer, client ID,
-and client secret.
+or `sub:<id>` for `oidc` and `saml`), the identity headers, and the OIDC issuer,
+client ID, and client secret, or the SAML metadata URL or file, entity ID, and
+subject attribute.
 
 | Key | Action |
 |-----|--------|
@@ -374,7 +389,7 @@ when the tunnel starts, and the tunnel comes back without the relays connected
 to it from the Relays pane, which are not saved in `config.toml`. The screen
 stays open and says Applied once the next status shows the new settings,
 including a new provider check. If the agent refuses the change, for example an
-OIDC tunnel without an allow list entry, its message shows on the screen, the
+OIDC or SAML tunnel without an allow list entry, its message shows on the screen, the
 typed secret stays so that you can correct the rest, and nothing is changed.
 The typed secret is dropped when the screen closes, when the mode changes, and
 after a successful apply. While nothing differs from what is stored the Apply
@@ -428,11 +443,15 @@ Common fields:
 | `tcp` | Dedicated raw TCP port setting |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
-| `auth` | Application login provider: `siwe`, `credential`, or `oidc` |
-| `auth_allowed_wallets` | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc`); empty allows any valid principal, except for `oidc`, which requires at least one entry; requires `auth` when set |
+| `auth` | Application login provider: `siwe`, `credential`, `oidc`, or `saml` |
+| `auth_allowed_wallets` | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc` and `saml`); empty allows any valid principal, except for `oidc` and `saml`, which require at least one entry; requires `auth` when set |
 | `auth_oidc_issuer` | OIDC issuer URL; required when `auth = "oidc"` |
 | `auth_oidc_client_id` | OIDC client ID; required when `auth = "oidc"` |
 | `auth_oidc_client_secret` | Optional OIDC client secret for `auth = "oidc"` |
+| `auth_saml_metadata_url` | SAML identity provider metadata URL; `auth = "saml"` needs it or `auth_saml_metadata_file` |
+| `auth_saml_metadata_file` | SAML identity provider metadata file, relative to `config.toml` |
+| `auth_saml_entity_id` | SAML service provider entity ID; defaults to the metadata URL of each host |
+| `auth_saml_subject_attribute` | SAML attribute that names the visitor; defaults to the NameID |
 | `auth_identity_headers` | Inject verified Portal identity headers into upstream requests |
 | `x402_pay_to` | Payment recipient for paid HTTP routes |
 | `x402_testnet` | Use Sui testnet when `x402_network` is omitted |
@@ -451,7 +470,7 @@ Constraints:
 - `target` cannot be combined with `http_routes`.
 - `serve` cannot be combined with `target`, `http_routes`, `tcp`, or `udp`.
 - `http_routes` cannot be combined with `tcp` or `udp`.
-- Application auth cannot be combined with `tcp` or `udp`; `auth_allowed_wallets`, `auth_identity_headers`, and the `auth_oidc_*` fields require `auth`, and the `auth_oidc_*` fields require `auth = "oidc"`.
+- Application auth cannot be combined with `tcp` or `udp`; `auth_allowed_wallets`, `auth_identity_headers`, and the `auth_oidc_*` and `auth_saml_*` fields require `auth`, the `auth_oidc_*` fields require `auth = "oidc"`, and the `auth_saml_*` fields require `auth = "saml"`.
 - `http_routes[].amount` requires `x402_pay_to`.
 - `http_routes[].methods` requires `http_routes[].amount`.
 
@@ -514,13 +533,13 @@ Control endpoints:
 | `POST` | `/agent/tunnels/{id}/relays` | Bearer token | Connect a relay |
 | `DELETE` | `/agent/tunnels/{id}/relays` | Bearer token | Disconnect a relay |
 
-`POST /agent/tunnels` accepts the `auth`, `auth_allowed_wallets`, `auth_identity_headers`, and `auth_oidc_*` fields, with the meaning they have in `config.toml`.
+`POST /agent/tunnels` accepts the `auth`, `auth_allowed_wallets`, `auth_identity_headers`, `auth_oidc_*`, and `auth_saml_*` fields, with the meaning they have in `config.toml`.
 
 `POST /agent/tunnels` accepts `serve`, a static site directory or HTML file with the meaning it has in `config.toml`. A tunnel with `serve` gets no default target, and `serve` cannot be combined with `target_addr` or `http_routes`. A relative `serve` path is resolved from the directory of `config.toml`, not from the caller's working directory, and saved as the resulting absolute path.
 
-`PATCH /agent/tunnels/{id}` changes the fields it names (`max_active_relays`, `metadata`, `auth`, `auth_allowed_wallets`, `auth_identity_headers`, `auth_oidc_issuer`, `auth_oidc_client_id`, `auth_oidc_client_secret`) and leaves the others as they are. `"auth": ""` turns sign-in off and clears the other `auth_*` settings, so it is refused when the same request sets one of them. To change the provider, send the new `auth` with the fields that fit it and clear the ones that do not (for example empty `auth_oidc_issuer`, `auth_oidc_client_id` and `auth_oidc_client_secret` when leaving OIDC); a combination the validators refuse changes nothing. `auth_oidc_client_secret` is write-only, and an empty value clears it. The resulting tunnel must pass the same validation as `config.toml`; if it does not, the request fails and neither the file nor the running tunnel changes. Changed sign-in settings restart that tunnel and no other, because the sign-in gate is built when the tunnel starts. It starts again from its saved settings: relays connected to it with `POST /agent/tunnels/{id}/relays` are not saved in `config.toml`, so it comes back without them. Metadata and `max_active_relays` update the running tunnel in place.
+`PATCH /agent/tunnels/{id}` changes the fields it names (`max_active_relays`, `metadata`, `auth`, `auth_allowed_wallets`, `auth_identity_headers`, `auth_oidc_issuer`, `auth_oidc_client_id`, `auth_oidc_client_secret`, `auth_saml_metadata_url`, `auth_saml_metadata_file`, `auth_saml_entity_id`, `auth_saml_subject_attribute`) and leaves the others as they are. `"auth": ""` turns sign-in off and clears the other `auth_*` settings, so it is refused when the same request sets one of them. To change the provider, send the new `auth` with the fields that fit it and clear the ones that do not (for example empty `auth_oidc_issuer`, `auth_oidc_client_id` and `auth_oidc_client_secret` when leaving OIDC, or the empty `auth_saml_*` fields when leaving SAML); a combination the validators refuse changes nothing. `auth_oidc_client_secret` is write-only, and an empty value clears it. The resulting tunnel must pass the same validation as `config.toml`; if it does not, the request fails and neither the file nor the running tunnel changes. Changed sign-in settings restart that tunnel and no other, because the sign-in gate is built when the tunnel starts. It starts again from its saved settings: relays connected to it with `POST /agent/tunnels/{id}/relays` are not saved in `config.toml`, so it comes back without them. Metadata and `max_active_relays` update the running tunnel in place.
 
-`GET /agent/status` reports each tunnel's `auth`, `auth_allowed_wallets`, `auth_identity_headers`, `auth_oidc_issuer`, and `auth_oidc_client_id`, plus `auth_oidc_client_secret_set`, which says whether a client secret is configured; the secret itself is never returned. A wallet session, which can only read the status, gets it without `auth_allowed_wallets`; the field is also left out when the list is empty, so a wallet-session client cannot tell a hidden allowlist from an empty one. A running OIDC tunnel also reports the provider check it runs once when it starts: `auth_oidc_provider_checked` is true once the check has finished, and `auth_oidc_provider_error` says why the provider was not usable. The check is not repeated: once the provider recovers, visitors can sign in again, but the error stays in the status until the tunnel restarts.
+`GET /agent/status` reports each tunnel's `auth`, `auth_allowed_wallets`, `auth_identity_headers`, `auth_oidc_issuer`, `auth_oidc_client_id`, and `auth_saml_*` fields, plus `auth_oidc_client_secret_set`, which says whether a client secret is configured; the secret itself is never returned. A wallet session, which can only read the status, gets it without `auth_allowed_wallets`; the field is also left out when the list is empty, so a wallet-session client cannot tell a hidden allowlist from an empty one. A running OIDC or SAML tunnel also reports the provider check it runs once when it starts: `auth_provider_checked` is true once the check has finished, and `auth_provider_error` says why the provider (its discovery document and keys, or its SAML metadata) was not usable. Before SAML support, these two fields were named `auth_oidc_provider_checked` and `auth_oidc_provider_error`. A client that reads the old names sees no provider check until it reads the new ones. The check is not repeated: once the provider recovers, visitors can sign in again, but the error stays in the status until the tunnel restarts.
 
 Wallet auth endpoints also exist under `/agent/auth/*`. Wallet-authenticated
 requests are read-only and can only call `/agent/status`; mutating operations

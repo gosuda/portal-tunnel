@@ -4,7 +4,7 @@ import type { ShareKind } from "@/lib/shareLink";
 
 export type TunnelCommandOS = "unix" | "windows";
 
-export type TunnelAuthMethod = "none" | "credential" | "siwe" | "oidc";
+export type TunnelAuthMethod = "none" | "credential" | "siwe" | "oidc" | "saml";
 
 export const GOOGLE_OIDC_ISSUER = "https://accounts.google.com";
 
@@ -15,6 +15,11 @@ export interface TunnelAuthOptions {
   identityHeaders: boolean;
   oidcIssuer: string;
   oidcClientId: string;
+  samlMetadataURL: string;
+  /** Empty means the default, the metadata URL of each host. */
+  samlEntityId: string;
+  /** Empty means the NameID. */
+  samlSubjectAttribute: string;
 }
 
 export const DEFAULT_TUNNEL_AUTH: TunnelAuthOptions = {
@@ -23,7 +28,17 @@ export const DEFAULT_TUNNEL_AUTH: TunnelAuthOptions = {
   identityHeaders: false,
   oidcIssuer: GOOGLE_OIDC_ISSUER,
   oidcClientId: "",
+  samlMetadataURL: "",
+  samlEntityId: "",
+  samlSubjectAttribute: "",
 };
+
+// The reserved paths a provider sends visitors back to, from
+// cmd/portal-tunnel/gateway (applicationAuthCallbackPath and the
+// applicationAuthSAML*Path constants).
+export const AUTH_CALLBACK_PATH = "/_portal/auth/callback";
+export const AUTH_SAML_ACS_PATH = "/_portal/auth/saml/acs";
+export const AUTH_SAML_METADATA_PATH = "/_portal/auth/saml/metadata";
 
 /** Sign-in covers HTTP only, so the tunnel refuses to combine it with UDP. */
 export function authBlocksUDP(auth: TunnelAuthOptions): boolean {
@@ -179,9 +194,22 @@ function buildAuthArgs(auth: TunnelAuthOptions, os: TunnelCommandOS): string[] {
       `--auth-oidc-issuer ${valueOrPlaceholder(auth.oidcIssuer, "<issuer>", os)}`,
       `--auth-oidc-client-id ${valueOrPlaceholder(auth.oidcClientId, "<client-id>", os)}`
     );
-    if (auth.allow.length === 0) {
-      args.push("--auth-allow <email, @domain or sub:id>");
+  }
+  if (auth.method === "saml") {
+    args.push(
+      `--auth-saml-metadata-url ${valueOrPlaceholder(auth.samlMetadataURL, "<metadata-url>", os)}`
+    );
+    if (auth.samlEntityId.trim() !== "") {
+      args.push(`--auth-saml-entity-id ${formatToken(auth.samlEntityId.trim(), os)}`);
     }
+    if (auth.samlSubjectAttribute.trim() !== "") {
+      args.push(
+        `--auth-saml-subject-attribute ${formatToken(auth.samlSubjectAttribute.trim(), os)}`
+      );
+    }
+  }
+  if (needsAllowlist(auth.method) && auth.allow.length === 0) {
+    args.push("--auth-allow <email, @domain or sub:id>");
   }
   for (const entry of auth.allow) {
     args.push(`--auth-allow ${formatToken(entry, os)}`);
@@ -225,9 +253,17 @@ type AuthAllowCheck =
   | { ok: false; error: string };
 
 /**
+ * An identity provider signs in accounts it does not restrict to the app, so
+ * the tunnel refuses to start oidc or saml without an allowlist.
+ */
+export function needsAllowlist(method: TunnelAuthMethod): boolean {
+  return method === "oidc" || method === "saml";
+}
+
+/**
  * Mirrors what `portal expose --auth-allow` accepts for each method. The Go
  * owners are normalizeApplicationAuthSubject (access_credential.go),
- * normalizeOIDCPrincipal (access_auth.go) and identity.NormalizeEVMAddress.
+ * normalizeProviderPrincipal (access_auth.go) and identity.NormalizeEVMAddress.
  * The browser has no Keccak, so a mixed-case wallet address is not checked
  * against its EIP-55 checksum here; the tunnel rejects a bad one at start.
  */
@@ -311,7 +347,30 @@ function isOIDCIssuer(raw: string): boolean {
   }
 }
 
-export type TunnelAuthField = "allow" | "entries" | "issuer" | "clientId";
+// normalizeSAMLMetadataURL (access_auth_saml.go) also accepts http on a
+// loopback host, which the builder does not offer. Unlike an issuer, the
+// metadata URL may carry a query.
+function isSAMLMetadataURL(raw: string): boolean {
+  try {
+    const parsed = new URL(raw.trim());
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname !== "" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+export type TunnelAuthField =
+  | "allow"
+  | "entries"
+  | "issuer"
+  | "clientId"
+  | "metadataURL";
 
 export interface TunnelAuthIssue {
   field: TunnelAuthField;
@@ -328,10 +387,10 @@ export function validateTunnelAuth(auth: TunnelAuthOptions): TunnelAuthIssue[] {
     return [];
   }
   const issues: TunnelAuthIssue[] = [];
+  if (needsAllowlist(auth.method) && auth.allow.length === 0) {
+    issues.push({ field: "allow", message: "Add who may sign in" });
+  }
   if (auth.method === "oidc") {
-    if (auth.allow.length === 0) {
-      issues.push({ field: "allow", message: "Add who may sign in" });
-    }
     if (auth.oidcIssuer.trim() === "") {
       issues.push({ field: "issuer", message: "Add the issuer address" });
     } else if (!isOIDCIssuer(auth.oidcIssuer)) {
@@ -342,6 +401,16 @@ export function validateTunnelAuth(auth: TunnelAuthOptions): TunnelAuthIssue[] {
     }
     if (auth.oidcClientId.trim() === "") {
       issues.push({ field: "clientId", message: "Add the client ID" });
+    }
+  }
+  if (auth.method === "saml") {
+    if (auth.samlMetadataURL.trim() === "") {
+      issues.push({ field: "metadataURL", message: "Add the metadata address" });
+    } else if (!isSAMLMetadataURL(auth.samlMetadataURL)) {
+      issues.push({
+        field: "metadataURL",
+        message: "The metadata address must be an https:// address without a fragment",
+      });
     }
   }
   if (auth.allow.some((entry) => !classifyAuthAllow(auth.method, entry).ok)) {
@@ -380,7 +449,7 @@ export function addAuthAllow(
 }
 
 function canonicalAuthAllow(method: TunnelAuthMethod, entry: string): string {
-  if (method !== "oidc") {
+  if (!needsAllowlist(method)) {
     return entry;
   }
   if (/^sub:/i.test(entry)) {
@@ -398,21 +467,22 @@ export function isListedSubject(allow: string[], subject: string): boolean {
 }
 
 /**
- * The redirect address to register at an OIDC provider for the short URL on
- * each relay in the command; none until the name is known. The gateway builds
- * the redirect from the host the visitor arrived on, so the address-bound URL
- * Portal prints, and every relay discovery adds, need their own; those hosts
- * are known only once Portal prints them.
+ * The address at path to register at an identity provider for the short URL
+ * on each relay in the command: the OIDC redirect address, or the SAML ACS or
+ * metadata address. None until the name is known. The gateway builds these
+ * from the host the visitor arrived on, so the address-bound URL Portal
+ * prints, and every relay discovery adds, need their own; those hosts are
+ * known only once Portal prints them.
  */
 export function buildAuthRedirectURLs(
   relayUrls: string[],
-  name: string
+  name: string,
+  path: string
 ): string[] {
   const shortURLs = relayUrls
     .map((relayURL) => buildTunnelPreviewURL(relayURL, name))
     .filter((url) => url !== "");
-  // applicationAuthCallbackPath in cmd/portal-tunnel/gateway/access_auth.go
-  return [...new Set(shortURLs)].map((url) => `${url}/_portal/auth/callback`);
+  return [...new Set(shortURLs)].map((url) => `${url}${path}`);
 }
 
 /**

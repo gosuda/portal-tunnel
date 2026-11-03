@@ -133,7 +133,7 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 	if byID["oidc"]["auth_oidc_client_secret_set"] != true {
 		t.Fatalf("oidc auth_oidc_client_secret_set = %v, want true", byID["oidc"]["auth_oidc_client_secret_set"])
 	}
-	for _, key := range []string{"auth_allowed_wallets", "auth_oidc_client_secret_set", "auth_oidc_provider_checked", "auth_oidc_provider_error"} {
+	for _, key := range []string{"auth_allowed_wallets", "auth_oidc_client_secret_set", "auth_provider_checked", "auth_provider_error"} {
 		for _, id := range []string{"credential", "plain"} {
 			if _, ok := byID[id][key]; ok {
 				t.Fatalf("tunnel %q reports %s without it being configured", id, key)
@@ -141,7 +141,7 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 		}
 	}
 	// A tunnel that is not running has not checked its provider.
-	if _, ok := byID["oidc"]["auth_oidc_provider_checked"]; ok {
+	if _, ok := byID["oidc"]["auth_provider_checked"]; ok {
 		t.Fatal("stopped oidc tunnel reports a provider check")
 	}
 }
@@ -164,12 +164,12 @@ func TestTunnelStatusOIDCProviderCheck(t *testing.T) {
 	startManager(t, m)
 
 	eventually(t, "the oidc provider to be checked and the siwe tunnel to run", func() bool {
-		return tunnelStatus(t, m, "oidc").AuthOIDCProviderChecked && tunnelStatus(t, m, "siwe").State == "running"
+		return tunnelStatus(t, m, "oidc").AuthProviderChecked && tunnelStatus(t, m, "siwe").State == "running"
 	})
-	if got := tunnelStatus(t, m, "oidc"); got.AuthOIDCProviderError == "" {
+	if got := tunnelStatus(t, m, "oidc"); got.AuthProviderError == "" {
 		t.Fatal("unreachable provider reports no error")
 	}
-	if got := tunnelStatus(t, m, "siwe"); got.AuthOIDCProviderChecked || got.AuthOIDCProviderError != "" {
+	if got := tunnelStatus(t, m, "siwe"); got.AuthProviderChecked || got.AuthProviderError != "" {
 		t.Fatalf("siwe tunnel reports an oidc provider check: %+v", got)
 	}
 }
@@ -379,7 +379,7 @@ func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 		t.Fatalf("sign-in change on a restarted b: %+v", b)
 	}
 	eventually(t, "a to run with the oidc gate", func() bool {
-		return tunnelStatus(t, m, "a").AuthOIDCProviderError != ""
+		return tunnelStatus(t, m, "a").AuthProviderError != ""
 	})
 
 	// Metadata, even sent next to unchanged sign-in settings, updates the

@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import ruleVectors from "@/lib/authRuleVectors.json";
 import {
+  AUTH_CALLBACK_PATH,
+  AUTH_SAML_ACS_PATH,
+  DEFAULT_TUNNEL_AUTH,
   addAuthAllow,
   applicationAuthHost,
   authBlocksUDP,
@@ -166,6 +169,9 @@ describe("tunnelCommand sign-in", () => {
     identityHeaders: false,
     oidcIssuer: "",
     oidcClientId: "",
+    samlMetadataURL: "",
+    samlEntityId: "",
+    samlSubjectAttribute: "",
   };
   const runLine = (command: string) => command.split("\n").slice(1).join("\n");
 
@@ -231,6 +237,39 @@ describe("tunnelCommand sign-in", () => {
     expect(windows[2]).toContain("--auth-allow 'alice@example.com'");
     expect(unix.join("\n")).not.toMatch(/SECRET|secret/);
     expect(windows.join("\n")).not.toMatch(/SECRET|secret/);
+  });
+
+  it("prints the SAML flags, and the optional ones only when set", () => {
+    const auth: TunnelAuthOptions = {
+      ...none,
+      method: "saml",
+      allow: ["@example.com"],
+      samlMetadataURL: "https://idp.example/realms/main/protocol/saml/descriptor",
+    };
+    expect(runLine(buildTunnelCommand({ ...base, auth }))).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-allow '@example.com'"
+    );
+    expect(
+      runLine(
+        buildTunnelCommand({
+          ...base,
+          auth: { ...auth, allow: [], samlEntityId: " urn:portal:app ", samlSubjectAttribute: "email" },
+        })
+      )
+    ).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-saml-entity-id urn:portal:app --auth-saml-subject-attribute email --auth-allow <email, @domain or sub:id>"
+    );
+  });
+
+  it("lists what keeps a SAML command from running as shown", () => {
+    const saml: TunnelAuthOptions = { ...none, method: "saml" };
+    const blocking = (auth: TunnelAuthOptions) =>
+      validateTunnelAuth(auth).map((issue) => issue.field);
+
+    expect(blocking(saml)).toEqual(["allow", "metadataURL"]);
+    expect(
+      blocking({ ...saml, allow: ["alice@example.com"], samlMetadataURL: "https://idp.example/metadata" })
+    ).toEqual([]);
   });
 
   it("reads the OIDC client secret at a prompt instead of through a placeholder", () => {
@@ -433,7 +472,8 @@ describe("tunnelCommand sign-in", () => {
           "https://relay.example.org/",
           "https://portal.example.com/",
         ],
-        "my-app"
+        "my-app",
+        AUTH_CALLBACK_PATH
       )
     ).toEqual([
       "https://my-app.portal.example.com/_portal/auth/callback",
@@ -443,14 +483,18 @@ describe("tunnelCommand sign-in", () => {
     expect(
       buildAuthRedirectURLs(
         ["https://relay.example.net:8443", "http://other.example.net:443"],
-        "my-app"
+        "my-app",
+        AUTH_CALLBACK_PATH
       )
     ).toEqual([
       "https://my-app.relay.example.net:8443/_portal/auth/callback",
       "https://my-app.other.example.net/_portal/auth/callback",
     ]);
-    expect(buildAuthRedirectURLs(["https://portal.example.com"], "")).toEqual([]);
-    expect(buildAuthRedirectURLs([], "my-app")).toEqual([]);
+    expect(
+      buildAuthRedirectURLs(["https://portal.example.com"], "my-app", AUTH_SAML_ACS_PATH)
+    ).toEqual(["https://my-app.portal.example.com/_portal/auth/saml/acs"]);
+    expect(buildAuthRedirectURLs(["https://portal.example.com"], "", AUTH_CALLBACK_PATH)).toEqual([]);
+    expect(buildAuthRedirectURLs([], "my-app", AUTH_CALLBACK_PATH)).toEqual([]);
   });
 
   it("binds an invite to the host of the URL the visitor is sent", () => {
@@ -490,12 +534,12 @@ describe("tunnelCommand sign-in", () => {
 // it. cmd/portal-tunnel/gateway/frontend_rules_test.go runs the same rows
 // against the Go functions, so a rule changed on one side alone fails a test.
 describe("rules shared with the Go gateway", () => {
-  const methods = new Set(["credential", "siwe", "oidc"]);
+  const methods = new Set(["credential", "siwe", "oidc", "saml"]);
 
   it("reads every allowlist entry as the gateway does", () => {
     for (const row of ruleVectors.allow) {
       expect(methods.has(row.method)).toBe(true);
-      const method = row.method as "credential" | "siwe" | "oidc";
+      const method = row.method as "credential" | "siwe" | "oidc" | "saml";
       const [entry] = addAuthAllow(method, [], row.typed);
       const valid = entry !== undefined && classifyAuthAllow(method, entry).ok;
       expect(valid, `${method} entry ${JSON.stringify(row.typed)}`).toBe(row.valid);
@@ -508,15 +552,30 @@ describe("rules shared with the Go gateway", () => {
   it("accepts the OIDC issuers the gateway accepts", () => {
     for (const row of ruleVectors.issuer) {
       const issues = validateTunnelAuth({
+        ...DEFAULT_TUNNEL_AUTH,
         method: "oidc",
         allow: ["alice@example.com"],
-        identityHeaders: false,
         oidcIssuer: row.value,
         oidcClientId: "client",
       });
       expect(
         issues.some((issue) => issue.field === "issuer"),
         `issuer ${JSON.stringify(row.value)}`
+      ).toBe(!row.valid);
+    }
+  });
+
+  it("accepts the SAML metadata URLs the gateway accepts", () => {
+    for (const row of ruleVectors.samlMetadata) {
+      const issues = validateTunnelAuth({
+        ...DEFAULT_TUNNEL_AUTH,
+        method: "saml",
+        allow: ["alice@example.com"],
+        samlMetadataURL: row.value,
+      });
+      expect(
+        issues.some((issue) => issue.field === "metadataURL"),
+        `metadata ${JSON.stringify(row.value)}`
       ).toBe(!row.valid);
     }
   });

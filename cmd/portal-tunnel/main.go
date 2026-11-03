@@ -71,43 +71,47 @@ func main() {
 }
 
 type exposeFlags struct {
-	relayCSV             string
-	discovery            bool
-	overlay              bool
-	banMITM              bool
-	identityPath         string
-	identityJSON         string
-	name                 string
-	desc                 string
-	tags                 string
-	owner                string
-	thumbnail            string
-	hide                 bool
-	authProvider         string
-	authAllowedWallets   []string
-	authIdentityHeaders  bool
-	authIdentityProof    string
-	authOIDCIssuer       string
-	authOIDCClientID     string
-	authOIDCClientSecret string
-	x402PayTo            string
-	x402Testnet          bool
-	x402Network          string
-	x402Asset            string
-	x402Endpoints        []string
-	x402FacilitatorToken string
-	targetAddr           string
-	httpRoutes           []string
-	stripRequestHeaders  []string
-	serve                string
-	cache                bool
-	cacheTTL             time.Duration
-	udp                  bool
-	udpAddr              string
-	tcp                  bool
-	maxActiveRelays      int
-	metricsAddr          string
-	logFormat            string
+	relayCSV                 string
+	discovery                bool
+	overlay                  bool
+	banMITM                  bool
+	identityPath             string
+	identityJSON             string
+	name                     string
+	desc                     string
+	tags                     string
+	owner                    string
+	thumbnail                string
+	hide                     bool
+	authProvider             string
+	authAllowedWallets       []string
+	authIdentityHeaders      bool
+	authIdentityProof        string
+	authOIDCIssuer           string
+	authOIDCClientID         string
+	authOIDCClientSecret     string
+	authSAMLMetadataURL      string
+	authSAMLMetadataFile     string
+	authSAMLEntityID         string
+	authSAMLSubjectAttribute string
+	x402PayTo                string
+	x402Testnet              bool
+	x402Network              string
+	x402Asset                string
+	x402Endpoints            []string
+	x402FacilitatorToken     string
+	targetAddr               string
+	httpRoutes               []string
+	stripRequestHeaders      []string
+	serve                    string
+	cache                    bool
+	cacheTTL                 time.Duration
+	udp                      bool
+	udpAddr                  string
+	tcp                      bool
+	maxActiveRelays          int
+	metricsAddr              string
+	logFormat                string
 }
 
 func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
@@ -123,13 +127,17 @@ func registerExposeFlags(fs *flag.FlagSet, flags *exposeFlags) {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe, credential, or oidc authentication")
-	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, or verified email, @domain, or sub:<subject> for oidc); repeat to allow multiple principals (empty allows any valid principal, except oidc, which requires at least one entry)")
+	utils.StringFlag(fs, &flags.authProvider, "auth", "", "Protect HTTP application access with siwe, credential, oidc, or saml authentication")
+	utils.RepeatedStringFlag(fs, &flags.authAllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, or verified email, @domain, or sub:<subject> for oidc and saml); repeat to allow multiple principals (empty allows any valid principal, except oidc and saml, which require at least one entry)")
 	utils.BoolFlag(fs, &flags.authIdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlagEnv(fs, &flags.authIdentityProof, "auth-identity-proof", "", "Secret sent as X-Portal-Proof with the identity headers so the upstream can verify they came from Portal (at least 16 visible ASCII characters; requires --auth-identity-headers). Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_IDENTITY_PROOF")
 	utils.StringFlagEnv(fs, &flags.authOIDCIssuer, "auth-oidc-issuer", "", "OIDC issuer URL for --auth oidc", "AUTH_OIDC_ISSUER")
 	utils.StringFlagEnv(fs, &flags.authOIDCClientID, "auth-oidc-client-id", "", "OIDC client ID for --auth oidc", "AUTH_OIDC_CLIENT_ID")
 	utils.StringFlagEnv(fs, &flags.authOIDCClientSecret, "auth-oidc-client-secret", "", "Optional OIDC client secret for --auth oidc", "AUTH_OIDC_CLIENT_SECRET")
+	utils.StringFlagEnv(fs, &flags.authSAMLMetadataURL, "auth-saml-metadata-url", "", "SAML identity provider metadata URL for --auth saml (or use --auth-saml-metadata-file)", "AUTH_SAML_METADATA_URL")
+	utils.StringFlagEnv(fs, &flags.authSAMLMetadataFile, "auth-saml-metadata-file", "", "SAML identity provider metadata file for --auth saml, for an identity provider that publishes no metadata URL", "AUTH_SAML_METADATA_FILE")
+	utils.StringFlagEnv(fs, &flags.authSAMLEntityID, "auth-saml-entity-id", "", "SAML service provider entity ID for --auth saml (default https://<host>/_portal/auth/saml/metadata)", "AUTH_SAML_ENTITY_ID")
+	utils.StringFlagEnv(fs, &flags.authSAMLSubjectAttribute, "auth-saml-subject-attribute", "", "SAML attribute that names the visitor for --auth saml, such as email (default: the NameID)", "AUTH_SAML_SUBJECT_ATTRIBUTE")
 	utils.StringFlag(fs, &flags.x402PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &flags.x402Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
 	utils.StringFlag(fs, &flags.x402Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, casper:casper-test, and nano:mainnet")
@@ -265,22 +273,29 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, flags exposeFlags) (tunnel.Spec
 		spec.Transport.UDP = &tunnel.UDPConfig{Target: flags.udpAddr}
 	}
 	serve := strings.TrimSpace(flags.serve)
-	// AUTH_OIDC_* may be exported for one service, so without --auth oidc only
-	// an --auth-oidc-* flag given on the command line counts. The same holds for
-	// AUTH_IDENTITY_PROOF without --auth-identity-headers.
-	oidcFlagGiven, proofFlagGiven := false, false
+	// AUTH_OIDC_* and AUTH_SAML_* may be exported for one service, so without
+	// --auth oidc or --auth saml only an --auth-oidc-* or --auth-saml-* flag
+	// given on the command line counts. The same holds for AUTH_IDENTITY_PROOF
+	// without --auth-identity-headers.
+	oidcFlagGiven, samlFlagGiven, proofFlagGiven := false, false, false
 	fs.Visit(func(f *flag.Flag) {
 		oidcFlagGiven = oidcFlagGiven || strings.HasPrefix(f.Name, "auth-oidc-")
+		samlFlagGiven = samlFlagGiven || strings.HasPrefix(f.Name, "auth-saml-")
 		proofFlagGiven = proofFlagGiven || f.Name == "auth-identity-proof"
 	})
-	if provider, _ := gateway.NormalizeApplicationAuthProvider(flags.authProvider); provider != gateway.ApplicationAuthProviderOIDC && !oidcFlagGiven {
+	provider, _ := gateway.NormalizeApplicationAuthProvider(flags.authProvider)
+	if provider != gateway.ApplicationAuthProviderOIDC && !oidcFlagGiven {
 		flags.authOIDCIssuer, flags.authOIDCClientID, flags.authOIDCClientSecret = "", "", ""
+	}
+	if provider != gateway.ApplicationAuthProviderSAML && !samlFlagGiven {
+		flags.authSAMLMetadataURL, flags.authSAMLMetadataFile, flags.authSAMLEntityID, flags.authSAMLSubjectAttribute = "", "", "", ""
 	}
 	if !flags.authIdentityHeaders && !proofFlagGiven {
 		flags.authIdentityProof = ""
 	}
 	authEnabled := flags.authProvider != "" || len(flags.authAllowedWallets) > 0 || flags.authIdentityHeaders || flags.authIdentityProof != "" ||
-		flags.authOIDCIssuer != "" || flags.authOIDCClientID != "" || flags.authOIDCClientSecret != ""
+		flags.authOIDCIssuer != "" || flags.authOIDCClientID != "" || flags.authOIDCClientSecret != "" ||
+		flags.authSAMLMetadataURL != "" || flags.authSAMLMetadataFile != "" || flags.authSAMLEntityID != "" || flags.authSAMLSubjectAttribute != ""
 	hasStripPolicy := len(flags.stripRequestHeaders) > 0
 	hasHTTPUpstream := len(routes) > 0 || strings.TrimSpace(flags.targetAddr) != ""
 	if hasStripPolicy && serve == "" && !hasHTTPUpstream && !authEnabled && !flags.cache {
@@ -306,13 +321,17 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, flags exposeFlags) (tunnel.Spec
 	}
 	if authEnabled {
 		spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
-			Provider:         flags.authProvider,
-			AllowedWallets:   append([]string(nil), flags.authAllowedWallets...),
-			IdentityHeaders:  flags.authIdentityHeaders,
-			IdentityProof:    flags.authIdentityProof,
-			OIDCIssuerURL:    flags.authOIDCIssuer,
-			OIDCClientID:     flags.authOIDCClientID,
-			OIDCClientSecret: flags.authOIDCClientSecret,
+			Provider:             flags.authProvider,
+			AllowedWallets:       append([]string(nil), flags.authAllowedWallets...),
+			IdentityHeaders:      flags.authIdentityHeaders,
+			IdentityProof:        flags.authIdentityProof,
+			OIDCIssuerURL:        flags.authOIDCIssuer,
+			OIDCClientID:         flags.authOIDCClientID,
+			OIDCClientSecret:     flags.authOIDCClientSecret,
+			SAMLMetadataURL:      flags.authSAMLMetadataURL,
+			SAMLMetadataFile:     flags.authSAMLMetadataFile,
+			SAMLEntityID:         flags.authSAMLEntityID,
+			SAMLSubjectAttribute: flags.authSAMLSubjectAttribute,
 		}
 	}
 	return spec, spec.Validate()
@@ -501,6 +520,7 @@ func printRootUsage(w io.Writer) {
 			"portal expose 3000 --auth siwe",
 			"portal expose 3000 --auth credential",
 			"portal expose 3000 --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id <id> --auth-allow alice@example.com",
+			"portal expose 3000 --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-allow @example.com",
 			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",

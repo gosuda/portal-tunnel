@@ -42,8 +42,8 @@ func testAccessStatus() AgentStatusResponse {
 	web.AuthOIDCIssuer = "https://accounts.example.com"
 	web.AuthOIDCClientID = "portal-web"
 	web.AuthOIDCClientSecretSet = true
-	web.AuthOIDCProviderChecked = true
-	web.AuthOIDCProviderError = "fetch oidc discovery: no such host"
+	web.AuthProviderChecked = true
+	web.AuthProviderError = "fetch oidc discovery: no such host"
 	api.Auth = gateway.ApplicationAuthProviderSIWE
 	api.AuthAllowedWallets = []string{"0x52908400098527886E0F7030069857D2E4169EE7"}
 	paid.Auth = gateway.ApplicationAuthProviderCredential
@@ -135,8 +135,8 @@ func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 		tunnel AgentTunnelStatus
 		want   string
 	}{
-		{"usable", AgentTunnelStatus{State: "running", AuthOIDCProviderChecked: true}, "[*] ok"},
-		{"unusable", AgentTunnelStatus{State: "running", AuthOIDCProviderChecked: true, AuthOIDCProviderError: "no such host"}, "[!] failed"},
+		{"usable", AgentTunnelStatus{State: "running", AuthProviderChecked: true}, "[*] ok"},
+		{"unusable", AgentTunnelStatus{State: "running", AuthProviderChecked: true, AuthProviderError: "no such host"}, "[!] failed"},
 		{"still checking", AgentTunnelStatus{State: "running"}, "[~] checking..."},
 		{"tunnel starting", AgentTunnelStatus{State: "starting"}, "[~] checking..."},
 		{"tunnel not running", AgentTunnelStatus{State: "stopped"}, "[ ] not checked"},
@@ -346,7 +346,12 @@ func TestDashboardAccessRequestNamesOnlyWhatChanged(t *testing.T) {
 			`{"auth":"siwe","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":"","auth_oidc_client_secret":""}`},
 		{"leaving OIDC without a stored secret does not name it", accessIdle, []tea.Msg{keyLeft},
 			`{"auth":"siwe","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":""}`},
-		{"OIDC to open sends only auth", accessWeb, []tea.Msg{keyRight}, `{"auth":""}`},
+		{"OIDC to open sends only auth", accessWeb, []tea.Msg{keyRight, keyRight}, `{"auth":""}`},
+		{"OIDC to SAML clears the OIDC settings and the allow list", accessWeb, []tea.Msg{keyRight},
+			`{"auth":"saml","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":"","auth_oidc_client_secret":""}`},
+		{"open to SAML", accessOpen,
+			[]tea.Msg{keyLeft, keyDown, typed("@example.com"), keyEnter, keyDown, keyDown, typed("https://idp.example/metadata"), keyDown, keyDown, typed("urn:portal:web"), keyDown, typed("email")},
+			`{"auth":"saml","auth_allowed_wallets":["@example.com"],"auth_saml_metadata_url":"https://idp.example/metadata","auth_saml_entity_id":"urn:portal:web","auth_saml_subject_attribute":"email"}`},
 		{"open to credential", accessOpen, []tea.Msg{keyRight}, `{"auth":"credential"}`},
 		{"wallet to OIDC", accessWallet,
 			[]tea.Msg{keyRight, keyDown, typed("carol@example.com"), keyEnter, keyDown, keyDown, typed("https://idp.example.org"), keyDown, typed("client-1"), keyDown, typed(fakeSecret)},

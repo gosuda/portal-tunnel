@@ -876,8 +876,8 @@ func TestApplicationAuthOIDCStopsRedirectLoops(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("login status = %d; want 502", rec.Code)
 	}
-	if got := hits.Load(); got > oidcMaxRedirects {
-		t.Fatalf("provider received %d requests; want at most %d", got, oidcMaxRedirects)
+	if got := hits.Load(); got > providerMaxRedirects {
+		t.Fatalf("provider received %d requests; want at most %d", got, providerMaxRedirects)
 	}
 }
 
@@ -1153,7 +1153,7 @@ func TestApplicationAuthOIDCStateCookieStaysWithinBrowserLimit(t *testing.T) {
 }
 
 // The session follows the ID token's lifetime, but lasts at least
-// oidcMinSessionTTL, so a token about to expire cannot produce a session that
+// providerMinSessionTTL, so a token about to expire cannot produce a session that
 // is invalid on arrival and sends the visitor through the provider again, and
 // at most applicationAuthSessionTTL.
 func TestApplicationAuthOIDCSessionLifetime(t *testing.T) {
@@ -1164,8 +1164,8 @@ func TestApplicationAuthOIDCSessionLifetime(t *testing.T) {
 		tokenLifetime time.Duration
 		want          time.Duration
 	}{
-		{"token already inside the verification leeway", -30 * time.Second, oidcMinSessionTTL},
-		{"token shorter than the minimum", 5 * time.Minute, oidcMinSessionTTL},
+		{"token already inside the verification leeway", -30 * time.Second, providerMinSessionTTL},
+		{"token shorter than the minimum", 5 * time.Minute, providerMinSessionTTL},
 		{"token between the bounds", time.Hour, time.Hour},
 		{"token longer than the maximum", 72 * time.Hour, applicationAuthSessionTTL},
 	}

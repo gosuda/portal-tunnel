@@ -733,13 +733,14 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			gate := newGate(t, ApplicationAuthProviderOIDC, tt.allow...)
-			got, ok := gate.resolveAllowedOIDCSubject(oidcIDTokenClaims{
+			claims := oidcIDTokenClaims{
 				Claims:        jwt.Claims{Subject: tt.sub},
 				Email:         tt.email,
 				EmailVerified: tt.status,
-			})
+			}
+			got, ok := gate.resolveAllowedPrincipal(claims.vouchedEmail(), claims.Subject)
 			if got != tt.want || ok != (tt.want != "") {
-				t.Fatalf("resolveAllowedOIDCSubject = (%q, %v); want %q", got, ok, tt.want)
+				t.Fatalf("resolveAllowedPrincipal = (%q, %v); want %q", got, ok, tt.want)
 			}
 		})
 	}
@@ -775,16 +776,16 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 	t.Run("malformed domain entries are rejected", func(t *testing.T) {
 		t.Parallel()
 		for _, entry := range []string{"@", "@a@b", "@ex ample.com"} {
-			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
-				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
+			if _, err := NormalizeApplicationAuthProviderPrincipals([]string{entry}); err == nil {
+				t.Fatalf("NormalizeApplicationAuthProviderPrincipals(%q) = nil error", entry)
 			}
 		}
 	})
 	t.Run("untyped or malformed entries are rejected", func(t *testing.T) {
 		t.Parallel()
 		for _, entry := range []string{"alice", "sub:", "sub: ", "alice@", "alice@a@b", "Kevin@example.com", "@gİthub.com"} {
-			if _, err := NormalizeApplicationAuthOIDCPrincipals([]string{entry}); err == nil {
-				t.Fatalf("NormalizeApplicationAuthOIDCPrincipals(%q) = nil error", entry)
+			if _, err := NormalizeApplicationAuthProviderPrincipals([]string{entry}); err == nil {
+				t.Fatalf("NormalizeApplicationAuthProviderPrincipals(%q) = nil error", entry)
 			}
 		}
 	})
@@ -792,7 +793,7 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 
 // A session subject is re-normalized on every request, so this rule decides
 // whether two provider subjects that differ only in case stay distinct there.
-func TestNormalizeOIDCPrincipalKeepsSubjectCase(t *testing.T) {
+func TestNormalizeProviderPrincipalKeepsSubjectCase(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -806,9 +807,9 @@ func TestNormalizeOIDCPrincipalKeepsSubjectCase(t *testing.T) {
 		{"Alice@Example.com", "alice@example.com"},
 	}
 	for _, tt := range tests {
-		got, err := normalizeOIDCPrincipal(tt.raw)
+		got, err := normalizeProviderPrincipal(tt.raw)
 		if err != nil || got != tt.want {
-			t.Errorf("normalizeOIDCPrincipal(%q) = (%q, %v); want %q", tt.raw, got, err, tt.want)
+			t.Errorf("normalizeProviderPrincipal(%q) = (%q, %v); want %q", tt.raw, got, err, tt.want)
 		}
 	}
 }
@@ -1085,7 +1086,7 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		},
 		{
 			name:    "unknown provider",
-			cfg:     ApplicationAuthConfig{Provider: "saml"},
+			cfg:     ApplicationAuthConfig{Provider: "ldap"},
 			wantErr: "unsupported application auth provider",
 		},
 		{
@@ -1112,6 +1113,63 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 			name:    "oidc without a client id",
 			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCIssuerURL: "https://idp.example", OIDCClientID: "  "},
 			wantErr: "client id is required",
+		},
+		{
+			name: "saml values are trimmed and normalized",
+			cfg: ApplicationAuthConfig{
+				Provider:             " SAML ",
+				AllowedWallets:       []string{"Alice@Example.com", "@example.org", "sub:A1"},
+				SAMLMetadataURL:      " https://login.example/federationmetadata.xml?appid=1 ",
+				SAMLEntityID:         " urn:portal:app ",
+				SAMLSubjectAttribute: " email ",
+			},
+			want: applicationAuthSettings{
+				provider:             ApplicationAuthProviderSAML,
+				allowed:              []string{"alice@example.com", "@example.org", "sub:A1"},
+				samlMetadataURL:      "https://login.example/federationmetadata.xml?appid=1",
+				samlEntityID:         "urn:portal:app",
+				samlSubjectAttribute: "email",
+			},
+		},
+		{
+			name: "saml metadata from a file",
+			cfg:  ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataFile: " idp.xml "},
+			want: applicationAuthSettings{provider: ApplicationAuthProviderSAML, allowed: []string{"alice@example.com"}, samlMetadataFile: "idp.xml"},
+		},
+		{
+			name:    "saml settings with another provider",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID, SAMLEntityID: "urn:portal:app"},
+			wantErr: "saml settings require the saml application auth provider",
+		},
+		{
+			name:    "oidc settings with saml",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataFile: "idp.xml", OIDCClientID: oidcTestClientID},
+			wantErr: "oidc settings require the oidc application auth provider",
+		},
+		{
+			name:    "saml without an allowlist",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, SAMLMetadataURL: "https://idp.example/metadata"},
+			wantErr: "--auth-allow",
+		},
+		{
+			name:    "saml without metadata",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}},
+			wantErr: "requires identity provider metadata",
+		},
+		{
+			name:    "saml with two metadata sources",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataURL: "https://idp.example/metadata", SAMLMetadataFile: "idp.xml"},
+			wantErr: "not both",
+		},
+		{
+			name:    "saml with cleartext metadata",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataURL: "http://idp.example/metadata"},
+			wantErr: "must use https",
+		},
+		{
+			name:    "saml entity id longer than SAML allows",
+			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLMetadataFile: "idp.xml", SAMLEntityID: "urn:" + strings.Repeat("a", 1024)},
+			wantErr: "saml entity id must be at most 1024 characters",
 		},
 	}
 	for _, tt := range tests {
@@ -1153,7 +1211,7 @@ func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate := handler.(*applicationAuth)
-	subject, ok := gate.resolveAllowedOIDCSubject(oidcIDTokenClaims{Claims: jwt.Claims{Subject: sub}})
+	subject, ok := gate.resolveAllowedPrincipal("", sub)
 	if !ok {
 		t.Fatal("maximum-length sub was not authorized at login")
 	}

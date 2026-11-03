@@ -187,7 +187,9 @@ func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) error {
 	if r.Auth != nil {
 		tunnel.Auth = *r.Auth
 		if strings.TrimSpace(tunnel.Auth) == "" {
-			if r.AuthAllowedWallets != nil || r.AuthIdentityHeaders != nil || r.AuthOIDCIssuer != nil || r.AuthOIDCClientID != nil || r.AuthOIDCClientSecret != nil {
+			namesOIDC := r.AuthOIDCIssuer != nil || r.AuthOIDCClientID != nil || r.AuthOIDCClientSecret != nil
+			namesSAML := r.AuthSAMLMetadataURL != nil || r.AuthSAMLMetadataFile != nil || r.AuthSAMLEntityID != nil || r.AuthSAMLSubjectAttribute != nil
+			if r.AuthAllowedWallets != nil || r.AuthIdentityHeaders != nil || namesOIDC || namesSAML {
 				return errAuthEmptyWhichTurnsSignOff
 			}
 			tunnel.AuthAllowedWallets = nil
@@ -195,6 +197,10 @@ func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) error {
 			tunnel.AuthOIDCIssuer = ""
 			tunnel.AuthOIDCClientID = ""
 			tunnel.AuthOIDCClientSecret = ""
+			tunnel.AuthSAMLMetadataURL = ""
+			tunnel.AuthSAMLMetadataFile = ""
+			tunnel.AuthSAMLEntityID = ""
+			tunnel.AuthSAMLSubjectAttribute = ""
 		}
 	}
 	if r.AuthAllowedWallets != nil {
@@ -211,6 +217,18 @@ func (r AgentTunnelUpdateRequest) applyAuth(tunnel *TunnelConfig) error {
 	}
 	if r.AuthOIDCClientSecret != nil {
 		tunnel.AuthOIDCClientSecret = *r.AuthOIDCClientSecret
+	}
+	if r.AuthSAMLMetadataURL != nil {
+		tunnel.AuthSAMLMetadataURL = *r.AuthSAMLMetadataURL
+	}
+	if r.AuthSAMLMetadataFile != nil {
+		tunnel.AuthSAMLMetadataFile = *r.AuthSAMLMetadataFile
+	}
+	if r.AuthSAMLEntityID != nil {
+		tunnel.AuthSAMLEntityID = *r.AuthSAMLEntityID
+	}
+	if r.AuthSAMLSubjectAttribute != nil {
+		tunnel.AuthSAMLSubjectAttribute = *r.AuthSAMLSubjectAttribute
 	}
 	return nil
 }
@@ -267,23 +285,27 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	x402.Asset = strings.TrimSpace(x402.Asset)
 	x402.Endpoints = compactStrings(x402.Endpoints)
 	tunnelCfg := TunnelConfig{
-		ID:                   id,
-		Name:                 name,
-		TargetAddr:           target,
-		Serve:                serve,
-		HTTPRoutes:           httpRoutes,
-		StripRequestHeaders:  append([]string(nil), req.StripRequestHeaders...),
-		RelayURLs:            relayURLs,
-		Discovery:            &discovery,
-		Overlay:              req.Overlay,
-		MaxActiveRelays:      req.MaxActiveRelays,
-		Auth:                 req.Auth,
-		AuthAllowedWallets:   append([]string(nil), req.AuthAllowedWallets...),
-		AuthIdentityHeaders:  req.AuthIdentityHeaders,
-		AuthOIDCIssuer:       req.AuthOIDCIssuer,
-		AuthOIDCClientID:     req.AuthOIDCClientID,
-		AuthOIDCClientSecret: req.AuthOIDCClientSecret,
-		X402Config:           x402,
+		ID:                       id,
+		Name:                     name,
+		TargetAddr:               target,
+		Serve:                    serve,
+		HTTPRoutes:               httpRoutes,
+		StripRequestHeaders:      append([]string(nil), req.StripRequestHeaders...),
+		RelayURLs:                relayURLs,
+		Discovery:                &discovery,
+		Overlay:                  req.Overlay,
+		MaxActiveRelays:          req.MaxActiveRelays,
+		Auth:                     req.Auth,
+		AuthAllowedWallets:       append([]string(nil), req.AuthAllowedWallets...),
+		AuthIdentityHeaders:      req.AuthIdentityHeaders,
+		AuthOIDCIssuer:           req.AuthOIDCIssuer,
+		AuthOIDCClientID:         req.AuthOIDCClientID,
+		AuthOIDCClientSecret:     req.AuthOIDCClientSecret,
+		AuthSAMLMetadataURL:      req.AuthSAMLMetadataURL,
+		AuthSAMLMetadataFile:     req.AuthSAMLMetadataFile,
+		AuthSAMLEntityID:         req.AuthSAMLEntityID,
+		AuthSAMLSubjectAttribute: req.AuthSAMLSubjectAttribute,
+		X402Config:               x402,
 	}
 	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
 		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
@@ -661,13 +683,17 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		AuthOIDCClientID:    cfg.AuthOIDCClientID,
 		X402Config:          x402,
 
-		AuthOIDCClientSecretSet: cfg.AuthOIDCClientSecret != "",
+		AuthOIDCClientSecretSet:  cfg.AuthOIDCClientSecret != "",
+		AuthSAMLMetadataURL:      cfg.AuthSAMLMetadataURL,
+		AuthSAMLMetadataFile:     cfg.AuthSAMLMetadataFile,
+		AuthSAMLEntityID:         cfg.AuthSAMLEntityID,
+		AuthSAMLSubjectAttribute: cfg.AuthSAMLSubjectAttribute,
 	}
-	if runtime != nil && cfg.Auth == gateway.ApplicationAuthProviderOIDC {
+	if runtime != nil && (cfg.Auth == gateway.ApplicationAuthProviderOIDC || cfg.Auth == gateway.ApplicationAuthProviderSAML) {
 		checked, err := runtime.AuthProviderCheck()
-		status.AuthOIDCProviderChecked = checked
+		status.AuthProviderChecked = checked
 		if err != nil {
-			status.AuthOIDCProviderError = err.Error()
+			status.AuthProviderError = err.Error()
 		}
 	}
 	if len(cfg.HTTPRoutes) > 0 {

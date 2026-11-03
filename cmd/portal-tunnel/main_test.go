@@ -82,6 +82,38 @@ func TestExposeRefusesExplicitOIDCFlagWithoutAuthOIDC(t *testing.T) {
 	}
 }
 
+// AUTH_SAML_* follow the AUTH_OIDC_* rule: they count only with --auth saml,
+// and a typed --auth-saml-* flag without it is refused.
+func TestExposeAuthSAMLEnv(t *testing.T) {
+	t.Setenv("AUTH_SAML_METADATA_URL", "https://idp.example/metadata")
+	t.Setenv("AUTH_SAML_ENTITY_ID", "urn:portal:app")
+	t.Setenv("AUTH_SAML_SUBJECT_ATTRIBUTE", "email")
+
+	for _, args := range [][]string{{"3000"}, {"--auth", "siwe", "3000"}} {
+		spec, err := exposeSpec(t, args...)
+		if err != nil {
+			t.Errorf("portal expose %v: %v", args, err)
+			continue
+		}
+		if spec.HTTP == nil || spec.HTTP.Auth == nil {
+			continue
+		}
+		if auth := spec.HTTP.Auth; auth.SAMLMetadataURL != "" || auth.SAMLEntityID != "" {
+			t.Errorf("portal expose %v carried AUTH_SAML_* into %+v", args, auth)
+		}
+	}
+	spec, err := exposeSpec(t, "--auth", "saml", "--auth-allow", "@example.com", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth := spec.HTTP.Auth; auth.SAMLMetadataURL != "https://idp.example/metadata" || auth.SAMLEntityID != "urn:portal:app" || auth.SAMLSubjectAttribute != "email" {
+		t.Fatalf("--auth saml config = %+v, want the AUTH_SAML_* values", auth)
+	}
+	if _, err := exposeSpec(t, "--auth", "siwe", "--auth-saml-entity-id", "urn:portal:app", "3000"); err == nil {
+		t.Error("portal expose started with --auth-saml-entity-id but without --auth saml")
+	}
+}
+
 const identityProofEnv = "test-proof-0123456789"
 
 // AUTH_IDENTITY_PROOF may be exported for one service, so without
