@@ -169,19 +169,20 @@ func normalizeVisitorEmail(raw string) (string, error) {
 	return email, nil
 }
 
-// isPublicHost reports whether host, a normalized request host, is one the
-// tunnel is reachable at now. A link mailed for any other host would send its
-// token to whoever answers there.
-func (e *emailAuthenticator) isPublicHost(host string) bool {
+// publicHost returns the host of the tunnel's current public URL that
+// requestHost, a normalized request host, names. A link mailed for any other
+// host would send its token to whoever answers there, so the mail takes its
+// host from this list and never from the request.
+func (e *emailAuthenticator) publicHost(requestHost string) (string, bool) {
 	if e.publicURLs == nil {
-		return false
+		return "", false
 	}
 	for _, raw := range e.publicURLs() {
-		if public, err := NormalizeApplicationAuthHost(raw); err == nil && public == host {
-			return true
+		if public, err := NormalizeApplicationAuthHost(raw); err == nil && public == requestHost {
+			return public, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // admit records a send to email at now if the limits allow one. The caller
@@ -430,8 +431,13 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	host, err := NormalizeApplicationAuthHost(r.Host)
-	if err != nil || !a.email.isPublicHost(host) {
+	requestHost, err := NormalizeApplicationAuthHost(r.Host)
+	if err != nil {
+		a.writeJSONError(w, http.StatusForbidden, errEmailRequestHostNotPublic.Error())
+		return
+	}
+	host, public := a.email.publicHost(requestHost)
+	if !public {
 		a.writeJSONError(w, http.StatusForbidden, errEmailRequestHostNotPublic.Error())
 		return
 	}
