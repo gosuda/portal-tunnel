@@ -101,6 +101,16 @@ auth_allowed_wallets = ["sub:G-7f3a"]
 auth_saml_metadata_file = "/absolute/idp.xml"
 
 [[tunnels]]
+id = "mail"
+target = "localhost:3003"
+auth = "email"
+auth_allowed_wallets = ["alice@example.com", "@example.com"]
+auth_email_smtp_addr = "smtp.example.com:587"
+auth_email_smtp_username = "portal@example.com"
+auth_email_smtp_password = "smtp-password"
+auth_email_from = "Portal <portal@example.com>"
+
+[[tunnels]]
 id = "site"
 serve = "./site"
 identity_json = "{}"

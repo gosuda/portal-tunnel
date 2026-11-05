@@ -98,11 +98,12 @@ type verifiedIdentityHeadersContextKey struct{}
 // and the runtime carry it as it is, under its auth and auth_* keys, so a new
 // provider setting is added here and in resolveApplicationAuthConfig only.
 // AllowedWallets holds the provider-scoped principal allowlist (Ethereum
-// wallet addresses for siwe, credential subjects for credential, or verified
-// emails, @domain entries, or sub: subjects for oidc and saml). IdentityProof
-// is a secret, like OIDCClientSecret: it is sent upstream with the identity
-// headers and must not be logged. Only portal expose sets it; the agent config
-// and the Agent API have no key for it.
+// wallet addresses for siwe, credential subjects for credential, verified
+// emails, @domain entries, or sub: subjects for oidc and saml, or emails and
+// @domain entries for email). IdentityProof is a secret, like OIDCClientSecret
+// and EmailSMTPPassword: it is sent upstream with the identity headers and must
+// not be logged. Only portal expose sets it; the agent config and the Agent API
+// have no key for it.
 type ApplicationAuthConfig struct {
 	Provider        string   `json:"auth,omitempty" toml:"auth,omitempty"`
 	AllowedWallets  []string `json:"auth_allowed_wallets,omitempty" toml:"auth_allowed_wallets,omitempty"`
@@ -110,6 +111,7 @@ type ApplicationAuthConfig struct {
 	IdentityProof   string   `json:"-" toml:"-"`
 	OIDCConfig
 	SAMLConfig
+	EmailConfig
 }
 
 // OIDCConfig holds the settings of the oidc provider; any other provider
@@ -130,12 +132,23 @@ type SAMLConfig struct {
 	SAMLSubjectAttribute string `json:"auth_saml_subject_attribute,omitempty" toml:"auth_saml_subject_attribute,omitempty"`
 }
 
+// EmailConfig holds the settings of the email provider; any other provider
+// refuses them. The tunnel mails each login link from EmailFrom, the one fixed
+// sender, through the operator's SMTP server at EmailSMTPAddr. The username and
+// password are for a server that requires a login; the password is a secret.
+type EmailConfig struct {
+	EmailSMTPAddr     string `json:"auth_email_smtp_addr,omitempty" toml:"auth_email_smtp_addr,omitempty"`
+	EmailSMTPUsername string `json:"auth_email_smtp_username,omitempty" toml:"auth_email_smtp_username,omitempty"`
+	EmailSMTPPassword string `json:"auth_email_smtp_password,omitempty" toml:"auth_email_smtp_password,omitempty"`
+	EmailFrom         string `json:"auth_email_from,omitempty" toml:"auth_email_from,omitempty"`
+}
+
 // IsZero reports whether no auth setting is given. Any setting asks for the
 // sign-in gate, so an incomplete one fails validation instead of leaving the
 // application open.
 func (c ApplicationAuthConfig) IsZero() bool {
 	return c.Provider == "" && len(c.AllowedWallets) == 0 && !c.IdentityHeaders && c.IdentityProof == "" &&
-		c.OIDCConfig == (OIDCConfig{}) && c.SAMLConfig == (SAMLConfig{})
+		c.OIDCConfig == (OIDCConfig{}) && c.SAMLConfig == (SAMLConfig{}) && c.EmailConfig == (EmailConfig{})
 }
 
 // Normalize returns c in the form a config stores: the provider in lower case,
@@ -152,6 +165,10 @@ func (c ApplicationAuthConfig) Normalize() (ApplicationAuthConfig, error) {
 	c.SAMLMetadataFile = strings.TrimSpace(c.SAMLMetadataFile)
 	c.SAMLEntityID = strings.TrimSpace(c.SAMLEntityID)
 	c.SAMLSubjectAttribute = strings.TrimSpace(c.SAMLSubjectAttribute)
+	c.EmailSMTPAddr = strings.TrimSpace(c.EmailSMTPAddr)
+	c.EmailSMTPUsername = strings.TrimSpace(c.EmailSMTPUsername)
+	c.EmailSMTPPassword = strings.TrimSpace(c.EmailSMTPPassword)
+	c.EmailFrom = strings.TrimSpace(c.EmailFrom)
 	if c.Provider == "" || len(c.AllowedWallets) == 0 {
 		c.AllowedWallets = slices.Clone(c.AllowedWallets)
 		return c, nil
@@ -164,12 +181,13 @@ func (c ApplicationAuthConfig) Normalize() (ApplicationAuthConfig, error) {
 	return c, nil
 }
 
-// Public returns c without its secrets, the identity proof and the OIDC client
-// secret, for a status that must not reveal them.
+// Public returns c without its secrets, the identity proof, the OIDC client
+// secret and the SMTP password, for a status that must not reveal them.
 func (c ApplicationAuthConfig) Public() ApplicationAuthConfig {
 	c.AllowedWallets = slices.Clone(c.AllowedWallets)
 	c.IdentityProof = ""
 	c.OIDCClientSecret = ""
+	c.EmailSMTPPassword = ""
 	return c
 }
 
@@ -182,6 +200,7 @@ type applicationAuth struct {
 	siwe            *siweauth.Authenticator
 	oidc            *oidcAuthenticator
 	saml            *samlAuthenticator
+	email           *emailAuthenticator
 	allowedSubjects map[string]struct{}
 	allowAnySubject bool
 	identityHeaders bool
@@ -474,7 +493,10 @@ func isUnsafeRedirectRune(r rune) bool {
 
 // NewApplicationAuth protects the complete HTTP gateway with tunnel-local
 // authentication. Its reserved login endpoints are the only bypass paths.
-func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg ApplicationAuthConfig) (http.Handler, error) {
+// publicURLs lists the URLs the tunnel is reachable at now. Only the email
+// provider uses it: a request names its own Host, so a login link is mailed
+// only for a host on that list, and a nil publicURLs mails none.
+func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg ApplicationAuthConfig, publicURLs func() []string) (http.Handler, error) {
 	if next == nil {
 		return nil, errApplicationAuthHandlerIsRequired
 	}
@@ -490,6 +512,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		siwe            *siweauth.Authenticator
 		oidc            *oidcAuthenticator
 		saml            *samlAuthenticator
+		email           *emailAuthenticator
 		allowedSubjects map[string]struct{}
 		allowAnySubject = true
 	)
@@ -529,6 +552,15 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		} else {
 			saml = newSAMLAuthenticator(settings, []byte(stateKey))
 		}
+	case ApplicationAuthProviderEmail:
+		// Like an identity provider, email never runs open: resolveApplicationAuthConfig
+		// rejects an empty allowlist.
+		allowAnySubject = false
+		allowedSubjects = make(map[string]struct{}, len(settings.allowed))
+		for _, principal := range settings.allowed {
+			allowedSubjects[principal] = struct{}{}
+		}
+		email = newEmailAuthenticator(settings, publicURLs)
 	}
 	credentialKey, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
 	if err != nil {
@@ -543,6 +575,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		siwe:            siwe,
 		oidc:            oidc,
 		saml:            saml,
+		email:           email,
 		allowedSubjects: allowedSubjects,
 		allowAnySubject: allowAnySubject,
 		identityHeaders: cfg.IdentityHeaders,
@@ -551,10 +584,12 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 }
 
 // CheckApplicationAuthProvider fetches what the first login needs, the OIDC
-// discovery document and signing keys or the SAML metadata, so that a wrong
-// issuer, metadata source or an unreachable provider shows when the tunnel
-// starts instead of to the first visitor who tries to sign in. Other providers
-// depend on nothing outside the tunnel.
+// discovery document and signing keys or the SAML metadata, or signs in to the
+// SMTP server without sending, so that a wrong issuer, metadata source, SMTP
+// setting or an unreachable provider shows when the tunnel starts instead of to
+// the first visitor who tries to sign in. The email check matters most, because
+// a visitor is never told that a mail could not be sent. Other providers depend
+// on nothing outside the tunnel.
 func CheckApplicationAuthProvider(ctx context.Context, cfg ApplicationAuthConfig) error {
 	settings, err := resolveApplicationAuthConfig(cfg)
 	if err != nil {
@@ -567,6 +602,8 @@ func CheckApplicationAuthProvider(ctx context.Context, cfg ApplicationAuthConfig
 		_, err = o.jwks.get(ctx, providerMetadataCacheTTL, o.fetchJWKS)
 	case ApplicationAuthProviderSAML:
 		_, err = newSAMLAuthenticator(settings, nil).identityProvider(ctx)
+	case ApplicationAuthProviderEmail:
+		err = newEmailAuthenticator(settings, nil).check(ctx)
 	}
 	return err
 }
@@ -591,6 +628,10 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.serveSAMLACS(w, r)
 	case applicationAuthSAMLMetadataPath:
 		a.serveSAMLMetadata(w, r)
+	case applicationAuthEmailRequestPath:
+		a.serveEmailRequest(w, r)
+	case applicationAuthEmailRedeemPath:
+		a.serveEmailRedeem(w, r)
 	case applicationAuthLogoutPath:
 		a.serveLogout(w, r)
 	default:
@@ -649,8 +690,11 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := signinWalletPage
-	if a.provider == ApplicationAuthProviderCredential {
+	switch a.provider {
+	case ApplicationAuthProviderCredential:
 		page = signinCredentialPage
+	case ApplicationAuthProviderEmail:
+		page = signinEmailPage
 	}
 	writeSigninPage(w, page, r.Host)
 }
@@ -1254,12 +1298,15 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, 
 		return address, provider, true
 	}
 	var subject string
-	if provider == ApplicationAuthProviderOIDC || provider == ApplicationAuthProviderSAML {
+	switch provider {
+	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML:
 		if binding := a.binding(); binding == "" || claims.Binding != binding {
 			return "", "", false
 		}
 		subject, err = normalizeProviderPrincipal(claims.Subject)
-	} else {
+	case ApplicationAuthProviderEmail:
+		subject, err = normalizeProviderPrincipal(claims.Subject)
+	default:
 		subject, err = normalizeApplicationAuthSubject(claims.Subject)
 	}
 	if err != nil || !a.subjectAllowed(subject) {
@@ -1278,7 +1325,7 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	if _, ok := a.allowedSubjects[subject]; ok {
 		return true
 	}
-	if a.provider != ApplicationAuthProviderOIDC && a.provider != ApplicationAuthProviderSAML {
+	if a.provider != ApplicationAuthProviderOIDC && a.provider != ApplicationAuthProviderSAML && a.provider != ApplicationAuthProviderEmail {
 		return false
 	}
 	// A `sub:` session subject is an opaque subject principal: it matches only
@@ -1288,8 +1335,9 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 		return false
 	}
 	// An "@example.com" entry authorizes exactly that email domain, never its
-	// subdomains. Login only passes an email the provider vouches for here,
-	// and sessions only carry subjects issued after that check.
+	// subdomains. Login only passes an email the provider vouches for here, or
+	// for email the address a link is about to be mailed to, and sessions only
+	// carry subjects issued after that check.
 	if _, domain, ok := strings.Cut(subject, "@"); ok && !strings.Contains(domain, "@") {
 		_, ok = a.allowedSubjects["@"+domain]
 		return ok

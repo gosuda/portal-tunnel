@@ -894,7 +894,7 @@ func newOIDCTLSGate(t *testing.T, serve func(w http.ResponseWriter, r *http.Requ
 		Provider:       ApplicationAuthProviderOIDC,
 		AllowedWallets: []string{"alice@example.com"},
 		OIDCConfig:     OIDCConfig{OIDCIssuerURL: provider.URL, OIDCClientID: oidcTestClientID},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -990,7 +990,7 @@ func newOIDCTestGate(t *testing.T, idp *oidcTestIdP, allowed ...string) *applica
 		Provider:       ApplicationAuthProviderOIDC,
 		AllowedWallets: allowed,
 		OIDCConfig:     OIDCConfig{OIDCIssuerURL: idp.issuerURL, OIDCClientID: oidcTestClientID, OIDCClientSecret: idp.clientSecret},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -570,22 +570,24 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	spec, _ := cfg.Spec()
 	auth := cfg.ApplicationAuthConfig
 	status := AgentTunnelStatus{
-		ID:                      cfg.ID,
-		Name:                    cfg.Name,
-		State:                   state,
-		TargetAddr:              cfg.TargetAddr,
-		LastError:               lastError,
-		Serve:                   cfg.Serve,
-		Discovery:               spec.Relays.Discovery,
-		Overlay:                 cfg.Overlay,
-		MaxActiveRelays:         spec.Relays.MaxActive,
-		Metadata:                spec.Metadata,
-		ApplicationAuthConfig:   auth.Public(),
-		AuthOIDCClientSecretSet: auth.OIDCClientSecret != "",
-		X402Config:              cfg.X402Config,
+		ID:                       cfg.ID,
+		Name:                     cfg.Name,
+		State:                    state,
+		TargetAddr:               cfg.TargetAddr,
+		LastError:                lastError,
+		Serve:                    cfg.Serve,
+		Discovery:                spec.Relays.Discovery,
+		Overlay:                  cfg.Overlay,
+		MaxActiveRelays:          spec.Relays.MaxActive,
+		Metadata:                 spec.Metadata,
+		ApplicationAuthConfig:    auth.Public(),
+		AuthOIDCClientSecretSet:  auth.OIDCClientSecret != "",
+		AuthEmailSMTPPasswordSet: auth.EmailSMTPPassword != "",
+		X402Config:               cfg.X402Config,
 	}
 	status.Endpoints = slices.Clone(status.Endpoints)
-	if runtime != nil && (cfg.Provider == gateway.ApplicationAuthProviderOIDC || cfg.Provider == gateway.ApplicationAuthProviderSAML) {
+	hasProviderCheck := cfg.Provider == gateway.ApplicationAuthProviderOIDC || cfg.Provider == gateway.ApplicationAuthProviderSAML || cfg.Provider == gateway.ApplicationAuthProviderEmail
+	if runtime != nil && hasProviderCheck {
 		checked, err := runtime.AuthProviderCheck()
 		status.AuthProviderChecked = checked
 		if err != nil {

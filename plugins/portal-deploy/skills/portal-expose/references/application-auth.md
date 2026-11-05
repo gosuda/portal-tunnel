@@ -12,6 +12,7 @@ Use this when only chosen people should open the public URL ("only me", "my team
 | People who own an Ethereum wallet | `siwe` | A browser wallet | Nothing |
 | People who already sign in at Google, Microsoft, Keycloak or another OpenID Connect provider | `oidc` | An account at that provider | An OAuth client registered at the provider |
 | People who sign in at a SAML identity provider (Okta, Entra ID, ADFS, Keycloak, Shibboleth) that issues no OpenID Connect client | `saml` | An account at that provider | A SAML application registered at the provider |
+| People the user knows by email address, with no identity provider | `email` | A mailbox | An SMTP account: a mailbox app password or a transactional mail service |
 
 When the user does not say which, use `credential`: it needs no external setup. A credential link is a bearer token, not a password; whoever holds the link gets in until it expires.
 
@@ -102,9 +103,51 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 - Visitors must start at the tunnel URL: a sign-in started from the provider's app list (IdP-initiated) is refused. Single logout is not supported.
 - A session follows the provider's `SessionNotOnOrAfter`, between 15 minutes and 24 hours (24 hours when the provider sends none). Sessions are re-checked against `--auth-allow` on every request. Changing the metadata source, the entity ID or the subject attribute signs everyone out.
 
+## email
+
+Do these in order. Stop and ask the user for the missing value instead of guessing it.
+
+1. Get the SMTP server as `host:port`, for example `smtp.gmail.com:587`. Port 465 uses TLS from the start. On any other port the server must offer STARTTLS. Only a server on a loopback address can receive plaintext.
+2. Get the SMTP username, when the server requires a login. The password reaches Portal only as `AUTH_EMAIL_SMTP_PASSWORD` in the environment of the shell that runs `portal expose`, never on the command line. Handle it as step 5 of the oidc section handles the client secret: the user reads it at a prompt and starts the tunnel in their own terminal, and you do not ask for it, type it, print it, or write it to a file. Username and password are set together or not at all.
+3. Get the sender for `--auth-email-from`: one address that the SMTP account can send from, with an optional display name such as `"Portal <login@example.com>"`. Every mail comes from it, and no visitor input can change it.
+4. Decide who may sign in. `--auth-allow` is required with `email`; without at least one entry Portal refuses to start, because anyone could make the tunnel mail any address.
+   - `alice@example.com`: that address.
+   - `@example.com`: any address on exactly that domain, not its subdomains.
+   - `sub:<id>` is refused: a mailbox has no other ID.
+   - Matching ignores case but needs ASCII; write an internationalized domain in punycode.
+
+The user first reads the password at a prompt. Linux and macOS (bash, zsh):
+
+```sh
+printf 'SMTP password: '; stty -echo; read -r AUTH_EMAIL_SMTP_PASSWORD; stty echo; echo; export AUTH_EMAIL_SMTP_PASSWORD
+```
+
+Windows PowerShell:
+
+```powershell
+$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_EMAIL_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+```
+
+Then, in that same shell, the user starts the tunnel (on PowerShell, on one line):
+
+```sh
+portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json \
+  --auth email --auth-email-smtp-addr smtp.gmail.com:587 \
+  --auth-email-smtp-username you@gmail.com --auth-email-from you@gmail.com \
+  --auth-allow alice@example.com --auth-allow @example.com
+```
+
+- When the server needs no login, no secret is involved, so you can run the command yourself.
+- `AUTH_EMAIL_SMTP_ADDR`, `AUTH_EMAIL_SMTP_USERNAME`, `AUTH_EMAIL_SMTP_PASSWORD` and `AUTH_EMAIL_FROM` stand in for the four flags, and are used only together with `--auth email`. An `--auth-email-*` flag without `--auth email` is refused.
+- The visitor enters an address on the sign-in page and gets a link `https://<host>/_portal/auth/login#email_token=...`. The link works once, for 10 minutes, and only on the host it was sent for. The token is in the fragment, so a mail scanner that opens the link cannot use it. Links are kept in memory: a restart cancels the unused ones, and the visitor asks again.
+- Portal sends a link only for a host where the tunnel is published now (a relay's address-bound URL, or its short URL while granted). A request for any other host gets `403`.
+- The page answers every well-formed address the same way, whether it is allowed or not, and sends the mail after it answers. One address gets at most one link per minute and five per hour, and the tunnel sends at most 50 per hour. So a visitor never sees why no mail came: a failed send shows only in the tunnel log as `email login link not sent`.
+- At start Portal signs in to the SMTP server once without sending mail and logs `application auth provider is not usable` when that fails. The tunnel keeps running.
+- A session lasts 24 hours. Sessions are re-checked against `--auth-allow` on every request. Changing the list takes effect when the tunnel restarts.
+
 ## Common options
 
-- `--auth-identity-headers` passes the verified identity to the app as `X-Portal-User` (wallet address, credential subject, or `alice@example.com` / `sub:<id>` for OIDC and SAML) and `X-Portal-Auth` (`siwe`, `credential`, `oidc`, `saml`). Portal strips any client-supplied copies. Tell the user the app may trust these headers only when nothing but Portal can reach the app's port: binding the app to loopback keeps other machines out, but any other process on the same machine can still connect to that port and send forged headers. When other local processes can reach it, add `--auth-identity-proof` (only with `--auth-identity-headers`, and only when the user's app will check it): Portal then also sends `X-Portal-Proof: <secret>`, always strips a visitor's copy, and the app compares the header with the same secret in constant time and ignores the identity headers when it differs or is missing. Pass the secret as `AUTH_IDENTITY_PROOF`, never as a flag value, where `ps` would show it. Generate it once into a file only the user can read, outside the repository, and set the variable for the one command, so it is never typed or printed:
+- `--auth-identity-headers` passes the verified identity to the app as `X-Portal-User` (wallet address, credential subject, `alice@example.com` / `sub:<id>` for OIDC and SAML, or the email address for email) and `X-Portal-Auth` (`siwe`, `credential`, `oidc`, `saml`, `email`). Portal strips any client-supplied copies. Tell the user the app may trust these headers only when nothing but Portal can reach the app's port: binding the app to loopback keeps other machines out, but any other process on the same machine can still connect to that port and send forged headers. When other local processes can reach it, add `--auth-identity-proof` (only with `--auth-identity-headers`, and only when the user's app will check it): Portal then also sends `X-Portal-Proof: <secret>`, always strips a visitor's copy, and the app compares the header with the same secret in constant time and ignores the identity headers when it differs or is missing. Pass the secret as `AUTH_IDENTITY_PROOF`, never as a flag value, where `ps` would show it. Generate it once into a file only the user can read, outside the repository, and set the variable for the one command, so it is never typed or printed:
 
   ```sh
   (umask 077 && mkdir -p ~/.config/portal && openssl rand -hex 32 > ~/.config/portal/my-app.proof)
@@ -112,7 +155,7 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
   ```
 
   The app reads the same file. Never print the file or the header value, and tell the user that the app must not log `X-Portal-Proof`. Use one secret per tunnel: it reaches every upstream of the tunnel, in cleartext over a plain `http` upstream. A persistent agent tunnel cannot send the proof.
-- Sign-in cannot be combined with `--tcp`, `--udp` or `--cache`; the tunnel refuses to start. Portal answers eight exact paths itself and never forwards them to the app: `/_portal/auth/login`, `/_portal/auth/challenge`, `/_portal/auth/verify`, `/_portal/auth/redeem`, `/_portal/auth/callback`, `/_portal/auth/saml/acs`, `/_portal/auth/saml/metadata` and `/_portal/auth/logout`. The app must not need those paths; other paths under `/_portal/auth/` reach it behind the sign-in check.
+- Sign-in cannot be combined with `--tcp`, `--udp` or `--cache`; the tunnel refuses to start. Portal answers ten exact paths itself and never forwards them to the app: `/_portal/auth/login`, `/_portal/auth/challenge`, `/_portal/auth/verify`, `/_portal/auth/redeem`, `/_portal/auth/callback`, `/_portal/auth/saml/acs`, `/_portal/auth/saml/metadata`, `/_portal/auth/email/request`, `/_portal/auth/email/redeem` and `/_portal/auth/logout`. The app must not need those paths; other paths under `/_portal/auth/` reach it behind the sign-in check.
 - Sessions use a `Secure`, `HttpOnly` cookie that Portal removes before forwarding the request to the app.
 
 ## Persistent agent
@@ -140,6 +183,8 @@ auth_identity_headers = true
 
 A `saml` entry takes `auth = "saml"`, `auth_saml_metadata_url` (or `auth_saml_metadata_file`, relative to the config file), and the optional `auth_saml_entity_id` and `auth_saml_subject_attribute`. It holds no secret.
 
+An `email` entry takes `auth = "email"`, `auth_email_smtp_addr`, `auth_email_from`, and, for a server that requires a login, `auth_email_smtp_username` and `auth_email_smtp_password`. Each tunnel holds its own SMTP settings. The agent does not read the `AUTH_EMAIL_*` variables, so the password can only be stored in the TOML file as plain text: it is a secret like the client secret, and the same consent, the same `0600` first, and the same rules for who types it apply. The Agent API never returns it and reports only `auth_email_smtp_password_set`.
+
 `auth_allowed_wallets` holds the allowlist for every method, not only wallets. To change it on a running agent tunnel, edit the file and run `portal agent restart`, which restarts every tunnel of the service, or have the user change it in the dashboard's Access screen (`F4`), or send `PATCH /agent/tunnels/{id}` (documented on the agent page), which restarts only that tunnel and writes the file too.
 
 ## Verify
@@ -151,6 +196,7 @@ Without signing in as the user:
 3. `credential`: `curl -s -H "X-Portal-Access-Credential: $C" https://<host>/` returns the app's real response. Use the credential you already issued for the subject you hand over (from the captured output, kept in a shell variable); do not issue one just to verify, and do not paste it into the final answer. If you do not hold one, skip this step and say so.
 4. `oidc` and `saml`: `curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://<host>/_portal/auth/login` prints `303` and the provider's authorization endpoint or SAML single sign-on URL. Use GET: a login starts only on GET, and HEAD answers `405`. Do not complete a provider login on the user's behalf.
 5. `saml`: `curl -s https://<host>/_portal/auth/saml/metadata` returns the service provider metadata with the entity ID and the ACS address that the provider must have.
+6. `email`: `curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Origin: https://<host>' -H 'Content-Type: application/json' -d '{"email":"nobody@example.invalid"}' https://<host>/_portal/auth/email/request` prints `202`. That address is on no allowlist, so no mail goes out. A `403` means the host is not one the tunnel is published at now. Do not request a link for a real address on the user's behalf.
 
 ## When it fails
 
@@ -164,12 +210,19 @@ Without signing in as the user:
 | `saml requires identity provider metadata` / `not both` | Pass exactly one of `--auth-saml-metadata-url` and `--auth-saml-metadata-file`. |
 | `saml metadata url must use https` | Pass an `https` metadata URL. |
 | `saml settings require the saml application auth provider` | An `--auth-saml-*` flag was given together with another `--auth` provider. |
-| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers`, `--auth-identity-proof`, or an `--auth-oidc-*` or `--auth-saml-*` flag was given without `--auth`. |
+| `email requires at least one --auth-allow entry` | Add an allowlist entry. |
+| `email allows email addresses and @domain entries only` | Remove the `sub:` entries. |
+| `email requires an SMTP server` / `email smtp address must be host:port` | Pass `--auth-email-smtp-addr host:port` with a port from 1 to 65535. |
+| `email requires a sender address` / `email sender must be one ASCII email address` | Pass one sender address with `--auth-email-from`. |
+| `email smtp username and password are set together or not at all` | Set both `--auth-email-smtp-username` and `AUTH_EMAIL_SMTP_PASSWORD`, or neither. |
+| `email settings require the email application auth provider` | An `--auth-email-*` flag was given together with another `--auth` provider. |
+| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers`, `--auth-identity-proof`, or an `--auth-oidc-*`, `--auth-saml-*` or `--auth-email-*` flag was given without `--auth`. |
 | `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers` | Add `--auth-identity-headers`, or drop the proof. |
 | `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least 16 characters of visible ASCII without spaces` | Generate the value with `openssl rand -hex 32` as above. |
 | `HTTP tunnel cannot be combined with TCP or UDP` | Remove `--tcp` / `--udp`, or drop sign-in. |
 | `application auth cannot be combined with relay cache` | Remove `--cache`, or drop sign-in. |
 | "This account is not allowed" comes back on Sign in again | The browser is still signed in to the provider with the refused account, and the provider lets it straight back in. Sign in again asks the provider for its account chooser, so pick another account there, or sign out of the provider first. |
 | The provider reports a redirect URI mismatch | No callback is registered for the host the visitor opened. Register `https://<host>/_portal/auth/callback` for that exact host too: the short and the address-bound host differ, and so does each relay's. |
-| `application auth provider is not usable` in the log | The OIDC issuer or the SAML metadata source is wrong or unreachable from this machine. |
+| `application auth provider is not usable` in the log | The OIDC issuer or the SAML metadata source is wrong or unreachable from this machine, or the tunnel could not sign in to the SMTP server: a wrong address, username or password, or a server without STARTTLS (`smtp server does not offer STARTTLS`). Use port 465 or a server that offers STARTTLS. |
+| `email login link not sent` in the log | The SMTP server refused the mail, for example a sender the account cannot send from, or the server could not be reached. The visitor saw the same answer as for a sent link. |
 | A SAML login ends on "Sign-in could not be completed" | The response failed a check: the entity ID or ACS address registered at the provider does not match this host, the provider encrypts assertions, signs nothing, or the login started at the provider's app list. Compare the provider's settings with `https://<host>/_portal/auth/saml/metadata`. |

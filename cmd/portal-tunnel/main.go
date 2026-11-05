@@ -99,8 +99,8 @@ func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlag
 	utils.StringFlag(fs, &cfg.Owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &cfg.Thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &cfg.Hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &cfg.Provider, "auth", "", "Protect HTTP application access with siwe, credential, oidc, or saml authentication")
-	utils.RepeatedStringFlag(fs, &cfg.AllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, or verified email, @domain, or sub:<subject> for oidc and saml); repeat to allow multiple principals (empty allows any valid principal, except oidc and saml, which require at least one entry)")
+	utils.StringFlag(fs, &cfg.Provider, "auth", "", "Protect HTTP application access with siwe, credential, oidc, saml, or email authentication")
+	utils.RepeatedStringFlag(fs, &cfg.AllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, verified email, @domain, or sub:<subject> for oidc and saml, or email or @domain for email); repeat to allow multiple principals (empty allows any valid principal, except oidc, saml, and email, which require at least one entry)")
 	utils.BoolFlag(fs, &cfg.IdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlagEnv(fs, &cfg.IdentityProof, "auth-identity-proof", "", "Secret sent as X-Portal-Proof with the identity headers so the upstream can verify they came from Portal (at least 16 visible ASCII characters; requires --auth-identity-headers). Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_IDENTITY_PROOF")
 	utils.StringFlagEnv(fs, &cfg.OIDCIssuerURL, "auth-oidc-issuer", "", "OIDC issuer URL for --auth oidc", "AUTH_OIDC_ISSUER")
@@ -110,6 +110,10 @@ func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlag
 	utils.StringFlagEnv(fs, &cfg.SAMLMetadataFile, "auth-saml-metadata-file", "", "SAML identity provider metadata file for --auth saml, for an identity provider that publishes no metadata URL", "AUTH_SAML_METADATA_FILE")
 	utils.StringFlagEnv(fs, &cfg.SAMLEntityID, "auth-saml-entity-id", "", "SAML service provider entity ID for --auth saml (default https://<host>/_portal/auth/saml/metadata)", "AUTH_SAML_ENTITY_ID")
 	utils.StringFlagEnv(fs, &cfg.SAMLSubjectAttribute, "auth-saml-subject-attribute", "", "SAML attribute that names the visitor for --auth saml, such as email (default: the NameID)", "AUTH_SAML_SUBJECT_ATTRIBUTE")
+	utils.StringFlagEnv(fs, &cfg.EmailSMTPAddr, "auth-email-smtp-addr", "", "SMTP server host:port that sends the login links of --auth email (port 465 uses TLS; any other port requires STARTTLS, except on a loopback host)", "AUTH_EMAIL_SMTP_ADDR")
+	utils.StringFlagEnv(fs, &cfg.EmailSMTPUsername, "auth-email-smtp-username", "", "Optional SMTP username for --auth email; requires --auth-email-smtp-password", "AUTH_EMAIL_SMTP_USERNAME")
+	utils.StringFlagEnv(fs, &cfg.EmailSMTPPassword, "auth-email-smtp-password", "", "SMTP password for --auth email. Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_EMAIL_SMTP_PASSWORD")
+	utils.StringFlagEnv(fs, &cfg.EmailFrom, "auth-email-from", "", "Fixed sender address of the login links of --auth email, such as \"Portal <login@example.com>\"", "AUTH_EMAIL_FROM")
 	utils.StringFlag(fs, &cfg.PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	utils.BoolFlag(fs, &cfg.Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
 	utils.StringFlag(fs, &cfg.Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, casper:casper-test, and nano:mainnet")
@@ -237,14 +241,15 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 	if flags.cache {
 		cfg.Cache = &tunnel.CacheConfig{TTL: flags.cacheTTL}
 	}
-	// AUTH_OIDC_* and AUTH_SAML_* may be exported for one service, so without
-	// --auth oidc or --auth saml only an --auth-oidc-* or --auth-saml-* flag
-	// given on the command line counts. The same holds for AUTH_IDENTITY_PROOF
-	// without --auth-identity-headers.
-	oidcFlagGiven, samlFlagGiven, proofFlagGiven := false, false, false
+	// AUTH_OIDC_*, AUTH_SAML_* and AUTH_EMAIL_* may be exported for one
+	// service, so without --auth oidc, saml or email only an --auth-oidc-*,
+	// --auth-saml-* or --auth-email-* flag given on the command line counts. The
+	// same holds for AUTH_IDENTITY_PROOF without --auth-identity-headers.
+	oidcFlagGiven, samlFlagGiven, emailFlagGiven, proofFlagGiven := false, false, false, false
 	fs.Visit(func(f *flag.Flag) {
 		oidcFlagGiven = oidcFlagGiven || strings.HasPrefix(f.Name, "auth-oidc-")
 		samlFlagGiven = samlFlagGiven || strings.HasPrefix(f.Name, "auth-saml-")
+		emailFlagGiven = emailFlagGiven || strings.HasPrefix(f.Name, "auth-email-")
 		proofFlagGiven = proofFlagGiven || f.Name == "auth-identity-proof"
 	})
 	provider, _ := gateway.NormalizeApplicationAuthProvider(cfg.Provider)
@@ -253,6 +258,9 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 	}
 	if provider != gateway.ApplicationAuthProviderSAML && !samlFlagGiven {
 		cfg.SAMLConfig = gateway.SAMLConfig{}
+	}
+	if provider != gateway.ApplicationAuthProviderEmail && !emailFlagGiven {
+		cfg.EmailConfig = gateway.EmailConfig{}
 	}
 	if !cfg.IdentityHeaders && !proofFlagGiven {
 		cfg.IdentityProof = ""
@@ -449,6 +457,7 @@ func printRootUsage(w io.Writer) {
 			"portal expose 3000 --auth credential",
 			"portal expose 3000 --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id <id> --auth-allow alice@example.com",
 			"portal expose 3000 --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-allow @example.com",
+			"AUTH_EMAIL_SMTP_PASSWORD=<app password> portal expose 3000 --auth email --auth-email-smtp-addr smtp.gmail.com:587 --auth-email-smtp-username me@gmail.com --auth-email-from me@gmail.com --auth-allow alice@example.com",
 			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",

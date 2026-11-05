@@ -1,6 +1,6 @@
 ---
 title: Application Access Authentication
-description: Let only chosen people open a tunnel, with Portal credential links, an Ethereum wallet, OpenID Connect, or SAML 2.0 sign-in.
+description: Let only chosen people open a tunnel, with Portal credential links, an Ethereum wallet, OpenID Connect, SAML 2.0, or email link sign-in.
 ---
 
 # Application Access Authentication
@@ -18,6 +18,7 @@ routed path. Pick one method:
 | People who own an Ethereum wallet | [`--auth siwe`](#siwe-application-access) | A browser wallet | Nothing |
 | People who sign in with Google, Microsoft, Keycloak, GitLab or another OpenID Connect provider | [`--auth oidc`](#openid-connect-oidc) | An account at that provider | An OAuth client registered at the provider |
 | People who sign in at a SAML identity provider such as Okta, Entra ID, ADFS, Keycloak or Shibboleth | [`--auth saml`](#saml-20) | An account at that provider | A SAML application registered at the provider |
+| People you know by email address | [`--auth email`](#email-links) | A mailbox | An SMTP account, such as a mailbox app password or a transactional mail service |
 
 [Check that sign-in is on](#check-that-sign-in-is-on) once the tunnel runs. An AI
 coding agent that follows the `portal-expose` skill reads the same steps in
@@ -101,7 +102,7 @@ are not used for application access.
 
 Inbound `X-Portal-User`, `X-Portal-Auth`, and `X-Portal-Proof` headers are always removed. Add
 `--auth-identity-headers` to inject the verified subject and provider (`siwe`,
-`credential`, `oidc`, or `saml`) after login. Upstreams must only trust these headers when they cannot be
+`credential`, `oidc`, `saml`, or `email`) after login. Upstreams must only trust these headers when they cannot be
 reached except through this local Portal proxy.
 
 ### Verifying the identity headers
@@ -287,6 +288,109 @@ to the metadata source, the entity ID and the subject attribute: a change to one
 of them signs every visitor out. With `--auth-identity-headers`,
 `X-Portal-User` carries the email or the `sub:` subject, and `X-Portal-Auth`
 carries `saml`.
+
+## Email links
+
+Use `--auth email` to sign visitors in with a one-time link that Portal sends
+by email. A visitor enters an email address on the sign-in page. If the address
+is on the allowlist, Portal sends a link to it through your own SMTP account.
+The link creates the same 24-hour session as the other methods. You need no
+identity provider, only an SMTP account, for example a mailbox with an app
+password or a transactional mail service. The SMTP settings and the password
+stay on your machine. The relay never sees them.
+
+```bash
+# AUTH_EMAIL_SMTP_PASSWORD is set in this shell first; see the prompt below
+portal expose 3000 \
+  --name myapp \
+  --auth email \
+  --auth-email-smtp-addr smtp.gmail.com:587 \
+  --auth-email-smtp-username you@gmail.com \
+  --auth-email-from you@gmail.com \
+  --auth-allow alice@example.com \
+  --auth-allow @example.com
+```
+
+### Set up the SMTP account
+
+1. Find the submission server of your mail provider as `host:port`, for example `smtp.gmail.com:587`. Set it with `--auth-email-smtp-addr`.
+2. Create an app password or an SMTP credential at the provider. Set the username with `--auth-email-smtp-username` and the password with `AUTH_EMAIL_SMTP_PASSWORD`. Leave both empty only for a server that needs no login.
+3. Set the sender with `--auth-email-from`. Use an address that your SMTP account can send from. You can add a display name, for example `"Portal <login@example.com>"`.
+
+Every link comes from this one sender. No visitor input can change the sender,
+the subject or the text of the mail.
+
+Portal picks the transport from the port. Port 465 uses TLS from the start. On
+any other port, the server must offer STARTTLS, and Portal refuses to send the
+password without it. Only a server on a loopback address, such as a local mail
+relay on `127.0.0.1:25`, can receive plaintext.
+
+Pass the password as `AUTH_EMAIL_SMTP_PASSWORD`, as with the OIDC client
+secret, so that it stays out of the process list. Read it at a prompt to keep it
+out of the shell history. Run these lines in the same shell session that then
+starts `portal expose`.
+
+Linux and macOS (bash, zsh):
+
+```bash
+printf 'SMTP password: '; stty -echo; read -r AUTH_EMAIL_SMTP_PASSWORD; stty echo; echo; export AUTH_EMAIL_SMTP_PASSWORD
+```
+
+Windows PowerShell:
+
+```powershell
+$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_EMAIL_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+```
+
+When the tunnel starts, Portal signs in to the SMTP server once and sends no
+mail. If that fails, Portal logs `application auth provider is not usable`, and
+the agent shows the error as the provider check. The tunnel keeps running.
+
+### Who may sign in with email
+
+`--auth-allow` is required with `--auth email`. Without a list, anyone could
+make the tunnel send mail to any address, so Portal refuses to start. An entry
+is an email address, or an `@example.com` domain that matches that exact domain
+only, not its subdomains. A mailbox has no other account ID, so Portal refuses
+`sub:` entries. Entries are compared in lowercase and must be ASCII, as with
+OIDC.
+
+The sign-in page gives the same answer for every well-formed address: an
+allowed address, an address that is not allowed, and an address over a limit.
+Portal sends the mail after it answers, so the time of the answer shows nothing
+either. For the same reason, a visitor never sees an SMTP error. A failed send
+shows only in the tunnel log, as `email login link not sent`, and a wrong SMTP
+setting shows in the startup check.
+
+One address gets at most one link per minute and five links per hour. The
+tunnel sends at most 50 links per hour in total. These limits keep a public
+address from flooding an allowed mailbox or using up the quota of your SMTP
+account.
+
+### The link
+
+The link opens the sign-in page with the token after `#`:
+`https://<tunnel-host>/_portal/auth/login#email_token=...`. A browser does not
+send the part after `#` to a server, so a mail scanner or a link preview that
+opens the link cannot use the token. The sign-in page sends the token to Portal.
+
+The token holds 256 random bits. Portal keeps only its SHA-256 hash in memory,
+with the address and the host. A link works once, for 10 minutes, and only on
+the host that it was sent for. A restart of the tunnel cancels every link that
+was not used. The visitor then asks for a new link.
+
+Portal sends a link only for a host where the tunnel is published now: the
+identity-bound URL of a relay, or the short URL while that relay holds the
+name. Portal refuses a request for any other host with `403`. This keeps a
+forged `Host` header from putting another host into the link.
+
+The link is not bound to the browser that asked for it. A visitor can ask on a
+computer and open the mail on a phone. Anyone who can read the mail can use the
+link once, so the link is as safe as the mailbox.
+
+Portal checks `--auth-allow` again when the link is used and on every request,
+so a removed entry ends its sessions at once. With `--auth-identity-headers`,
+`X-Portal-User` carries the email address, and `X-Portal-Auth` carries `email`.
 
 ## Check That Sign-In Is On
 

@@ -3,7 +3,9 @@ package gateway
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -14,22 +16,28 @@ import (
 )
 
 var (
-	errIdentityProofAuthIdentityProofAuth     = errors.New("identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers")
-	errOIDCSettingsRequireOIDCApplicationAuth = errors.New("oidc settings require the oidc application auth provider")
-	errOIDCRequiresLeastOneAuthAllow          = errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
-	errOIDCClientIDIsRequired                 = errors.New("oidc client id is required")
-	errSAMLSettingsRequireSAMLApplicationAuth = errors.New("saml settings require the saml application auth provider")
-	errSAMLRequiresLeastOneAuthAllow          = errors.New("saml requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
-	errSAMLMetadataIsRequired                 = errors.New("saml requires identity provider metadata: --auth-saml-metadata-url or --auth-saml-metadata-file")
-	errSAMLMetadataSourcesConflict            = errors.New("saml metadata comes from --auth-saml-metadata-url or --auth-saml-metadata-file, not both")
-	errTunnelIdentityIsRequired               = errors.New("tunnel identity is required")
-	errApplicationCredentialExpiryMustFuture  = errors.New("application credential expiry must be in the future")
-	errApplicationCredentialIsRequired        = errors.New("application credential is required")
-	errApplicationAuthHostIsRequired          = errors.New("application auth host is required")
-	errApplicationAuthHostMustHTTPSURL        = errors.New("application auth host must be an HTTPS URL or hostname without a path")
-	errApplicationCredentialIsInvalid         = errors.New("application credential is invalid")
-	errApplicationCredentialInvalidOrExpired  = errors.New("application credential is invalid or expired")
-	errApplicationCredentialSubjectMust1256   = errors.New("application credential subject must be 1 to 256 printable characters")
+	errIdentityProofAuthIdentityProofAuth       = errors.New("identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers")
+	errOIDCSettingsRequireOIDCApplicationAuth   = errors.New("oidc settings require the oidc application auth provider")
+	errOIDCRequiresLeastOneAuthAllow            = errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+	errOIDCClientIDIsRequired                   = errors.New("oidc client id is required")
+	errSAMLSettingsRequireSAMLApplicationAuth   = errors.New("saml settings require the saml application auth provider")
+	errSAMLRequiresLeastOneAuthAllow            = errors.New("saml requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+	errSAMLMetadataIsRequired                   = errors.New("saml requires identity provider metadata: --auth-saml-metadata-url or --auth-saml-metadata-file")
+	errSAMLMetadataSourcesConflict              = errors.New("saml metadata comes from --auth-saml-metadata-url or --auth-saml-metadata-file, not both")
+	errEmailSettingsRequireEmailApplicationAuth = errors.New("email settings require the email application auth provider")
+	errEmailRequiresLeastOneAuthAllow           = errors.New("email requires at least one --auth-allow entry: an email address or an @domain")
+	errEmailAllowsNoSubjectEntries              = errors.New("email allows email addresses and @domain entries only, not sub:<subject>")
+	errEmailSMTPAddrIsRequired                  = errors.New("email requires an SMTP server: --auth-email-smtp-addr host:port")
+	errEmailFromIsRequired                      = errors.New("email requires a sender address: --auth-email-from")
+	errEmailSMTPCredentialsArePaired            = errors.New("email smtp username and password are set together or not at all")
+	errTunnelIdentityIsRequired                 = errors.New("tunnel identity is required")
+	errApplicationCredentialExpiryMustFuture    = errors.New("application credential expiry must be in the future")
+	errApplicationCredentialIsRequired          = errors.New("application credential is required")
+	errApplicationAuthHostIsRequired            = errors.New("application auth host is required")
+	errApplicationAuthHostMustHTTPSURL          = errors.New("application auth host must be an HTTPS URL or hostname without a path")
+	errApplicationCredentialIsInvalid           = errors.New("application credential is invalid")
+	errApplicationCredentialInvalidOrExpired    = errors.New("application credential is invalid or expired")
+	errApplicationCredentialSubjectMust1256     = errors.New("application credential subject must be 1 to 256 printable characters")
 )
 
 const (
@@ -37,6 +45,7 @@ const (
 	ApplicationAuthProviderCredential = "credential"
 	ApplicationAuthProviderOIDC       = "oidc"
 	ApplicationAuthProviderSAML       = "saml"
+	ApplicationAuthProviderEmail      = "email"
 
 	applicationCredentialPrefix  = "pcred_"
 	applicationCredentialVersion = 1
@@ -62,6 +71,8 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 		return ApplicationAuthProviderOIDC, nil
 	case ApplicationAuthProviderSAML:
 		return ApplicationAuthProviderSAML, nil
+	case ApplicationAuthProviderEmail:
+		return ApplicationAuthProviderEmail, nil
 	default:
 		return "", fmt.Errorf("unsupported application auth provider %q", provider)
 	}
@@ -70,8 +81,8 @@ func NormalizeApplicationAuthProvider(provider string) (string, error) {
 // applicationAuthSettings is an ApplicationAuthConfig after validation and
 // normalization. ValidateApplicationAuthConfig and NewApplicationAuth both get
 // it from resolveApplicationAuthConfig, so what validation accepts is exactly
-// what the gate is built from. It holds the identity proof and the OIDC client
-// secret, so it must not be formatted or logged.
+// what the gate is built from. It holds the identity proof, the OIDC client
+// secret and the SMTP password, so it must not be formatted or logged.
 type applicationAuthSettings struct {
 	provider string
 	// allowed holds the normalized principals; empty means any valid principal.
@@ -89,11 +100,17 @@ type applicationAuthSettings struct {
 	samlMetadataFile     string
 	samlEntityID         string
 	samlSubjectAttribute string
+	// The email fields are set only for the email provider. The SMTP username
+	// and password are both set or both empty.
+	emailSMTPAddr     string
+	emailSMTPUsername string
+	emailSMTPPassword string
+	emailFrom         mail.Address
 }
 
 // ValidateApplicationAuthConfig validates the complete tunnel-local
-// application authentication configuration, including provider-specific OIDC
-// and SAML fields and principal allowlists.
+// application authentication configuration, including provider-specific OIDC,
+// SAML and email fields and principal allowlists.
 func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
 	_, err := resolveApplicationAuthConfig(cfg)
 	return err
@@ -103,7 +120,8 @@ func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
 const minIdentityProofLength = 16
 
 // resolveApplicationAuthConfig is the one place that validates and normalizes
-// the provider, the allowlist, the identity proof and the OIDC and SAML settings.
+// the provider, the allowlist, the identity proof and the OIDC, SAML and email
+// settings.
 func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSettings, error) {
 	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
 	if err != nil {
@@ -134,13 +152,21 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	metadataFile := strings.TrimSpace(cfg.SAMLMetadataFile)
 	entityID := strings.TrimSpace(cfg.SAMLEntityID)
 	subjectAttribute := strings.TrimSpace(cfg.SAMLSubjectAttribute)
+	smtpAddr := strings.TrimSpace(cfg.EmailSMTPAddr)
+	smtpUsername := strings.TrimSpace(cfg.EmailSMTPUsername)
+	smtpPassword := strings.TrimSpace(cfg.EmailSMTPPassword)
+	from := strings.TrimSpace(cfg.EmailFrom)
 	hasOIDCSettings := issuer != "" || clientID != "" || clientSecret != ""
 	hasSAMLSettings := metadataURL != "" || metadataFile != "" || entityID != "" || subjectAttribute != ""
+	hasEmailSettings := smtpAddr != "" || smtpUsername != "" || smtpPassword != "" || from != ""
 	if hasOIDCSettings && provider != ApplicationAuthProviderOIDC {
 		return applicationAuthSettings{}, errOIDCSettingsRequireOIDCApplicationAuth
 	}
 	if hasSAMLSettings && provider != ApplicationAuthProviderSAML {
 		return applicationAuthSettings{}, errSAMLSettingsRequireSAMLApplicationAuth
+	}
+	if hasEmailSettings && provider != ApplicationAuthProviderEmail {
+		return applicationAuthSettings{}, errEmailSettingsRequireEmailApplicationAuth
 	}
 	settings := applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof}
 	switch provider {
@@ -181,14 +207,36 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 			return applicationAuthSettings{}, err
 		}
 		settings.samlEntityID, settings.samlSubjectAttribute = entityID, subjectAttribute
+	case ApplicationAuthProviderEmail:
+		// Without an allowlist, anyone could make the tunnel mail any address.
+		if len(allowed) == 0 {
+			return applicationAuthSettings{}, errEmailRequiresLeastOneAuthAllow
+		}
+		if smtpAddr == "" {
+			return applicationAuthSettings{}, errEmailSMTPAddrIsRequired
+		}
+		if err := validateEmailSMTPAddr(smtpAddr); err != nil {
+			return applicationAuthSettings{}, err
+		}
+		if from == "" {
+			return applicationAuthSettings{}, errEmailFromIsRequired
+		}
+		if settings.emailFrom, err = parseEmailFrom(from); err != nil {
+			return applicationAuthSettings{}, err
+		}
+		if (smtpUsername == "") != (smtpPassword == "") {
+			return applicationAuthSettings{}, errEmailSMTPCredentialsArePaired
+		}
+		settings.emailSMTPAddr, settings.emailSMTPUsername, settings.emailSMTPPassword = smtpAddr, smtpUsername, smtpPassword
 	}
 	return settings, nil
 }
 
 // NormalizeApplicationAuthAllowed validates and normalizes the provider-scoped
 // principal allowlist (`--auth-allow` / `auth_allowed_wallets`): Ethereum
-// addresses for `siwe`, credential subjects for `credential`, and emails or
-// subjects for `oidc` and `saml`.
+// addresses for `siwe`, credential subjects for `credential`, emails or
+// subjects for `oidc` and `saml`, and emails for `email`. The email provider
+// knows no subject but the address, so it refuses `sub:` entries.
 func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string, error) {
 	provider, err := NormalizeApplicationAuthProvider(provider)
 	if err != nil {
@@ -201,6 +249,12 @@ func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string
 		return NormalizeApplicationAuthSubjects(values)
 	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML:
 		return NormalizeApplicationAuthProviderPrincipals(values)
+	case ApplicationAuthProviderEmail:
+		allowed, err := NormalizeApplicationAuthProviderPrincipals(values)
+		if err == nil && slices.ContainsFunc(allowed, func(principal string) bool { return strings.HasPrefix(principal, subjectPrincipalPrefix) }) {
+			return nil, errEmailAllowsNoSubjectEntries
+		}
+		return allowed, err
 	default:
 		return nil, fmt.Errorf("unsupported application auth provider %q", provider)
 	}
