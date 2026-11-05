@@ -76,6 +76,14 @@ background; a runtime overlay failure leaves public ingress and direct reverse
 transport running. See [the overlay networking concepts](/concepts#ivnp-backed-overlay-networking)
 and [the architecture](/architecture#ivnp-backed-overlay-networking).
 
+## Optional Observability
+
+The [observability Compose overlay](https://github.com/gosuda/portal-tunnel/blob/main/deploy/observability/README.md)
+adds Prometheus and Grafana without changing the base deployment. It scrapes
+the authenticated `/api/admin/metrics` route. The dashboard follows the current
+aggregate metrics contract; transport-specific and application traffic
+panels require additional relay statistics.
+
 ## Custom Community Frontend
 
 Portal serves the official embedded SPA when `PORTAL_FRONTEND_DIR` is empty.

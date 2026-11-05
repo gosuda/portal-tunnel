@@ -1,0 +1,38 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    profiles: [observability]
+    network_mode: service:portal
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    secrets:
+      - portal_admin_token
+    depends_on:
+      portal:
+        condition: service_started
+        restart: true
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.3.0
+    profiles: [observability]
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD for the observability stack}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+secrets:
+  portal_admin_token:
+    file: ./deploy/observability/admin-token
+
+volumes:
+  prometheus-data:
+  grafana-data:
