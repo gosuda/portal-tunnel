@@ -894,8 +894,8 @@ function EmailSetup({
             The host and port of your mail provider's submission server, such
             as a mailbox with an app password or a transactional mail service.
             Port 465 starts with TLS. Any other port must offer STARTTLS, and
-            only a server on this computer (a loopback address) may run without
-            TLS.
+            only a server on this computer at localhost, 127.0.0.1 or ::1 may
+            run without TLS.
           </p>
         </div>
         <div className="space-y-1.5">
@@ -961,7 +961,10 @@ function EmailSetup({
       <p className={s.help}>
         The sign-in page answers every address the same way, so it does not
         show who is on the list. One address gets at most one link per minute
-        and five per hour, and the tunnel sends at most fifty per hour. A link
+        and five per hour. The addresses that only an @domain entry allows
+        share fifty links per hour, so made-up addresses in a domain can use
+        that budget up for an hour; list addresses exactly where that matters.
+        A link
         works once, for 10 minutes; restarting the tunnel cancels the links
         not used yet. A visitor is not told when a mail fails: check the tunnel
         log.

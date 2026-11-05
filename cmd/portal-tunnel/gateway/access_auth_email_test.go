@@ -388,7 +388,7 @@ func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
 	now := time.Now().UTC()
 
-	token := e.issue("alice@example.com", emailTestHost, "/next", now)
+	token := e.issue("alice@example.com", true, emailTestHost, "/next", now)
 	if email, next, ok := e.redeem(token, emailTestHost, now.Add(emailLinkTTL-time.Second)); !ok || email != "alice@example.com" || next != "/next" {
 		t.Fatalf("redeem = %q, %q, %v", email, next, ok)
 	}
@@ -396,12 +396,12 @@ func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 		t.Fatal("a used link worked again")
 	}
 
-	token = e.issue("bob@example.com", emailTestHost, "/", now)
+	token = e.issue("bob@example.com", true, emailTestHost, "/", now)
 	if _, _, ok := e.redeem(token, emailTestHost, now.Add(emailLinkTTL)); ok {
 		t.Fatal("an expired link worked")
 	}
 
-	token = e.issue("carol@example.com", emailTestHost, "/", now)
+	token = e.issue("carol@example.com", true, emailTestHost, "/", now)
 	if _, _, ok := e.redeem(token, "other.example", now); ok {
 		t.Fatal("a link worked at another host")
 	}
@@ -413,16 +413,18 @@ func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 	}
 }
 
-// One address gets one link per minute and five per hour, and the tunnel sends
-// at most fifty per hour.
+// One address gets one link per minute and five per hour. The addresses that
+// only an @domain entry allows share fifty links per hour, and a flood of them
+// does not lock out an exactly listed address.
 func TestEmailSendLimits(t *testing.T) {
 	t.Parallel()
 
 	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
 	start := time.Now().UTC()
-	issue := func(email string, at time.Duration) bool {
-		return e.issue(email, emailTestHost, "/", start.Add(at)) != ""
+	issueAs := func(email string, listed bool, at time.Duration) bool {
+		return e.issue(email, listed, emailTestHost, "/", start.Add(at)) != ""
 	}
+	issue := func(email string, at time.Duration) bool { return issueAs(email, true, at) }
 	if !issue("alice@example.com", 0) {
 		t.Fatal("the first link was refused")
 	}
@@ -442,16 +444,44 @@ func TestEmailSendLimits(t *testing.T) {
 	}
 
 	e = newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
-	for i := range emailHourlyLimit {
-		if !issue(fmt.Sprintf("user%d@example.com", i), time.Duration(i)*time.Second) {
-			t.Fatalf("link %d was refused", i+1)
+	for i := range emailDomainHourlyLimit {
+		if !issueAs(fmt.Sprintf("user%d@team.example", i), false, time.Duration(i)*time.Second) {
+			t.Fatalf("domain link %d was refused", i+1)
 		}
 	}
-	if issue("late@example.com", time.Minute) {
-		t.Fatal("a link over the hourly limit of the tunnel was sent")
+	if issueAs("late@team.example", false, time.Minute) {
+		t.Fatal("a domain link over the hourly domain limit was sent")
 	}
-	if !issue("late@example.com", time.Hour+time.Second) {
-		t.Fatal("a link after the hour was refused")
+	if !issue("alice@example.com", time.Minute) {
+		t.Fatal("a flood of domain addresses locked out an exactly listed address")
+	}
+	if !issueAs("late@team.example", false, time.Hour+time.Second) {
+		t.Fatal("a domain link after the hour was refused")
+	}
+}
+
+// A send dropped because every send slot is busy spends no limit and leaves
+// no link, so the visitor's retry can still get one.
+func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
+	t.Parallel()
+
+	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
+	for range emailSendSlots {
+		e.sendSlots <- struct{}{}
+	}
+	now := time.Now().UTC()
+	e.send("alice@example.com", true, emailTestHost, "/", now)
+	e.mu.Lock()
+	links, sent := len(e.links), len(e.sent)
+	e.mu.Unlock()
+	if links != 0 || sent != 0 {
+		t.Fatalf("a dropped send left %d links and %d recorded sends", links, sent)
+	}
+	for range emailSendSlots {
+		<-e.sendSlots
+	}
+	if e.issue("alice@example.com", true, emailTestHost, "/", now) == "" {
+		t.Fatal("the dropped send spent the cooldown of the address")
 	}
 }
 
@@ -482,6 +512,25 @@ func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 		gate.ServeHTTP(rec, req)
 		if rec.Code != tc.want {
 			t.Fatalf("allowlist %q: status = %d; want %d", tc.allowed, rec.Code, tc.want)
+		}
+	}
+
+	// A session is bound to the mail account that mailed its link, so a new
+	// SMTP server, username or sender ends it.
+	for name, change := range map[string]func(*ApplicationAuthConfig){
+		"server":   func(c *ApplicationAuthConfig) { c.EmailSMTPAddr = "127.0.0.1:587" },
+		"username": func(c *ApplicationAuthConfig) { c.EmailSMTPUsername = "other" },
+		"sender":   func(c *ApplicationAuthConfig) { c.EmailFrom = "other@portal.example" },
+	} {
+		cfg := emailTestConfig("127.0.0.1:25", "alice@example.com")
+		change(&cfg)
+		gate := newEmailTestGate(t, cfg, http.NotFoundHandler())
+		req := httptest.NewRequest(http.MethodGet, "https://"+emailTestHost+"/", nil)
+		req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: session})
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("new %s: status = %d; want the session refused", name, rec.Code)
 		}
 	}
 }
@@ -557,20 +606,23 @@ func TestCheckEmailProviderSignsInWithoutSending(t *testing.T) {
 	server.expectNoMore(t)
 }
 
-// Only a loopback SMTP server may be reached without TLS: any other server
-// must offer STARTTLS before the password is sent.
+// Only localhost, 127.0.0.1 and ::1, the names net/smtp sends a password to
+// without TLS, may be reached in plaintext: any other server must offer
+// STARTTLS before the password is sent.
 func TestEmailRefusesPlaintextToARemoteServer(t *testing.T) {
 	t.Parallel()
 
 	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
-	e := newEmailAuthenticator(applicationAuthSettings{
-		emailSMTPAddr:     server.addr,
-		emailSMTPUsername: emailTestUsername,
-		emailSMTPPassword: emailTestPassword,
-	}, nil)
-	// The server listens on a loopback address, but is named as a remote one.
-	e.smtpHost = "smtp.example"
-	if err := e.check(context.Background()); !errors.Is(err, errEmailSMTPOffersNoSTARTTLS) {
-		t.Fatalf("check = %v; want a STARTTLS refusal", err)
+	for _, name := range []string{"smtp.example", "127.0.0.2"} {
+		e := newEmailAuthenticator(applicationAuthSettings{
+			emailSMTPAddr:     server.addr,
+			emailSMTPUsername: emailTestUsername,
+			emailSMTPPassword: emailTestPassword,
+		}, nil)
+		// The server listens on 127.0.0.1, but is named as another host.
+		e.smtpHost = name
+		if err := e.check(context.Background()); !errors.Is(err, errEmailSMTPOffersNoSTARTTLS) {
+			t.Fatalf("check as %s = %v; want a STARTTLS refusal", name, err)
+		}
 	}
 }

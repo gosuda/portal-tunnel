@@ -322,8 +322,9 @@ the subject or the text of the mail.
 
 Portal picks the transport from the port. Port 465 uses TLS from the start. On
 any other port, the server must offer STARTTLS, and Portal refuses to send the
-password without it. Only a server on a loopback address, such as a local mail
-relay on `127.0.0.1:25`, can receive plaintext.
+password without it. Only a server at `localhost`, `127.0.0.1` or `::1`, such
+as a local mail relay on `127.0.0.1:25`, can receive plaintext. These are the
+names to which Go's SMTP client sends a password without TLS.
 
 Pass the password as `AUTH_EMAIL_SMTP_PASSWORD`, as with the OIDC client
 secret, so that it stays out of the process list. Read it at a prompt to keep it
@@ -362,10 +363,18 @@ either. For the same reason, a visitor never sees an SMTP error. A failed send
 shows only in the tunnel log, as `email login link not sent`, and a wrong SMTP
 setting shows in the startup check.
 
-One address gets at most one link per minute and five links per hour. The
-tunnel sends at most 50 links per hour in total. These limits keep a public
-address from flooding an allowed mailbox or using up the quota of your SMTP
-account.
+One address gets at most one link per minute and five links per hour. This
+limit keeps a public address from flooding an allowed mailbox. The addresses
+that only an `@domain` entry allows get at most 50 links per hour together,
+because their number has no bound. This limit protects the quota of your SMTP
+account. An address that you list exactly is outside this budget.
+
+Portal cannot tell visitors apart, because the relay does not pass on their IP
+addresses. So one visitor can use up the hourly budget of a domain with made-up
+addresses in that domain. Then the real addresses of that domain get no link
+for up to an hour, and their visitors see no error. The same requests also make
+your SMTP account send up to 50 mails per hour to addresses that may not exist.
+If this matters, list the addresses exactly instead of `@domain`.
 
 ### The link
 
@@ -389,7 +398,10 @@ computer and open the mail on a phone. Anyone who can read the mail can use the
 link once, so the link is as safe as the mailbox.
 
 Portal checks `--auth-allow` again when the link is used and on every request,
-so a removed entry ends its sessions at once. With `--auth-identity-headers`,
+so a removed entry ends its sessions at once. A session is also bound to the
+SMTP server, the SMTP username and the sender. If you change one of them, for
+example after the mail account was compromised, every email session ends. A
+new password alone does not end the sessions. With `--auth-identity-headers`,
 `X-Portal-User` carries the email address, and `X-Portal-Auth` carries `email`.
 
 ## Check That Sign-In Is On

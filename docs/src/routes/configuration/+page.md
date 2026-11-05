@@ -390,7 +390,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--auth-saml-metadata-file` | `AUTH_SAML_METADATA_FILE` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` |
 | `--auth-saml-entity-id` | `AUTH_SAML_ENTITY_ID` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` |
 | `--auth-saml-subject-attribute` | `AUTH_SAML_SUBJECT_ATTRIBUTE` | string | NameID | SAML attribute that names the visitor for `--auth saml` |
-| `--auth-email-smtp-addr` | `AUTH_EMAIL_SMTP_ADDR` | string | | SMTP server `host:port` for `--auth email`; port 465 uses TLS from the start, other ports must offer STARTTLS, and only a loopback host may use plaintext |
+| `--auth-email-smtp-addr` | `AUTH_EMAIL_SMTP_ADDR` | string | | SMTP server `host:port` for `--auth email`; port 465 uses TLS from the start, other ports must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext |
 | `--auth-email-smtp-username` | `AUTH_EMAIL_SMTP_USERNAME` | string | | SMTP username for `--auth email`; set together with the password |
 | `--auth-email-smtp-password` | `AUTH_EMAIL_SMTP_PASSWORD` | string | | SMTP password for `--auth email`; pass it by environment variable |
 | `--auth-email-from` | `AUTH_EMAIL_FROM` | string | | Fixed sender address of every login link for `--auth email` |

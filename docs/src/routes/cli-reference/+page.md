@@ -119,7 +119,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--auth-saml-metadata-file` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` (env: `AUTH_SAML_METADATA_FILE`) |
 | `--auth-saml-entity-id` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` (env: `AUTH_SAML_ENTITY_ID`) |
 | `--auth-saml-subject-attribute` | string | NameID | SAML attribute that names the visitor for `--auth saml`, such as `email` (env: `AUTH_SAML_SUBJECT_ATTRIBUTE`) |
-| `--auth-email-smtp-addr` | string | | SMTP server `host:port` that sends the login links for `--auth email`; port 465 uses TLS from the start, any other port must offer STARTTLS, and only a loopback host may use plaintext (env: `AUTH_EMAIL_SMTP_ADDR`) |
+| `--auth-email-smtp-addr` | string | | SMTP server `host:port` that sends the login links for `--auth email`; port 465 uses TLS from the start, any other port must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext (env: `AUTH_EMAIL_SMTP_ADDR`) |
 | `--auth-email-smtp-username` | string | | SMTP username for `--auth email`; set it together with the password, or leave both empty for a server that needs no login (env: `AUTH_EMAIL_SMTP_USERNAME`) |
 | `--auth-email-smtp-password` | string | | SMTP password for `--auth email`; pass it by environment variable, because process lists show arguments (env: `AUTH_EMAIL_SMTP_PASSWORD`) |
 | `--auth-email-from` | string | | The one sender address of every login link for `--auth email`, with an optional display name (env: `AUTH_EMAIL_FROM`) |

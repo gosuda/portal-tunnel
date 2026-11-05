@@ -212,8 +212,9 @@ type applicationAuthClaims struct {
 	Provider  string `json:"auth,omitempty"`
 	Host      string `json:"host"`
 	ExpiresAt int64  `json:"exp"`
-	// Binding names the OIDC issuer and client, or the SAML identity provider
-	// and service provider, that authenticated the visitor.
+	// Binding names the OIDC issuer and client, the SAML identity provider
+	// and service provider, or the SMTP account and sender of email, that
+	// authenticated the visitor.
 	Binding string `json:"bnd,omitempty"`
 }
 
@@ -1299,12 +1300,10 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, 
 	}
 	var subject string
 	switch provider {
-	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML:
+	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML, ApplicationAuthProviderEmail:
 		if binding := a.binding(); binding == "" || claims.Binding != binding {
 			return "", "", false
 		}
-		subject, err = normalizeProviderPrincipal(claims.Subject)
-	case ApplicationAuthProviderEmail:
 		subject, err = normalizeProviderPrincipal(claims.Subject)
 	default:
 		subject, err = normalizeApplicationAuthSubject(claims.Subject)
@@ -1350,14 +1349,17 @@ func (a *applicationAuth) issueSession(subject, provider, host string, expiresAt
 	return encodeSignedApplicationAuthJSON(a.signingKey, claims)
 }
 
-// binding is what every session of an identity provider carries: the digest
-// of the OIDC issuer and client, or of the SAML settings. Other providers have none.
+// binding is what every session of an identity provider or of email carries:
+// the digest of the OIDC issuer and client, of the SAML settings, or of the SMTP
+// account and sender. Other providers have none.
 func (a *applicationAuth) binding() string {
 	switch {
 	case a.oidc != nil:
 		return a.oidc.binding
 	case a.saml != nil:
 		return a.saml.binding
+	case a.email != nil:
+		return a.email.binding
 	default:
 		return ""
 	}
