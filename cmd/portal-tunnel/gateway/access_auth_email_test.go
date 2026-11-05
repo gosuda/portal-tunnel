@@ -217,8 +217,8 @@ func TestEmailLoginLinkCreatesSessionOnce(t *testing.T) {
 	if got := parsed.Header.Get("From"); got != `"Portal" <login@portal.example>` {
 		t.Fatalf("From = %q", got)
 	}
-	if got := parsed.Header.Get("To"); got != "alice@example.com" {
-		t.Fatalf("To = %q", got)
+	if _, ok := parsed.Header["To"]; ok || strings.Contains(strings.ToLower(message.data), "alice@example.com") {
+		t.Fatalf("the address the visitor typed is part of the mail:\n%s", message.data)
 	}
 	if !strings.Contains(message.data, "https://"+emailTestHost+applicationAuthLoginPath+"#email_token=") {
 		t.Fatalf("mail does not link to the login page of %s:\n%s", emailTestHost, message.data)
@@ -314,7 +314,7 @@ func TestEmailRequestRefusesHeaderInjection(t *testing.T) {
 	}
 	server.expectNoMore(t)
 
-	if _, err := emailLoginMessage(mail.Address{Address: emailTestSender}, "alice@example.com\r\nBcc: mallory@evil.example", emailTestHost, "token", time.Now()); !errors.Is(err, errEmailHeaderHasLineBreak) {
+	if _, err := emailLoginMessage(mail.Address{Address: emailTestSender}, emailTestHost+"\r\nBcc: mallory@evil.example", "token", time.Now()); !errors.Is(err, errEmailHeaderHasLineBreak) {
 		t.Fatalf("emailLoginMessage error = %v; want a line break refusal", err)
 	}
 }

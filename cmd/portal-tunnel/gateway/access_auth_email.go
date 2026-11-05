@@ -268,7 +268,7 @@ func (e *emailAuthenticator) send(email, host, next string, now time.Time) {
 		// The error comes from composing the mail, the SMTP server or the
 		// connection and never holds the password; the recipient stays out of
 		// the log.
-		message, err := emailLoginMessage(e.from, email, host, token, now)
+		message, err := emailLoginMessage(e.from, host, token, now)
 		if err == nil {
 			err = e.deliver(ctx, email, message)
 		}
@@ -367,13 +367,14 @@ func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client) error {
 // emailLoginMessage is the one mail the tunnel sends: fixed text, the host the
 // link is for, and the link. The token is in the fragment, as in a credential
 // redeem link, so a mail scanner or link preview that fetches the URL cannot
-// use it up; only the sign-in page posts it.
-func emailLoginMessage(from mail.Address, to, host, token string, now time.Time) ([]byte, error) {
+// use it up; only the sign-in page posts it. The recipient is named only in the
+// SMTP envelope, with no To header, so nothing a visitor typed is part of the
+// mail itself.
+func emailLoginMessage(from mail.Address, host, token string, now time.Time) ([]byte, error) {
 	_, fromDomain, _ := strings.Cut(from.Address, "@")
 	link := "https://" + host + applicationAuthLoginPath + "#email_token=" + token
 	headers := [][2]string{
 		{"From", from.String()},
-		{"To", to},
 		{"Subject", "Sign in to " + host},
 		{"Date", now.Format(time.RFC1123Z)},
 		{"Message-ID", "<" + rand.Text() + "@" + fromDomain + ">"},
