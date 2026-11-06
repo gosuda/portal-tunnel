@@ -222,7 +222,7 @@ portal expose 3000 --log-format json
 | Records | One structured JSON log record per line on **stdout**; filter by `"event":"relay_status"` |
 | Human output | Unchanged by default; `--log-format text` (default) keeps the human-readable console |
 | State ownership | Records are emitted from the same authoritative SDK status paths the human logs derive from |
-| Transitions | Records report readiness, readiness loss (`ready` → `connecting`), failures, and deselection; repeated unchanged statuses are omitted |
+| Transitions | Records report readiness, readiness loss (`ready` → `connecting`), the relay refusing the lease, failures, and deselection; repeated unchanged statuses are omitted |
 
 One ready record:
 
@@ -238,6 +238,7 @@ Fields on `event=relay_status` records:
 | `relay_url` | Relay API URL this status describes |
 | `state` | `connecting`, `ready`, or `failed` |
 | `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
+| `approval` | Present while the relay refuses this lease: `pending` (not approved yet) or `refused` (denied or banned). `state` is `connecting` and `public_url` is empty. Its absence does not mean approved |
 | `public_url` | Identity-bound canonical URL; usable only while `state` is `ready`, even if a retained lease keeps this field set while reconnecting |
 | `alias_url` | Short `<name>.<relay-domain>` URL without an Ethereum address; prefer this for sharing when present. Present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |
 | `deselected` | `true` on the removal notification for a relay that left the membership set; a previously advertised relay URL must be retracted |
@@ -249,6 +250,16 @@ snapshot should use the SDK's `Relays()`, not the lossy event stream.
 
 A `connecting` record retracts readiness until a subsequent `ready`
 record, and never reports an `alias_url`.
+
+On a `manual` relay, a waiting tunnel logs `waiting for relay approval` once,
+not on every retry, and needs no restart after approval:
+
+```json
+{"level":"warn","event":"relay_status","relay_url":"https://relay.example.com","state":"connecting","public_url":"","deselected":false,"approval":"pending","address":"0x...","time":"2026-01-01T00:00:00Z","message":"waiting for relay approval"}
+```
+
+Raw TCP and UDP tunnels log `raw transport endpoints allocated` once a reverse
+stream opens, so the line also means that the relay accepts the lease.
 
 ### Examples
 

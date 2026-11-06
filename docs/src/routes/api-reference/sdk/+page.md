@@ -284,6 +284,38 @@ The SDK keeps several ready reverse streams open. When an end user connects to
 the lease hostname, the relay claims one ready stream and bridges encrypted
 tenant bytes between the browser side and the SDK side.
 
+### Waiting for approval
+
+A relay reports its routing decision only as the answer to a reverse connect.
+`RegisterResponse` and `RenewResponse` carry no approval field.
+
+| Reverse connect answers | Meaning | `RelayStatus` |
+|-------------------------|---------|---------------|
+| `101` | lease may route | `State` is `ready`, `Approval` is empty |
+| `403 lease_rejected` | not approved yet, or approval was revoked | `State` is `connecting`, `Approval` is `pending` |
+| `403 lease_denied` | denied or banned | `State` is `connecting`, `Approval` is `refused` |
+
+The SDK retries every 3 seconds, so an approved lease becomes ready without a
+new registration. When a lease stops being routable, the relay closes its idle
+reverse streams, and the lease leaves `ready` at once.
+
+While `Approval` is set, `PublicURL`, `AliasURL`, `TCPAddr`, and `UDPAddr` are
+empty and `Active()` is false, because nothing routes. The lease still exists on
+the relay and renews normally.
+
+An empty `Approval` means that no refusal was reported. It never means approved.
+Show `Approval.Message()` to people: `waiting for relay approval` or
+`refused by relay`.
+
+| SDK and relay | While waiting | After a revoke |
+|---------------|---------------|----------------|
+| Old SDK, new relay | `connecting` | leaves `ready` for `connecting` |
+| New SDK, old relay | `pending`, also when denied | stays `ready`; an old relay does not report it |
+| New SDK, new relay | `pending` or `refused` | `pending` or `refused` |
+
+The browser SDK stays at `connecting`, because a failed WebSocket does not
+expose its status.
+
 <div id="browser-wasm-sdk-runtime"></div>
 
 ## Browser/WASM SDK Runtime

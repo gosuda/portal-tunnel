@@ -197,7 +197,8 @@ environment:
 ```
 
 A new tunnel then registers and appears in the admin dashboard, but no traffic
-reaches it until you approve it. The tunnel does not need to restart after
+reaches it until you approve it. Meanwhile, `portal expose` logs
+`waiting for relay approval`. The tunnel does not need to restart after
 approval.
 
 The setting applies on startup, and a mode saved in `policy.json` wins. The
