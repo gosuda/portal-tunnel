@@ -395,7 +395,7 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--auth-saml-subject-attribute` | `AUTH_SAML_SUBJECT_ATTRIBUTE` | string | NameID | SAML attribute that names the visitor for `--auth saml` |
 | `--auth-smtp-addr` | `AUTH_SMTP_ADDR` | string | | SMTP server `host:port` for `--auth email`; port 465 uses TLS from the start, other ports must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext |
 | `--auth-smtp-username` | `AUTH_SMTP_USERNAME` | string | | SMTP username for `--auth email`; set together with the password |
-| `--auth-smtp-password` | `AUTH_SMTP_PASSWORD` | string | | SMTP password for `--auth email`; pass it by environment variable |
+| `--auth-smtp-password` | `AUTH_SMTP_PASSWORD` | string | | SMTP password for `--auth email`, with spaces around it dropped; pass it by environment variable |
 | `--auth-smtp-from` | `AUTH_SMTP_FROM` | string | | Fixed sender address of every login link for `--auth email` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
 | `--auth-identity-proof` | `AUTH_IDENTITY_PROOF` | string | | Secret sent as `X-Portal-Proof` with the identity headers; at least 16 visible ASCII characters; requires `--auth-identity-headers`; set it by environment variable, not on the command line, because process lists show arguments |
