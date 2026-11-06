@@ -108,6 +108,14 @@ session local to the tunnel endpoint. The cookie is `Secure`, `HttpOnly`, and
 request, while preserving application-owned cookies; relay-issued lease tokens
 are not used for application access.
 
+A session works from the application's own origin. When a request carries a
+session cookie and an `Origin` of another origin, Portal answers `403` to a
+protocol upgrade, such as a WebSocket, and to any method other than `GET`,
+`HEAD`, or `OPTIONS`. A request without `Origin`, a request that presents a
+credential in `X-Portal-Access-Credential`, and a form post with `Origin: null`
+that a browser marks with `Sec-Fetch-Site: same-origin`, which a page with
+`Referrer-Policy: no-referrer` sends, are not affected.
+
 Inbound `X-Portal-User`, `X-Portal-Auth`, and `X-Portal-Proof` headers are always removed. Add
 `--auth-identity-headers` to inject the verified subject and provider (`siwe`,
 `credential`, `oidc`, `saml`, or `email`) after login. Upstreams must only trust these headers when they cannot be

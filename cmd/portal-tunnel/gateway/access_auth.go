@@ -662,6 +662,10 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			a.requireLogin(w, r)
 			return
 		}
+		if credential == "" && crossOriginWrite(r) {
+			a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+			return
+		}
 		stripApplicationAuthCookie(r)
 		if a.identityHeaders {
 			r.Header.Set(types.HeaderPortalUser, subject)
@@ -1452,6 +1456,29 @@ func (a *applicationAuth) requireLogin(w http.ResponseWriter, r *http.Request) {
 func sameOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	return strings.EqualFold(origin, "https://"+strings.TrimSpace(r.Host))
+}
+
+// crossOriginWrite reports a protocol upgrade or an unsafe method that a browser
+// sent from a page of another origin. A session is for the application's own
+// origin, so the gate refuses both. A request without Origin does not come from
+// such a page: browsers send Origin on both kinds. Sec-Fetch-Site settles the one
+// same-origin request whose Origin is null, a form post from a page with
+// Referrer-Policy: no-referrer. A page cannot set that header itself.
+func crossOriginWrite(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || sameOrigin(r) {
+		return false
+	}
+	upgrade := r.Header.Get("Upgrade") != ""
+	if origin == "null" && !upgrade && r.Header.Get("Sec-Fetch-Site") == "same-origin" {
+		return false
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return upgrade
+	default:
+		return true
+	}
 }
 
 func decodeApplicationAuthJSON(w http.ResponseWriter, r *http.Request, dst any) error {
