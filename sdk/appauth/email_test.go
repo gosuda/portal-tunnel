@@ -23,6 +23,9 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -775,7 +778,7 @@ func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 	t.Parallel()
 
 	issued := newEmailTestGate(t, emailTestConfig("127.0.0.1:25", "alice@example.com"), http.NotFoundHandler())
-	session, err := issued.issueSession("alice@example.com", ProviderEmail, emailTestHost, time.Now().Add(time.Hour))
+	session, err := issued.issueSession(Principal{Provider: ProviderEmail, Subject: "alice@example.com"}, emailTestHost, time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,5 +951,58 @@ func TestEmailRefusesPlaintextToARemoteServer(t *testing.T) {
 		if err := e.check(context.Background()); !errors.Is(err, errEmailSMTPOffersNoSTARTTLS) {
 			t.Fatalf("check as %s = %v; want a STARTTLS refusal", name, err)
 		}
+	}
+}
+
+func TestEmailPrincipalIsTheAddress(t *testing.T) {
+	t.Parallel()
+
+	gate := newEmailTestGate(t, emailTestConfig("127.0.0.1:25", "alice@example.com"), http.NotFoundHandler())
+	token := gate.email.issue("alice@example.com", true, emailTestHost, "/", time.Now().UTC())
+	<-gate.email.sendSlots
+	rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("redeem status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://"+emailTestHost+"/", nil)
+	req.AddCookie(rec.Result().Cookies()[0])
+	want := Principal{ProviderEmail, "alice@example.com", "alice@example.com"}
+	if got, ok := gate.authenticateSession(req); !ok || got != want {
+		t.Fatalf("principal = (%+v, %v); want %+v", got, ok, want)
+	}
+}
+
+// logLines hands each line the global logger writes to a channel.
+type logLines chan string
+
+func (l logLines) Write(line []byte) (int, error) {
+	l <- string(line)
+	return len(line), nil
+}
+
+// The one place the gate logs is a mail that was not sent, with the SMTP error. A
+// server that echoes what it was sent must not put the password in the log. Not
+// parallel: it replaces the global logger.
+func TestEmailFailureLogsNoSecret(t *testing.T) {
+	const secret = "smtp-password-that-must-stay-out-of-the-log"
+	lines := make(logLines, 8)
+	previous := log.Logger
+	log.Logger = zerolog.New(lines)
+	t.Cleanup(func() { log.Logger = previous })
+
+	server := newSMTPTestServer(t, emailTestUsername, "another-password")
+	cfg := emailTestConfig(server.addr, "alice@example.com")
+	cfg.SMTPPassword = secret
+	gate := newEmailTestGate(t, cfg, http.NotFoundHandler())
+	if rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"}); rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d; want 202", rec.Code)
+	}
+	select {
+	case line := <-lines:
+		if !strings.Contains(line, "email login link not sent") || strings.Contains(line, secret) {
+			t.Fatalf("log line = %s", line)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refused send was not logged")
 	}
 }

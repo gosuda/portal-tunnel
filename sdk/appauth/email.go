@@ -529,7 +529,7 @@ func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Reques
 		a.writeJSONError(w, http.StatusUnauthorized, errEmailLinkInvalidOrExpired.Error())
 		return
 	}
-	if err := a.setSession(w, email, ProviderEmail, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderEmail, Subject: email, Email: email}, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}

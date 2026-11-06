@@ -496,7 +496,7 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	if statement := assertion.AuthnStatement; statement != nil && statement.SessionNotOnOrAfter != nil {
 		lifetime = min(max(statement.SessionNotOnOrAfter.Sub(now), providerMinSessionTTL), applicationAuthSessionTTL)
 	}
-	if err := a.setSession(w, subject, ProviderSAML, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderSAML, Subject: subject, Email: providerEmail(value)}, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}

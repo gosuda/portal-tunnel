@@ -132,7 +132,7 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	})
 	handler := newApplicationAuthTestHandler(t, nil, false, next)
 	gate := handler.(*applicationAuth)
-	token, err := gate.issueSession(applicationAuthTestWallet(t, "2").Identity().Address, ProviderSIWE, "app.example", applicationAuthTestTime().Add(applicationAuthSessionTTL))
+	token, err := gate.issueSession(Principal{Provider: ProviderSIWE, Subject: applicationAuthTestWallet(t, "2").Identity().Address}, "app.example", applicationAuthTestTime().Add(applicationAuthSessionTTL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1315,14 +1315,14 @@ func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	if err := gate.setSession(rec, subject, ProviderOIDC, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
+	if err := gate.setSession(rec, Principal{Provider: ProviderOIDC, Subject: subject}, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
 	for _, c := range rec.Result().Cookies() {
 		req.AddCookie(c)
 	}
-	if got, _, ok := gate.authenticateSession(req); !ok || got != subject {
+	if got, ok := gate.authenticateSession(req); !ok || got.Subject != subject {
 		t.Fatalf("authenticateSession = (%q, %v); want the session to stay valid for %q", got, ok, subject)
 	}
 }
@@ -1355,7 +1355,7 @@ func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 
 	issuer := newGate(t, "https://idp.example", "portal-client", "secret")
 	rec := httptest.NewRecorder()
-	if err := issuer.setSession(rec, "alice@example.com", ProviderOIDC, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
+	if err := issuer.setSession(rec, Principal{Provider: ProviderOIDC, Subject: "alice@example.com"}, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	cookies := rec.Result().Cookies()
@@ -1376,7 +1376,7 @@ func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			gate := newGate(t, tt.issuer, tt.clientID, tt.clientSecret)
-			if _, _, ok := gate.authenticateSession(sessionRequest(cookies)); ok != tt.want {
+			if _, ok := gate.authenticateSession(sessionRequest(cookies)); ok != tt.want {
 				t.Fatalf("authenticateSession ok = %v; want %v", ok, tt.want)
 			}
 		})
@@ -1394,7 +1394,7 @@ func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 			t.Fatal(err)
 		}
 		cookie := &http.Cookie{Name: applicationAuthCookieName, Value: token}
-		if _, _, ok := issuer.authenticateSession(sessionRequest([]*http.Cookie{cookie})); ok {
+		if _, ok := issuer.authenticateSession(sessionRequest([]*http.Cookie{cookie})); ok {
 			t.Fatal("an OIDC session without an issuer and client binding was accepted")
 		}
 	})

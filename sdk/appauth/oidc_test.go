@@ -1254,3 +1254,37 @@ func TestCheckApplicationAuthProvider(t *testing.T) {
 		}
 	})
 }
+
+// A sub: entry decides who may sign in, not who the visitor is: the application
+// still learns the address the provider vouches for, and never an unverified one.
+func TestOIDCPrincipalCarriesTheVouchedEmail(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		allow    string
+		verified oidcEmailVerified
+		want     Principal
+	}{
+		{"email entry", "alice@example.com", true, Principal{ProviderOIDC, "alice@example.com", "alice@example.com"}},
+		{"sub entry with a verified email", "sub:user-123", true, Principal{ProviderOIDC, "sub:user-123", "alice@example.com"}},
+		{"sub entry with an unverified email", "sub:user-123", false, Principal{ProviderOIDC, "sub:user-123", ""}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newOIDCTestIdP(t, func(p *oidcTestIdP) {
+				p.mutate = func(c *oidcIDTokenClaims) { c.EmailVerified = tt.verified }
+			})
+			gate := newOIDCTestGate(t, idp, tt.allow)
+			rec := completeOIDCLogin(t, gate, idp)
+			assertOIDCCallback(t, rec, http.StatusSeeOther)
+			req := httptest.NewRequest(http.MethodGet, "https://app.example/", nil)
+			for _, cookie := range rec.Result().Cookies() {
+				req.AddCookie(cookie)
+			}
+			if got, ok := gate.authenticateSession(req); !ok || got != tt.want {
+				t.Fatalf("principal = (%+v, %v); want %+v", got, ok, tt.want)
+			}
+		})
+	}
+}

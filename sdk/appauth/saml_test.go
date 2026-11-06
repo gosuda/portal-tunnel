@@ -664,8 +664,8 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 			session := assertSAMLACS(t, rec, http.StatusSeeOther)
 			req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
 			req.AddCookie(session)
-			if got, provider, ok := gate.authenticateSession(req); !ok || got != tt.want || provider != ProviderSAML {
-				t.Fatalf("session = (%q, %q, %v); want %q from saml", got, provider, ok, tt.want)
+			if got, ok := gate.authenticateSession(req); !ok || got.Subject != tt.want || got.Provider != ProviderSAML {
+				t.Fatalf("session = (%+v, %v); want %q from saml", got, ok, tt.want)
 			}
 		})
 	}
@@ -689,7 +689,7 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 			restarted := newSAMLTestGate(t, idp, nil, configure)
 			req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
 			req.AddCookie(session)
-			_, _, ok := restarted.authenticateSession(req)
+			_, ok := restarted.authenticateSession(req)
 			if ok != (name == "same settings") {
 				t.Errorf("%s: session accepted = %v", name, ok)
 			}
@@ -836,5 +836,37 @@ func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 		if err := Check(t.Context(), tt.cfg); (err == nil) != tt.usable {
 			t.Errorf("%s: Check() = %v; want usable = %v", name, err, tt.usable)
 		}
+	}
+}
+
+// A sub: entry decides who may sign in, not who the visitor is: the application
+// still learns the address the identity provider signed, when it signed one.
+func TestSAMLPrincipalCarriesTheVouchedEmail(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		nameID string
+		allow  string
+		want   Principal
+	}{
+		{"email entry", "alice@example.com", "alice@example.com", Principal{ProviderSAML, "alice@example.com", "alice@example.com"}},
+		{"sub entry with an email NameID", "alice@example.com", "sub:alice@example.com", Principal{ProviderSAML, "sub:alice@example.com", "alice@example.com"}},
+		{"sub entry with an opaque NameID", "G-7f3a", "sub:G-7f3a", Principal{ProviderSAML, "sub:G-7f3a", ""}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newSAMLTestIdP(t)
+			gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) { cfg.Allow = []string{tt.allow} })
+			login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+			response := idp.validResponse(login)
+			response.nameID = tt.nameID
+			session := assertSAMLACS(t, login.post(gate, idp.encode(t, response)), http.StatusSeeOther)
+			req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
+			req.AddCookie(session)
+			if got, ok := gate.authenticateSession(req); !ok || got != tt.want {
+				t.Fatalf("principal = (%+v, %v); want %+v", got, ok, tt.want)
+			}
+		})
 	}
 }

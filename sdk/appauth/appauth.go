@@ -102,15 +102,24 @@ var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
 
 type principalContextKey struct{}
 
-// Principal is the visitor the gate signed in: the provider that vouched for
-// them and the subject it named.
+// Principal is the visitor the gate signed in.
 type Principal struct {
+	// Provider is the method that signed the visitor in, such as ProviderOIDC.
 	Provider string
-	Subject  string
+	// Subject is the principal the allowlist checks: a wallet address, a
+	// credential subject, an email, or a sub:<subject> entry.
+	Subject string
+	// Email is the address oidc, saml or email vouches for, also when Subject
+	// is a sub: entry, and empty when there is none. An OIDC email counts only
+	// with email_verified. It is the value from the sign-in: the allowlist checks
+	// Subject on each request, not this. A session from before this field reads
+	// as no email until the visitor signs in again.
+	Email string
 }
 
-// PrincipalFromContext returns the visitor of a request that passed the gate.
-// Without a gate in front of the handler there is none.
+// PrincipalFromContext returns the visitor of a request that passed the gate,
+// with or without Config.IdentityHeaders. Without a gate in front of the handler
+// there is none.
 func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 	principal, ok := ctx.Value(principalContextKey{}).(Principal)
 	return principal, ok
@@ -262,6 +271,7 @@ type applicationAuth struct {
 type applicationAuthClaims struct {
 	Subject   string `json:"sub"`
 	Provider  string `json:"auth,omitempty"`
+	Email     string `json:"email,omitempty"`
 	Host      string `json:"host"`
 	ExpiresAt int64  `json:"exp"`
 	// Binding names the OIDC issuer and client, the SAML identity provider
@@ -692,7 +702,7 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case applicationAuthLogoutPath:
 		a.serveLogout(w, r)
 	default:
-		subject, provider, ok := a.authenticate(r, credential)
+		principal, ok := a.authenticate(r, credential)
 		if !ok {
 			a.requireLogin(w, r)
 			return
@@ -703,13 +713,13 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		stripApplicationAuthCookie(r)
 		if a.identityHeaders {
-			r.Header.Set(types.HeaderPortalUser, subject)
-			r.Header.Set(types.HeaderPortalAuth, provider)
+			r.Header.Set(types.HeaderPortalUser, principal.Subject)
+			r.Header.Set(types.HeaderPortalAuth, principal.Provider)
 			if a.identityProof != "" {
 				r.Header.Set(types.HeaderPortalProof, a.identityProof)
 			}
 		}
-		a.next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, Principal{Provider: provider, Subject: subject})))
+		a.next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)))
 	}
 }
 
@@ -911,7 +921,7 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	// would loop through the provider. The allowlist is checked on every request,
 	// so revoking a principal does not wait for the session to end.
 	lifetime := min(max(claims.Expiry.Time().Sub(now), providerMinSessionTTL), applicationAuthSessionTTL)
-	if err := a.setSession(w, subject, ProviderOIDC, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderOIDC, Subject: subject, Email: providerEmail(email)}, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -1263,7 +1273,7 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
 		return
 	}
-	if err := a.setSession(w, address, ProviderSIWE, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderSIWE, Subject: address}, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -1299,7 +1309,7 @@ func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
 	if sessionExpiry := now.Add(applicationAuthSessionTTL); sessionExpiry.Before(expiresAt) {
 		expiresAt = sessionExpiry
 	}
-	if err := a.setSession(w, claims.Subject, ProviderCredential, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderCredential, Subject: claims.Subject}, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -1315,54 +1325,54 @@ func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *applicationAuth) authenticate(r *http.Request, credential string) (string, string, bool) {
+func (a *applicationAuth) authenticate(r *http.Request, credential string) (Principal, bool) {
 	if credential != "" {
 		if a.provider != ProviderCredential {
-			return "", "", false
+			return Principal{}, false
 		}
 		claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
 		if err == nil && a.subjectAllowed(claims.Subject) {
-			return claims.Subject, ProviderCredential, true
+			return Principal{Provider: ProviderCredential, Subject: claims.Subject}, true
 		}
-		return "", "", false
+		return Principal{}, false
 	}
 	return a.authenticateSession(r)
 }
 
-func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, bool) {
+func (a *applicationAuth) authenticateSession(r *http.Request) (Principal, bool) {
 	cookie, err := r.Cookie(applicationAuthCookieName)
 	if err != nil {
-		return "", "", false
+		return Principal{}, false
 	}
 	var claims applicationAuthClaims
 	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !sameApplicationHost(claims.Host, r.Host) || time.Now().UTC().Unix() >= claims.ExpiresAt {
-		return "", "", false
+		return Principal{}, false
 	}
 	provider := claims.Provider
 	if provider != a.provider {
-		return "", "", false
+		return Principal{}, false
 	}
 	if provider == ProviderSIWE {
 		address, err := identity.NormalizeEVMAddress(claims.Subject)
 		if err != nil || a.siwe == nil || !a.siwe.AddressAllowed(address) {
-			return "", "", false
+			return Principal{}, false
 		}
-		return address, provider, true
+		return Principal{Provider: provider, Subject: address}, true
 	}
 	var subject string
 	switch provider {
 	case ProviderOIDC, ProviderSAML, ProviderEmail:
 		if binding := a.binding(); binding == "" || claims.Binding != binding {
-			return "", "", false
+			return Principal{}, false
 		}
 		subject, err = normalizeProviderPrincipal(claims.Subject)
 	default:
 		subject, err = normalizeApplicationAuthSubject(claims.Subject)
 	}
 	if err != nil || !a.subjectAllowed(subject) {
-		return "", "", false
+		return Principal{}, false
 	}
-	return subject, provider, true
+	return Principal{Provider: provider, Subject: subject, Email: claims.Email}, true
 }
 
 func (a *applicationAuth) subjectAllowed(subject string) bool {
@@ -1395,8 +1405,8 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	return false
 }
 
-func (a *applicationAuth) issueSession(subject, provider, host string, expiresAt time.Time) (string, error) {
-	claims := applicationAuthClaims{Subject: subject, Provider: provider, Host: host, ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
+func (a *applicationAuth) issueSession(principal Principal, host string, expiresAt time.Time) (string, error) {
+	claims := applicationAuthClaims{Subject: principal.Subject, Provider: principal.Provider, Email: principal.Email, Host: host, ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
 	return encodeSignedApplicationAuthJSON(a.signingKey, claims)
 }
 
@@ -1416,8 +1426,8 @@ func (a *applicationAuth) binding() string {
 	}
 }
 
-func (a *applicationAuth) setSession(w http.ResponseWriter, subject, provider, host string, now, expiresAt time.Time) error {
-	token, err := a.issueSession(subject, provider, host, expiresAt)
+func (a *applicationAuth) setSession(w http.ResponseWriter, principal Principal, host string, now, expiresAt time.Time) error {
+	token, err := a.issueSession(principal, host, expiresAt)
 	if err != nil {
 		return err
 	}
