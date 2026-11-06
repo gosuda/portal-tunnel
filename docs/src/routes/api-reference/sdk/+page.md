@@ -471,7 +471,7 @@ hosts.
 
 The `email` provider needs `Config.PublicURLs`, and `New` refuses it without one. It
 lists the hosts that a login link may name, so a request with a forged `Host`
-gets no link:
+gets no link. An email session works only while its host is on the list:
 
 ```go
 cfg.PublicURLs = func() []string {

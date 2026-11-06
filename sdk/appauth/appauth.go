@@ -143,9 +143,10 @@ func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 // sets it; the agent config and the Agent API have no key for it.
 //
 // PublicURLs lists the URLs the application is reachable at now, and the email
-// provider requires it: a request names its own Host, so a login link is mailed
-// only for a host on that list. It is called on each request and is no setting,
-// so no config format carries it.
+// provider requires it: a request names its own Host, so a login link is mailed,
+// and an email session works, only for a host on that list. It is called on each
+// request and is no setting, so no config format carries it and a stored Config
+// leaves it nil.
 type Config struct {
 	Provider        string   `json:"auth,omitempty" toml:"auth,omitempty"`
 	Allow           []string `json:"auth_allowed_wallets,omitempty" toml:"auth_allowed_wallets,omitempty"`
@@ -1351,6 +1352,13 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (Principal, bool)
 	provider := claims.Provider
 	if provider != a.provider {
 		return Principal{}, false
+	}
+	// An alias this tunnel lost may have a new owner, who reads the cookie of
+	// whoever opens it there and must not be able to replay it here.
+	if a.email != nil {
+		if _, public := a.email.publicHost(r.Host); !public {
+			return Principal{}, false
+		}
 	}
 	if provider == ProviderSIWE {
 		address, err := identity.NormalizeEVMAddress(claims.Subject)

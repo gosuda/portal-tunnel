@@ -151,7 +151,7 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 - Changing the SMTP server, username or sender ends every email session. A new password alone does not.
 - At start Portal checks the SMTP server once without sending mail and logs `application auth provider is not usable` when that fails. The tunnel keeps running. The check proves the server, TLS, and the login. It sends no `MAIL FROM`, so it does not prove the sender. With no username it signs in to nothing, so it proves only that the server answers, with TLS where TLS is required.
 - Portal signs in with AUTH PLAIN only. A server that offers only AUTH LOGIN fails at the startup check.
-- A session lasts 24 hours. Sessions are re-checked against `--auth-email-list` on every request. Changing the list takes effect when the tunnel restarts.
+- A session lasts 24 hours, and works only while the tunnel holds its host: a session on an alias stops when the tunnel loses that alias. Sessions are re-checked against `--auth-email-list` on every request. Changing the list takes effect when the tunnel restarts.
 
 ## Common options
 

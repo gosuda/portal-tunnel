@@ -706,6 +706,51 @@ func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 	}
 }
 
+// A session is worth no more than the link it came from: when its alias leaves
+// the tunnel, the next owner of the name gets the cookie of whoever opens it, and
+// must not be able to replay it here. The session works again if the alias returns.
+func TestEmailSessionEndsWithItsPublicHost(t *testing.T) {
+	t.Parallel()
+
+	const alias = "alias.example"
+	var public atomic.Value
+	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
+	cfg := emailTestConfig("127.0.0.1:25", "alice@example.com")
+	cfg.PublicURLs = func() []string { return public.Load().([]string) }
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), applicationAuthTestIdentity(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := handler.(*applicationAuth)
+	token := gate.email.issue("alice@example.com", true, alias, "/", time.Now().UTC())
+	<-gate.email.sendSlots
+	redeem := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token})
+	if redeem.Code != http.StatusOK || len(redeem.Result().Cookies()) != 1 {
+		t.Fatalf("redeem = %d, cookies = %v", redeem.Code, redeem.Result().Cookies())
+	}
+	open := func() int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+alias+"/private", nil)
+		req.AddCookie(redeem.Result().Cookies()[0])
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := open(); code != http.StatusNoContent {
+		t.Fatalf("session on a public alias = %d; want 204", code)
+	}
+	public.Store([]string{"https://" + emailTestHost})
+	if code := open(); code != http.StatusSeeOther {
+		t.Fatalf("session on a lost alias = %d; want the login redirect", code)
+	}
+	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
+	if code := open(); code != http.StatusNoContent {
+		t.Fatalf("session after the alias came back = %d; want 204", code)
+	}
+}
+
 func newEmailTestAuthenticator(t *testing.T, addr string) *emailAuthenticator {
 	t.Helper()
 	settings, err := resolveApplicationAuthConfig(emailTestConfig(addr, "bob@example.com"))
