@@ -127,7 +127,7 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 		return
 	}
 
-	entries := tunnel.AllowedWallets
+	entries := tunnel.Allowed()
 	if len(entries) == 0 {
 		v.addAccessValue(th, width, "Allowed", agentDashboardAllowedHint(tunnel.Provider), th.text)
 	}
@@ -344,7 +344,7 @@ func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
 	a.applied = false
 	a.provider = tunnel.Provider
 	a.headers = tunnel.IdentityHeaders
-	a.allowed = slices.Clone(tunnel.AllowedWallets)
+	a.allowed = slices.Clone(tunnel.Allowed())
 	a.err = nil
 	a.add.Reset()
 	for input, value := range map[*textinput.Model]string{
@@ -505,7 +505,14 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	// The draft holds the settings of its own provider only, so leaving OIDC,
 	// SAML or email clears the settings of the provider left, which the
 	// validators refuse for another provider.
-	draft := gateway.ApplicationAuthConfig{Provider: a.provider, AllowedWallets: a.allowed, IdentityHeaders: a.headers}
+	draft := gateway.ApplicationAuthConfig{Provider: a.provider, IdentityHeaders: a.headers}
+	// A tunnel that stays on its provider keeps the key its list is stored under,
+	// so that opening the screen of a released config changes nothing.
+	if gateway.ApplicationAuthProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.AllowedWallets) == 0) {
+		draft.EmailList = a.allowed
+	} else {
+		draft.AllowedWallets = a.allowed
+	}
 	switch a.provider {
 	case gateway.ApplicationAuthProviderOIDC:
 		draft.OIDCConfig = gateway.OIDCConfig{

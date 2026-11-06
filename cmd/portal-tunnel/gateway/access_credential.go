@@ -18,14 +18,17 @@ import (
 var (
 	errIdentityProofAuthIdentityProofAuth       = errors.New("identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers")
 	errOIDCSettingsRequireOIDCApplicationAuth   = errors.New("oidc settings require the oidc application auth provider")
-	errOIDCRequiresLeastOneAuthAllow            = errors.New("oidc requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+	errOIDCRequiresEmailList                    = errors.New("oidc requires at least one --auth-email-list entry: an email address, an @domain, or sub:<subject>")
 	errOIDCClientIDIsRequired                   = errors.New("oidc client id is required")
 	errSAMLSettingsRequireSAMLApplicationAuth   = errors.New("saml settings require the saml application auth provider")
-	errSAMLRequiresLeastOneAuthAllow            = errors.New("saml requires at least one --auth-allow entry: an email address, an @domain, or sub:<subject>")
+	errSAMLRequiresEmailList                    = errors.New("saml requires at least one --auth-email-list entry: an email address, an @domain, or sub:<subject>")
 	errSAMLMetadataIsRequired                   = errors.New("saml requires identity provider metadata: --auth-saml-metadata-url or --auth-saml-metadata-file")
 	errSAMLMetadataSourcesConflict              = errors.New("saml metadata comes from --auth-saml-metadata-url or --auth-saml-metadata-file, not both")
 	errEmailSettingsRequireEmailApplicationAuth = errors.New("email settings require the email application auth provider")
-	errEmailRequiresLeastOneAuthAllow           = errors.New("email requires at least one --auth-allow entry: an email address or an @domain")
+	errEmailRequiresEmailList                   = errors.New("email requires at least one --auth-email-list entry: an email address or an @domain")
+	errEmailListRequiresEmailProvider           = errors.New("--auth-email-list works with oidc, saml, and email; siwe and credential use --auth-allow")
+	errEmailProviderTakesEmailList              = errors.New("email reads its addresses from --auth-email-list, not --auth-allow")
+	errAllowlistIsSetTwice                      = errors.New("--auth-email-list and --auth-allow are the same list: set one")
 	errEmailAllowsNoSubjectEntries              = errors.New("email allows email addresses and @domain entries only, not sub:<subject>")
 	errSMTPAddrIsRequired                       = errors.New("email requires an SMTP server: --auth-smtp-addr host:port")
 	errSMTPFromIsRequired                       = errors.New("email requires a sender address: --auth-smtp-from")
@@ -127,7 +130,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	if err != nil {
 		return applicationAuthSettings{}, err
 	}
-	allowed, err := NormalizeApplicationAuthAllowed(provider, cfg.AllowedWallets)
+	allowed, err := resolveAllowlist(provider, cfg)
 	if err != nil {
 		return applicationAuthSettings{}, err
 	}
@@ -174,7 +177,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 		// An identity provider authenticates accounts it does not restrict to
 		// this application, so without an allowlist every one of them would pass.
 		if len(allowed) == 0 {
-			return applicationAuthSettings{}, errOIDCRequiresLeastOneAuthAllow
+			return applicationAuthSettings{}, errOIDCRequiresEmailList
 		}
 		settings.issuerURL, err = normalizeOIDCIssuerURL(issuer)
 		if err != nil {
@@ -186,7 +189,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 		settings.clientID, settings.clientSecret = clientID, clientSecret
 	case ApplicationAuthProviderSAML:
 		if len(allowed) == 0 {
-			return applicationAuthSettings{}, errSAMLRequiresLeastOneAuthAllow
+			return applicationAuthSettings{}, errSAMLRequiresEmailList
 		}
 		switch {
 		case metadataURL == "" && metadataFile == "":
@@ -210,7 +213,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	case ApplicationAuthProviderEmail:
 		// Without an allowlist, anyone could make the tunnel mail any address.
 		if len(allowed) == 0 {
-			return applicationAuthSettings{}, errEmailRequiresLeastOneAuthAllow
+			return applicationAuthSettings{}, errEmailRequiresEmailList
 		}
 		if smtpAddr == "" {
 			return applicationAuthSettings{}, errSMTPAddrIsRequired
@@ -232,8 +235,35 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	return settings, nil
 }
 
+// ApplicationAuthProviderTakesEmailList reports whether provider names a visitor
+// by email, so that it reads `--auth-email-list` / `auth_email_list`.
+func ApplicationAuthProviderTakesEmailList(provider string) bool {
+	switch provider {
+	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML, ApplicationAuthProviderEmail:
+		return true
+	default:
+		return false
+	}
+}
+
+// resolveAllowlist reads the allowlist of provider from the key that may hold
+// it. oidc and saml take both keys, because released configs hold the list under
+// `--auth-allow`; email was never released with it, so it takes only the one.
+func resolveAllowlist(provider string, cfg ApplicationAuthConfig) ([]string, error) {
+	switch {
+	case len(cfg.EmailList) > 0 && len(cfg.AllowedWallets) > 0:
+		return nil, errAllowlistIsSetTwice
+	case len(cfg.EmailList) > 0 && !ApplicationAuthProviderTakesEmailList(provider):
+		return nil, errEmailListRequiresEmailProvider
+	case len(cfg.AllowedWallets) > 0 && provider == ApplicationAuthProviderEmail:
+		return nil, errEmailProviderTakesEmailList
+	}
+	return NormalizeApplicationAuthAllowed(provider, cfg.Allowed())
+}
+
 // NormalizeApplicationAuthAllowed validates and normalizes the provider-scoped
-// principal allowlist (`--auth-allow` / `auth_allowed_wallets`): Ethereum
+// principal allowlist (`--auth-allow` / `auth_allowed_wallets`, or
+// `--auth-email-list` / `auth_email_list`): Ethereum
 // addresses for `siwe`, credential subjects for `credential`, emails or
 // subjects for `oidc` and `saml`, and emails for `email`. The email provider
 // knows no subject but the address, so it refuses `sub:` entries.

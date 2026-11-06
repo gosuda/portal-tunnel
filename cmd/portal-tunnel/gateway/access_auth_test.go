@@ -962,8 +962,8 @@ func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
 	t.Parallel()
 
 	cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
-	if err := ValidateApplicationAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
-		t.Fatalf("ValidateApplicationAuthConfig without an allowlist = %v; want an error naming --auth-allow", err)
+	if err := ValidateApplicationAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
+		t.Fatalf("ValidateApplicationAuthConfig without an allowlist = %v; want an error naming --auth-email-list", err)
 	}
 	if _, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg, nil); err == nil {
 		t.Fatal("NewApplicationAuth started OIDC without an allowlist")
@@ -1090,7 +1090,7 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		{
 			name:    "oidc without an allowlist",
 			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}},
-			wantErr: "--auth-allow",
+			wantErr: "--auth-email-list",
 		},
 		{
 			name:    "oidc without an issuer",
@@ -1140,7 +1140,7 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		{
 			name:    "saml without an allowlist",
 			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, SAMLConfig: SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"}},
-			wantErr: "--auth-allow",
+			wantErr: "--auth-email-list",
 		},
 		{
 			name:    "saml without metadata",

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -84,13 +85,17 @@ func TestControlHandlerRejectsUntrustedHostBeforeAuthorization(t *testing.T) {
 }
 
 // A wallet session is read-only, and any wallet may sign in while the dashboard
-// has no wallet allowlist, so it must not learn who may sign in to a tunnel.
-// The control token still sees the list.
+// has no wallet allowlist, so it must not learn who may sign in to a tunnel or
+// which mail account sends its links. The control token still sees them.
 func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	tunnelCfg := testTunnel("web")
 	tunnelCfg.Provider = "credential"
 	tunnelCfg.AllowedWallets = []string{"alice", "bob"}
-	m, _ := testManager(t, tunnelCfg)
+	mailCfg := testTunnel("mail")
+	mailCfg.Provider = gateway.ApplicationAuthProviderEmail
+	mailCfg.EmailList = []string{"carol@example.com"}
+	mailCfg.EmailConfig = gateway.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "me@example.com", SMTPPassword: "not-a-real-secret-0123", SMTPFrom: "login@example.com"}
+	m, _ := testManager(t, tunnelCfg, mailCfg)
 
 	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
 	if err != nil {
@@ -124,7 +129,7 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	}
 
 	handler := &controlHandler{manager: m, token: "control-token", auth: auth, authority: domain, localhostAuthority: "localhost:4018"}
-	allowlist := func(authorize func(*http.Request)) []string {
+	statusAs := func(authorize func(*http.Request)) map[string]AgentTunnelStatus {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, types.PathAgentStatus, nil)
 		req.Host = domain
@@ -140,16 +145,25 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		if len(body.Data.Tunnels) != 1 {
-			t.Fatalf("status lists %d tunnels, want 1", len(body.Data.Tunnels))
+		tunnels := make(map[string]AgentTunnelStatus, len(body.Data.Tunnels))
+		for _, tunnel := range body.Data.Tunnels {
+			tunnels[tunnel.ID] = tunnel
 		}
-		return body.Data.Tunnels[0].AllowedWallets
+		return tunnels
 	}
 
-	if got := allowlist(func(r *http.Request) { r.Header.Set("Authorization", "Bearer control-token") }); !slices.Equal(got, []string{"alice", "bob"}) {
+	token := statusAs(func(r *http.Request) { r.Header.Set("Authorization", "Bearer control-token") })
+	if got := token["web"].AllowedWallets; !slices.Equal(got, []string{"alice", "bob"}) {
 		t.Fatalf("control token sees allowlist %v, want [alice bob]", got)
 	}
-	if got := allowlist(func(r *http.Request) { r.AddCookie(&http.Cookie{Name: agentCookieName, Value: session}) }); len(got) != 0 {
+	if got := token["mail"]; !slices.Equal(got.EmailList, []string{"carol@example.com"}) || got.SMTPUsername != "me@example.com" || got.SMTPPassword != "" || !got.AuthSMTPPasswordSet {
+		t.Fatalf("control token sees %+v, want the list and the account, not the password", got.ApplicationAuthConfig)
+	}
+	signedIn := statusAs(func(r *http.Request) { r.AddCookie(&http.Cookie{Name: agentCookieName, Value: session}) })
+	if got := signedIn["web"].AllowedWallets; len(got) != 0 {
 		t.Fatalf("wallet session sees allowlist %v, want none", got)
+	}
+	if got := signedIn["mail"]; len(got.EmailList) != 0 || got.EmailConfig != (gateway.EmailConfig{}) || got.AuthSMTPPasswordSet {
+		t.Fatalf("wallet session sees %+v, want no list and no mail account", got.ApplicationAuthConfig)
 	}
 }

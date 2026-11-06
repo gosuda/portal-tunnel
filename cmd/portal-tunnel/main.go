@@ -100,7 +100,8 @@ func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlag
 	utils.StringFlag(fs, &cfg.Thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &cfg.Hide, "hide", false, "Hide service from relay listing screens")
 	utils.StringFlag(fs, &cfg.Provider, "auth", "", "Protect HTTP application access with siwe, credential, oidc, saml, or email authentication")
-	utils.RepeatedStringFlag(fs, &cfg.AllowedWallets, "auth-allow", "Principal allowed to sign in (Ethereum wallet for siwe, subject for credential, verified email, @domain, or sub:<subject> for oidc and saml, or email or @domain for email); repeat to allow multiple principals (empty allows any valid principal, except oidc, saml, and email, which require at least one entry)")
+	utils.RepeatedStringFlag(fs, &cfg.AllowedWallets, "auth-allow", "Principal allowed to sign in with siwe (Ethereum wallet) or credential (subject); repeat to allow multiple principals (empty allows any valid principal). oidc and saml also read it, as --auth-email-list")
+	utils.RepeatedStringFlag(fs, &cfg.EmailList, "auth-email-list", "Who may sign in with oidc, saml, or email: an email address, an @domain, or, for oidc and saml, sub:<subject>; repeat to allow multiple entries (at least one is required)")
 	utils.BoolFlag(fs, &cfg.IdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlagEnv(fs, &cfg.IdentityProof, "auth-identity-proof", "", "Secret sent as X-Portal-Proof with the identity headers so the upstream can verify they came from Portal (at least 16 visible ASCII characters; requires --auth-identity-headers). Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_IDENTITY_PROOF")
 	utils.StringFlagEnv(fs, &cfg.OIDCIssuerURL, "auth-oidc-issuer", "", "OIDC issuer URL for --auth oidc", "AUTH_OIDC_ISSUER")
@@ -455,9 +456,9 @@ func printRootUsage(w io.Writer) {
 			"portal expose 3000",
 			"portal expose 3000 --auth siwe",
 			"portal expose 3000 --auth credential",
-			"portal expose 3000 --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id <id> --auth-allow alice@example.com",
-			"portal expose 3000 --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-allow @example.com",
-			"AUTH_SMTP_PASSWORD=<app password> portal expose 3000 --auth email --auth-smtp-addr smtp.gmail.com:587 --auth-smtp-username me@gmail.com --auth-smtp-from me@gmail.com --auth-allow alice@example.com",
+			"portal expose 3000 --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id <id> --auth-email-list alice@example.com",
+			"portal expose 3000 --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-email-list @example.com",
+			"portal expose 3000 --auth email --auth-smtp-addr smtp.gmail.com:587 --auth-smtp-username me@gmail.com --auth-smtp-from me@gmail.com --auth-email-list alice@example.com   # with AUTH_SMTP_PASSWORD in the environment",
 			"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
@@ -504,7 +505,7 @@ func printExposeUsage(w io.Writer) {
 		group := advanced
 		switch f.Name {
 		case "name", "relays", "discovery", "overlay", "http-route", "serve", "tcp", "udp",
-			"auth", "auth-allow", "x402-pay-to", "ban-mitm", "identity-path":
+			"auth", "auth-allow", "auth-email-list", "x402-pay-to", "ban-mitm", "identity-path":
 			group = common
 		}
 		group.Var(f.Value, f.Name, f.Usage)

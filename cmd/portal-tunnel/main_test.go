@@ -100,7 +100,7 @@ func TestExposeAuthSAMLEnv(t *testing.T) {
 			t.Errorf("portal expose %v carried AUTH_SAML_* into %+v", args, auth)
 		}
 	}
-	spec, err := exposeSpec(t, "--auth", "saml", "--auth-allow", "@example.com", "3000")
+	spec, err := exposeSpec(t, "--auth", "saml", "--auth-email-list", "@example.com", "3000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestExposeAuthEmailEnv(t *testing.T) {
 			t.Errorf("portal expose %v carried AUTH_SMTP_* into the auth settings", args)
 		}
 	}
-	spec, err := exposeSpec(t, "--auth", "email", "--auth-allow", "alice@example.com", "3000")
+	spec, err := exposeSpec(t, "--auth", "email", "--auth-email-list", "alice@example.com", "3000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestExposeAuthEmailEnv(t *testing.T) {
 	if _, err := exposeSpec(t, "--auth", "email", "3000"); err == nil {
 		t.Error("portal expose --auth email started without an allowlist")
 	}
-	if _, err := exposeSpec(t, "--auth", "email", "--auth-allow", "alice@example.com", "--auth-smtp-addr", " ", "3000"); err == nil {
+	if _, err := exposeSpec(t, "--auth", "email", "--auth-email-list", "alice@example.com", "--auth-smtp-addr", " ", "3000"); err == nil {
 		t.Error("portal expose --auth email started without an SMTP server")
 	}
 }

@@ -234,10 +234,10 @@ describe("tunnelCommand sign-in", () => {
 
     expect(unix).toHaveLength(2);
     expect(unix[1]).toBe(
-      "portal expose 3000 --name my-app --relays https://relay.example.com --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id abc.apps.googleusercontent.com --auth-allow 'alice@example.com' --auth-allow '@example.com'"
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id abc.apps.googleusercontent.com --auth-email-list 'alice@example.com' --auth-email-list '@example.com'"
     );
     expect(windows).toHaveLength(3);
-    expect(windows[2]).toContain("--auth-allow 'alice@example.com'");
+    expect(windows[2]).toContain("--auth-email-list 'alice@example.com'");
     expect(unix.join("\n")).not.toMatch(/SECRET|secret/);
     expect(windows.join("\n")).not.toMatch(/SECRET|secret/);
   });
@@ -250,7 +250,7 @@ describe("tunnelCommand sign-in", () => {
       samlMetadataURL: "https://idp.example/realms/main/protocol/saml/descriptor",
     };
     expect(runLine(buildTunnelCommand({ ...base, auth }))).toBe(
-      "portal expose 3000 --name my-app --relays https://relay.example.com --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-allow '@example.com'"
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-email-list '@example.com'"
     );
     expect(
       runLine(
@@ -260,7 +260,7 @@ describe("tunnelCommand sign-in", () => {
         })
       )
     ).toBe(
-      "portal expose 3000 --name my-app --relays https://relay.example.com --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-saml-entity-id urn:portal:app --auth-saml-subject-attribute email --auth-allow <email, @domain or sub:id>"
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-saml-entity-id urn:portal:app --auth-saml-subject-attribute email --auth-email-list <email, @domain or sub:id>"
     );
   });
 
@@ -286,7 +286,7 @@ describe("tunnelCommand sign-in", () => {
     };
     const command = runLine(buildTunnelCommand({ ...base, auth }));
     expect(command).toBe(
-      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-smtp-addr smtp.example.com:587 --auth-smtp-from 'Portal <login@example.com>' --auth-smtp-username 'login@example.com' --auth-allow 'alice@example.com' --auth-allow '@example.com'"
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-smtp-addr smtp.example.com:587 --auth-smtp-from 'Portal <login@example.com>' --auth-smtp-username 'login@example.com' --auth-email-list 'alice@example.com' --auth-email-list '@example.com'"
     );
     expect(command).not.toMatch(/PASSWORD|password/);
     expect(
@@ -297,7 +297,7 @@ describe("tunnelCommand sign-in", () => {
         })
       )
     ).toBe(
-      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-smtp-addr <host:port> --auth-smtp-from <sender> --auth-allow <email or @domain>"
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-smtp-addr <host:port> --auth-smtp-from <sender> --auth-email-list <email or @domain>"
     );
   });
 

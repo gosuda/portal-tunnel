@@ -144,8 +144,8 @@ func (s *smtpTestServer) expectNoMore(t *testing.T) {
 
 func emailTestConfig(smtpAddr string, allowed ...string) ApplicationAuthConfig {
 	return ApplicationAuthConfig{
-		Provider:       ApplicationAuthProviderEmail,
-		AllowedWallets: allowed,
+		Provider:  ApplicationAuthProviderEmail,
+		EmailList: allowed,
 		EmailConfig: EmailConfig{
 			SMTPAddr:     smtpAddr,
 			SMTPUsername: emailTestUsername,
@@ -561,8 +561,8 @@ func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 		change  func(*ApplicationAuthConfig)
 		wantErr error
 	}{
-		"no allowlist":           {func(c *ApplicationAuthConfig) { c.AllowedWallets = nil }, errEmailRequiresLeastOneAuthAllow},
-		"subject entry":          {func(c *ApplicationAuthConfig) { c.AllowedWallets = []string{"sub:alice"} }, errEmailAllowsNoSubjectEntries},
+		"no allowlist":           {func(c *ApplicationAuthConfig) { c.EmailList = nil }, errEmailRequiresEmailList},
+		"subject entry":          {func(c *ApplicationAuthConfig) { c.EmailList = []string{"sub:alice"} }, errEmailAllowsNoSubjectEntries},
 		"no smtp address":        {func(c *ApplicationAuthConfig) { c.SMTPAddr = "" }, errSMTPAddrIsRequired},
 		"no smtp port":           {func(c *ApplicationAuthConfig) { c.SMTPAddr = "smtp.example" }, errSMTPAddrMustHostPort},
 		"smtp port 0":            {func(c *ApplicationAuthConfig) { c.SMTPAddr = "smtp.example:0" }, errSMTPAddrMustHostPort},
@@ -573,7 +573,7 @@ func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 		"username only":          {func(c *ApplicationAuthConfig) { c.SMTPPassword = "" }, errEmailSMTPCredentialsArePaired},
 		"password only":          {func(c *ApplicationAuthConfig) { c.SMTPUsername = "" }, errEmailSMTPCredentialsArePaired},
 		"settings of another provider": {func(c *ApplicationAuthConfig) {
-			c.Provider, c.AllowedWallets = ApplicationAuthProviderCredential, nil
+			c.Provider, c.EmailList = ApplicationAuthProviderCredential, nil
 		}, errEmailSettingsRequireEmailApplicationAuth},
 	} {
 		cfg := emailTestConfig("smtp.example:587", "alice@example.com")
@@ -581,6 +581,46 @@ func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 		if _, err := resolveApplicationAuthConfig(cfg); !errors.Is(err, tc.wantErr) {
 			t.Errorf("%s: error = %v; want %v", name, err, tc.wantErr)
 		}
+	}
+}
+
+// One list has two names. auth_email_list is the list of every provider that
+// names a visitor by email, and released oidc and saml configs hold it under
+// auth_allowed_wallets. A config that sets both, or that gives the list to a
+// provider that cannot read it, is refused rather than read one way.
+func TestAllowlistKeys(t *testing.T) {
+	t.Parallel()
+
+	oidc := OIDCConfig{OIDCIssuerURL: "https://issuer.example", OIDCClientID: "portal"}
+	saml := SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"}
+	smtp := EmailConfig{SMTPAddr: "smtp.example:587", SMTPFrom: emailTestSender}
+	list := []string{"Alice@Example.com"}
+	for name, tc := range map[string]struct {
+		cfg     ApplicationAuthConfig
+		wantErr error
+	}{
+		"oidc reads the email list":       {ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, EmailList: list, OIDCConfig: oidc}, nil},
+		"oidc keeps its released key":     {ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: list, OIDCConfig: oidc}, nil},
+		"saml reads the email list":       {ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, EmailList: list, SAMLConfig: saml}, nil},
+		"saml keeps its released key":     {ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: list, SAMLConfig: saml}, nil},
+		"email reads the email list":      {ApplicationAuthConfig{Provider: ApplicationAuthProviderEmail, EmailList: list, EmailConfig: smtp}, nil},
+		"email has no released key":       {ApplicationAuthConfig{Provider: ApplicationAuthProviderEmail, AllowedWallets: list, EmailConfig: smtp}, errEmailProviderTakesEmailList},
+		"credential cannot read the list": {ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, EmailList: list}, errEmailListRequiresEmailProvider},
+		"siwe cannot read the list":       {ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, EmailList: list}, errEmailListRequiresEmailProvider},
+		"both keys":                       {ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: list, EmailList: list, OIDCConfig: oidc}, errAllowlistIsSetTwice},
+	} {
+		settings, err := resolveApplicationAuthConfig(tc.cfg)
+		if !errors.Is(err, tc.wantErr) {
+			t.Errorf("%s: error = %v; want %v", name, err, tc.wantErr)
+		}
+		if tc.wantErr == nil && !slices.Equal(settings.allowed, []string{"alice@example.com"}) {
+			t.Errorf("%s: allowed = %v", name, settings.allowed)
+		}
+	}
+
+	normalized, err := ApplicationAuthConfig{Provider: "OIDC", EmailList: list}.Normalize()
+	if err != nil || !slices.Equal(normalized.EmailList, []string{"alice@example.com"}) {
+		t.Fatalf("Normalize = %v, %v", normalized.EmailList, err)
 	}
 }
 

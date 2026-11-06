@@ -109,7 +109,7 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 	credential.Provider = "credential"
 	email := testTunnel("email")
 	email.Provider = "email"
-	email.AllowedWallets = []string{"alice@example.com"}
+	email.EmailList = []string{"alice@example.com"}
 	email.SMTPAddr = "smtp.example.com:587"
 	email.SMTPUsername = "portal"
 	email.SMTPPassword = smtpPassword

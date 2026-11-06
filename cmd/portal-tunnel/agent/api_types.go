@@ -180,7 +180,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *gateway.ApplicationAuthConfig)
 	// Decoding reuses the backing array of a slice, which the stored settings
 	// may share.
 	next := *auth
-	next.AllowedWallets = slices.Clone(next.AllowedWallets)
+	next.AllowedWallets, next.EmailList = slices.Clone(next.AllowedWallets), slices.Clone(next.EmailList)
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&next); err != nil {

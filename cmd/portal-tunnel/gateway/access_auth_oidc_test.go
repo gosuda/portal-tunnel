@@ -1241,7 +1241,7 @@ func TestCheckApplicationAuthProvider(t *testing.T) {
 	t.Run("configuration the resolver rejects", func(t *testing.T) {
 		t.Parallel()
 		cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
-		if err := CheckApplicationAuthProvider(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
+		if err := CheckApplicationAuthProvider(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
 			t.Fatalf("CheckApplicationAuthProvider() = %v; want the resolver's error about the missing allowlist", err)
 		}
 	})

@@ -16,7 +16,7 @@ export const GOOGLE_OIDC_ISSUER = "https://accounts.google.com";
 
 export interface TunnelAuthOptions {
   method: TunnelAuthMethod;
-  /** `--auth-allow` entries as typed; classifyAuthAllow says what each one is. */
+  /** Allowlist entries as typed; classifyAuthAllow says what each one is. */
   allow: string[];
   identityHeaders: boolean;
   oidcIssuer: string;
@@ -234,15 +234,16 @@ function buildAuthArgs(auth: TunnelAuthOptions, os: TunnelCommandOS): string[] {
       );
     }
   }
+  const allowFlag = needsAllowlist(auth.method) ? "--auth-email-list" : "--auth-allow";
   if (needsAllowlist(auth.method) && auth.allow.length === 0) {
     args.push(
       auth.method === "email"
-        ? "--auth-allow <email or @domain>"
-        : "--auth-allow <email, @domain or sub:id>"
+        ? `${allowFlag} <email or @domain>`
+        : `${allowFlag} <email, @domain or sub:id>`
     );
   }
   for (const entry of auth.allow) {
-    args.push(`--auth-allow ${formatToken(entry, os)}`);
+    args.push(`${allowFlag} ${formatToken(entry, os)}`);
   }
   if (auth.identityHeaders) {
     args.push("--auth-identity-headers");
@@ -304,7 +305,7 @@ export function needsAllowlist(method: TunnelAuthMethod): boolean {
 }
 
 /**
- * Mirrors what `portal expose --auth-allow` accepts for each method. The Go
+ * Mirrors what `portal expose --auth-allow` and `--auth-email-list` accept for each method. The Go
  * owners are normalizeApplicationAuthSubject and NormalizeApplicationAuthAllowed
  * (access_credential.go), normalizeProviderPrincipal (access_auth.go) and
  * identity.NormalizeEVMAddress. Email takes the email and @domain entries of
@@ -516,7 +517,7 @@ export function addAuthAllow(
   const keyOf = (entry: string) => (method === "siwe" ? entry.toLowerCase() : entry);
   const next = [...current];
   const seen = new Set(next.map(keyOf));
-  // The tunnel takes each --auth-allow value whole, and a link name, a sub: id
+  // The tunnel takes each allowlist value whole, and a link name, a sub: id
   // or the local part of an email may contain spaces; a wallet address never does.
   const separator = method === "siwe" ? /[,\s]+/ : /,/;
   for (const typed of draft.split(separator).map((part) => part.trim())) {

@@ -104,9 +104,9 @@ func TestFrontendAuthRulesMatchTheGateway(t *testing.T) {
 		t.Parallel()
 		for _, row := range rules.SMTPAddr {
 			err := ValidateApplicationAuthConfig(ApplicationAuthConfig{
-				Provider:       ApplicationAuthProviderEmail,
-				AllowedWallets: []string{"alice@example.com"},
-				EmailConfig:    EmailConfig{SMTPAddr: row.Value, SMTPFrom: "login@example.com"},
+				Provider:    ApplicationAuthProviderEmail,
+				EmailList:   []string{"alice@example.com"},
+				EmailConfig: EmailConfig{SMTPAddr: row.Value, SMTPFrom: "login@example.com"},
 			})
 			if (err == nil) != row.Valid {
 				t.Errorf("SMTP address %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)

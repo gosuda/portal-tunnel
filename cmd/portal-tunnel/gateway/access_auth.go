@@ -97,16 +97,20 @@ type verifiedIdentityHeadersContextKey struct{}
 // It is the auth component of a tunnel config: the agent config, the Agent API
 // and the runtime carry it as it is, under its auth and auth_* keys, so a new
 // provider setting is added here and in resolveApplicationAuthConfig only.
-// AllowedWallets holds the provider-scoped principal allowlist (Ethereum
-// wallet addresses for siwe, credential subjects for credential, verified
-// emails, @domain entries, or sub: subjects for oidc and saml, or emails and
-// @domain entries for email). IdentityProof is a secret, like OIDCClientSecret
-// and SMTPPassword: it is sent upstream with the identity headers and must
-// not be logged. Only portal expose sets it; the agent config and the Agent API
-// have no key for it.
+// AllowedWallets holds the provider-scoped principal allowlist: Ethereum wallet
+// addresses for siwe, credential subjects for credential. EmailList is the same
+// list for the providers that name a visitor by email: verified emails, @domain
+// entries, or sub: subjects for oidc and saml, and emails or @domain entries for
+// email. A tunnel runs one provider, so the one list can mean either. oidc and
+// saml also read AllowedWallets, where released configs keep it; use Allowed to
+// read the list. IdentityProof is a secret, like OIDCClientSecret and
+// SMTPPassword: it is sent upstream with the identity headers and must not be
+// logged. Only portal expose sets it; the agent config and the Agent API have no
+// key for it.
 type ApplicationAuthConfig struct {
 	Provider        string   `json:"auth,omitempty" toml:"auth,omitempty"`
 	AllowedWallets  []string `json:"auth_allowed_wallets,omitempty" toml:"auth_allowed_wallets,omitempty"`
+	EmailList       []string `json:"auth_email_list,omitempty" toml:"auth_email_list,omitempty"`
 	IdentityHeaders bool     `json:"auth_identity_headers,omitempty" toml:"auth_identity_headers,omitempty"`
 	IdentityProof   string   `json:"-" toml:"-"`
 	OIDCConfig
@@ -143,11 +147,20 @@ type EmailConfig struct {
 	SMTPFrom     string `json:"auth_smtp_from,omitempty" toml:"auth_smtp_from,omitempty"`
 }
 
+// Allowed returns the allowlist from the key that holds it. Validation refuses a
+// config that sets both.
+func (c ApplicationAuthConfig) Allowed() []string {
+	if len(c.EmailList) > 0 {
+		return c.EmailList
+	}
+	return c.AllowedWallets
+}
+
 // IsZero reports whether no auth setting is given. Any setting asks for the
 // sign-in gate, so an incomplete one fails validation instead of leaving the
 // application open.
 func (c ApplicationAuthConfig) IsZero() bool {
-	return c.Provider == "" && len(c.AllowedWallets) == 0 && !c.IdentityHeaders && c.IdentityProof == "" &&
+	return c.Provider == "" && len(c.Allowed()) == 0 && !c.IdentityHeaders && c.IdentityProof == "" &&
 		c.OIDCConfig == (OIDCConfig{}) && c.SAMLConfig == (SAMLConfig{}) && c.EmailConfig == (EmailConfig{})
 }
 
@@ -169,22 +182,30 @@ func (c ApplicationAuthConfig) Normalize() (ApplicationAuthConfig, error) {
 	c.SMTPUsername = strings.TrimSpace(c.SMTPUsername)
 	c.SMTPPassword = strings.TrimSpace(c.SMTPPassword)
 	c.SMTPFrom = strings.TrimSpace(c.SMTPFrom)
-	if c.Provider == "" || len(c.AllowedWallets) == 0 {
-		c.AllowedWallets = slices.Clone(c.AllowedWallets)
+	c.AllowedWallets, c.EmailList = slices.Clone(c.AllowedWallets), slices.Clone(c.EmailList)
+	if c.Provider == "" {
 		return c, nil
 	}
-	allowed, err := NormalizeApplicationAuthAllowed(c.Provider, c.AllowedWallets)
-	if err != nil {
-		return c, err
+	var err error
+	if len(c.AllowedWallets) > 0 {
+		if c.AllowedWallets, err = NormalizeApplicationAuthAllowed(c.Provider, c.AllowedWallets); err != nil {
+			return c, err
+		}
 	}
-	c.AllowedWallets = allowed
+	// A provider that does not take the list reads it as what it is not, so
+	// resolveApplicationAuthConfig names the mistake instead.
+	if len(c.EmailList) > 0 && ApplicationAuthProviderTakesEmailList(c.Provider) {
+		if c.EmailList, err = NormalizeApplicationAuthAllowed(c.Provider, c.EmailList); err != nil {
+			return c, err
+		}
+	}
 	return c, nil
 }
 
 // Public returns c without its secrets, the identity proof, the OIDC client
 // secret and the SMTP password, for a status that must not reveal them.
 func (c ApplicationAuthConfig) Public() ApplicationAuthConfig {
-	c.AllowedWallets = slices.Clone(c.AllowedWallets)
+	c.AllowedWallets, c.EmailList = slices.Clone(c.AllowedWallets), slices.Clone(c.EmailList)
 	c.IdentityProof = ""
 	c.OIDCClientSecret = ""
 	c.SMTPPassword = ""
@@ -381,8 +402,8 @@ func checkProviderRedirect(req *http.Request, via []*http.Request) error {
 }
 
 // NormalizeApplicationAuthProviderPrincipals canonicalizes the allowed
-// principals of an identity provider, oidc or saml (`--auth-allow` /
-// `auth_allowed_wallets`). Email addresses (containing '@') are lowercased and
+// principals of an identity provider, oidc or saml (`--auth-email-list` /
+// `auth_email_list`). Email addresses (containing '@') are lowercased and
 // match an email the provider vouches for only, '@example.com' domain entries
 // match that exact email domain, and `sub:<subject>` entries match the opaque
 // provider subject exactly, including case. Subject entries must carry the
@@ -407,7 +428,7 @@ func NormalizeApplicationAuthProviderPrincipals(values []string) ([]string, erro
 	return normalized, nil
 }
 
-// normalizeProviderAllowlistEntry canonicalizes one `--auth-allow` entry into its
+// normalizeProviderAllowlistEntry canonicalizes one `--auth-email-list` entry into its
 // typed form: `sub:<subject>` for an opaque provider subject, a lowercased
 // email for a verified-email entry, or a leading-'@' domain entry. A bare
 // token cannot be told apart from an email-shaped subject claim, so subject
