@@ -81,6 +81,10 @@ const (
 	// applicationAuthStateTokenLimit keeps a signed login state cookie well
 	// under the roughly 4 KB a browser accepts, since it silently drops a larger one.
 	applicationAuthStateTokenLimit = 3500
+	// applicationAuthNextLimit keeps a return path well inside the body limit,
+	// even doubled by JSON escaping, because the login page posts it back from
+	// its own URL.
+	applicationAuthNextLimit = 16 << 10
 	// providerMinSessionTTL is the shortest OIDC or SAML session, so a
 	// short-lived ID token or IdP session cannot produce a session that has
 	// already expired.
@@ -1488,7 +1492,7 @@ func signApplicationAuthPayload(key, payload []byte) []byte {
 func (a *applicationAuth) requireLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		next := r.URL.RequestURI()
-		if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+		if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || len(next) > applicationAuthNextLimit {
 			next = "/"
 		}
 		http.Redirect(w, r, applicationAuthLoginPath+"?next="+url.QueryEscape(next), http.StatusSeeOther)

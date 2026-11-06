@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/mail"
 	"net/textproto"
+	"net/url"
 	"reflect"
 	"runtime"
 	"slices"
@@ -709,6 +710,29 @@ func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
 	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusOK {
 		t.Fatalf("redeem after the alias came back = %d; want 200", rec.Code)
+	}
+}
+
+// The login page posts the path in its URL back, so the gate leaves out a deep
+// link too long for the request body. Otherwise the visitor would be told that a
+// good address is invalid.
+func TestLoginRedirectDropsAPathTooLongToPostBack(t *testing.T) {
+	t.Parallel()
+
+	gate := newEmailTestGate(t, emailTestConfig("127.0.0.1:25", "alice@example.com"), http.NotFoundHandler())
+	for path, want := range map[string]string{
+		"/" + strings.Repeat("a", applicationAuthNextLimit-1): "/" + strings.Repeat("a", applicationAuthNextLimit-1),
+		"/" + strings.Repeat("a", applicationAuthNextLimit):   "/",
+	} {
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+emailTestHost+path, nil))
+		location, err := url.Parse(rec.Header().Get("Location"))
+		if rec.Code != http.StatusSeeOther || err != nil {
+			t.Fatalf("redirect = %d, %v", rec.Code, err)
+		}
+		if got := location.Query().Get("next"); got != want {
+			t.Fatalf("a path of %d bytes returns to %d bytes; want %d", len(path), len(got), len(want))
+		}
 	}
 }
 
