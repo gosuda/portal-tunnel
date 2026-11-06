@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Relay: a budget for unapproved leases
+
+An unapproved lease routes nothing, but it holds an alias, a port, and capacity.
+`--unapproved-leases-per-source` (`UNAPPROVED_LEASES_PER_SOURCE`, default `64`)
+bounds how many such leases one IP can hold. Over the budget, registration gets
+`429 rate_limited` and the SDK retries every 5 minutes. Approved identities never
+count, and this budget never refuses them. `0` turns the bound off.
+
+An embedder of `portal.Server` with its own mux must follow two changes:
+`HandleRegister` no longer takes an address, because a lease belongs to the source
+that asked for its challenge, and `RefuseChallengeOverBudget` must be called after
+the access decision for the limit to apply.
+
 ### Tunnels report the approval wait
 
 On a `manual` relay, a tunnel now tells you when the relay does not route it.

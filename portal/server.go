@@ -126,6 +126,9 @@ type ServerConfig struct {
 	MinPort          int
 	MaxPort          int
 	ACME             acme.Config
+	// UnapprovedLeasesPerSource bounds the leases one source can hold without
+	// being routable. Zero disables the bound.
+	UnapprovedLeasesPerSource int
 
 	// ApplicationOwnsDomainReport delegates types.PathSDKDomain to the
 	// application handler, which can compose Server.DomainReport() itself.
@@ -313,6 +316,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	registry.unapprovedPerSource = cfg.UnapprovedLeasesPerSource
 	var relaySet *discovery.RelaySet
 	if cfg.DiscoveryEnabled {
 		cfg.Bootstraps, err = discovery.ResolveRelayURLs(cfg.Bootstraps, true)
