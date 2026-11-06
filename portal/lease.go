@@ -143,23 +143,42 @@ func (r *leaseRegistry) tcpPortPolicy() (bool, int) {
 // setIdentityRoutable applies the relay-pushed access result for one
 // identity. A non-routable identity also loses its cached content
 // immediately: cached sites must never outlive the relay's decision to route
-// their owner.
+// their owner. It loses its idle reverse streams too, so the SDK stops
+// reporting ready and learns the decision from its next reverse connect.
 func (r *leaseRegistry) setIdentityRoutable(key types.ServiceIdentityKey, routable bool, revision uint64) bool {
 	if r == nil || !key.Valid() {
 		return true
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if revision < r.accessRevision {
+		r.mu.Unlock()
 		return false
 	}
 	r.accessRevision = revision
 	r.applyIdentityRoutableLocked(key, routable)
+	var closeIdle []func()
+	for _, record := range r.records {
+		if record == nil || record.reverse == nil || record.ServiceKey() != key {
+			continue
+		}
+		if routable {
+			record.reverse.Resume()
+		} else if closeStreams := record.reverse.Pause(); closeStreams != nil {
+			closeIdle = append(closeIdle, closeStreams)
+		}
+	}
+	r.mu.Unlock()
+	// A TLS close can wait on its peer, so it must not hold the registry lock.
+	for _, closeStreams := range closeIdle {
+		closeStreams()
+	}
 	return true
 }
 
 // suspendIdentity keeps registration fail-closed without inventing a relay
 // revision. Only a publication at the current or a newer revision can reopen it.
+// It leaves idle reverse streams alone: the suspension is not a decision, and a
+// failed re-registration must not cost the live lease its streams.
 func (r *leaseRegistry) suspendIdentity(key types.ServiceIdentityKey) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -498,6 +498,48 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 	}
 }
 
+func TestRoutingDecisionControlsIdleReverseStreams(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	leaseIdentity := newTestLeaseIdentity(t, "streams")
+	record, _, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(record.Close)
+	key := leaseIdentity.ServiceKey()
+	registry.setIdentityRoutable(key, true, 1)
+	offer := func() error {
+		local, remote := net.Pipe()
+		t.Cleanup(func() { _ = remote.Close() })
+		return record.reverse.Offer(local)
+	}
+	if err := offer(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A suspension is not a decision: a failed re-registration keeps the stream.
+	registry.suspendIdentity(key)
+	if record.reverse.ReadyCount() != 1 {
+		t.Fatal("suspending the identity dropped its idle stream")
+	}
+
+	registry.setIdentityRoutable(key, false, 2)
+	if record.reverse.ReadyCount() != 0 {
+		t.Fatal("a non-routable decision left an idle stream parked")
+	}
+	if err := offer(); err == nil {
+		t.Fatal("a non-routable lease accepted a reverse stream")
+	}
+
+	registry.setIdentityRoutable(key, true, 3)
+	if err := offer(); err != nil {
+		t.Fatalf("a routable lease refused a reverse stream: %v", err)
+	}
+	if record.reverse.ReadyCount() != 1 {
+		t.Fatal("a routable decision did not admit the stream")
+	}
+}
+
 func TestAccessRevisionRejectsInFlightAllow(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	leaseIdentity := newTestLeaseIdentity(t, "revision")
