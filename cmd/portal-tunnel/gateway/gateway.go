@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
 	"sort"
@@ -554,7 +553,7 @@ func newCasperFacilitatorClient(contract X402Payment) (*facilitatorclient.Client
 		if err != nil {
 			return nil, fmt.Errorf("parse x402 facilitator endpoint %q: %w", endpoint, err)
 		}
-		if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		if u.Scheme == "http" && !utils.IsLoopbackHost(u.Hostname()) {
 			return nil, fmt.Errorf("x402 facilitator endpoint %q sends the authorization token over plaintext http; use https or a loopback endpoint", endpoint)
 		}
 	}
@@ -580,18 +579,6 @@ func firstEndpoint(endpoints []string) string {
 		}
 	}
 	return ""
-}
-
-// isLoopbackHost reports whether hostname is a loopback address: "localhost",
-// "::1", or a valid IP address that reports true from IsLoopback().
-func isLoopbackHost(hostname string) bool {
-	if hostname == "localhost" || hostname == "::1" {
-		return true
-	}
-	if addr, err := netip.ParseAddr(hostname); err == nil && addr.IsLoopback() {
-		return true
-	}
-	return false
 }
 
 func orDefaultMaxTimeout(contract X402Payment) int {

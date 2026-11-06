@@ -363,7 +363,7 @@ func normalizeOIDCIssuerURL(raw string) (string, error) {
 // isLoopbackHTTP reports whether u is plain http on a loopback host, the one
 // cleartext form an identity provider URL may take (local development and tests).
 func isLoopbackHTTP(u *url.URL) bool {
-	return u.Scheme == "http" && isLoopbackHost(u.Hostname())
+	return u.Scheme == "http" && utils.IsLoopbackHost(u.Hostname())
 }
 
 // validateOIDCEndpoint checks an endpoint from the discovery document of

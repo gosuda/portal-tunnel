@@ -481,6 +481,18 @@ func NormalizeTargetAddr(raw string) (string, error) {
 	return "", fmt.Errorf("invalid target address %q", raw)
 }
 
+// IsLoopbackHost reports whether hostname is a loopback address: "localhost",
+// "::1", or a valid IP address that reports true from IsLoopback().
+func IsLoopbackHost(hostname string) bool {
+	if hostname == "localhost" || hostname == "::1" {
+		return true
+	}
+	if addr, err := netip.ParseAddr(hostname); err == nil && addr.IsLoopback() {
+		return true
+	}
+	return false
+}
+
 func HostPortOrLoopback(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
