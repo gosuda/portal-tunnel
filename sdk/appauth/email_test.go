@@ -797,6 +797,23 @@ func TestEmailDeliverSurvivesAFailedQuit(t *testing.T) {
 	server.next(t)
 }
 
+// validateSMTPAddr accepts a port by its number, so the transport follows the
+// number too: a client that waits for a plaintext greeting on a TLS port times out.
+func TestEmailPortNumberPicksTheTransport(t *testing.T) {
+	t.Parallel()
+
+	for addr, want := range map[string]bool{
+		"smtp.example.com:465":  true,
+		"smtp.example.com:0465": true,
+		"smtp.example.com:+465": true,
+		"smtp.example.com:587":  false,
+	} {
+		if got := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: addr}, nil).implicitTLS; got != want {
+			t.Errorf("%s: implicit TLS = %v; want %v", addr, got, want)
+		}
+	}
+}
+
 // The startup check is the operator's main signal, so a server that signs in and
 // then drops the connection at QUIT must not read as an unusable one.
 func TestEmailCheckSurvivesAFailedQuit(t *testing.T) {

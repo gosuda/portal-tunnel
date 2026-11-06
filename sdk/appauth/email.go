@@ -56,7 +56,7 @@ const (
 	// emailAddressLimit is the longest address SMTP delivers (RFC 5321 4.5.3.1.3).
 	emailAddressLimit = 254
 	// emailImplicitTLSPort is the submission port that starts with TLS (RFC 8314).
-	emailImplicitTLSPort = "465"
+	emailImplicitTLSPort = 465
 	// emailLinkTokenBytes is the size of the secret in a login link: 256 bits.
 	emailLinkTokenBytes = 32
 	// emailRoutingCharacters are ordinary address characters to net/mail, but a
@@ -120,12 +120,13 @@ type applicationAuthEmailRedeemRequest struct {
 
 func newEmailAuthenticator(settings applicationAuthSettings, publicURLs func() []string) *emailAuthenticator {
 	host, port, _ := net.SplitHostPort(settings.emailSMTPAddr)
+	portNumber, _ := strconv.Atoi(port)
 	// None of the settings can hold a NUL, so the separators keep them unambiguous.
 	binding := sha256.Sum256([]byte(settings.emailSMTPAddr + "\x00" + settings.emailSMTPUsername + "\x00" + settings.emailFrom.Address))
 	return &emailAuthenticator{
 		smtpAddr:    settings.emailSMTPAddr,
 		smtpHost:    host,
-		implicitTLS: port == emailImplicitTLSPort,
+		implicitTLS: portNumber == emailImplicitTLSPort,
 		username:    settings.emailSMTPUsername,
 		password:    settings.emailSMTPPassword,
 		from:        settings.emailFrom,
