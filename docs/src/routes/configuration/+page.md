@@ -165,6 +165,7 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
 | `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the IVNP overlay and requires `DISCOVERY=true`; empty disables the overlay |
 | `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
+| `APPROVAL_MODE` | `auto` | string | Initial lease approval mode (`auto` \| `manual`). A mode saved in `policy.json` wins; see [Private relay](/self-hosting#private-relay) |
 
 ### IVNP overlay
 

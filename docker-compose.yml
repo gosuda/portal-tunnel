@@ -49,6 +49,7 @@ services:
       # Admin/auth configuration.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
+      APPROVAL_MODE: ${APPROVAL_MODE:-auto}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
 

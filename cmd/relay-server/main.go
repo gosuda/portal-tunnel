@@ -52,6 +52,7 @@ type appConfig struct {
 	UDPEnabled         bool
 	TCPEnabled         bool
 	PreAuth            types.PreAuthConfig
+	ApprovalMode       string
 	TrustProxyHeaders  bool
 	TrustedProxyCIDRs  string
 	FrontendDir        string
@@ -120,6 +121,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "show the dashboard landing page", "LANDING_PAGE_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.ApprovalMode, "approval-mode", string(policy.ModeAuto), "initial lease approval mode (auto|manual); a mode saved in policy.json wins", "APPROVAL_MODE")
 	utils.IntFlagEnv(fs, &cfg.Relay.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	utils.IntFlagEnv(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
@@ -181,6 +183,11 @@ func validateRelaySettings(cfg *appConfig) error {
 	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
 		return err
 	}
+	mode, err := policy.ParseMode(cfg.ApprovalMode)
+	if err != nil {
+		return err
+	}
+	cfg.ApprovalMode = string(mode)
 	if _, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs); err != nil {
 		return err
 	}
@@ -228,7 +235,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 
 	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
 	initialPolicy := types.PolicySettings{
-		ApprovalMode:       string(policy.ModeAuto),
+		ApprovalMode:       cfg.ApprovalMode,
 		LandingPageEnabled: cfg.LandingPageEnabled,
 		UDP:                types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
 		TCPPort:            types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
@@ -236,6 +243,11 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
+	}
+	// Any admin write on an auto relay saves that mode, and a saved mode wins.
+	// Only this direction warns, because it leaves a private relay open.
+	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && access.Snapshot().Mode() == policy.ModeAuto {
+		log.Warn().Str("policy_path", policyPath).Msg("approval mode manual is ignored: policy.json saves auto, so every lease is approved; set the mode with the admin API")
 	}
 
 	base, err := composeRelayHandler(x402Settings, server, relayAPI.Handler())

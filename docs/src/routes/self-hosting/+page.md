@@ -187,6 +187,29 @@ environment:
 
 See the [Deployment Guide](/deployment) for full ACME configuration options, credential setup per provider, and managed DNS automation.
 
+## Private relay
+
+To serve only tunnels you approve, start the relay in `manual` mode:
+
+```yaml
+environment:
+  APPROVAL_MODE: "manual"
+```
+
+A new tunnel then registers and appears in the admin dashboard, but no traffic
+reaches it until you approve it. The tunnel does not need to restart after
+approval.
+
+The setting applies on startup, and a mode saved in `policy.json` wins. The
+relay saves the mode on any admin change, such as a ban or a bandwidth limit.
+So a relay that once ran on `auto` and saved that mode stays open after you set
+`APPROVAL_MODE=manual`. The relay logs a warning in that case. Set the mode from
+the admin dashboard instead.
+
+An unapproved tunnel routes no traffic, but it still holds its name alias and
+any UDP or TCP port it was given, and those ports count against the relay's
+capacity limits.
+
 ## Optional: Enable TCP/UDP Tunneling
 
 To relay raw TCP or UDP traffic (game servers, databases, etc.), enable the transports and set a port range:
