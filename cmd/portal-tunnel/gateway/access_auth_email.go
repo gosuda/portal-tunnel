@@ -414,7 +414,9 @@ func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client) error {
 }
 
 // emailLoginMessage is the one mail the tunnel sends: fixed text, the host the
-// link is for, and the link. The token is in the fragment, as in a credential
+// link is for in its subject, and the link. A mail client makes a link of any URL
+// in the text, so the login link is the only one: a visitor who taps another
+// reaches the application, not the sign-in. The token is in the fragment, as in a credential
 // redeem link, so a mail scanner or link preview that fetches the URL cannot
 // use it up. The sign-in page posts it only after a click, so one that also runs
 // the page cannot either. The recipient is named only in the SMTP envelope, with
@@ -441,7 +443,7 @@ func emailLoginMessage(from mail.Address, host, token string, now time.Time) ([]
 	}
 	message.WriteString("\r\n")
 	for _, line := range []string{
-		"Use this link to sign in to https://" + host + ":",
+		"Use this link to sign in:",
 		"",
 		link,
 		"",

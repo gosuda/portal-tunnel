@@ -412,6 +412,24 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 	server.expectNoMore(t)
 }
 
+// A mail client makes a link of any URL in the text, so the login link has to be
+// the only one a visitor can tap.
+func TestEmailMailHoldsOneLink(t *testing.T) {
+	t.Parallel()
+
+	message, err := emailLoginMessage(mail.Address{Address: emailTestSender}, emailTestHost, "token", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers, body, ok := strings.Cut(string(message), "\r\n\r\n")
+	if !ok || !strings.Contains(headers, "Subject: Sign in to "+emailTestHost) {
+		t.Fatalf("subject does not name the host:\n%s", headers)
+	}
+	if got := strings.Count(body, emailTestHost); got != 1 || !strings.Contains(body, "https://"+emailTestHost+applicationAuthLoginPath+"#email_token=token") {
+		t.Fatalf("body names the host %d times, want only in the login link:\n%s", got, body)
+	}
+}
+
 // A link works once, for its host, within emailLinkTTL.
 func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 	t.Parallel()
