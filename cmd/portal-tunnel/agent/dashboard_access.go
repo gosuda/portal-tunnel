@@ -378,6 +378,25 @@ func (a *agentDashboardAccess) forgetSecret() {
 	a.clearSecret = false
 }
 
+// setClearSecret marks the stored secret for removal or takes the mark back. An
+// SMTP username and password are set together, so the username goes with the mark
+// and returns with it, unless another one was typed meanwhile.
+func (a *agentDashboardAccess) setClearSecret(clear bool, stored AgentTunnelStatus) {
+	a.clearSecret = clear
+	if clear {
+		a.secret.Reset()
+	}
+	if a.provider != appauth.ProviderEmail {
+		return
+	}
+	switch {
+	case clear:
+		a.smtpUsername.Reset()
+	case a.smtpUsername.Value() == "":
+		a.smtpUsername.SetValue(stored.SMTPUsername)
+	}
+}
+
 // setProvider switches the draft to provider and drops a typed secret. The
 // allow list and the OIDC, SAML or email settings belong to one provider, so another provider
 // than the stored one starts without them; coming back to the stored one

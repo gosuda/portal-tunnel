@@ -93,10 +93,8 @@ var agentDashboardBindings = []agentDashboardBinding{
 	{
 		keys: []string{"f6", "ctrl+x"}, label: "Clear", when: agentDashboardModel.canClearAccessSecret,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
-			m.access.clearSecret = !m.access.clearSecret
-			if m.access.clearSecret {
-				m.access.secret.Reset()
-			}
+			tunnel, _ := m.accessTunnel()
+			m.access.setClearSecret(!m.access.clearSecret, tunnel)
 			return m, nil
 		},
 	},
@@ -333,9 +331,10 @@ func (m agentDashboardModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	*input, cmd = input.Update(msg)
-	if m.inAccess() && input == &m.access.secret && input.Value() != "" {
+	if m.inAccess() && input == &m.access.secret && input.Value() != "" && m.access.clearSecret {
 		// A typed secret replaces the stored one, so it takes the removal mark with it.
-		m.access.clearSecret = false
+		tunnel, _ := m.accessTunnel()
+		m.access.setClearSecret(false, tunnel)
 	}
 	return m, cmd
 }
