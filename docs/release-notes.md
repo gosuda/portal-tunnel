@@ -27,6 +27,10 @@ and `saml` keep reading `--auth-allow` (`auth_allowed_wallets`), so existing
 configs keep working, and setting both keys is refused. `siwe` and `credential`
 keep `--auth-allow`.
 
+The command builder now writes `--auth-email-list` for `oidc` and `saml`. An
+installed `portal` older than this release refuses that flag, so update
+`portal` before you run a command that you copied from the builder.
+
 ### Agent config: one typed tunnel configuration
 
 The CLI, the agent config, and the Agent API now share one typed tunnel
