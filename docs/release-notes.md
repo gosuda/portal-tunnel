@@ -46,6 +46,19 @@ The default stays `auto`, and any other value than `auto` or `manual` stops
 startup. A mode saved in `policy.json` wins. The relay saves the mode on any
 admin change, so a relay that has saved `auto` stays open under
 `APPROVAL_MODE=manual` and logs a warning.
+### Application auth for Go programs
+
+Package `sdk/appauth` is the sign-in gate of `portal expose --auth` as an
+`http.Handler`, for a Go program that embeds the SDK. `New` builds the gate and
+reads no network, and `Check` tests the provider. `PrincipalFromContext` gives
+the handler the provider, the subject, and the verified email. A rebuilt gate
+keeps its sessions when the identity and the provider settings stay the same.
+See [Go Application Auth](/api-reference/sdk#go-application-auth).
+
+For `portal` users nothing changes: flags, config keys, and the Agent API stay
+the same. A session cookie now also holds the verified email. A session made
+before this release keeps working.
+
 ### Application auth: a session works from its own origin
 
 When a request carries a session cookie and an `Origin` of another origin, the
