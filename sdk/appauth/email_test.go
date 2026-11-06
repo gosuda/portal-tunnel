@@ -15,10 +15,8 @@ import (
 	"net/textproto"
 	"net/url"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -562,7 +560,7 @@ func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
 // A send takes its slot only after the limits pass. A request that waits for
 // them holds none, so a flood of requests the limits refuse cannot crowd out a
 // real send.
-func TestEmailSendWaitingForTheLimitsHoldsNoSlot(t *testing.T) {
+func TestEmailRefusedSendsLeaveTheSlotsFree(t *testing.T) {
 	t.Parallel()
 
 	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
@@ -571,27 +569,13 @@ func TestEmailSendWaitingForTheLimitsHoldsNoSlot(t *testing.T) {
 		t.Fatal("the first link was refused")
 	}
 	<-e.sendSlots
-
-	e.mu.Lock()
-	var waiting sync.WaitGroup
-	for range emailSendSlots {
-		waiting.Go(func() { e.send("alice@example.com", true, emailTestHost, "/", now) })
-	}
-	// Give the sends every chance to run up to the lock.
-	for range 10_000 {
-		if len(e.sendSlots) != 0 {
-			break
+	for range emailSendSlots + 1 {
+		if e.issue("alice@example.com", true, emailTestHost, "/", now) != "" {
+			t.Fatal("the cooldown let a send through")
 		}
-		runtime.Gosched()
 	}
-	held := len(e.sendSlots)
-	e.mu.Unlock()
-	waiting.Wait()
-	if held != 0 {
-		t.Fatalf("%d sends held a slot while they waited for the limits", held)
-	}
-	if held := len(e.sendSlots); held != 0 {
-		t.Fatalf("%d refused sends kept a slot", held)
+	if e.issue("bob@example.com", true, emailTestHost, "/", now) == "" {
+		t.Fatal("refused sends took the slot of a real one")
 	}
 }
 
