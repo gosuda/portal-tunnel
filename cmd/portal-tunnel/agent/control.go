@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
+	"github.com/gosuda/portal-tunnel/v2/internal/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
