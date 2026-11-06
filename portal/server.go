@@ -637,7 +637,14 @@ func (s *Server) Wait() error {
 func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
 	lease, err := s.registry.admitLeaseIdentity(offer.ServiceIdentity, offer.LeaseID, time.Now().UTC(), false)
 	if err != nil {
-		offer.RejectUnavailable()
+		switch {
+		case errors.Is(err, errLeaseRejected):
+			offer.RejectPending()
+		case errors.Is(err, errLeaseDenied):
+			offer.RejectDenied()
+		default:
+			offer.RejectUnavailable()
+		}
 		offer.Close()
 		return
 	}

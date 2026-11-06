@@ -72,6 +72,9 @@ const (
 	statusUnavailable = byte(0)
 	statusAccepted    = byte(1)
 	statusCapacity    = byte(2)
+	// A peer from before these two reads them as unavailable.
+	statusPending = byte(3)
+	statusDenied  = byte(4)
 )
 
 func normalizeIVNPDestination(destination string) (string, error) {
@@ -116,6 +119,12 @@ func (o ReverseOffer) RejectUnavailable() { _, _ = o.respond(statusUnavailable) 
 
 // RejectCapacity writes the capacity status for the reverse-offer protocol.
 func (o ReverseOffer) RejectCapacity() { _, _ = o.respond(statusCapacity) }
+
+// RejectPending writes the status of a lease that waits for approval.
+func (o ReverseOffer) RejectPending() { _, _ = o.respond(statusPending) }
+
+// RejectDenied writes the status of a lease the relay denied or banned.
+func (o ReverseOffer) RejectDenied() { _, _ = o.respond(statusDenied) }
 
 // Close releases the connection transferred with the offer.
 func (o ReverseOffer) Close() { closeNow(o.conn) }
@@ -549,11 +558,18 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
 		return nil, nil
 	}
-	if response[0] == statusCapacity {
+	switch response[0] {
+	case statusAccepted:
+	case statusCapacity:
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay capacity exhausted")
 		return nil, nil
-	}
-	if response[0] != statusAccepted {
+	case statusPending:
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
+		return nil, nil
+	case statusDenied:
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseDenied, "lease is denied by the relay")
+		return nil, nil
+	default:
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "reverse capability is invalid")
 		return nil, nil
 	}
