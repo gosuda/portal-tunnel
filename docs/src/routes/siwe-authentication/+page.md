@@ -1,6 +1,6 @@
 ---
 title: Application Access Authentication
-description: Let only chosen people open a tunnel, with Portal credential links, an Ethereum wallet, OpenID Connect, or SAML 2.0 sign-in.
+description: Let only chosen people open a tunnel, with Portal credential links, an Ethereum wallet, OpenID Connect, SAML 2.0, or email link sign-in.
 ---
 
 # Application Access Authentication
@@ -18,6 +18,15 @@ routed path. Pick one method:
 | People who own an Ethereum wallet | [`--auth siwe`](#siwe-application-access) | A browser wallet | Nothing |
 | People who sign in with Google, Microsoft, Keycloak, GitLab or another OpenID Connect provider | [`--auth oidc`](#openid-connect-oidc) | An account at that provider | An OAuth client registered at the provider |
 | People who sign in at a SAML identity provider such as Okta, Entra ID, ADFS, Keycloak or Shibboleth | [`--auth saml`](#saml-20) | An account at that provider | A SAML application registered at the provider |
+| People you know by email address | [`--auth email`](#email-links) | A mailbox | An SMTP account, such as a mailbox app password or a transactional mail service |
+
+Two keys hold the list of who may sign in. `--auth-allow`
+(`auth_allowed_wallets` in `config.toml`) is the list for `siwe` and
+`credential`. `--auth-email-list` (`auth_email_list`) is the list for `oidc`,
+`saml`, and `email`: a tunnel runs one provider, so the one list serves all
+three. `oidc` and `saml` still read `--auth-allow` / `auth_allowed_wallets`, so
+existing configs keep working. Setting both keys is refused. `email` takes only
+`--auth-email-list`.
 
 [Check that sign-in is on](#check-that-sign-in-is-on) once the tunnel runs. An AI
 coding agent that follows the `portal-expose` skill reads the same steps in
@@ -101,7 +110,7 @@ are not used for application access.
 
 Inbound `X-Portal-User`, `X-Portal-Auth`, and `X-Portal-Proof` headers are always removed. Add
 `--auth-identity-headers` to inject the verified subject and provider (`siwe`,
-`credential`, `oidc`, or `saml`) after login. Upstreams must only trust these headers when they cannot be
+`credential`, `oidc`, `saml`, or `email`) after login. Upstreams must only trust these headers when they cannot be
 reached except through this local Portal proxy.
 
 ### Verifying the identity headers
@@ -151,16 +160,16 @@ portal expose 3000 \
   --auth oidc \
   --auth-oidc-issuer https://accounts.google.com \
   --auth-oidc-client-id "$OIDC_CLIENT_ID" \
-  --auth-allow alice@example.com
+  --auth-email-list alice@example.com
 ```
 
-Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal/auth/callback`. Portal builds it from the host the visitor opened, so register it for every host visitors use: the short `<name>.<relay-domain>` URL and the identity-bound one, on every relay the tunnel is published on. Pinning one relay with `--relays <url> --discovery=false` keeps that list short. Portal verifies the ID token against the provider's `.well-known/openid-configuration` and `jwks_uri` and enforces `--auth-allow` on login and on every subsequent session request. A session is bound to the issuer and client ID that created it, so changing `--auth-oidc-issuer` or `--auth-oidc-client-id` signs every visitor out; rotating the client secret does not. On the not-allowed screen, Sign in again asks the provider for its account chooser, so a browser still signed in to the refused account can pick another one.
+Configure the identity provider's redirect URI as `https://<tunnel-host>/_portal/auth/callback`. Portal builds it from the host the visitor opened, so register it for every host visitors use: the short `<name>.<relay-domain>` URL and the identity-bound one, on every relay the tunnel is published on. Pinning one relay with `--relays <url> --discovery=false` keeps that list short. Portal verifies the ID token against the provider's `.well-known/openid-configuration` and `jwks_uri` and enforces `--auth-email-list` on login and on every subsequent session request. A session is bound to the issuer and client ID that created it, so changing `--auth-oidc-issuer` or `--auth-oidc-client-id` signs every visitor out; rotating the client secret does not. On the not-allowed screen, Sign in again asks the provider for its account chooser, so a browser still signed in to the refused account can pick another one.
 
-`--auth-allow` is required with `--auth oidc`: an identity provider authenticates accounts it does not restrict to your application, so without an allowlist every one of them would pass, and Portal refuses to start. It accepts an email address, an `@example.com` domain (that exact domain only, not its subdomains), or a `sub:<subject>` entry for the provider's opaque `sub` claim. Email and domain entries match only when the ID token carries `email_verified: true`; a provider that omits the claim, or one whose `sub` is not an email, can be allowed by `sub:` only. A `sub` claim value can never satisfy an email or domain entry, so an email-shaped `sub` cannot impersonate a verified-email allowlist entry.
+`--auth-email-list` is required with `--auth oidc`: an identity provider authenticates accounts it does not restrict to your application, so without an allowlist every one of them would pass, and Portal refuses to start. It accepts an email address, an `@example.com` domain (that exact domain only, not its subdomains), or a `sub:<subject>` entry for the provider's opaque `sub` claim. Email and domain entries match only when the ID token carries `email_verified: true`; a provider that omits the claim, or one whose `sub` is not an email, can be allowed by `sub:` only. A `sub` claim value can never satisfy an email or domain entry, so an email-shaped `sub` cannot impersonate a verified-email allowlist entry.
 
 Email and domain entries are compared in lowercase and must be ASCII, so write an internationalized domain in punycode. A `sub:` entry is compared exactly, including case, because the provider's `sub` is a case-sensitive identifier: `sub:Alice` does not allow the subject `alice`.
 
-An OIDC session lasts as long as the ID token, but never less than 15 minutes, so a short-lived token does not send the visitor through the provider again at once, and never more than 24 hours. Revoking a principal takes effect on the next request whatever the session lifetime, because `--auth-allow` is checked every time.
+An OIDC session lasts as long as the ID token, but never less than 15 minutes, so a short-lived token does not send the visitor through the provider again at once, and never more than 24 hours. Revoking a principal takes effect on the next request whatever the session lifetime, because `--auth-email-list` is checked every time.
 
 Pass the client secret as `AUTH_OIDC_CLIENT_SECRET`, as above, so it stays out of the process list. Typing the secret after `export` saves it in the shell history; reading it at a prompt avoids that. Run these lines in the same shell session that then starts `portal expose`. If you press Ctrl-C at the Linux and macOS prompt, run `stty echo` to see what you type again.
 
@@ -191,7 +200,7 @@ portal expose 3000 \
   --name myapp \
   --auth saml \
   --auth-saml-metadata-url https://idp.example.com/realms/main/protocol/saml/descriptor \
-  --auth-allow @example.com
+  --auth-email-list @example.com
 ```
 
 ### Set up the identity provider
@@ -236,8 +245,8 @@ provider is not usable` if that fails. The tunnel keeps running.
 
 ### Who may sign in with SAML
 
-`--auth-allow` is required with `--auth saml`, for the same reason as with OIDC.
-The subject is the `NameID` of the assertion, or the single value of the
+`--auth-email-list` is required with `--auth saml`, for the same reason as with
+OIDC. The subject is the `NameID` of the assertion, or the single value of the
 attribute that `--auth-saml-subject-attribute` names, for example `email`. The
 allowlist entries take the OIDC forms:
 
@@ -281,12 +290,155 @@ the tunnel address instead. Portal does not support single logout.
 A SAML session follows the `SessionNotOnOrAfter` of the assertion when the IdP
 sends one, but never lasts less than 15 minutes or more than 24 hours. Without
 it, the session lasts 24 hours. The `NotOnOrAfter` of the assertion only limits
-when Portal accepts the assertion. Portal checks `--auth-allow` on every
+when Portal accepts the assertion. Portal checks `--auth-email-list` on every
 request, so a removed entry ends its sessions at once. A session is also bound
 to the metadata source, the entity ID and the subject attribute: a change to one
 of them signs every visitor out. With `--auth-identity-headers`,
 `X-Portal-User` carries the email or the `sub:` subject, and `X-Portal-Auth`
 carries `saml`.
+
+## Email links
+
+Use `--auth email` to sign visitors in with a one-time link that Portal sends
+by email. A visitor enters an email address on the sign-in page. If the address
+is on the allowlist, Portal sends a link to it through your own SMTP account.
+The link creates a 24-hour session. You need no identity provider, only an SMTP
+account, for example a mailbox with an app password or a transactional mail
+service. The SMTP settings and the password stay on your machine. The relay
+never sees them.
+
+```bash
+# AUTH_SMTP_PASSWORD is set in this shell first; see the prompt below
+portal expose 3000 \
+  --name myapp \
+  --auth email \
+  --auth-smtp-addr smtp.gmail.com:587 \
+  --auth-smtp-username you@gmail.com \
+  --auth-smtp-from you@gmail.com \
+  --auth-email-list alice@example.com \
+  --auth-email-list @example.com
+```
+
+### Set up the SMTP account
+
+1. Find the submission server of your mail provider as `host:port`, for example `smtp.gmail.com:587`. Set it with `--auth-smtp-addr`.
+2. Create an app password or an SMTP credential at the provider. Set the username with `--auth-smtp-username` and the password with `AUTH_SMTP_PASSWORD`. Leave both empty only for a server that needs no login.
+3. Set the sender with `--auth-smtp-from`. Use an address that your SMTP account can send from. You can add a display name, for example `"Portal <login@example.com>"`.
+
+Every link comes from this one sender. No visitor input can change the sender,
+the subject or the text of the mail. The mail has no `To` header, by design: the
+recipient is named only in the SMTP envelope. Delivery, spam placement, SPF, DKIM
+and DMARC belong to your SMTP account.
+
+Portal picks the transport from the port. Port 465 uses TLS from the start. On
+any other port, the server must offer STARTTLS, and Portal refuses to send the
+password without it. Only a server at `localhost`, `127.0.0.1` or `::1`, such
+as a local mail relay on `127.0.0.1:25`, can receive plaintext. These are the
+names to which Go's SMTP client sends a password without TLS.
+
+Portal signs in with AUTH PLAIN only. A server that offers only AUTH LOGIN fails
+at the startup check.
+
+Pass the password as `AUTH_SMTP_PASSWORD`, as with the OIDC client
+secret, so that it stays out of the process list. Read it at a prompt to keep it
+out of the shell history. Run these lines in the same shell session that then
+starts `portal expose`.
+
+Linux and macOS (bash, zsh):
+
+```bash
+printf 'SMTP password: '; stty -echo; read -r AUTH_SMTP_PASSWORD; stty echo; echo; export AUTH_SMTP_PASSWORD
+```
+
+Windows PowerShell:
+
+```powershell
+$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+```
+
+When the tunnel starts, Portal checks the SMTP server once and sends no mail.
+The check proves the server, TLS, and the login. It sends no `MAIL FROM`, so it
+does not prove the sender. With no username it signs in to nothing, so it proves
+only that the server answers, with TLS where TLS is required. If the check fails,
+Portal logs `application auth provider is not usable`, and the agent shows the
+error as the provider check. The tunnel keeps running.
+
+### Who may sign in with email
+
+`--auth-email-list` is required with `--auth email`. Without a list, anyone
+could make the tunnel send mail to any address, so Portal refuses to start. An
+entry is an email address, or an `@example.com` domain that matches that exact
+domain only, not its subdomains. A mailbox has no other account ID, so Portal
+refuses `sub:` entries. Entries are compared in lowercase and must be ASCII, as
+with OIDC. An address entry that no visitor could sign in with, for example one
+that contains a space, `%` or `!`, stops the tunnel at startup.
+
+Portal refuses a visitor's address that contains `%` or `!` with `400`. A mail
+server can route on those characters, so the allowlist could not vouch for where
+the mail ends up.
+
+The sign-in page gives the same answer for every other well-formed address: an
+allowed address, an address that is not allowed, and an address over a limit.
+Portal sends the mail after it answers, so the time of the answer shows nothing
+either. For the same reason, a visitor never sees an SMTP error.
+
+A failed send shows only in the tunnel log, as `email login link not sent`, and
+the error on that line says why. For the recipient and data steps the error holds
+only the SMTP reply code, never the recipient. The error
+`every email send slot is in use` means that four sends were running, so Portal
+dropped this one. A refusal by a limit or by the allowlist logs nothing, so a
+quiet log can mean a refusal. A wrong server, TLS setup or login shows in the
+startup check.
+
+One address gets at most one link per minute and five links per hour. For an
+address that you list exactly, this limit bounds the mail to its mailbox. An
+`@domain` entry is different: `alice+1@example.com` and `alice+2@example.com` are
+two addresses that can reach one mailbox, so only the budget below limits that
+mailbox.
+
+The addresses that only an `@domain` entry allows get at most 50 links per hour
+together, because their number has no bound. All `@domain` entries share this one
+budget, not one budget per domain. It protects the quota of your SMTP account. An
+address that you list exactly is outside this budget.
+
+Portal cannot tell visitors apart, because the relay does not pass on their IP
+addresses. So one visitor can use up the budget with made-up addresses in any
+allowed domain. Then the real addresses of every `@domain` entry get no link
+while the flood lasts and for up to an hour after it, because the window rolls.
+Their visitors see no error. The same requests also make your SMTP account send
+up to 50 mails per hour to addresses that may not exist. If this matters, list
+the addresses exactly instead of `@domain`.
+
+### The link
+
+The link opens the sign-in page with the token after `#`:
+`https://<tunnel-host>/_portal/auth/login#email_token=...`. A browser does not
+send the part after `#` to a server. The page removes the token from the address
+when it loads and shows a Continue button. It posts the token to Portal only on
+that click. So a mail scanner or a link preview that only fetches the URL, or
+that opens the page and runs its script without clicking, does not use up the
+link.
+
+The token holds 256 random bits. Portal keeps only its SHA-256 hash in memory,
+with the address and the host. A link works once, for 10 minutes, and only on
+the host that it was sent for. A restart of the tunnel cancels every link that
+was not used. The visitor then asks for a new link.
+
+Portal sends a link only for a host where the tunnel is published now: the
+identity-bound URL of a relay, or the short URL while that relay holds the
+name. Portal refuses a request for any other host with `403`. This keeps a
+forged `Host` header from putting another host into the link.
+
+The link is not bound to the browser that asked for it. A visitor can ask on a
+computer and open the mail on a phone. Anyone who can read the mail can use the
+link once, so the link is as safe as the mailbox.
+
+Portal checks `--auth-email-list` again when the link is used and on every
+request, so a removed entry ends its sessions at once. A session is also bound to the
+SMTP server, the SMTP username and the sender. If you change one of them, for
+example after the mail account was compromised, every email session ends. A
+new password alone does not end the sessions. With `--auth-identity-headers`,
+`X-Portal-User` carries the email address, and `X-Portal-Auth` carries `email`.
 
 ## Check That Sign-In Is On
 
@@ -301,6 +453,18 @@ curl -s -X POST https://myapp.example.com/     # 401 {"error":"authentication re
 A `200` means the gate is not on: check that `--auth` is on the command you ran.
 With OIDC or SAML, use `GET` for `/_portal/auth/login`, which answers `303` to
 the provider; a `HEAD` request is refused with `405`.
+
+With email, ask for a link for an address that is on no allowlist. The answer is
+`202`, and no mail goes out:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'Origin: https://myapp.example.com' -H 'Content-Type: application/json' \
+  -d '{"email":"nobody@example.invalid"}' \
+  https://myapp.example.com/_portal/auth/email/request     # 202
+```
+
+A `403` means that the tunnel is not published at that host now.
 
 ## Agent Wallet Status Access
 

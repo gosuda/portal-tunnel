@@ -187,7 +187,7 @@ func TestApplicationAuthCredential(t *testing.T) {
 		upstreamUser, upstreamAuth = r.Header.Get(types.HeaderPortalUser), r.Header.Get(types.HeaderPortalAuth)
 		upstreamCredential = r.Header.Get(types.HeaderAccessCredential)
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true})
+	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestApplicationSessionFollowsTheHostNotItsSpelling(t *testing.T) {
 	tunnelIdentity := applicationAuthTestIdentity()
 	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential})
+	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestApplicationAuthIdentityProof(t *testing.T) {
 				reached = true
 				gotProof = r.Header.Values(types.HeaderPortalProof)
 				w.WriteHeader(http.StatusNoContent)
-			}), tunnelIdentity, tt.cfg)
+			}), tunnelIdentity, tt.cfg, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -406,7 +406,7 @@ func TestApplicationAuthIdentityProofReachesRoutedUpstream(t *testing.T) {
 		t.Fatal(err)
 	}
 	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := NewApplicationAuth(routes, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue})
+	handler, err := NewApplicationAuth(routes, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 		Provider:        ApplicationAuthProviderCredential,
 		AllowedWallets:  []string{"alice", "bob"},
 		IdentityHeaders: true,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +467,7 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 		Provider:        ApplicationAuthProviderCredential,
 		AllowedWallets:  []string{"bob"},
 		IdentityHeaders: true,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +589,7 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 		AllowedWallets:  []string{"alice@example.com"},
 		IdentityHeaders: true,
 		OIDCConfig:      OIDCConfig{OIDCIssuerURL: issuerURL, OIDCClientID: "portal-client", OIDCClientSecret: "portal-secret"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,7 +660,7 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 		AllowedWallets:  []string{"bob@example.com"},
 		IdentityHeaders: true,
 		OIDCConfig:      OIDCConfig{OIDCIssuerURL: issuerURL, OIDCClientID: "portal-client", OIDCClientSecret: "portal-secret"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +683,7 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 			cfg.OIDCIssuerURL = "https://idp.example"
 			cfg.OIDCClientID = "portal-client"
 		}
-		handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
+		handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -894,7 +894,7 @@ func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
 	t.Helper()
 	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, AllowedWallets: allowed, IdentityHeaders: identityHeaders})
+	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, AllowedWallets: allowed, IdentityHeaders: identityHeaders}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -962,10 +962,10 @@ func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
 	t.Parallel()
 
 	cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
-	if err := ValidateApplicationAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
-		t.Fatalf("ValidateApplicationAuthConfig without an allowlist = %v; want an error naming --auth-allow", err)
+	if err := ValidateApplicationAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
+		t.Fatalf("ValidateApplicationAuthConfig without an allowlist = %v; want an error naming --auth-email-list", err)
 	}
-	if _, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg); err == nil {
+	if _, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg, nil); err == nil {
 		t.Fatal("NewApplicationAuth started OIDC without an allowlist")
 	}
 	cfg.AllowedWallets = []string{"alice@example.com"}
@@ -1090,7 +1090,7 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		{
 			name:    "oidc without an allowlist",
 			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}},
-			wantErr: "--auth-allow",
+			wantErr: "--auth-email-list",
 		},
 		{
 			name:    "oidc without an issuer",
@@ -1140,7 +1140,7 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		{
 			name:    "saml without an allowlist",
 			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, SAMLConfig: SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"}},
-			wantErr: "--auth-allow",
+			wantErr: "--auth-email-list",
 		},
 		{
 			name:    "saml without metadata",
@@ -1196,7 +1196,7 @@ func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
 		Provider:       ApplicationAuthProviderOIDC,
 		AllowedWallets: []string{"sub:" + sub},
 		OIDCConfig:     OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1231,7 +1231,7 @@ func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 			Provider:       ApplicationAuthProviderOIDC,
 			AllowedWallets: []string{"alice@example.com"},
 			OIDCConfig:     OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: clientID, OIDCClientSecret: clientSecret},
-		})
+		}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

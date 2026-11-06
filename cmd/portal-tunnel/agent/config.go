@@ -142,10 +142,11 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 }
 
 // holdsSecret reports whether writing the tunnel stores a credential: the
-// OIDC client secret, an identity with its private key, or an x402 facilitator
-// token.
+// OIDC client secret, the SMTP password, an identity with its private key, or
+// an x402 facilitator token.
 func (cfg TunnelConfig) holdsSecret() bool {
 	return strings.TrimSpace(cfg.OIDCClientSecret) != "" ||
+		strings.TrimSpace(cfg.SMTPPassword) != "" ||
 		strings.TrimSpace(cfg.IdentityJSON) != "" ||
 		strings.TrimSpace(cfg.FacilitatorToken) != ""
 }

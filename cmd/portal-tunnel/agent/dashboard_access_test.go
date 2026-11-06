@@ -54,6 +54,44 @@ func testAccessStatus() AgentStatusResponse {
 	return status
 }
 
+// A tunnel with an email list and a stored SMTP password: leaving the password
+// alone names nothing, F6 removes it with the username it is paired with, a
+// typed one replaces it, and leaving the provider removes it. The list stays
+// under its own key throughout.
+func TestDashboardAccessStoredEmailPassword(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	typed := func(text string) tea.Msg { return keyRunes(text) }
+	status := testAccessStatus()
+	mail := &status.Tunnels[accessOpen]
+	mail.Provider = gateway.ApplicationAuthProviderEmail
+	mail.EmailList = []string{"alice@example.com"}
+	mail.EmailConfig = gateway.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "portal", SMTPFrom: "login@example.com"}
+	mail.AuthSMTPPasswordSet = true
+
+	// The focus ring is mode, entry 1, add 2, headers 3, server 4, username 5, password 6, sender 7.
+	for _, tt := range []struct {
+		name string
+		keys []tea.Msg
+		want string
+	}{
+		{"nothing touched", nil, `{}`},
+		{"a blank password leaves the stored one alone", []tea.Msg{keyUp, keyUp, typed("   ")}, `{}`},
+		{"a typed password replaces the stored one", []tea.Msg{keyUp, keyUp, typed(fakeSecret)}, `{"auth_smtp_password":"` + fakeSecret + `"}`},
+		{"F6 removes the stored password", []tea.Msg{keyUp, keyUp, keyF6}, `{"auth_smtp_password":""}`},
+		{"an allow list change keeps the list key", []tea.Msg{keyDown, keyDown, typed("bob@example.com"), keyEnter},
+			`{"auth_email_list":["alice@example.com","bob@example.com"]}`},
+		{"leaving email clears its settings and the password", []tea.Msg{keyLeft},
+			`{"auth":"saml","auth_email_list":[],"auth_smtp_addr":"","auth_smtp_username":"","auth_smtp_password":"","auth_smtp_from":""}`},
+		{"turning sign-in off sends only auth", []tea.Msg{keyRight}, `{"auth":""}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := accessBody(t, accessScreen(t, theme, status, accessOpen, tt.keys...)); !sameJSON(t, got, tt.want) {
+				t.Fatalf("request body = %s\nwant           %s", got, tt.want)
+			}
+		})
+	}
+}
+
 // settingsOf shows the Settings pane of the tunnel that is down tunnels from the first one.
 func settingsOf(t *testing.T, status AgentStatusResponse, down int) string {
 	t.Helper()
@@ -359,16 +397,19 @@ func TestDashboardAccessRequestNamesOnlyWhatChanged(t *testing.T) {
 			`{"auth":"siwe","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":"","auth_oidc_client_secret":""}`},
 		{"leaving OIDC without a stored secret does not name it", accessIdle, []tea.Msg{keyLeft},
 			`{"auth":"siwe","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":""}`},
-		{"OIDC to open sends only auth", accessWeb, []tea.Msg{keyRight, keyRight}, `{"auth":""}`},
+		{"OIDC to open sends only auth", accessWeb, []tea.Msg{keyRight, keyRight, keyRight}, `{"auth":""}`},
 		{"OIDC to SAML clears the OIDC settings and the allow list", accessWeb, []tea.Msg{keyRight},
 			`{"auth":"saml","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":"","auth_oidc_client_secret":""}`},
 		{"open to SAML", accessOpen,
-			[]tea.Msg{keyLeft, keyDown, typed("@example.com"), keyEnter, keyDown, keyDown, typed("https://idp.example/metadata"), keyDown, keyDown, typed("urn:portal:web"), keyDown, typed("email")},
-			`{"auth":"saml","auth_allowed_wallets":["@example.com"],"auth_saml_metadata_url":"https://idp.example/metadata","auth_saml_entity_id":"urn:portal:web","auth_saml_subject_attribute":"email"}`},
+			[]tea.Msg{keyLeft, keyLeft, keyDown, typed("@example.com"), keyEnter, keyDown, keyDown, typed("https://idp.example/metadata"), keyDown, keyDown, typed("urn:portal:web"), keyDown, typed("email")},
+			`{"auth":"saml","auth_email_list":["@example.com"],"auth_saml_metadata_url":"https://idp.example/metadata","auth_saml_entity_id":"urn:portal:web","auth_saml_subject_attribute":"email"}`},
+		{"open to email", accessOpen,
+			[]tea.Msg{keyLeft, keyDown, typed("alice@example.com"), keyEnter, keyDown, keyDown, typed("smtp.example.com:587"), keyDown, typed("portal"), keyDown, typed(fakeSecret), keyDown, typed("login@example.com")},
+			`{"auth":"email","auth_email_list":["alice@example.com"],"auth_smtp_addr":"smtp.example.com:587","auth_smtp_username":"portal","auth_smtp_password":"` + fakeSecret + `","auth_smtp_from":"login@example.com"}`},
 		{"open to credential", accessOpen, []tea.Msg{keyRight}, `{"auth":"credential"}`},
 		{"wallet to OIDC", accessWallet,
 			[]tea.Msg{keyRight, keyDown, typed("carol@example.com"), keyEnter, keyDown, keyDown, typed("https://idp.example.org"), keyDown, typed("client-1"), keyDown, typed(fakeSecret)},
-			`{"auth":"oidc","auth_allowed_wallets":["carol@example.com"],"auth_oidc_issuer":"https://idp.example.org","auth_oidc_client_id":"client-1","auth_oidc_client_secret":"` + fakeSecret + `"}`},
+			`{"auth":"oidc","auth_allowed_wallets":[],"auth_email_list":["carol@example.com"],"auth_oidc_issuer":"https://idp.example.org","auth_oidc_client_id":"client-1","auth_oidc_client_secret":"` + fakeSecret + `"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

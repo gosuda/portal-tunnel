@@ -894,7 +894,7 @@ func newOIDCTLSGate(t *testing.T, serve func(w http.ResponseWriter, r *http.Requ
 		Provider:       ApplicationAuthProviderOIDC,
 		AllowedWallets: []string{"alice@example.com"},
 		OIDCConfig:     OIDCConfig{OIDCIssuerURL: provider.URL, OIDCClientID: oidcTestClientID},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -990,7 +990,7 @@ func newOIDCTestGate(t *testing.T, idp *oidcTestIdP, allowed ...string) *applica
 		Provider:       ApplicationAuthProviderOIDC,
 		AllowedWallets: allowed,
 		OIDCConfig:     OIDCConfig{OIDCIssuerURL: idp.issuerURL, OIDCClientID: oidcTestClientID, OIDCClientSecret: idp.clientSecret},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1241,7 +1241,7 @@ func TestCheckApplicationAuthProvider(t *testing.T) {
 	t.Run("configuration the resolver rejects", func(t *testing.T) {
 		t.Parallel()
 		cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
-		if err := CheckApplicationAuthProvider(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--auth-allow") {
+		if err := CheckApplicationAuthProvider(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
 			t.Fatalf("CheckApplicationAuthProvider() = %v; want the resolver's error about the missing allowlist", err)
 		}
 	})

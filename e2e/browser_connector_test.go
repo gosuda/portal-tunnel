@@ -61,6 +61,22 @@ func readBrowserLog(path string) string {
 	return string(data)
 }
 
+// requireBrowser finds Chrome or Chromium. CI must have one; elsewhere the test
+// that asks is skipped.
+func requireBrowser(t *testing.T) string {
+	t.Helper()
+	for _, candidate := range []string{"google-chrome", "chromium", "chromium-browser"} {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path
+		}
+	}
+	if os.Getenv("CI") != "" {
+		t.Fatal("Chrome or Chromium is required for the browser tests")
+	}
+	t.Skip("Chrome or Chromium is not installed")
+	return ""
+}
+
 type browserSmokeResult struct {
 	publicURL string
 	aliasURL  string
@@ -88,19 +104,7 @@ func testPackagedBrowserWASM(t *testing.T, name string) {
 		t.Skip("WASM runtime glue is not built; run make build-tunnel")
 	}
 
-	var browser string
-	for _, candidate := range []string{"google-chrome", "chromium", "chromium-browser"} {
-		if path, err := exec.LookPath(candidate); err == nil {
-			browser = path
-			break
-		}
-	}
-	if browser == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("Chrome or Chromium is required for the browser connector test")
-		}
-		t.Skip("Chrome or Chromium is not installed")
-	}
+	browser := requireBrowser(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

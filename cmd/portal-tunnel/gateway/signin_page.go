@@ -60,6 +60,9 @@ h1:focus{outline:none}
 .field label{font-size:.82rem;font-weight:600}
 textarea{width:100%;min-height:96px;padding:10px 12px;border:1px solid var(--control);border-radius:.5rem;background:var(--input);color:var(--fg);font:.9rem ui-monospace,"SF Mono",Menlo,Consolas,monospace;resize:vertical}
 textarea::placeholder{color:var(--muted);opacity:1}
+form{display:grid;gap:14px}
+input{width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--control);border-radius:.5rem;background:var(--input);color:var(--fg);font:.95rem "Open Sans","Helvetica Neue",Arial,sans-serif}
+input::placeholder{color:var(--muted);opacity:1}
 .err{display:flex;gap:6px;align-items:flex-start;margin:0;font-size:.86rem}
 .err svg{width:16px;height:16px;margin-top:3px;flex:none;stroke:var(--danger);stroke-width:1.9}
 .btn{width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--action);border-radius:.5rem;background:var(--action);color:var(--action-fg);font:700 .95rem "Open Sans","Helvetica Neue",Arial,sans-serif;cursor:pointer}
@@ -79,6 +82,7 @@ a.btn{display:flex;align-items:center;justify-content:center;text-decoration:non
 <symbol id="i-wallet" viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v3"/><rect x="3.5" y="8" width="17" height="11" rx="2"/><circle cx="16" cy="13.5" r="1"/></symbol>
 <symbol id="i-spin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" opacity=".22"/><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"/></symbol>
 <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+<symbol id="i-mail" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="m4 7 8 6 8-6"/></symbol>
 </svg>
 <div class="page">
 <svg class="grid" aria-hidden="true"><defs><pattern id="dots" width="18" height="18" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" style="fill:var(--dot)"/></pattern></defs><rect width="100%" height="100%" fill="url(#dots)"/></svg>
@@ -98,11 +102,14 @@ a.btn{display:flex;align-items:center;justify-content:center;text-decoration:non
 // screens of a method, the post-login target check, and the request helper.
 // The target check refuses control characters and backslashes because browsers
 // drop tabs and newlines from URLs, so "/<TAB>/host" would become "//host".
+// done goes to the target of the login page, or to the one it is given, such as
+// the target an email link was requested with.
 const signinScriptPrelude = `const views=[...document.querySelectorAll('[data-view]')];
 const show=(name)=>{let shown;views.forEach((v)=>{v.hidden=v.dataset.view!==name;if(!v.hidden)shown=v});const h=shown&&shown.querySelector('h1');if(h)h.focus({preventScroll:true})};
 document.addEventListener('click',(e)=>{const b=e.target.closest('[data-go]');if(b)show(b.dataset.go)});
-const next=()=>{const value=new URLSearchParams(location.search).get('next')||'/';return value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')&&!/[\u0000-\u001f\u007f]/.test(value)?value:'/'};
-const done=()=>{const target=next();document.querySelector('#dest').textContent=target;show('ok');location.assign(target)};
+const safe=(value)=>typeof value==='string'&&value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')&&!/[\u0000-\u001f\u007f]/.test(value)?value:'/';
+const next=()=>safe(new URLSearchParams(location.search).get('next'));
+const done=(target)=>{target=target?safe(target):next();document.querySelector('#dest').textContent=target;show('ok');location.assign(target)};
 const fail=(message)=>{document.querySelector('#err-msg').textContent=message||'Check your connection and try again.';show('error')};
 const post=async(path,body)=>{const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let data={};try{data=await response.json()}catch(e){}return{status:response.status,ok:response.ok,data}};
 `
@@ -140,6 +147,27 @@ const v=await post('/_portal/auth/verify',{challenge_id:c.data.challenge_id,mess
 }catch(e){if(e&&e.code===4001){show('form');return}fail(e&&e.message)}};
 document.addEventListener('click',(e)=>{const b=e.target.closest('[data-connect]');if(b)connect(b.dataset.connect==='fresh')});`
 
+// The email screens: the form, the screens while a link is requested and after,
+// and the ones while a link from the mail is redeemed. The page answers the same
+// for every address, so the sent screen cannot say whether a mail went out. A
+// link waits for a click, because it works once and a mail scanner may open it
+// and run this page: a scanner must not use up the link of the visitor.
+const signinEmailBody = `<section data-view="form"><h1 tabindex="-1">Sign in with email</h1><p class="body">Enter your email address. If it has access to this app, you will get a one-time sign-in link.</p>
+<form id="email-form" novalidate><div class="field"><label for="email">Email address</label><input id="email" type="email" placeholder="you@example.com" autocomplete="email" autocapitalize="off" spellcheck="false">
+<p class="err" id="hint" role="alert" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg><span id="hint-msg"></span></p></div>
+<button type="submit" class="btn" id="send">Send sign-in link</button></form></section>
+<section data-view="sending" hidden><div class="ico info spin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spin"/></svg></div><h1 tabindex="-1">Sending your link</h1><p class="body">This takes a moment.</p></section>
+<section data-view="sent" hidden><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"/></svg></div><h1 tabindex="-1">Check your email</h1><p class="body">If this address has access, a sign-in link is on its way. The link works once and expires in 10 minutes.</p><div class="who"><small>Sent to</small><b id="to"></b></div><button type="button" class="btn" data-go="form">Use a different address</button></section>
+<section data-view="confirm" hidden><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"/></svg></div><h1 tabindex="-1">Finish signing in</h1><p class="body">Your sign-in link is ready. It works once.</p><button type="button" class="btn" id="redeem">Continue</button></section>
+<section data-view="checking" hidden><div class="ico info spin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spin"/></svg></div><h1 tabindex="-1">Checking your link</h1><p class="body">This takes a moment.</p></section>
+<section data-view="invalid" hidden><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1 tabindex="-1">That link did not work</h1><p class="body">It was already used, it expired, or the app restarted since it was sent. Ask for a new link.</p><button type="button" class="btn" data-go="form">Get a new link</button></section>
+` + signinCommonViews
+
+const signinEmailScript = `const input=document.querySelector('#email'),hint=document.querySelector('#hint'),hintMsg=document.querySelector('#hint-msg');
+const warn=(message)=>{hintMsg.textContent=message;hint.hidden=false;show('form');input.focus()};
+document.querySelector('#email-form').addEventListener('submit',async(e)=>{e.preventDefault();const email=input.value.trim();hint.hidden=true;if(!email){warn('Enter your email address first.');return}show('sending');try{const r=await post('/_portal/auth/email/request',{email,next:next()});if(r.status===400){warn('Enter a valid email address.');return}if(!r.ok){fail(r.data.error);return}document.querySelector('#to').textContent=email;show('sent')}catch(e){fail()}});
+const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('email_token')){const token=fragment.get('email_token');history.replaceState(null,'',location.pathname+location.search);show('confirm');document.querySelector('#redeem').addEventListener('click',()=>{show('checking');post('/_portal/auth/email/redeem',{token}).then((r)=>{if(r.status===401){show('invalid');return}if(!r.ok){fail(r.data.error);return}done(r.data.next)},()=>fail())})}`
+
 // An OIDC or SAML login leaves for the provider at once, so its only screens
 // are the ways it can come back without a session. They are rendered by the
 // server and need no script. @@ISSUER@@ is the provider's host, @@RETRY@@ the login link
@@ -158,6 +186,7 @@ const (
 var (
 	signinCredentialPage = newSigninPage(signinCredentialBody, signinScriptPrelude+signinCredentialScript)
 	signinWalletPage     = newSigninPage(signinWalletBody, signinScriptPrelude+signinWalletScript)
+	signinEmailPage      = newSigninPage(signinEmailBody, signinScriptPrelude+signinEmailScript)
 
 	signinProviderExpiredPage  = newSigninPage(signinProviderExpiredBody, "")
 	signinProviderCanceledPage = newSigninPage(signinProviderCanceledBody, "")

@@ -40,13 +40,16 @@ type AgentTunnelStatus struct {
 	MaxActiveRelays int                 `json:"max_active_relays,omitempty"`
 	Metadata        types.LeaseMetadata `json:"metadata"`
 	// The auth settings come without their secrets (see
-	// gateway.ApplicationAuthConfig.Public). The client secret is write-only:
-	// AuthOIDCClientSecretSet says whether one is configured.
+	// gateway.ApplicationAuthConfig.Public). The OIDC client secret and the
+	// SMTP password are write-only: AuthOIDCClientSecretSet and
+	// AuthSMTPPasswordSet say whether one is configured.
 	gateway.ApplicationAuthConfig
 	AuthOIDCClientSecretSet bool `json:"auth_oidc_client_secret_set,omitempty"`
+	AuthSMTPPasswordSet     bool `json:"auth_smtp_password_set,omitempty"`
 	// The provider fields report the startup check of the OIDC or SAML
-	// identity provider of a running tunnel: both are empty until the check
-	// finishes, and the error stays empty while the provider is usable.
+	// identity provider, or of the SMTP server of email, of a running tunnel:
+	// both are empty until the check finishes, and the error stays empty while
+	// the provider is usable.
 	AuthProviderChecked bool   `json:"auth_provider_checked,omitempty"`
 	AuthProviderError   string `json:"auth_provider_error,omitempty"`
 	gateway.X402Config
@@ -94,7 +97,8 @@ type AgentRelayRequest struct {
 // and they are decoded over the stored auth settings, so a setting added to
 // gateway.ApplicationAuthConfig can be updated without a field of its own here.
 // An empty auth turns application sign-in off and clears the other auth
-// settings. The client secret is write-only: an empty value clears it.
+// settings. The OIDC client secret and the SMTP password are write-only: an
+// empty value clears one.
 type AgentTunnelUpdateRequest struct {
 	MaxActiveRelays *int                       `json:"max_active_relays,omitempty"`
 	Metadata        *AgentMetadataRequest      `json:"metadata,omitempty"`
@@ -176,7 +180,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *gateway.ApplicationAuthConfig)
 	// Decoding reuses the backing array of a slice, which the stored settings
 	// may share.
 	next := *auth
-	next.AllowedWallets = slices.Clone(next.AllowedWallets)
+	next.AllowedWallets, next.EmailList = slices.Clone(next.AllowedWallets), slices.Clone(next.EmailList)
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&next); err != nil {
@@ -188,8 +192,8 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *gateway.ApplicationAuthConfig)
 
 // authChanges is the auth part of an update that turns the stored settings into
 // desired: each field that differs, and each emptied one with its empty value.
-// Both are compared as a status shows them, so the write-only client secret is
-// never among the changes; a client that changes it names it itself. An update
+// Both are compared as a status shows them, so a write-only secret is never
+// among the changes; a client that changes one names it itself. An update
 // decodes over the stored settings, so it can empty a string, a number, a
 // boolean or a list, and a setting must be one of these.
 func authChanges(stored, desired gateway.ApplicationAuthConfig) map[string]json.RawMessage {

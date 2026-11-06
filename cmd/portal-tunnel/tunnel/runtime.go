@@ -251,7 +251,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 
 	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
 	if err == nil && spec.HTTP.Auth != nil {
-		handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, *spec.HTTP.Auth)
+		handler, err = gateway.NewApplicationAuth(handler, listenerIdentity, *spec.HTTP.Auth, runtime.publicURLs)
 	}
 	if err == nil && len(spec.HTTP.StripRequestHeaders) > 0 {
 		handler, err = gateway.NewStripRequestHeaders(handler, spec.HTTP.StripRequestHeaders)
@@ -278,10 +278,24 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	return runtime, nil
 }
 
+// publicURLs lists the URLs the tunnel is reachable at now: the canonical URL of
+// each relay, which always routes to this tunnel, and the alias its lease holds.
+// The SDK clears an alias as soon as the lease may be gone, because the relay may
+// then give the name to another identity, so the alias itself is the signal. The
+// relay state is not: every visitor connection takes an idle reverse session, so
+// a relay reports connecting while it serves a burst of requests on that alias.
+func (runtime *Runtime) publicURLs() []string {
+	var urls []string
+	for _, relay := range runtime.Exposure.Relays() {
+		urls = append(urls, relay.PublicURL, relay.AliasURL)
+	}
+	return urls
+}
+
 // AuthProviderCheck reports whether the startup check of the application auth
 // provider has finished and, if it failed, why the provider is not usable.
-// Only the oidc and saml providers depend on anything outside the tunnel; the
-// check passes at once for the others.
+// Only the oidc, saml and email providers depend on anything outside the
+// tunnel; the check passes at once for the others.
 func (runtime *Runtime) AuthProviderCheck() (checked bool, err error) {
 	if check := runtime.authProvider.Load(); check != nil {
 		return true, check.err

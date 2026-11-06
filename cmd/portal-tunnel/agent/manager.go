@@ -582,10 +582,12 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		Metadata:                spec.Metadata,
 		ApplicationAuthConfig:   auth.Public(),
 		AuthOIDCClientSecretSet: auth.OIDCClientSecret != "",
+		AuthSMTPPasswordSet:     auth.SMTPPassword != "",
 		X402Config:              cfg.X402Config,
 	}
 	status.Endpoints = slices.Clone(status.Endpoints)
-	if runtime != nil && (cfg.Provider == gateway.ApplicationAuthProviderOIDC || cfg.Provider == gateway.ApplicationAuthProviderSAML) {
+	hasProviderCheck := cfg.Provider == gateway.ApplicationAuthProviderOIDC || cfg.Provider == gateway.ApplicationAuthProviderSAML || cfg.Provider == gateway.ApplicationAuthProviderEmail
+	if runtime != nil && hasProviderCheck {
 		checked, err := runtime.AuthProviderCheck()
 		status.AuthProviderChecked = checked
 		if err != nil {

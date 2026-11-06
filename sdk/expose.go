@@ -64,10 +64,11 @@ type RelayStatus struct {
 	PublicURL string
 	// AliasURL is the <name>.<root host> URL when the relay granted that
 	// alias to this lease, else empty: another identity may own the name
-	// (canonical fallback). The relay holds the alias only while the lease
-	// lives: it stays set while the lease is held (also RelayConnecting while
-	// reverse sessions reconnect) and is cleared on RelayFailed. Show it only
-	// while State is RelayReady. It always reaches the live origin.
+	// (canonical fallback). A set alias is held by the lease: it stays set
+	// while the lease is held (also RelayConnecting while reverse sessions
+	// reconnect), is cleared on RelayFailed, and always reaches the live
+	// origin. The RelayReady rule is for display only: show the alias only
+	// while State is RelayReady.
 	AliasURL string
 	UDPAddr  string
 	TCPAddr  string

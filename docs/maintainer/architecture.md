@@ -29,7 +29,7 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   `Config.Spec` is the one step from a `Config` to the runtime `Spec`: it
   normalizes the values, fills in the defaults, and validates the result. A
   component with settings of its own keeps its type and its keys with its owner:
-  `gateway.ApplicationAuthConfig` with `OIDCConfig` and `SAMLConfig`,
+  `gateway.ApplicationAuthConfig` with `OIDCConfig`, `SAMLConfig`, and `EmailConfig`,
   `gateway.X402Config`, and `types.LeaseMetadata`. The agent config, the Agent
   API requests, and the agent status embed these components, so a new provider
   setting changes only its component and the validation of that component. The

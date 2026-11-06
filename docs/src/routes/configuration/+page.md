@@ -381,8 +381,9 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--owner` | | string | | Service owner metadata |
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
-| `--auth` | | string | | Protect the complete HTTP application with `siwe`, `credential`, `oidc`, or `saml`; excludes cache, TCP, and UDP |
-| `--auth-allow` | | string | | Allowed principal (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc` and `saml`); repeatable; empty allows any valid principal, except for `oidc` and `saml`, which require at least one entry; requires `--auth` |
+| `--auth` | | string | | Protect the complete HTTP application with `siwe`, `credential`, `oidc`, `saml`, or `email`; excludes cache, TCP, and UDP |
+| `--auth-allow` | | string | | Allowed principal for `siwe` (Ethereum wallet) or `credential` (subject); repeatable; empty allows any valid principal; `oidc` and `saml` also read it, as `--auth-email-list`; requires `--auth` |
+| `--auth-email-list` | | string | | Who may sign in with `oidc` or `saml` (verified email, `@example.com` domain, or `sub:<subject>`) or `email` (email or `@example.com` domain); repeatable; at least one entry is required; requires `--auth` |
 | `--auth-oidc-issuer` | `AUTH_OIDC_ISSUER` | string | | OIDC issuer URL for `--auth oidc` |
 | `--auth-oidc-client-id` | `AUTH_OIDC_CLIENT_ID` | string | | OIDC client ID for `--auth oidc` |
 | `--auth-oidc-client-secret` | `AUTH_OIDC_CLIENT_SECRET` | string | | Optional OIDC client secret for `--auth oidc` |
@@ -390,6 +391,10 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--auth-saml-metadata-file` | `AUTH_SAML_METADATA_FILE` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` |
 | `--auth-saml-entity-id` | `AUTH_SAML_ENTITY_ID` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` |
 | `--auth-saml-subject-attribute` | `AUTH_SAML_SUBJECT_ATTRIBUTE` | string | NameID | SAML attribute that names the visitor for `--auth saml` |
+| `--auth-smtp-addr` | `AUTH_SMTP_ADDR` | string | | SMTP server `host:port` for `--auth email`; port 465 uses TLS from the start, other ports must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext |
+| `--auth-smtp-username` | `AUTH_SMTP_USERNAME` | string | | SMTP username for `--auth email`; set together with the password |
+| `--auth-smtp-password` | `AUTH_SMTP_PASSWORD` | string | | SMTP password for `--auth email`; pass it by environment variable |
+| `--auth-smtp-from` | `AUTH_SMTP_FROM` | string | | Fixed sender address of every login link for `--auth email` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
 | `--auth-identity-proof` | `AUTH_IDENTITY_PROOF` | string | | Secret sent as `X-Portal-Proof` with the identity headers; at least 16 visible ASCII characters; requires `--auth-identity-headers`; set it by environment variable, not on the command line, because process lists show arguments |
 | `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive, and the underscore spelling of a name (`X_Custom` for `X-Custom`) goes with it; applies to HTTP and WebSocket upgrades; `Host` and `X-Forwarded-Proto` cannot be stripped (always regenerated before this middleware runs); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth`/`Proof` are allowed; requires `--http-route`, `--target`, or `--auth` |
@@ -505,6 +510,13 @@ auth_allowed_wallets = ["alice"]
 auth_identity_headers = true
 ```
 
+`--auth-allow` / `auth_allowed_wallets` is the list for `siwe` and `credential`.
+`--auth-email-list` / `auth_email_list` is the list for `oidc`, `saml`, and
+`email`: a tunnel runs one provider, so the one list serves all three. `oidc` and
+`saml` still read `--auth-allow` / `auth_allowed_wallets`, so existing configs
+keep working. Setting both keys is refused. `email` takes only
+`--auth-email-list`.
+
 Agent fields:
 
 | Field | Default | Description |
@@ -537,8 +549,9 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
-| `auth` | string | Application login provider: `siwe`, `credential`, `oidc`, or `saml`; cannot be combined with TCP or UDP |
-| `auth_allowed_wallets` | string array | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc` and `saml`); empty allows any valid principal, except for `oidc` and `saml`, which require at least one entry; requires `auth` when set |
+| `auth` | string | Application login provider: `siwe`, `credential`, `oidc`, `saml`, or `email`; cannot be combined with TCP or UDP |
+| `auth_allowed_wallets` | string array | Principals allowed to sign in with `siwe` (Ethereum wallets) or `credential` (subjects); empty allows any valid principal; `oidc` and `saml` also read it, as `auth_email_list`; requires `auth` when set |
+| `auth_email_list` | string array | Who may sign in with `oidc` or `saml` (verified emails, `@example.com` domains, or `sub:` subjects) or `email` (emails and `@example.com` domains); at least one entry is required; requires `auth` when set |
 | `auth_oidc_issuer` | string | OIDC issuer URL; required when `auth = "oidc"` |
 | `auth_oidc_client_id` | string | OIDC client ID; required when `auth = "oidc"` |
 | `auth_oidc_client_secret` | string | Optional OIDC client secret for `auth = "oidc"` |
@@ -546,6 +559,10 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `auth_saml_metadata_file` | string | SAML identity provider metadata file, relative to the config file |
 | `auth_saml_entity_id` | string | SAML service provider entity ID; defaults to the metadata URL of each host |
 | `auth_saml_subject_attribute` | string | SAML attribute that names the visitor; defaults to the NameID |
+| `auth_smtp_addr` | string | SMTP server `host:port`; required when `auth = "email"` |
+| `auth_smtp_username` | string | SMTP username for `auth = "email"`; set together with the password |
+| `auth_smtp_password` | string | SMTP password for `auth = "email"` |
+| `auth_smtp_from` | string | Fixed sender address of every login link; required when `auth = "email"` |
 | `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
 | `strip_request_headers` | string array | Client request headers removed before routed HTTP forwards them upstream; case-insensitive; `Host` and `X-Forwarded-Proto` cannot be listed (always regenerated); `X-Portal-User`/`Auth` conflict with `auth_identity_headers`; requires `http_routes` or a `target` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |

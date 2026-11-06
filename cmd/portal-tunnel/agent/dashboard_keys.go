@@ -267,10 +267,10 @@ func (m agentDashboardModel) onAccessChoice() bool {
 }
 
 // canClearAccessSecret reports whether the focused row is the secret of a
-// tunnel that has one stored.
+// tunnel that has one stored for the draft's provider.
 func (m agentDashboardModel) canClearAccessSecret() bool {
 	tunnel, ok := m.accessTunnel()
-	return ok && m.onAccessSecret() && tunnel.AuthOIDCClientSecretSet
+	return ok && m.onAccessSecret() && agentDashboardSecretSet(m.access.provider, tunnel)
 }
 
 // inAccess reports whether the Access screen takes keys: it is open and no

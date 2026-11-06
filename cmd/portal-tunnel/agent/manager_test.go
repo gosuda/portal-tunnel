@@ -104,19 +104,28 @@ func oidcTunnel(id, issuer, secret string) TunnelConfig {
 
 func TestTunnelStatusAuthSettings(t *testing.T) {
 	const secret = "s3cret-client-secret"
+	const smtpPassword = "s3cret-smtp-password"
 	credential := testTunnel("credential")
 	credential.Provider = "credential"
+	email := testTunnel("email")
+	email.Provider = "email"
+	email.EmailList = []string{"alice@example.com"}
+	email.SMTPAddr = "smtp.example.com:587"
+	email.SMTPUsername = "portal"
+	email.SMTPPassword = smtpPassword
+	email.SMTPFrom = "login@example.com"
 	m, _ := testManager(t,
 		oidcTunnel("oidc", "https://accounts.example.com", secret),
 		credential,
+		email,
 		testTunnel("plain"),
 	)
 	data, err := json.Marshal(m.Snapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), secret) {
-		t.Fatalf("status exposes the client secret: %s", data)
+	if strings.Contains(string(data), secret) || strings.Contains(string(data), smtpPassword) {
+		t.Fatalf("status exposes a secret: %s", data)
 	}
 
 	var wire struct {
@@ -135,7 +144,10 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 	if byID["oidc"]["auth_oidc_client_secret_set"] != true {
 		t.Fatalf("oidc auth_oidc_client_secret_set = %v, want true", byID["oidc"]["auth_oidc_client_secret_set"])
 	}
-	for _, key := range []string{"auth_allowed_wallets", "auth_oidc_client_secret_set", "auth_provider_checked", "auth_provider_error"} {
+	if byID["email"]["auth_smtp_password_set"] != true || byID["email"]["auth_smtp_addr"] != "smtp.example.com:587" {
+		t.Fatalf("email status = %v, want the SMTP server and auth_smtp_password_set", byID["email"])
+	}
+	for _, key := range []string{"auth_allowed_wallets", "auth_oidc_client_secret_set", "auth_smtp_password_set", "auth_provider_checked", "auth_provider_error"} {
 		for _, id := range []string{"credential", "plain"} {
 			if _, ok := byID[id][key]; ok {
 				t.Fatalf("tunnel %q reports %s without it being configured", id, key)

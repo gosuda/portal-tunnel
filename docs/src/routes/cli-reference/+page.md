@@ -110,8 +110,9 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
-| `--auth` | string | | Protect HTTP application access with `siwe`, `credential`, `oidc`, or `saml`; cannot be combined with `--cache` |
-| `--auth-allow` | string | | Principal allowed to sign in (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc` and `saml`); repeat for multiple principals (empty allows any valid principal, except for `oidc` and `saml`, which require at least one entry); requires `--auth` |
+| `--auth` | string | | Protect HTTP application access with `siwe`, `credential`, `oidc`, `saml`, or `email`; cannot be combined with `--cache` |
+| `--auth-allow` | string | | Principal allowed to sign in with `siwe` (Ethereum wallet) or `credential` (subject); repeat for multiple principals (empty allows any valid principal); `oidc` and `saml` also read it, as `--auth-email-list`; requires `--auth` |
+| `--auth-email-list` | string | | Who may sign in with `oidc` or `saml` (verified email, `@example.com` domain, or `sub:<subject>`) or `email` (email or `@example.com` domain); repeat for multiple entries (at least one entry is required); requires `--auth` |
 | `--auth-oidc-issuer` | string | | OIDC issuer URL for `--auth oidc` (env: `AUTH_OIDC_ISSUER`) |
 | `--auth-oidc-client-id` | string | | OIDC client ID for `--auth oidc` (env: `AUTH_OIDC_CLIENT_ID`) |
 | `--auth-oidc-client-secret` | string | | Optional OIDC client secret for `--auth oidc` (env: `AUTH_OIDC_CLIENT_SECRET`) |
@@ -119,6 +120,10 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--auth-saml-metadata-file` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` (env: `AUTH_SAML_METADATA_FILE`) |
 | `--auth-saml-entity-id` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` (env: `AUTH_SAML_ENTITY_ID`) |
 | `--auth-saml-subject-attribute` | string | NameID | SAML attribute that names the visitor for `--auth saml`, such as `email` (env: `AUTH_SAML_SUBJECT_ATTRIBUTE`) |
+| `--auth-smtp-addr` | string | | SMTP server `host:port` that sends the login links for `--auth email`; port 465 uses TLS from the start, any other port must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext (env: `AUTH_SMTP_ADDR`) |
+| `--auth-smtp-username` | string | | SMTP username for `--auth email`; set it together with the password, or leave both empty for a server that needs no login (env: `AUTH_SMTP_USERNAME`) |
+| `--auth-smtp-password` | string | | SMTP password for `--auth email`; pass it by environment variable, because process lists show arguments (env: `AUTH_SMTP_PASSWORD`) |
+| `--auth-smtp-from` | string | | The one sender address of every login link for `--auth email`, with an optional display name (env: `AUTH_SMTP_FROM`) |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
@@ -276,11 +281,11 @@ Protect it with a standard OpenID Connect provider (see
 portal expose 3000 --auth oidc \
   --auth-oidc-issuer https://accounts.google.com \
   --auth-oidc-client-id <client-id> \
-  --auth-allow alice@example.com
+  --auth-email-list alice@example.com
 ```
 
-`--auth-allow` is required with `--auth oidc`. The `AUTH_OIDC_*` variables are
-read only with `--auth oidc`, so exporting them for one service does not affect
+`--auth-email-list` is required with `--auth oidc`. The `AUTH_OIDC_*` variables
+are read only with `--auth oidc`, so exporting them for one service does not affect
 another `portal expose`. An `--auth-oidc-*` flag given on the command line
 without `--auth oidc` is rejected.
 
@@ -290,12 +295,34 @@ Protect it with a SAML 2.0 identity provider (see
 ```bash
 portal expose 3000 --auth saml \
   --auth-saml-metadata-url https://idp.example.com/realms/main/protocol/saml/descriptor \
-  --auth-allow @example.com
+  --auth-email-list @example.com
 ```
 
-`--auth-allow` is required with `--auth saml`. The `AUTH_SAML_*` variables
+`--auth-email-list` is required with `--auth saml`. The `AUTH_SAML_*` variables
 follow the `AUTH_OIDC_*` rule: Portal reads them only with `--auth saml`, and
 it rejects an `--auth-saml-*` flag on the command line without `--auth saml`.
+
+Protect it with one-time sign-in links that Portal sends through your own SMTP
+account (see [Email links](/siwe-authentication#email-links)):
+
+```bash
+# AUTH_SMTP_PASSWORD is set in this shell first, at a prompt
+portal expose 3000 --auth email \
+  --auth-smtp-addr smtp.gmail.com:587 \
+  --auth-smtp-username you@gmail.com \
+  --auth-smtp-from you@gmail.com \
+  --auth-email-list alice@example.com
+```
+
+`--auth-email-list` is required with `--auth email`. The `AUTH_SMTP_*` variables
+follow the `AUTH_OIDC_*` rule: Portal reads them only with `--auth email`, and
+it rejects an `--auth-smtp-*` flag on the command line without `--auth email`.
+
+`--auth-allow` is the list for `siwe` and `credential`. `--auth-email-list` is
+the list for `oidc`, `saml`, and `email`: a tunnel runs one provider, so the one
+list serves all three. `oidc` and `saml` still read `--auth-allow`, so existing
+configs keep working. Setting both is refused. `email` takes only
+`--auth-email-list`.
 
 Portal protects the complete HTTP gateway, including routed, static, and x402
 paths. It always strips inbound Portal identity headers. The auth gate cannot be

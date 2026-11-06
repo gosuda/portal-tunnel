@@ -9,7 +9,11 @@ import (
 
 func newSigninTestHandler(t *testing.T, provider string) http.Handler {
 	t.Helper()
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{Provider: provider})
+	cfg := ApplicationAuthConfig{Provider: provider}
+	if provider == ApplicationAuthProviderEmail {
+		cfg = emailTestConfig("127.0.0.1:25", "alice@example.com")
+	}
+	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +28,7 @@ func getSigninPage(handler http.Handler, host string) *httptest.ResponseRecorder
 	return rec
 }
 
-// Both providers answer with the shared Portal shell and their own controls,
+// Every provider with a page of its own answers with the shared Portal shell and their own controls,
 // under a content policy that admits scripts and styles from the page itself and
 // fonts from one host only.
 func TestSigninPagesShareOneShell(t *testing.T) {
@@ -36,6 +40,7 @@ func TestSigninPagesShareOneShell(t *testing.T) {
 	}{
 		{ApplicationAuthProviderCredential, `id="credential"`},
 		{ApplicationAuthProviderSIWE, `data-connect`},
+		{ApplicationAuthProviderEmail, `id="email"`},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			t.Parallel()
@@ -105,7 +110,7 @@ func TestSigninPageEscapesAndShortensHost(t *testing.T) {
 func TestSigninPagesRefuseControlCharactersInNext(t *testing.T) {
 	t.Parallel()
 
-	for _, page := range []string{signinCredentialPage, signinWalletPage} {
+	for _, page := range []string{signinCredentialPage, signinWalletPage, signinEmailPage} {
 		if got := strings.Count(page, `/[\u0000-\u001f\u007f]/.test(value)`); got != 1 {
 			t.Fatalf("control-character check appears %d times in a page; want once", got)
 		}
@@ -124,7 +129,7 @@ func TestFrontendSigninPreviewMatchesThePages(t *testing.T) {
 	}
 	loadFrontendFile(t, "signinCopy.json", &previewCopy)
 
-	for _, provider := range []string{ApplicationAuthProviderCredential, ApplicationAuthProviderSIWE} {
+	for _, provider := range []string{ApplicationAuthProviderCredential, ApplicationAuthProviderSIWE, ApplicationAuthProviderEmail} {
 		want, ok := previewCopy[provider]
 		if !ok {
 			t.Errorf("signinCopy.json has no %s entry", provider)
