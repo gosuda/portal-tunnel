@@ -215,7 +215,7 @@ func TestTCPLeaseBridgeLifecycle(t *testing.T) {
 						t.Fatal(err)
 					}
 				case "deny":
-					if !h.server.SetServiceIdentityRoutable(h.lease.Identity.ServiceKey(), false, 1) {
+					if !h.server.SetServiceIdentityAccess(h.lease.Identity.ServiceKey(), types.LeaseDenied, 1) {
 						t.Fatal("deny rejected")
 					}
 				case "shutdown":
@@ -238,7 +238,7 @@ func TestTCPLeaseBridgeLifecycle(t *testing.T) {
 					}
 				}
 				if event == "deny" {
-					if !h.server.SetServiceIdentityRoutable(h.lease.Identity.ServiceKey(), true, 2) {
+					if !h.server.SetServiceIdentityAccess(h.lease.Identity.ServiceKey(), types.LeaseRoutable, 2) {
 						t.Fatal("allow rejected")
 					}
 					fresh, backhaul := h.connect()
@@ -310,7 +310,7 @@ func TestTCPLeaseBoundsReverseWaitersAndRecovers(t *testing.T) {
 	if pending != 128 {
 		t.Fatalf("pending reverse waiters=%d, want bounded128", pending)
 	}
-	h.server.SetServiceIdentityRoutable(h.lease.Identity.ServiceKey(), false, 1)
+	h.server.SetServiceIdentityAccess(h.lease.Identity.ServiceKey(), types.LeaseDenied, 1)
 	for _, conn := range connections {
 		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		var buf [1]byte
@@ -320,7 +320,7 @@ func TestTCPLeaseBoundsReverseWaitersAndRecovers(t *testing.T) {
 			t.Fatalf("denied waiter retained: %v", err)
 		}
 	}
-	h.server.SetServiceIdentityRoutable(h.lease.Identity.ServiceKey(), true, 2)
+	h.server.SetServiceIdentityAccess(h.lease.Identity.ServiceKey(), types.LeaseRoutable, 2)
 	public, reverse := h.connect()
 	tcpLeaseRoundTrip(t, public, reverse)
 }

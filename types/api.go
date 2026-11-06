@@ -249,6 +249,17 @@ type PolicyStateResponse struct {
 	Leases []PolicyLease  `json:"leases,omitempty"`
 }
 
+// LeaseAccess is a relay's routing decision for one service identity.
+type LeaseAccess string
+
+const (
+	LeaseRoutable LeaseAccess = "routable"
+	// LeasePending is not routable yet: no admin has approved the identity.
+	LeasePending LeaseAccess = "pending"
+	// LeaseDenied is not routable: an admin denied or banned the identity.
+	LeaseDenied LeaseAccess = "denied"
+)
+
 type PolicySettings struct {
 	ApprovalMode       string             `json:"approval_mode"`
 	LandingPageEnabled bool               `json:"landing_page_enabled"`

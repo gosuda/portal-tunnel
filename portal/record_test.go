@@ -14,7 +14,7 @@ import (
 func TestRawTCPRejectsConnectionWhileNotRoutable(t *testing.T) {
 	record := &leaseRecord{Identity: types.Identity{Name: "demo", Address: "0x1"}, ExpiresAt: time.Now().Add(time.Hour), reverse: transport.NewReversePool(time.Minute, 1)}
 	defer record.Close()
-	registry := &leaseRegistry{records: []*leaseRecord{record}, blocked: map[types.ServiceIdentityKey]time.Time{record.ServiceKey(): time.Now()}}
+	registry := &leaseRegistry{records: []*leaseRecord{record}, blocked: map[types.ServiceIdentityKey]blockedIdentity{record.ServiceKey(): {pushedAt: time.Now(), refusal: errLeaseRejected}}}
 	client, inbound := net.Pipe()
 	defer client.Close()
 	defer inbound.Close()

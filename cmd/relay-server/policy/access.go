@@ -76,11 +76,17 @@ func (s AccessState) Revision() uint64 {
 	return s.revision
 }
 
-func (s AccessState) Routable(key types.ServiceIdentityKey) bool {
-	if !key.Valid() {
-		return true
+func (s AccessState) Access(key types.ServiceIdentityKey) types.LeaseAccess {
+	switch {
+	case !key.Valid():
+		return types.LeaseRoutable
+	case s.IsBanned(key) || s.IsDenied(key):
+		return types.LeaseDenied
+	case !s.EffectiveApproval(key):
+		return types.LeasePending
+	default:
+		return types.LeaseRoutable
 	}
-	return !s.IsBanned(key) && !s.IsDenied(key) && s.EffectiveApproval(key)
 }
 
 func (s AccessState) Mode() Mode {
