@@ -36,6 +36,13 @@ func TestAgentRelayStatusAdvertisesAliasOnlyWhileReady(t *testing.T) {
 	}
 }
 
+func TestAgentRelayStatusCarriesApproval(t *testing.T) {
+	statuses := agentRelayStatuses([]sdk.RelayStatus{{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalPending}})
+	if statuses[0].Approval != "pending" || !statuses[0].Connecting {
+		t.Fatalf("status = %+v", statuses[0])
+	}
+}
+
 func TestStoppedTunnelSnapshotDoesNotAdvertiseCachedAlias(t *testing.T) {
 	tunnel := &managedTunnel{relays: []AgentRelayStatus{{
 		PublicURL: "https://identity.relay.example/",
