@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"slices"
 	"strconv"
 	"strings"
@@ -44,11 +45,11 @@ const (
 	emailSendSlots = 4
 	// One address gets at most one link per emailAddressCooldown and
 	// emailAddressHourlyLimit links per hour, so a public URL cannot flood an
-	// allowed mailbox. The addresses that only an @domain entry allows are
-	// unbounded, so together they get at most emailDomainHourlyLimit links per
-	// hour, which keeps the SMTP account's quota. An exactly listed address is
-	// outside that budget, so a flood of made-up addresses in a domain cannot
-	// lock it out.
+	// exactly listed mailbox. The addresses that only an @domain entry allows are
+	// unbounded, and alice+1@ and alice+2@ can reach one mailbox, so together
+	// they get at most emailDomainHourlyLimit links per hour, which bounds that
+	// mailbox and the SMTP account's quota. An exactly listed address is outside
+	// that budget, so a flood of made-up addresses in a domain cannot lock it out.
 	emailAddressCooldown    = time.Minute
 	emailAddressHourlyLimit = 5
 	emailDomainHourlyLimit  = 50
@@ -58,6 +59,10 @@ const (
 	emailImplicitTLSPort = "465"
 	// emailLinkTokenBytes is the size of the secret in a login link: 256 bits.
 	emailLinkTokenBytes = 32
+	// emailRoutingCharacters are ordinary address characters to net/mail, but a
+	// mail server can route on them: user%evil.example@team.example passes an
+	// @team.example entry, and such a server delivers it to evil.example.
+	emailRoutingCharacters = "%!"
 )
 
 // emailAuthenticator mails one-time login links through the operator's SMTP
@@ -166,10 +171,11 @@ func parseSMTPFrom(raw string) (mail.Address, error) {
 // normalizeVisitorEmail reads the address a visitor typed. It must be a bare
 // address that net/mail reads back unchanged, so a display name, a comment, a
 // quoted local part or a line break is refused, and it is normalized like an
-// allowlist entry.
+// allowlist entry. An address that names a route is refused too, because the
+// allowlist only vouches for the domain after the last @.
 func normalizeVisitorEmail(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || len(raw) > emailAddressLimit || strings.ContainsFunc(raw, unicode.IsControl) {
+	if raw == "" || len(raw) > emailAddressLimit || strings.ContainsFunc(raw, unicode.IsControl) || strings.ContainsAny(raw, emailRoutingCharacters) {
 		return "", errEmailAddressIsInvalid
 	}
 	parsed, err := mail.ParseAddress(raw)
@@ -184,11 +190,12 @@ func normalizeVisitorEmail(raw string) (string, error) {
 }
 
 // publicHost returns the host of the tunnel's current public URL that
-// requestHost, a normalized request host, names. A link mailed for any other
-// host would send its token to whoever answers there, so the mail takes its
-// host from this list and never from the request.
-func (e *emailAuthenticator) publicHost(requestHost string) (string, bool) {
-	if e.publicURLs == nil {
+// requestHost, a request's Host, names. A link mailed for any other host would
+// send its token to whoever answers there, so the mail takes its host from this
+// list and never from the request.
+func (e *emailAuthenticator) publicHost(rawHost string) (string, bool) {
+	requestHost, err := NormalizeApplicationAuthHost(rawHost)
+	if err != nil || e.publicURLs == nil {
 		return "", false
 	}
 	for _, raw := range e.publicURLs() {
@@ -199,8 +206,10 @@ func (e *emailAuthenticator) publicHost(requestHost string) (string, bool) {
 	return "", false
 }
 
-// admit records a send to email at now if the limits allow one. listed says
-// whether an exact allowlist entry allows email. The caller holds e.mu.
+// admit records a send to email at now and takes a send slot for it, if the
+// limits and the slots allow one. listed says whether an exact allowlist entry
+// allows email. The slot comes last, so a request the limits refuse never holds
+// one, and a send dropped for a busy slot spends no limit. The caller holds e.mu.
 func (e *emailAuthenticator) admit(email string, listed bool, now time.Time) bool {
 	hourAgo := now.Add(-time.Hour)
 	e.sent = slices.DeleteFunc(e.sent, func(send emailSend) bool { return !send.at.After(hourAgo) })
@@ -223,12 +232,19 @@ func (e *emailAuthenticator) admit(email string, listed bool, now time.Time) boo
 	if !listed && domainCount >= emailDomainHourlyLimit {
 		return false
 	}
+	select {
+	case e.sendSlots <- struct{}{}:
+	default:
+		log.Warn().Err(errEmailSendSlotsAreAllInUse).Str("smtp_addr", e.smtpAddr).Msg("email login link not sent")
+		return false
+	}
 	e.sent = append(e.sent, emailSend{email: email, listed: listed, at: now})
 	return true
 }
 
 // issue creates the link for a send to email at host that returns the visitor
-// to next. It returns the token, or "" when a limit refuses the send.
+// to next. It returns the token, and the send owns a slot from then on, or ""
+// when a limit or the slots refuse the send.
 func (e *emailAuthenticator) issue(email string, listed bool, host, next string, now time.Time) string {
 	var secret [emailLinkTokenBytes]byte
 	_, _ = rand.Read(secret[:])
@@ -266,19 +282,10 @@ func (e *emailAuthenticator) redeem(token, host string, now time.Time) (email, n
 // send mails a login link for email at host, unless a limit refuses it. The
 // SMTP conversation runs in its own goroutine, so the caller answers before it
 // starts and an allowed address answers as fast as a refused one. At most
-// emailSendSlots conversations run at once, each within emailSendTimeout. The
-// slot is taken before the link is issued, so a send dropped for a full slot
-// spends no limit and leaves no link.
+// emailSendSlots conversations run at once, each within emailSendTimeout.
 func (e *emailAuthenticator) send(email string, listed bool, host, next string, now time.Time) {
-	select {
-	case e.sendSlots <- struct{}{}:
-	default:
-		log.Warn().Err(errEmailSendSlotsAreAllInUse).Str("smtp_addr", e.smtpAddr).Msg("email login link not sent")
-		return
-	}
 	token := e.issue(email, listed, host, next, now)
 	if token == "" {
-		<-e.sendSlots
 		return
 	}
 	go func() {
@@ -286,8 +293,8 @@ func (e *emailAuthenticator) send(email string, listed bool, host, next string, 
 		ctx, cancel := context.WithTimeout(context.Background(), emailSendTimeout)
 		defer cancel()
 		// The error comes from composing the mail, the SMTP server or the
-		// connection and never holds the password; the recipient stays out of
-		// the log.
+		// connection and never holds the password, and deliver keeps the
+		// recipient out of it.
 		message, err := emailLoginMessage(e.from, host, token, now)
 		if err == nil {
 			err = e.deliver(ctx, email, message)
@@ -311,6 +318,8 @@ func (e *emailAuthenticator) check(ctx context.Context) error {
 	return client.Quit()
 }
 
+// deliver hands one mail to the SMTP server. The replies from RCPT on are about
+// the recipient and can quote the address, so their errors keep only the code.
 func (e *emailAuthenticator) deliver(ctx context.Context, to string, message []byte) error {
 	client, err := e.dial(ctx)
 	if err != nil {
@@ -321,19 +330,31 @@ func (e *emailAuthenticator) deliver(ctx context.Context, to string, message []b
 		return fmt.Errorf("smtp MAIL FROM: %w", err)
 	}
 	if err := client.Rcpt(to); err != nil {
-		return fmt.Errorf("smtp RCPT TO: %w", err)
+		return fmt.Errorf("smtp RCPT TO: %w", smtpReplyCode(err))
 	}
 	data, err := client.Data()
 	if err != nil {
-		return fmt.Errorf("smtp DATA: %w", err)
+		return fmt.Errorf("smtp DATA: %w", smtpReplyCode(err))
 	}
 	if _, err := data.Write(message); err != nil {
 		return fmt.Errorf("smtp DATA: %w", err)
 	}
 	if err := data.Close(); err != nil {
-		return fmt.Errorf("smtp DATA: %w", err)
+		return fmt.Errorf("smtp DATA: %w", smtpReplyCode(err))
 	}
-	return client.Quit()
+	// The server took the mail at the end of DATA, so a failed QUIT is not a
+	// failed send.
+	_ = client.Quit()
+	return nil
+}
+
+// smtpReplyCode reduces an SMTP reply to its code.
+func smtpReplyCode(err error) error {
+	var reply *textproto.Error
+	if errors.As(err, &reply) {
+		return fmt.Errorf("server replied %d", reply.Code)
+	}
+	return err
 }
 
 // dial opens a signed-in SMTP session within the deadline of ctx: implicit TLS
@@ -395,9 +416,9 @@ func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client) error {
 // emailLoginMessage is the one mail the tunnel sends: fixed text, the host the
 // link is for, and the link. The token is in the fragment, as in a credential
 // redeem link, so a mail scanner or link preview that fetches the URL cannot
-// use it up; only the sign-in page posts it. The recipient is named only in the
-// SMTP envelope, with no To header, so nothing a visitor typed is part of the
-// mail itself.
+// use it up. The sign-in page posts it only after a click, so one that also runs
+// the page cannot either. The recipient is named only in the SMTP envelope, with
+// no To header, so nothing a visitor typed is part of the mail itself.
 func emailLoginMessage(from mail.Address, host, token string, now time.Time) ([]byte, error) {
 	_, fromDomain, _ := strings.Cut(from.Address, "@")
 	link := "https://" + host + applicationAuthLoginPath + "#email_token=" + token
@@ -460,12 +481,7 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	requestHost, err := NormalizeApplicationAuthHost(r.Host)
-	if err != nil {
-		a.writeJSONError(w, http.StatusForbidden, errEmailRequestHostNotPublic.Error())
-		return
-	}
-	host, public := a.email.publicHost(requestHost)
+	host, public := a.email.publicHost(r.Host)
 	if !public {
 		a.writeJSONError(w, http.StatusForbidden, errEmailRequestHostNotPublic.Error())
 		return
@@ -479,7 +495,9 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 
 // serveEmailRedeem turns a login link into the session every provider
 // creates. The allowlist is checked again, so an entry removed after the link
-// was mailed refuses it.
+// was mailed refuses it. So is the host: an alias this tunnel lost may have a new
+// owner, who reads the link of whoever opens it there, and must not be able to
+// replay it here.
 func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Request) {
 	if a.provider != ApplicationAuthProviderEmail || a.email == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
@@ -497,6 +515,10 @@ func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Reques
 	var req applicationAuthEmailRedeemRequest
 	if err := decodeApplicationAuthJSON(w, r, &req); err != nil {
 		a.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, public := a.email.publicHost(r.Host); !public {
+		a.writeJSONError(w, http.StatusForbidden, errEmailRequestHostNotPublic.Error())
 		return
 	}
 	now := time.Now().UTC()

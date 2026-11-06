@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/mail"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -281,10 +280,22 @@ func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string
 		return NormalizeApplicationAuthProviderPrincipals(values)
 	case ApplicationAuthProviderEmail:
 		allowed, err := NormalizeApplicationAuthProviderPrincipals(values)
-		if err == nil && slices.ContainsFunc(allowed, func(principal string) bool { return strings.HasPrefix(principal, subjectPrincipalPrefix) }) {
-			return nil, errEmailAllowsNoSubjectEntries
+		if err != nil {
+			return nil, err
 		}
-		return allowed, err
+		for _, principal := range allowed {
+			if strings.HasPrefix(principal, subjectPrincipalPrefix) {
+				return nil, errEmailAllowsNoSubjectEntries
+			}
+			// An address no visitor can sign in with would fail in silence, so
+			// it fails at the start.
+			if !strings.HasPrefix(principal, "@") {
+				if _, err := normalizeVisitorEmail(principal); err != nil {
+					return nil, fmt.Errorf("principal %q: %w", principal, err)
+				}
+			}
+		}
+		return allowed, nil
 	default:
 		return nil, fmt.Errorf("unsupported application auth provider %q", provider)
 	}

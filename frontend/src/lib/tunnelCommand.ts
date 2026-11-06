@@ -362,7 +362,19 @@ export function classifyAuthAllow(
       error: `${entry} is not an email, an @domain or sub:<id>.`,
     };
   }
+  if (method === "email" && at > 0 && !isVisitorEmail(entry)) {
+    return { ok: false, error: `${entry} is not an address a visitor can sign in with.` };
+  }
   return { ok: true, kind: at === 0 ? "domain" : "person" };
+}
+
+// normalizeVisitorEmail (access_auth_email.go) takes a bare address that net/mail
+// reads back unchanged, without the % and ! that mail servers route on.
+const mailAtom = "[a-zA-Z0-9#$&'*+/=?^_`{|}~-]+";
+const visitorEmail = new RegExp(`^${mailAtom}(\\.${mailAtom})*@${mailAtom}(\\.${mailAtom})*$`);
+
+function isVisitorEmail(entry: string): boolean {
+  return entry.length <= 254 && visitorEmail.test(entry);
 }
 
 function isASCII(value: string): boolean {
@@ -496,6 +508,8 @@ export function validateTunnelAuth(auth: TunnelAuthOptions): TunnelAuthIssue[] {
     }
     if (auth.emailFrom.trim() === "") {
       issues.push({ field: "from", message: "Add the sender address" });
+    } else if (!auth.emailFrom.includes("@")) {
+      issues.push({ field: "from", message: "The sender must be an email address" });
     }
   }
   if (auth.allow.some((entry) => !classifyAuthAllow(auth.method, entry).ok)) {

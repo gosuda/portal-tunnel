@@ -1,5 +1,5 @@
 {
- "notes": "Rules the command builder (frontend/src/lib/tunnelCommand.ts) repeats from the Go gateway, because the browser cannot call Go. The vitest test in tunnelCommand.test.ts and cmd/portal-tunnel/gateway/frontend_rules_test.go run every row, so a rule changed on one side alone fails a test. Not covered: the EIP-55 checksum of a mixed-case wallet address (the browser has no Keccak; the tunnel checks it), http issuers and SAML metadata URLs on a loopback host (the builder does not offer them), a port written with leading zeros (:0443), which a browser never sends, and the email sender, which the tunnel reads with net/mail.",
+ "notes": "Rules the command builder (frontend/src/lib/tunnelCommand.ts) repeats from the Go gateway, because the browser cannot call Go. The vitest test in tunnelCommand.test.ts and cmd/portal-tunnel/gateway/frontend_rules_test.go run every row, so a rule changed on one side alone fails a test. Not covered: the EIP-55 checksum of a mixed-case wallet address (the browser has no Keccak; the tunnel checks it), http issuers and SAML metadata URLs on a loopback host (the builder does not offer them), a port written with leading zeros (:0443), which a browser never sends, and the display name of the email sender, which the tunnel reads with net/mail.",
  "allow": [
    {"method": "credential", "typed": "alice", "valid": true, "canonical": "alice"},
    {"method": "credential", "typed": "  alice  ", "valid": true, "canonical": "alice"},
@@ -62,6 +62,11 @@
    {"method": "email", "typed": "alice@xn--mnchen-3ya.de", "valid": true, "canonical": "alice@xn--mnchen-3ya.de"},
    {"method": "email", "typed": "sub:alice", "valid": false},
    {"method": "email", "typed": "SUB:alice@example.com", "valid": false},
+   {"method": "email", "typed": "first.last+tag@example.co", "valid": true, "canonical": "first.last+tag@example.co"},
+   {"method": "email", "typed": "first last@example.com", "valid": false},
+   {"method": "email", "typed": "attacker%evil.example@team.example", "valid": false},
+   {"method": "email", "typed": "evil.example!attacker@team.example", "valid": false},
+   {"method": "email", "typed": "a..b@example.com", "valid": false},
    {"method": "email", "typed": "alice", "valid": false},
    {"method": "email", "typed": "münchen@example.de", "valid": false},
    {"method": "email", "typed": "", "valid": false}

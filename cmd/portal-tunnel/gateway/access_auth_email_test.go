@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,8 +14,11 @@ import (
 	"net/mail"
 	"net/textproto"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,12 +35,20 @@ const (
 
 // smtpTestServer is a minimal SMTP server on a loopback address. It accepts a
 // mail only after AUTH PLAIN with its username and password, when it has them,
-// and hands each accepted mail to messages.
+// and hands each accepted mail to messages. The fields after messages change how
+// it answers, and are set before the first connection.
 type smtpTestServer struct {
 	addr     string
 	username string
 	password string
 	messages chan smtpTestMessage
+	// rcptReply and dataReply, when set, refuse the recipient or the mail.
+	rcptReply string
+	dataReply string
+	// dropAtQuit closes the connection instead of answering QUIT.
+	dropAtQuit bool
+	// startTLS, when set, is offered as STARTTLS with this certificate.
+	startTLS *tls.Config
 }
 
 type smtpTestMessage struct {
@@ -83,7 +95,14 @@ func (s *smtpTestServer) serve(conn net.Conn) {
 		switch strings.ToUpper(verb) {
 		case "EHLO", "HELO":
 			reply("250-smtp.test")
+			if s.startTLS != nil {
+				reply("250-STARTTLS")
+			}
 			reply("250 AUTH PLAIN")
+		case "STARTTLS":
+			reply("220 go ahead")
+			_ = tls.Server(conn, s.startTLS).Handshake()
+			return
 		case "AUTH":
 			_, encoded, _ := strings.Cut(arg, " ")
 			credentials, _ := base64.StdEncoding.DecodeString(encoded)
@@ -101,6 +120,10 @@ func (s *smtpTestServer) serve(conn net.Conn) {
 			message = smtpTestMessage{from: strings.TrimSuffix(strings.TrimPrefix(arg, "FROM:<"), ">")}
 			reply("250 OK")
 		case "RCPT":
+			if s.rcptReply != "" {
+				reply(s.rcptReply)
+				continue
+			}
 			message.to = append(message.to, strings.TrimSuffix(strings.TrimPrefix(arg, "TO:<"), ">"))
 			reply("250 OK")
 		case "DATA":
@@ -109,11 +132,17 @@ func (s *smtpTestServer) serve(conn net.Conn) {
 			if err != nil {
 				return
 			}
+			if s.dataReply != "" {
+				reply(s.dataReply)
+				continue
+			}
 			message.data = string(data)
 			s.messages <- message
 			reply("250 OK")
 		case "QUIT":
-			reply("221 bye")
+			if !s.dropAtQuit {
+				reply("221 bye")
+			}
 			return
 		default:
 			reply("502 command not implemented")
@@ -338,6 +367,8 @@ func TestNormalizeVisitorEmail(t *testing.T) {
 		"a, b@example.com":                        "",
 		"alice@exämple.com":                       "",
 		"alice@ex\u212aample.com":                 "",
+		"attacker%evil.example@team.example":      "",
+		"evil.example!attacker@team.example":      "",
 		"sub:alice@example.com":                   "",
 		strings.Repeat("a", 250) + "@example.com": "",
 	} {
@@ -422,7 +453,11 @@ func TestEmailSendLimits(t *testing.T) {
 	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
 	start := time.Now().UTC()
 	issueAs := func(email string, listed bool, at time.Duration) bool {
-		return e.issue(email, listed, emailTestHost, "/", start.Add(at)) != ""
+		if e.issue(email, listed, emailTestHost, "/", start.Add(at)) == "" {
+			return false
+		}
+		<-e.sendSlots
+		return true
 	}
 	issue := func(email string, at time.Duration) bool { return issueAs(email, true, at) }
 	if !issue("alice@example.com", 0) {
@@ -482,6 +517,226 @@ func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
 	}
 	if e.issue("alice@example.com", true, emailTestHost, "/", now) == "" {
 		t.Fatal("the dropped send spent the cooldown of the address")
+	}
+}
+
+// A send takes its slot only after the limits pass. A request that waits for
+// them holds none, so a flood of requests the limits refuse cannot crowd out a
+// real send.
+func TestEmailSendWaitingForTheLimitsHoldsNoSlot(t *testing.T) {
+	t.Parallel()
+
+	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
+	now := time.Now().UTC()
+	if e.issue("alice@example.com", true, emailTestHost, "/", now) == "" {
+		t.Fatal("the first link was refused")
+	}
+	<-e.sendSlots
+
+	e.mu.Lock()
+	var waiting sync.WaitGroup
+	for range emailSendSlots {
+		waiting.Go(func() { e.send("alice@example.com", true, emailTestHost, "/", now) })
+	}
+	// Give the sends every chance to run up to the lock.
+	for range 10_000 {
+		if len(e.sendSlots) != 0 {
+			break
+		}
+		runtime.Gosched()
+	}
+	held := len(e.sendSlots)
+	e.mu.Unlock()
+	waiting.Wait()
+	if held != 0 {
+		t.Fatalf("%d sends held a slot while they waited for the limits", held)
+	}
+	if held := len(e.sendSlots); held != 0 {
+		t.Fatalf("%d refused sends kept a slot", held)
+	}
+}
+
+// The gate tells an exactly listed address from one that only an @domain entry
+// allows, so a flood that spends the domain budget leaves the listed address its
+// link.
+func TestEmailDomainBudgetSparesAListedAddress(t *testing.T) {
+	t.Parallel()
+
+	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+	gate := newEmailTestGate(t, emailTestConfig(server.addr, "alice@team.example", "@team.example"), http.NotFoundHandler())
+	now := time.Now().UTC()
+	gate.email.mu.Lock()
+	for i := range emailDomainHourlyLimit {
+		gate.email.sent = append(gate.email.sent, emailSend{email: fmt.Sprintf("user%d@team.example", i), at: now})
+	}
+	gate.email.mu.Unlock()
+
+	postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "late@team.example"})
+	server.expectNoMore(t)
+	postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@team.example"})
+	if message := server.next(t); !slices.Equal(message.to, []string{"alice@team.example"}) {
+		t.Fatalf("mail to %v", message.to)
+	}
+}
+
+// A mail server may route on these characters, so the allowlist cannot vouch
+// for where such an address ends up, and it never reaches the server.
+func TestEmailRequestRefusesARoutedAddress(t *testing.T) {
+	t.Parallel()
+
+	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+	gate := newEmailTestGate(t, emailTestConfig(server.addr, "@team.example"), http.NotFoundHandler())
+	for _, address := range []string{"attacker%evil.example@team.example", "evil.example!attacker@team.example"} {
+		if rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: address}); rec.Code != http.StatusBadRequest {
+			t.Fatalf("request for %s status = %d; want 400", address, rec.Code)
+		}
+	}
+	server.expectNoMore(t)
+}
+
+// Another site cannot ask for a mail or spend a link from a visitor's browser,
+// and the attempt leaves the link usable.
+func TestEmailEndpointsRefuseAnotherOrigin(t *testing.T) {
+	t.Parallel()
+
+	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+	gate := newEmailTestGate(t, emailTestConfig(server.addr, "alice@example.com", "bob@example.com"), http.NotFoundHandler())
+	post := func(path string, body any) int {
+		data, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "https://"+emailTestHost+path, bytes.NewReader(data))
+		req.Header.Set("Origin", "https://attacker.example")
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := post(applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"}); code != http.StatusForbidden {
+		t.Fatalf("request status = %d; want 403", code)
+	}
+	server.expectNoMore(t)
+
+	token := gate.email.issue("bob@example.com", true, emailTestHost, "/", time.Now().UTC())
+	<-gate.email.sendSlots
+	if code := post(applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); code != http.StatusForbidden {
+		t.Fatalf("redeem status = %d; want 403", code)
+	}
+	if rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusOK {
+		t.Fatalf("same-origin redeem status = %d; want 200", rec.Code)
+	}
+}
+
+// A link only ever returns a visitor to a path of this application.
+func TestEmailLinkReturnsOnlyToLocalPaths(t *testing.T) {
+	t.Parallel()
+
+	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+	gate := newEmailTestGate(t, emailTestConfig(server.addr, "@example.com"), http.NotFoundHandler())
+	for i, next := range []string{"https://evil.example/", "//evil.example/", "/\\evil.example", "/\t/evil.example"} {
+		email := fmt.Sprintf("user%d@example.com", i)
+		postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: email, Next: next})
+		rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: emailLinkToken(t, server.next(t))})
+		var redeemed map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &redeemed); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("redeem = %d, %v", rec.Code, err)
+		}
+		if redeemed["next"] != "/" {
+			t.Fatalf("next %q returned %q; want /", next, redeemed["next"])
+		}
+	}
+}
+
+// A link mailed for an alias stops working when the alias leaves the tunnel: the
+// next owner of the name reads the link of whoever opens it, and must not be able
+// to replay it here. A refused host does not use up the link.
+func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
+	t.Parallel()
+
+	const alias = "alias.example"
+	var public atomic.Value
+	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
+	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), emailTestConfig("127.0.0.1:25", "alice@example.com"), func() []string {
+		return public.Load().([]string)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := handler.(*applicationAuth)
+	token := gate.email.issue("alice@example.com", true, alias, "/", time.Now().UTC())
+	<-gate.email.sendSlots
+
+	public.Store([]string{"https://" + emailTestHost})
+	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusForbidden {
+		t.Fatalf("redeem at a lost alias = %d; want 403", rec.Code)
+	}
+	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
+	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusOK {
+		t.Fatalf("redeem after the alias came back = %d; want 200", rec.Code)
+	}
+}
+
+func newEmailTestAuthenticator(t *testing.T, addr string) *emailAuthenticator {
+	t.Helper()
+	settings, err := resolveApplicationAuthConfig(emailTestConfig(addr, "bob@example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newEmailAuthenticator(settings, nil)
+}
+
+// A server's reply about the recipient can quote the address. The send log must
+// not hold it, so an error keeps only the code.
+func TestEmailDeliverKeepsTheRecipientOutOfItsError(t *testing.T) {
+	t.Parallel()
+
+	for name, change := range map[string]func(*smtpTestServer){
+		"RCPT": func(s *smtpTestServer) { s.rcptReply = "550 5.1.1 <bob@example.com>: Recipient address rejected" },
+		"DATA": func(s *smtpTestServer) { s.dataReply = "550 5.7.1 <bob@example.com>: message refused" },
+	} {
+		server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+		change(server)
+		err := newEmailTestAuthenticator(t, server.addr).deliver(context.Background(), "bob@example.com", []byte("Subject: hi\r\n\r\nhi\r\n"))
+		if err == nil || !strings.Contains(err.Error(), "550") || strings.Contains(err.Error(), "bob") {
+			t.Errorf("%s: deliver error = %v; want the code without the address", name, err)
+		}
+	}
+}
+
+// The server has the mail once it accepts DATA, so a connection lost at QUIT is
+// not a failed send.
+func TestEmailDeliverSurvivesAFailedQuit(t *testing.T) {
+	t.Parallel()
+
+	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+	server.dropAtQuit = true
+	if err := newEmailTestAuthenticator(t, server.addr).deliver(context.Background(), "bob@example.com", []byte("Subject: hi\r\n\r\nhi\r\n")); err != nil {
+		t.Fatalf("deliver = %v", err)
+	}
+	server.next(t)
+}
+
+// Both TLS transports verify the server. The test cannot show a successful
+// session, because the code takes no root certificate, but it shows that a
+// certificate nobody vouches for ends the session before the password is sent.
+func TestEmailRefusesAnUntrustedCertificate(t *testing.T) {
+	t.Parallel()
+
+	untrusted := httptest.NewUnstartedServer(http.NotFoundHandler())
+	untrusted.StartTLS()
+	t.Cleanup(untrusted.Close)
+	var refused *tls.CertificateVerificationError
+
+	implicit := newEmailTestAuthenticator(t, untrusted.Listener.Addr().String())
+	implicit.implicitTLS = true
+	if err := implicit.check(context.Background()); !errors.As(err, &refused) {
+		t.Fatalf("implicit TLS check = %v; want a certificate refusal", err)
+	}
+
+	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+	server.startTLS = &tls.Config{Certificates: untrusted.TLS.Certificates, MinVersion: tls.VersionTLS12}
+	starttls := newEmailTestAuthenticator(t, server.addr)
+	starttls.smtpHost = "smtp.test"
+	if err := starttls.check(context.Background()); !errors.As(err, &refused) {
+		t.Fatalf("STARTTLS check = %v; want a certificate refusal", err)
 	}
 }
 
