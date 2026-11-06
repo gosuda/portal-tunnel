@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"maps"
+	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -14,6 +15,16 @@ const (
 	ModeAuto   Mode = "auto"
 	ModeManual Mode = "manual"
 )
+
+// ParseMode owns approval mode validation. An empty value is invalid, so a
+// caller that allows a missing mode has to skip parsing on purpose.
+func ParseMode(raw string) (Mode, error) {
+	mode := Mode(strings.TrimSpace(raw))
+	if mode != ModeAuto && mode != ModeManual {
+		return "", fmt.Errorf("invalid approval mode: %q", raw)
+	}
+	return mode, nil
+}
 
 // Access owns committed relay access decisions. A transaction edits a detached
 // Snapshot, persists it, then commits the complete state with a new revision.
@@ -79,12 +90,8 @@ func (s AccessState) Mode() Mode {
 	return s.mode
 }
 
-func (s *AccessState) SetMode(mode Mode) error {
-	if mode != ModeAuto && mode != ModeManual {
-		return fmt.Errorf("invalid approval mode: %q", mode)
-	}
+func (s *AccessState) SetMode(mode Mode) {
 	s.mode = mode
-	return nil
 }
 
 func (s AccessState) EffectiveApproval(key types.ServiceIdentityKey) bool {
