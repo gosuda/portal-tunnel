@@ -1,4 +1,7 @@
-package gateway
+// Package appauth is the application sign-in gate: an http.Handler that signs
+// visitors in with a wallet, an access credential, OpenID Connect, SAML, or an
+// email link, and passes only signed-in requests to the application behind it.
+package appauth
 
 import (
 	"context"
@@ -91,7 +94,21 @@ var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
 	jose.PS512,
 }
 
-type verifiedIdentityHeadersContextKey struct{}
+type principalContextKey struct{}
+
+// Principal is the visitor the gate signed in: the provider that vouched for
+// them and the subject it named.
+type Principal struct {
+	Provider string
+	Subject  string
+}
+
+// PrincipalFromContext returns the visitor of a request that passed the gate.
+// Without a gate in front of the handler there is none.
+func PrincipalFromContext(ctx context.Context) (Principal, bool) {
+	principal, ok := ctx.Value(principalContextKey{}).(Principal)
+	return principal, ok
+}
 
 // ApplicationAuthConfig configures the tunnel-local application access gate.
 // It is the auth component of a tunnel config: the agent config, the Agent API
@@ -673,18 +690,9 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if a.identityProof != "" {
 				r.Header.Set(types.HeaderPortalProof, a.identityProof)
 			}
-			r = r.WithContext(context.WithValue(r.Context(), verifiedIdentityHeadersContextKey{}, true))
 		}
-		a.next.ServeHTTP(w, r)
+		a.next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, Principal{Provider: provider, Subject: subject})))
 	}
-}
-
-func hasVerifiedIdentityHeaders(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	verified, _ := r.Context().Value(verifiedIdentityHeadersContextKey{}).(bool)
-	return verified
 }
 
 func stripApplicationAuthCookie(r *http.Request) {

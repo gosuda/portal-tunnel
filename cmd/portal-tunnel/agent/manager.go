@@ -14,9 +14,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -586,7 +586,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		X402Config:              cfg.X402Config,
 	}
 	status.Endpoints = slices.Clone(status.Endpoints)
-	hasProviderCheck := cfg.Provider == gateway.ApplicationAuthProviderOIDC || cfg.Provider == gateway.ApplicationAuthProviderSAML || cfg.Provider == gateway.ApplicationAuthProviderEmail
+	hasProviderCheck := cfg.Provider == appauth.ApplicationAuthProviderOIDC || cfg.Provider == appauth.ApplicationAuthProviderSAML || cfg.Provider == appauth.ApplicationAuthProviderEmail
 	if runtime != nil && hasProviderCheck {
 		checked, err := runtime.AuthProviderCheck()
 		status.AuthProviderChecked = checked

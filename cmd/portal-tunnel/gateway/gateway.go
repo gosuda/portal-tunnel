@@ -26,6 +26,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -636,11 +637,11 @@ type httpGateway struct {
 }
 
 func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Always remove Portal-owned credential and identity headers unless the
-	// local application auth gate explicitly verified and attached them for
-	// this request.
+	// Always remove Portal-owned credential and identity headers. Behind the
+	// application auth gate the identity headers are its own: it removes a
+	// visitor's copies before it sets them.
 	utils.DelHeaderSpellings(r.Header, types.HeaderAccessCredential)
-	if !hasVerifiedIdentityHeaders(r) {
+	if _, ok := appauth.PrincipalFromContext(r.Context()); !ok {
 		utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
 	}
 

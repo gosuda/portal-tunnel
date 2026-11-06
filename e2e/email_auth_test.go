@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -332,11 +332,11 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 		Identity:  tunnel.IdentitySpec{Name: "mail", Path: filepath.Join(t.TempDir(), "identity.json")},
 		Relays:    tunnel.RelaySpec{URLs: []string{"https://" + sniAddr}},
 		Transport: tunnel.TransportSpec{Target: strings.TrimPrefix(upstream.URL, "http://")},
-		HTTP: &tunnel.HTTPConfig{Auth: &gateway.ApplicationAuthConfig{
-			Provider:        gateway.ApplicationAuthProviderEmail,
+		HTTP: &tunnel.HTTPConfig{Auth: &appauth.ApplicationAuthConfig{
+			Provider:        appauth.ApplicationAuthProviderEmail,
 			EmailList:       []string{"@example.com"},
 			IdentityHeaders: true,
-			EmailConfig:     gateway.EmailConfig{SMTPAddr: catcher.addr, SMTPFrom: "Portal <login@portal.test>"},
+			EmailConfig:     appauth.EmailConfig{SMTPAddr: catcher.addr, SMTPFrom: "Portal <login@portal.test>"},
 		}},
 	})
 	if err != nil {

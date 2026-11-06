@@ -1,4 +1,4 @@
-package gateway
+package appauth
 
 import (
 	"bytes"
@@ -376,6 +376,19 @@ func TestApplicationAuthWithoutSessionIgnoresOrigin(t *testing.T) {
 	}
 }
 
+// portalHeaderNames lists the headers of h that a gateway reading underscores as
+// hyphens takes for a Portal header, in whatever spelling they arrived.
+func portalHeaderNames(h http.Header) []string {
+	var names []string
+	for key := range h {
+		if strings.HasPrefix(strings.ToLower(strings.ReplaceAll(key, "_", "-")), "x-portal-") {
+			names = append(names, key)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 func TestSameApplicationHost(t *testing.T) {
 	t.Parallel()
 
@@ -520,44 +533,6 @@ func TestApplicationAuthIdentityProof(t *testing.T) {
 				t.Fatalf("unauthenticated request: reached upstream = %v, status = %d; want a login redirect", reached, rec.Code)
 			}
 		})
-	}
-}
-
-// The router in front of the upstream removes Portal identity headers the gate
-// did not verify, so the proof set by the gate must survive it.
-func TestApplicationAuthIdentityProofReachesRoutedUpstream(t *testing.T) {
-	t.Parallel()
-
-	gotProof := make(chan []string, 1)
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotProof <- r.Header.Values(types.HeaderPortalProof)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer upstream.Close()
-	routes, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Payment{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := NewApplicationAuth(routes, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
-	req.Header.Set(types.HeaderAccessCredential, credential)
-	req.Header.Set(types.HeaderPortalProof, "forged-proof-value")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d; want %d", rec.Code, http.StatusNoContent)
-	}
-	if got := <-gotProof; !slices.Equal(got, []string{identityProofTestValue}) {
-		t.Fatalf("upstream %s = %q; want the configured proof only", types.HeaderPortalProof, got)
 	}
 }
 

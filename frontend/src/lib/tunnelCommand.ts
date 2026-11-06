@@ -49,7 +49,7 @@ export const DEFAULT_TUNNEL_AUTH: TunnelAuthOptions = {
 };
 
 // The reserved paths a provider sends visitors back to, from
-// cmd/portal-tunnel/gateway (applicationAuthCallbackPath and the
+// sdk/appauth (applicationAuthCallbackPath and the
 // applicationAuthSAML*Path constants).
 export const AUTH_CALLBACK_PATH = "/_portal/auth/callback";
 export const AUTH_SAML_ACS_PATH = "/_portal/auth/saml/acs";
@@ -307,7 +307,7 @@ export function needsAllowlist(method: TunnelAuthMethod): boolean {
 /**
  * Mirrors what `portal expose --auth-allow` and `--auth-email-list` accept for each method. The Go
  * owners are normalizeApplicationAuthSubject and NormalizeApplicationAuthAllowed
- * (access_credential.go), normalizeProviderPrincipal (access_auth.go) and
+ * (sdk/appauth/credential.go), normalizeProviderPrincipal (sdk/appauth/appauth.go) and
  * identity.NormalizeEVMAddress. Email takes the email and @domain entries of
  * oidc and saml, but no sub:<id>, because a mailbox has no other id.
  * The browser has no Keccak, so a mixed-case wallet address is not checked
@@ -368,7 +368,7 @@ export function classifyAuthAllow(
   return { ok: true, kind: at === 0 ? "domain" : "person" };
 }
 
-// normalizeVisitorEmail (access_auth_email.go) takes a bare address that net/mail
+// normalizeVisitorEmail (sdk/appauth/email.go) takes a bare address that net/mail
 // reads back unchanged, without the % and ! that mail servers route on.
 const mailAtom = "[a-zA-Z0-9#$&'*+/=?^_`{|}~-]+";
 const visitorEmail = new RegExp(`^${mailAtom}(\\.${mailAtom})*@${mailAtom}(\\.${mailAtom})*$`);
@@ -411,7 +411,7 @@ function isOIDCIssuer(raw: string): boolean {
   }
 }
 
-// normalizeSAMLMetadataURL (access_auth_saml.go) also accepts http on a
+// normalizeSAMLMetadataURL (sdk/appauth/saml.go) also accepts http on a
 // loopback host, which the builder does not offer. Unlike an issuer, the
 // metadata URL may carry a query.
 function isSAMLMetadataURL(raw: string): boolean {
@@ -429,7 +429,7 @@ function isSAMLMetadataURL(raw: string): boolean {
   }
 }
 
-// validateSMTPAddr (access_auth_email.go) reads host:port the way
+// validateSMTPAddr (sdk/appauth/email.go) reads host:port the way
 // net.SplitHostPort and strconv.Atoi do: an IPv6 host in brackets, a host
 // without control characters, and a port from 1 to 65535.
 function isEmailSMTPAddr(raw: string): boolean {
@@ -586,7 +586,7 @@ export function buildAuthRedirectURLs(
 
 /**
  * The host a private link is bound to, read from the URL handed to the
- * visitor the way NormalizeApplicationAuthHost (access_credential.go) reads
+ * visitor the way NormalizeApplicationAuthHost (sdk/appauth/credential.go) reads
  * it: an https URL or a bare host, without a path, query or fragment. The URL
  * parser also drops the `:443` Portal prints, as a browser leaves it out of
  * the Host it sends. Empty when the address is unusable.

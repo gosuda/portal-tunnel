@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/internal/siweauth"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -83,8 +83,8 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			for i := range status.Tunnels {
 				tunnel := &status.Tunnels[i]
 				tunnel.AllowedWallets, tunnel.EmailList = nil, nil
-				tunnel.EmailConfig, tunnel.AuthSMTPPasswordSet = gateway.EmailConfig{}, false
-				if tunnel.Provider == gateway.ApplicationAuthProviderEmail && tunnel.AuthProviderError != "" {
+				tunnel.EmailConfig, tunnel.AuthSMTPPasswordSet = appauth.EmailConfig{}, false
+				if tunnel.Provider == appauth.ApplicationAuthProviderEmail && tunnel.AuthProviderError != "" {
 					tunnel.AuthProviderError = "smtp server check failed"
 				}
 			}

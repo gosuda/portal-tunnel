@@ -3,7 +3,7 @@ package tunnel
 import (
 	"testing"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
 func TestSpecValidateModes(t *testing.T) {
@@ -39,41 +39,41 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 		edit  func(*Spec)
 		valid bool
 	}{
-		{name: "siwe", edit: func(spec *Spec) { spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe"} }, valid: true},
-		{name: "unknown auth", edit: func(spec *Spec) { spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "unknown"} }},
-		{name: "missing auth provider", edit: func(spec *Spec) { spec.HTTP.Auth = &gateway.ApplicationAuthConfig{IdentityHeaders: true} }},
+		{name: "siwe", edit: func(spec *Spec) { spec.HTTP.Auth = &appauth.ApplicationAuthConfig{Provider: "siwe"} }, valid: true},
+		{name: "unknown auth", edit: func(spec *Spec) { spec.HTTP.Auth = &appauth.ApplicationAuthConfig{Provider: "unknown"} }},
+		{name: "missing auth provider", edit: func(spec *Spec) { spec.HTTP.Auth = &appauth.ApplicationAuthConfig{IdentityHeaders: true} }},
 		{name: "credential allowlist", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "credential", AllowedWallets: []string{"alice"}}
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{Provider: "credential", AllowedWallets: []string{"alice"}}
 		}, valid: true},
 		{name: "credential invalid allowlist", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "credential", AllowedWallets: []string{""}}
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{Provider: "credential", AllowedWallets: []string{""}}
 		}},
 		{name: "siwe invalid allowlist", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe", AllowedWallets: []string{"not-a-wallet"}}
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{Provider: "siwe", AllowedWallets: []string{"not-a-wallet"}}
 		}},
 		{name: "oidc valid", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{
 				Provider:       "oidc",
-				OIDCConfig:     gateway.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123"},
+				OIDCConfig:     appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123"},
 				AllowedWallets: []string{"alice@example.com"},
 			}
 		}, valid: true},
 		{name: "oidc missing client id", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{
 				Provider:   "oidc",
-				OIDCConfig: gateway.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com"},
+				OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com"},
 			}
 		}},
 		{name: "oidc non-https issuer", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{
 				Provider:   "oidc",
-				OIDCConfig: gateway.OIDCConfig{OIDCIssuerURL: "http://idp.example.com", OIDCClientID: "client-123"},
+				OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "http://idp.example.com", OIDCClientID: "client-123"},
 			}
 		}},
 		{name: "oidc settings with siwe provider", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{
 				Provider:   "siwe",
-				OIDCConfig: gateway.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com"},
+				OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com"},
 			}
 		}},
 		{name: "paid route", edit: func(spec *Spec) {
@@ -97,7 +97,7 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
 		}, valid: true},
 		{name: "strip request headers with auth target", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe"}
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{Provider: "siwe"}
 			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
 		}, valid: true},
 		{name: "strip request headers on static", edit: func(spec *Spec) {
@@ -115,11 +115,11 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 			spec.HTTP.StripRequestHeaders = []string{"X-Forwarded-Proto"}
 		}},
 		{name: "strip X-Portal-User with auth identity headers", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe", IdentityHeaders: true}
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{Provider: "siwe", IdentityHeaders: true}
 			spec.HTTP.StripRequestHeaders = []string{"X-Portal-User"}
 		}, valid: true},
 		{name: "strip X-Portal-Auth without auth identity headers", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &gateway.ApplicationAuthConfig{Provider: "siwe"}
+			spec.HTTP.Auth = &appauth.ApplicationAuthConfig{Provider: "siwe"}
 			spec.HTTP.StripRequestHeaders = []string{"X-Portal-Auth"}
 		}, valid: true},
 		{name: "invalid strip request header name", edit: func(spec *Spec) {

@@ -21,11 +21,11 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -253,15 +253,15 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 		emailFlagGiven = emailFlagGiven || strings.HasPrefix(f.Name, "auth-smtp-")
 		proofFlagGiven = proofFlagGiven || f.Name == "auth-identity-proof"
 	})
-	provider, _ := gateway.NormalizeApplicationAuthProvider(cfg.Provider)
-	if provider != gateway.ApplicationAuthProviderOIDC && !oidcFlagGiven {
-		cfg.OIDCConfig = gateway.OIDCConfig{}
+	provider, _ := appauth.NormalizeApplicationAuthProvider(cfg.Provider)
+	if provider != appauth.ApplicationAuthProviderOIDC && !oidcFlagGiven {
+		cfg.OIDCConfig = appauth.OIDCConfig{}
 	}
-	if provider != gateway.ApplicationAuthProviderSAML && !samlFlagGiven {
-		cfg.SAMLConfig = gateway.SAMLConfig{}
+	if provider != appauth.ApplicationAuthProviderSAML && !samlFlagGiven {
+		cfg.SAMLConfig = appauth.SAMLConfig{}
 	}
-	if provider != gateway.ApplicationAuthProviderEmail && !emailFlagGiven {
-		cfg.EmailConfig = gateway.EmailConfig{}
+	if provider != appauth.ApplicationAuthProviderEmail && !emailFlagGiven {
+		cfg.EmailConfig = appauth.EmailConfig{}
 	}
 	if !cfg.IdentityHeaders && !proofFlagGiven {
 		cfg.IdentityProof = ""
@@ -310,11 +310,11 @@ func runAuthCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load tunnel identity: %w", err)
 	}
-	credential, err := gateway.IssueApplicationCredential(tunnelIdentity, host, subject, time.Now().UTC().Add(expires))
+	credential, err := appauth.IssueApplicationCredential(tunnelIdentity, host, subject, time.Now().UTC().Add(expires))
 	if err != nil {
 		return err
 	}
-	redeemURL, err := gateway.ApplicationCredentialRedeemURL(host, credential)
+	redeemURL, err := appauth.ApplicationCredentialRedeemURL(host, credential)
 	if err != nil {
 		return err
 	}

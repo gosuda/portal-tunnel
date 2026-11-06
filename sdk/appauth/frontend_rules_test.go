@@ -1,4 +1,4 @@
-package gateway
+package appauth
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 // the frontend.
 func loadFrontendFile(t *testing.T, name string, into any) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "frontend", "src", "lib", name))
+	data, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", "lib", name))
 	if err != nil {
 		t.Fatal(err)
 	}
