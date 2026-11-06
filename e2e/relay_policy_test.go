@@ -215,20 +215,9 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 		}()
 
 		// A pending lease has registered, so the admin can see and approve it.
-		var pending types.PolicyStateResponse
-		registered := time.After(15 * time.Second)
-		for len(pending.Leases) == 0 {
-			if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &pending); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-registered:
-				t.Fatal("lease never registered")
-			case <-time.After(50 * time.Millisecond):
-			}
-		}
-		if pending.Leases[0].IsApproved {
-			t.Fatalf("manual relay approved a lease on its own: %+v", pending.Leases[0])
+		pending := waitPolicyLease(t, ctx, client, base)
+		if pending.IsApproved {
+			t.Fatalf("manual relay approved a lease on its own: %+v", pending)
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
@@ -236,7 +225,7 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 			t.Fatalf("unapproved lease became ready: %+v", ready)
 		}
 		tenantClient := relayTenantClient(t, client, base)
-		publicURL := "https://" + pending.Leases[0].CanonicalHostname + ":" + base.Port()
+		publicURL := "https://" + pending.CanonicalHostname + ":" + base.Port()
 		if response, err := tenantClient.Get(publicURL); err == nil {
 			body, _ := io.ReadAll(response.Body)
 			response.Body.Close()
@@ -245,11 +234,7 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 			}
 		}
 
-		isApproved := true
-		update := types.LeasePolicyUpdate{IdentityKey: leaseIdentity.Key(), IsApproved: &isApproved}
-		if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, update, headers, new(types.PolicyLease)); err != nil {
-			t.Fatal(err)
-		}
+		setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: leaseIdentity.Key(), IsApproved: ptr(true)})
 		readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		if _, err := exposure.WaitReady(readyCtx); err != nil {
