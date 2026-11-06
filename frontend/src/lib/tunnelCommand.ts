@@ -371,7 +371,18 @@ export function classifyAuthAllow(
 // normalizeVisitorEmail (sdk/appauth/email.go) takes a bare address that net/mail
 // reads back unchanged, without the % and ! that mail servers route on.
 const mailAtom = "[a-zA-Z0-9#$&'*+/=?^_`{|}~-]+";
-const visitorEmail = new RegExp(`^${mailAtom}(\\.${mailAtom})*@${mailAtom}(\\.${mailAtom})*$`);
+const mailAddress = `${mailAtom}(\\.${mailAtom})*@${mailAtom}(\\.${mailAtom})*`;
+const visitorEmail = new RegExp(`^${mailAddress}$`);
+
+// parseSMTPFrom (sdk/appauth/email.go) takes one address the way net/mail reads
+// it: bare, or in angle brackets after a display name.
+const senderName = `(?:"[^"\\\\]*"|[^"<>@,;:()\\[\\]\\\\]+)`;
+const emailSender = new RegExp(`^(?:${mailAddress}|(?:${senderName}\\s*)?<${mailAddress}>)$`);
+
+function isEmailSender(raw: string): boolean {
+  const sender = raw.trim();
+  return !/[\u0000-\u001f\u007f-\u009f]/.test(sender) && emailSender.test(sender);
+}
 
 function isVisitorEmail(entry: string): boolean {
   return entry.length <= 254 && visitorEmail.test(entry);
@@ -508,8 +519,11 @@ export function validateTunnelAuth(auth: TunnelAuthOptions): TunnelAuthIssue[] {
     }
     if (auth.emailFrom.trim() === "") {
       issues.push({ field: "from", message: "Add the sender address" });
-    } else if (!auth.emailFrom.includes("@")) {
-      issues.push({ field: "from", message: "The sender must be an email address" });
+    } else if (!isEmailSender(auth.emailFrom)) {
+      issues.push({
+        field: "from",
+        message: "The sender must be one address, such as Portal <login@example.com>",
+      });
     }
   }
   if (auth.allow.some((entry) => !classifyAuthAllow(auth.method, entry).ok)) {

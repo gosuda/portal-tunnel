@@ -655,6 +655,22 @@ describe("rules shared with the Go gateway", () => {
     }
   });
 
+  it("accepts the email senders the gateway accepts", () => {
+    for (const row of ruleVectors.emailFrom) {
+      const issues = validateTunnelAuth({
+        ...DEFAULT_TUNNEL_AUTH,
+        method: "email",
+        allow: ["alice@example.com"],
+        emailSMTPAddr: "smtp.example.com:587",
+        emailFrom: row.value,
+      });
+      expect(
+        issues.some((issue) => issue.field === "from"),
+        `sender ${JSON.stringify(row.value)}`
+      ).toBe(!row.valid);
+    }
+  });
+
   it("binds a private link to the host the gateway reads", () => {
     for (const row of ruleVectors.host) {
       expect(applicationAuthHost(row.address), `address ${JSON.stringify(row.address)}`).toBe(row.host);

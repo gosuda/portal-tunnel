@@ -41,6 +41,10 @@ type frontendAuthRules struct {
 		Value string `json:"value"`
 		Valid bool   `json:"valid"`
 	} `json:"emailSMTPAddr"`
+	SMTPFrom []struct {
+		Value string `json:"value"`
+		Valid bool   `json:"valid"`
+	} `json:"emailFrom"`
 	Host []struct {
 		Address string `json:"address"`
 		Host    string `json:"host"`
@@ -52,9 +56,17 @@ func TestFrontendAuthRulesMatchTheGateway(t *testing.T) {
 
 	var rules frontendAuthRules
 	loadFrontendFile(t, "authRuleVectors.json", &rules)
-	if len(rules.Allow) == 0 || len(rules.Issuer) == 0 || len(rules.SAMLMetadata) == 0 || len(rules.SMTPAddr) == 0 || len(rules.Host) == 0 {
-		t.Fatalf("authRuleVectors.json has %d allow, %d issuer, %d samlMetadata, %d emailSMTPAddr and %d host rows; want all five",
-			len(rules.Allow), len(rules.Issuer), len(rules.SAMLMetadata), len(rules.SMTPAddr), len(rules.Host))
+	for name, rows := range map[string]int{
+		"allow":         len(rules.Allow),
+		"issuer":        len(rules.Issuer),
+		"samlMetadata":  len(rules.SAMLMetadata),
+		"emailSMTPAddr": len(rules.SMTPAddr),
+		"emailFrom":     len(rules.SMTPFrom),
+		"host":          len(rules.Host),
+	} {
+		if rows == 0 {
+			t.Fatalf("authRuleVectors.json has no %s rows", name)
+		}
 	}
 
 	t.Run("allowlist entries", func(t *testing.T) {
@@ -110,6 +122,20 @@ func TestFrontendAuthRulesMatchTheGateway(t *testing.T) {
 			})
 			if (err == nil) != row.Valid {
 				t.Errorf("SMTP address %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)
+			}
+		}
+	})
+
+	t.Run("email senders", func(t *testing.T) {
+		t.Parallel()
+		for _, row := range rules.SMTPFrom {
+			err := Validate(Config{
+				Provider:    ProviderEmail,
+				EmailList:   []string{"alice@example.com"},
+				EmailConfig: EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPFrom: row.Value},
+			})
+			if (err == nil) != row.Valid {
+				t.Errorf("sender %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)
 			}
 		}
 	})
