@@ -149,13 +149,16 @@ document.addEventListener('click',(e)=>{const b=e.target.closest('[data-connect]
 
 // The email screens: the form, the screens while a link is requested and after,
 // and the ones while a link from the mail is redeemed. The page answers the same
-// for every address, so the sent screen cannot say whether a mail went out.
+// for every address, so the sent screen cannot say whether a mail went out. A
+// link waits for a click, because it works once and a mail scanner may open it
+// and run this page: a scanner must not use up the link of the visitor.
 const signinEmailBody = `<section data-view="form"><h1 tabindex="-1">Sign in with email</h1><p class="body">Enter your email address. If it has access to this app, you will get a one-time sign-in link.</p>
 <form id="email-form" novalidate><div class="field"><label for="email">Email address</label><input id="email" type="email" placeholder="you@example.com" autocomplete="email" autocapitalize="off" spellcheck="false">
 <p class="err" id="hint" role="alert" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg><span id="hint-msg"></span></p></div>
 <button type="submit" class="btn" id="send">Send sign-in link</button></form></section>
 <section data-view="sending" hidden><div class="ico info spin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spin"/></svg></div><h1 tabindex="-1">Sending your link</h1><p class="body">This takes a moment.</p></section>
 <section data-view="sent" hidden><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"/></svg></div><h1 tabindex="-1">Check your email</h1><p class="body">If this address has access, a sign-in link is on its way. The link works once and expires in 10 minutes.</p><div class="who"><small>Sent to</small><b id="to"></b></div><button type="button" class="btn" data-go="form">Use a different address</button></section>
+<section data-view="confirm" hidden><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"/></svg></div><h1 tabindex="-1">Finish signing in</h1><p class="body">Your sign-in link is ready. It works once.</p><button type="button" class="btn" id="redeem">Continue</button></section>
 <section data-view="checking" hidden><div class="ico info spin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spin"/></svg></div><h1 tabindex="-1">Checking your link</h1><p class="body">This takes a moment.</p></section>
 <section data-view="invalid" hidden><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1 tabindex="-1">That link did not work</h1><p class="body">It was already used, it expired, or the app restarted since it was sent. Ask for a new link.</p><button type="button" class="btn" data-go="form">Get a new link</button></section>
 ` + signinCommonViews
@@ -163,7 +166,7 @@ const signinEmailBody = `<section data-view="form"><h1 tabindex="-1">Sign in wit
 const signinEmailScript = `const input=document.querySelector('#email'),hint=document.querySelector('#hint'),hintMsg=document.querySelector('#hint-msg');
 const warn=(message)=>{hintMsg.textContent=message;hint.hidden=false;show('form');input.focus()};
 document.querySelector('#email-form').addEventListener('submit',async(e)=>{e.preventDefault();const email=input.value.trim();hint.hidden=true;if(!email){warn('Enter your email address first.');return}show('sending');try{const r=await post('/_portal/auth/email/request',{email,next:next()});if(r.status===400){warn('Enter a valid email address.');return}if(!r.ok){fail(r.data.error);return}document.querySelector('#to').textContent=email;show('sent')}catch(e){fail()}});
-const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('email_token')){const token=fragment.get('email_token');history.replaceState(null,'',location.pathname+location.search);show('checking');post('/_portal/auth/email/redeem',{token}).then((r)=>{if(r.status===401){show('invalid');return}if(!r.ok){fail(r.data.error);return}done(r.data.next)},()=>fail())}`
+const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('email_token')){const token=fragment.get('email_token');history.replaceState(null,'',location.pathname+location.search);show('confirm');document.querySelector('#redeem').addEventListener('click',()=>{show('checking');post('/_portal/auth/email/redeem',{token}).then((r)=>{if(r.status===401){show('invalid');return}if(!r.ok){fail(r.data.error);return}done(r.data.next)},()=>fail())})}`
 
 // An OIDC or SAML login leaves for the provider at once, so its only screens
 // are the ways it can come back without a session. They are rendered by the
