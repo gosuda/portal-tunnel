@@ -132,7 +132,7 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	})
 	handler := newApplicationAuthTestHandler(t, nil, false, next)
 	gate := handler.(*applicationAuth)
-	token, err := gate.issueSession(applicationAuthTestWallet(t, "2").Identity().Address, ApplicationAuthProviderSIWE, "app.example", applicationAuthTestTime().Add(applicationAuthSessionTTL))
+	token, err := gate.issueSession(applicationAuthTestWallet(t, "2").Identity().Address, ProviderSIWE, "app.example", applicationAuthTestTime().Add(applicationAuthSessionTTL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,16 +182,16 @@ func TestApplicationAuthCredential(t *testing.T) {
 	tunnelIdentity := applicationAuthTestIdentity()
 	var upstreamUser, upstreamAuth, upstreamCredential string
 	upstreamRequests := 0
-	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamRequests++
 		upstreamUser, upstreamAuth = r.Header.Get(types.HeaderPortalUser), r.Header.Get(types.HeaderPortalAuth)
 		upstreamCredential = r.Header.Get(types.HeaderAccessCredential)
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true}, nil)
+	}), tunnelIdentity, Config{Provider: ProviderCredential, IdentityHeaders: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,17 +211,17 @@ func TestApplicationAuthCredential(t *testing.T) {
 	protected.AddCookie(cookies[0])
 	protectedRec := httptest.NewRecorder()
 	handler.ServeHTTP(protectedRec, protected)
-	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential {
+	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ProviderCredential {
 		t.Fatalf("protected status = %d, identity = %q/%q", protectedRec.Code, upstreamUser, upstreamAuth)
 	}
 	direct := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
 	direct.Header.Set(types.HeaderAccessCredential, credential)
 	directRec := httptest.NewRecorder()
 	handler.ServeHTTP(directRec, direct)
-	if directRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ApplicationAuthProviderCredential || upstreamCredential != "" {
+	if directRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ProviderCredential || upstreamCredential != "" {
 		t.Fatalf("credential header status = %d, identity = %q/%q, upstream credential = %q", directRec.Code, upstreamUser, upstreamAuth, upstreamCredential)
 	}
-	bobCredential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
+	bobCredential, err := IssueCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,14 +250,14 @@ func TestApplicationSessionRefusesOtherOrigins(t *testing.T) {
 
 	tunnelIdentity := applicationAuthTestIdentity()
 	upstreamRequests := 0
-	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamRequests++
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}, nil)
+	}), tunnelIdentity, Config{Provider: ProviderCredential})
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,13 +331,13 @@ func TestApplicationCredentialHeaderPassesFromAnyOrigin(t *testing.T) {
 	t.Parallel()
 
 	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}, nil)
+	}), tunnelIdentity, Config{Provider: ProviderCredential})
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestApplicationCredentialHeaderPassesFromAnyOrigin(t *testing.T) {
 func TestApplicationAuthWithoutSessionIgnoresOrigin(t *testing.T) {
 	t.Parallel()
 
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}, nil)
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{Provider: ProviderCredential})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,15 +427,15 @@ func TestApplicationSessionFollowsTheHostNotItsSpelling(t *testing.T) {
 	t.Parallel()
 
 	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}, nil)
+	}), tunnelIdentity, Config{Provider: ProviderCredential})
 	if err != nil {
 		t.Fatal(err)
 	}
 	redeem := func(host string) *http.Cookie {
 		t.Helper()
-		credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+		credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -486,29 +486,29 @@ func TestApplicationAuthIdentityProof(t *testing.T) {
 	t.Parallel()
 
 	tunnelIdentity := applicationAuthTestIdentity()
-	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tt := range []struct {
 		name      string
-		cfg       ApplicationAuthConfig
+		cfg       Config
 		wantProof []string
 	}{
-		{"configured", ApplicationAuthConfig{IdentityHeaders: true, IdentityProof: identityProofTestValue}, []string{identityProofTestValue}},
-		{"not configured", ApplicationAuthConfig{IdentityHeaders: true}, nil},
+		{"configured", Config{IdentityHeaders: true, IdentityProof: identityProofTestValue}, []string{identityProofTestValue}},
+		{"not configured", Config{IdentityHeaders: true}, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			reached := false
 			var gotProof []string
-			tt.cfg.Provider = ApplicationAuthProviderCredential
-			handler, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tt.cfg.Provider = ProviderCredential
+			handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				reached = true
 				gotProof = r.Header.Values(types.HeaderPortalProof)
 				w.WriteHeader(http.StatusNoContent)
-			}), tunnelIdentity, tt.cfg, nil)
+			}), tunnelIdentity, tt.cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -538,23 +538,23 @@ func TestApplicationAuthIdentityProof(t *testing.T) {
 
 func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 	tunnelIdentity := applicationAuthTestIdentity()
-	aliceCredential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	aliceCredential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobCredential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
+	bobCredential, err := IssueCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Step 1: Both alice and bob are allowed; alice redeems a browser session cookie.
-	initialGate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	initialGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{
-		Provider:        ApplicationAuthProviderCredential,
-		AllowedWallets:  []string{"alice", "bob"},
+	}), tunnelIdentity, Config{
+		Provider:        ProviderCredential,
+		Allow:           []string{"alice", "bob"},
 		IdentityHeaders: true,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,14 +568,14 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 	}
 	aliceCookie := redeemRec.Result().Cookies()[0]
 
-	// Step 2: Revoke alice by restricting AllowedWallets to bob only.
-	revokedGate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Step 2: Revoke alice by restricting Allow to bob only.
+	revokedGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{
-		Provider:        ApplicationAuthProviderCredential,
-		AllowedWallets:  []string{"bob"},
+	}), tunnelIdentity, Config{
+		Provider:        ProviderCredential,
+		Allow:           []string{"bob"},
 		IdentityHeaders: true,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,16 +688,16 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 
 	tunnelIdentity := applicationAuthTestIdentity()
 	var upstreamUser, upstreamAuth string
-	gate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	gate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamUser = r.Header.Get(types.HeaderPortalUser)
 		upstreamAuth = r.Header.Get(types.HeaderPortalAuth)
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{
-		Provider:        ApplicationAuthProviderOIDC,
-		AllowedWallets:  []string{"alice@example.com"},
+	}), tunnelIdentity, Config{
+		Provider:        ProviderOIDC,
+		Allow:           []string{"alice@example.com"},
 		IdentityHeaders: true,
 		OIDCConfig:      OIDCConfig{OIDCIssuerURL: issuerURL, OIDCClientID: "portal-client", OIDCClientSecret: "portal-secret"},
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,19 +756,19 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 	protectedReq.AddCookie(sessionCookie)
 	protectedRec := httptest.NewRecorder()
 	gate.ServeHTTP(protectedRec, protectedReq)
-	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice@example.com" || upstreamAuth != ApplicationAuthProviderOIDC {
+	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice@example.com" || upstreamAuth != ProviderOIDC {
 		t.Fatalf("protected status = %d, user = %q, auth = %q", protectedRec.Code, upstreamUser, upstreamAuth)
 	}
 
-	// 4. Removing alice@example.com from AllowedWallets immediately revokes the existing OIDC session.
-	revokedGate, err := NewApplicationAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 4. Removing alice@example.com from Allow immediately revokes the existing OIDC session.
+	revokedGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, ApplicationAuthConfig{
-		Provider:        ApplicationAuthProviderOIDC,
-		AllowedWallets:  []string{"bob@example.com"},
+	}), tunnelIdentity, Config{
+		Provider:        ProviderOIDC,
+		Allow:           []string{"bob@example.com"},
 		IdentityHeaders: true,
 		OIDCConfig:      OIDCConfig{OIDCIssuerURL: issuerURL, OIDCClientID: "portal-client", OIDCClientSecret: "portal-secret"},
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -786,12 +786,12 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 
 	newGate := func(t *testing.T, provider string, allow ...string) *applicationAuth {
 		t.Helper()
-		cfg := ApplicationAuthConfig{Provider: provider, AllowedWallets: allow}
-		if provider == ApplicationAuthProviderOIDC {
+		cfg := Config{Provider: provider, Allow: allow}
+		if provider == ProviderOIDC {
 			cfg.OIDCIssuerURL = "https://idp.example"
 			cfg.OIDCClientID = "portal-client"
 		}
-		handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg, nil)
+		handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -836,7 +836,7 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			gate := newGate(t, ApplicationAuthProviderOIDC, tt.allow...)
+			gate := newGate(t, ProviderOIDC, tt.allow...)
 			claims := oidcIDTokenClaims{
 				Claims:        jwt.Claims{Subject: tt.sub},
 				Email:         tt.email,
@@ -851,13 +851,13 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 
 	t.Run("domain session remains valid", func(t *testing.T) {
 		t.Parallel()
-		if !newGate(t, ApplicationAuthProviderOIDC, "@example.com").subjectAllowed("bob@example.com") {
+		if !newGate(t, ProviderOIDC, "@example.com").subjectAllowed("bob@example.com") {
 			t.Fatal("domain-authorized subject rejected on session validation")
 		}
 	})
 	t.Run("sub session remains valid", func(t *testing.T) {
 		t.Parallel()
-		gate := newGate(t, ApplicationAuthProviderOIDC, "sub:alice@example.com")
+		gate := newGate(t, ProviderOIDC, "sub:alice@example.com")
 		if !gate.subjectAllowed("sub:alice@example.com") {
 			t.Fatal("sub:-authorized subject rejected on session validation")
 		}
@@ -867,29 +867,29 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 	})
 	t.Run("sub session cannot widen to a domain entry", func(t *testing.T) {
 		t.Parallel()
-		if newGate(t, ApplicationAuthProviderOIDC, "@example.com").subjectAllowed("sub:mallory@example.com") {
+		if newGate(t, ProviderOIDC, "@example.com").subjectAllowed("sub:mallory@example.com") {
 			t.Fatal("sub: session subject honored an @domain entry")
 		}
 	})
 	t.Run("credential subjects ignore domain entries", func(t *testing.T) {
 		t.Parallel()
-		if newGate(t, ApplicationAuthProviderCredential, "@example.com").subjectAllowed("bob@example.com") {
+		if newGate(t, ProviderCredential, "@example.com").subjectAllowed("bob@example.com") {
 			t.Fatal("credential provider honored an @domain entry")
 		}
 	})
 	t.Run("malformed domain entries are rejected", func(t *testing.T) {
 		t.Parallel()
 		for _, entry := range []string{"@", "@a@b", "@ex ample.com"} {
-			if _, err := NormalizeApplicationAuthProviderPrincipals([]string{entry}); err == nil {
-				t.Fatalf("NormalizeApplicationAuthProviderPrincipals(%q) = nil error", entry)
+			if _, err := normalizeProviderPrincipals([]string{entry}); err == nil {
+				t.Fatalf("normalizeProviderPrincipals(%q) = nil error", entry)
 			}
 		}
 	})
 	t.Run("untyped or malformed entries are rejected", func(t *testing.T) {
 		t.Parallel()
 		for _, entry := range []string{"alice", "sub:", "sub: ", "alice@", "alice@a@b", "Kevin@example.com", "@gİthub.com"} {
-			if _, err := NormalizeApplicationAuthProviderPrincipals([]string{entry}); err == nil {
-				t.Fatalf("NormalizeApplicationAuthProviderPrincipals(%q) = nil error", entry)
+			if _, err := normalizeProviderPrincipals([]string{entry}); err == nil {
+				t.Fatalf("normalizeProviderPrincipals(%q) = nil error", entry)
 			}
 		}
 	})
@@ -920,7 +920,7 @@ func TestNormalizeProviderPrincipalKeepsSubjectCase(t *testing.T) {
 
 func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {
 	tunnelIdentity := applicationAuthTestIdentity()
-	credential, err := IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -964,9 +964,9 @@ func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 		{"app.example:1443", "app.example", false},
 		{"app.example", "app.example:1443", false},
 	} {
-		credential, err := IssueApplicationCredential(tunnelIdentity, tt.issuedFor, "alice", time.Now().UTC().Add(time.Hour))
+		credential, err := IssueCredential(tunnelIdentity, tt.issuedFor, "alice", time.Now().UTC().Add(time.Hour))
 		if err != nil {
-			t.Fatalf("IssueApplicationCredential(%q) error = %v", tt.issuedFor, err)
+			t.Fatalf("IssueCredential(%q) error = %v", tt.issuedFor, err)
 		}
 		_, err = verifyApplicationCredential([]byte(key), tunnelIdentity, tt.requestHost, credential, time.Now().UTC())
 		if (err == nil) != tt.want {
@@ -993,16 +993,16 @@ func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 		}
 	}
 
-	redeemURL, err := ApplicationCredentialRedeemURL("https://app.example:443", "portal_cred_x")
+	redeemURL, err := CredentialRedeemURL("https://app.example:443", "portal_cred_x")
 	if err != nil || !strings.HasPrefix(redeemURL, "https://app.example/") {
-		t.Errorf("ApplicationCredentialRedeemURL() = %q, %v; want a URL on app.example without the default port", redeemURL, err)
+		t.Errorf("CredentialRedeemURL() = %q, %v; want a URL on app.example without the default port", redeemURL, err)
 	}
 }
 
 func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
 	t.Helper()
 	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := NewApplicationAuth(next, tunnelIdentity, ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, AllowedWallets: allowed, IdentityHeaders: identityHeaders}, nil)
+	handler, err := New(next, tunnelIdentity, Config{Provider: ProviderSIWE, Allow: allowed, IdentityHeaders: identityHeaders})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1069,19 +1069,19 @@ func TestSanitizeApplicationAuthNext(t *testing.T) {
 func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
 	t.Parallel()
 
-	cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
-	if err := ValidateApplicationAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
-		t.Fatalf("ValidateApplicationAuthConfig without an allowlist = %v; want an error naming --auth-email-list", err)
+	cfg := Config{Provider: ProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
+		t.Fatalf("Validate without an allowlist = %v; want an error naming --auth-email-list", err)
 	}
-	if _, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg, nil); err == nil {
-		t.Fatal("NewApplicationAuth started OIDC without an allowlist")
+	if _, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg); err == nil {
+		t.Fatal("New started OIDC without an allowlist")
 	}
-	cfg.AllowedWallets = []string{"alice@example.com"}
-	if err := ValidateApplicationAuthConfig(cfg); err != nil {
-		t.Fatalf("ValidateApplicationAuthConfig with an allowlist: %v", err)
+	cfg.Allow = []string{"alice@example.com"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate with an allowlist: %v", err)
 	}
 	// siwe and credential keep their open mode: an empty list there still needs a wallet or issued credential.
-	if err := ValidateApplicationAuthConfig(ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential}); err != nil {
+	if err := Validate(Config{Provider: ProviderCredential}); err != nil {
 		t.Fatalf("credential without an allowlist: %v", err)
 	}
 }
@@ -1098,19 +1098,19 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
-		cfg     ApplicationAuthConfig
+		cfg     Config
 		want    applicationAuthSettings
 		wantErr string
 	}{
 		{
 			name: "oidc values are trimmed and normalized",
-			cfg: ApplicationAuthConfig{
-				Provider:       " OIDC ",
-				AllowedWallets: []string{"Alice@Example.com", "alice@example.com"},
-				OIDCConfig:     OIDCConfig{OIDCIssuerURL: " https://idp.example/ ", OIDCClientID: " portal-client ", OIDCClientSecret: " secret "},
+			cfg: Config{
+				Provider:   " OIDC ",
+				Allow:      []string{"Alice@Example.com", "alice@example.com"},
+				OIDCConfig: OIDCConfig{OIDCIssuerURL: " https://idp.example/ ", OIDCClientID: " portal-client ", OIDCClientSecret: " secret "},
 			},
 			want: applicationAuthSettings{
-				provider:     ApplicationAuthProviderOIDC,
+				provider:     ProviderOIDC,
 				allowed:      []string{"alice@example.com"},
 				issuerURL:    "https://idp.example",
 				clientID:     "portal-client",
@@ -1119,31 +1119,31 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		},
 		{
 			name: "credential subjects are de-duplicated and carry no oidc settings",
-			cfg:  ApplicationAuthConfig{Provider: "Credential", AllowedWallets: []string{"alice", "alice"}},
-			want: applicationAuthSettings{provider: ApplicationAuthProviderCredential, allowed: []string{"alice"}},
+			cfg:  Config{Provider: "Credential", Allow: []string{"alice", "alice"}},
+			want: applicationAuthSettings{provider: ProviderCredential, allowed: []string{"alice"}},
 		},
 		{
 			name: "wallet addresses are normalized and de-duplicated",
-			cfg:  ApplicationAuthConfig{Provider: "SIWE", AllowedWallets: []string{mixedCaseWallet, strings.ToLower(mixedCaseWallet)}},
-			want: applicationAuthSettings{provider: ApplicationAuthProviderSIWE, allowed: []string{wallet}},
+			cfg:  Config{Provider: "SIWE", Allow: []string{mixedCaseWallet, strings.ToLower(mixedCaseWallet)}},
+			want: applicationAuthSettings{provider: ProviderSIWE, allowed: []string{wallet}},
 		},
 		{
 			// Exactly the minimum length, with the first and last visible ASCII characters.
 			name: "identity proof is kept as given",
-			cfg:  ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "!~" + strings.Repeat("a", 14)},
-			want: applicationAuthSettings{provider: ApplicationAuthProviderCredential, identityProof: "!~" + strings.Repeat("a", 14)},
+			cfg:  Config{Provider: ProviderCredential, IdentityHeaders: true, IdentityProof: "!~" + strings.Repeat("a", 14)},
+			want: applicationAuthSettings{provider: ProviderCredential, identityProof: "!~" + strings.Repeat("a", 14)},
 		},
 		{
 			name: "identity proof with oidc",
-			cfg: ApplicationAuthConfig{
-				Provider:        ApplicationAuthProviderOIDC,
-				AllowedWallets:  []string{"alice@example.com"},
+			cfg: Config{
+				Provider:        ProviderOIDC,
+				Allow:           []string{"alice@example.com"},
 				IdentityHeaders: true,
 				IdentityProof:   identityProofTestValue,
 				OIDCConfig:      OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
 			},
 			want: applicationAuthSettings{
-				provider:      ApplicationAuthProviderOIDC,
+				provider:      ProviderOIDC,
 				allowed:       []string{"alice@example.com"},
 				identityProof: identityProofTestValue,
 				issuerURL:     "https://idp.example",
@@ -1152,78 +1152,78 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		},
 		{
 			name:    "identity proof without identity headers",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, IdentityProof: identityProofTestValue},
+			cfg:     Config{Provider: ProviderSIWE, IdentityProof: identityProofTestValue},
 			wantErr: "(--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers",
 		},
 		{
 			name:    "identity proof too short",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "abcdefghijklmno"},
+			cfg:     Config{Provider: ProviderCredential, IdentityHeaders: true, IdentityProof: "abcdefghijklmno"},
 			wantErr: "(--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least 16 characters",
 		},
 		{
 			name:    "identity proof with a space",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "test proof 0123456789"},
+			cfg:     Config{Provider: ProviderCredential, IdentityHeaders: true, IdentityProof: "test proof 0123456789"},
 			wantErr: "visible ASCII",
 		},
 		{
 			name:    "identity proof is not trimmed",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: " " + identityProofTestValue},
+			cfg:     Config{Provider: ProviderCredential, IdentityHeaders: true, IdentityProof: " " + identityProofTestValue},
 			wantErr: "visible ASCII",
 		},
 		{
 			name:    "identity proof with a line break",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue + "\r\nX-Injected: 1"},
+			cfg:     Config{Provider: ProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue + "\r\nX-Injected: 1"},
 			wantErr: "visible ASCII",
 		},
 		{
 			name:    "identity proof with the delete character",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue + "\x7f"},
+			cfg:     Config{Provider: ProviderCredential, IdentityHeaders: true, IdentityProof: identityProofTestValue + "\x7f"},
 			wantErr: "visible ASCII",
 		},
 		{
 			name:    "identity proof with a non-ASCII character",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: "test-proof-01234567é"},
+			cfg:     Config{Provider: ProviderCredential, IdentityHeaders: true, IdentityProof: "test-proof-01234567é"},
 			wantErr: "visible ASCII",
 		},
 		{
 			name:    "unknown provider",
-			cfg:     ApplicationAuthConfig{Provider: "ldap"},
+			cfg:     Config{Provider: "ldap"},
 			wantErr: "unsupported application auth provider",
 		},
 		{
 			name:    "oidc settings with another provider",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
+			cfg:     Config{Provider: ProviderSIWE, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
 			wantErr: "oidc settings require the oidc application auth provider",
 		},
 		{
 			name:    "oidc without an allowlist",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}},
+			cfg:     Config{Provider: ProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}},
 			wantErr: "--auth-email-list",
 		},
 		{
 			name:    "oidc without an issuer",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
+			cfg:     Config{Provider: ProviderOIDC, Allow: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
 			wantErr: "issuer url is required",
 		},
 		{
 			name:    "oidc with a cleartext issuer",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "http://idp.example", OIDCClientID: oidcTestClientID}},
+			cfg:     Config{Provider: ProviderOIDC, Allow: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "http://idp.example", OIDCClientID: oidcTestClientID}},
 			wantErr: "must use https",
 		},
 		{
 			name:    "oidc without a client id",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: "  "}},
+			cfg:     Config{Provider: ProviderOIDC, Allow: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: "  "}},
 			wantErr: "client id is required",
 		},
 		{
 			name: "saml values are trimmed and normalized",
-			cfg: ApplicationAuthConfig{
-				Provider:       " SAML ",
-				AllowedWallets: []string{"Alice@Example.com", "@example.org", "sub:A1"},
-				SAMLConfig:     SAMLConfig{SAMLMetadataURL: " https://login.example/federationmetadata.xml?appid=1 ", SAMLEntityID: " urn:portal:app ", SAMLSubjectAttribute: " email "},
+			cfg: Config{
+				Provider:   " SAML ",
+				Allow:      []string{"Alice@Example.com", "@example.org", "sub:A1"},
+				SAMLConfig: SAMLConfig{SAMLMetadataURL: " https://login.example/federationmetadata.xml?appid=1 ", SAMLEntityID: " urn:portal:app ", SAMLSubjectAttribute: " email "},
 			},
 			want: applicationAuthSettings{
-				provider:             ApplicationAuthProviderSAML,
+				provider:             ProviderSAML,
 				allowed:              []string{"alice@example.com", "@example.org", "sub:A1"},
 				samlMetadataURL:      "https://login.example/federationmetadata.xml?appid=1",
 				samlEntityID:         "urn:portal:app",
@@ -1232,42 +1232,42 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 		},
 		{
 			name: "saml metadata from a file",
-			cfg:  ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: " idp.xml "}},
-			want: applicationAuthSettings{provider: ApplicationAuthProviderSAML, allowed: []string{"alice@example.com"}, samlMetadataFile: "idp.xml"},
+			cfg:  Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: " idp.xml "}},
+			want: applicationAuthSettings{provider: ProviderSAML, allowed: []string{"alice@example.com"}, samlMetadataFile: "idp.xml"},
 		},
 		{
 			name:    "saml settings with another provider",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}, SAMLConfig: SAMLConfig{SAMLEntityID: "urn:portal:app"}},
+			cfg:     Config{Provider: ProviderOIDC, Allow: []string{"alice@example.com"}, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}, SAMLConfig: SAMLConfig{SAMLEntityID: "urn:portal:app"}},
 			wantErr: "saml settings require the saml application auth provider",
 		},
 		{
 			name:    "oidc settings with saml",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: "idp.xml"}, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
+			cfg:     Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: "idp.xml"}, OIDCConfig: OIDCConfig{OIDCClientID: oidcTestClientID}},
 			wantErr: "oidc settings require the oidc application auth provider",
 		},
 		{
 			name:    "saml without an allowlist",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, SAMLConfig: SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"}},
+			cfg:     Config{Provider: ProviderSAML, SAMLConfig: SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"}},
 			wantErr: "--auth-email-list",
 		},
 		{
 			name:    "saml without metadata",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}},
+			cfg:     Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}},
 			wantErr: "requires identity provider metadata",
 		},
 		{
 			name:    "saml with two metadata sources",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLMetadataFile: "idp.xml"}},
+			cfg:     Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLMetadataFile: "idp.xml"}},
 			wantErr: "not both",
 		},
 		{
 			name:    "saml with cleartext metadata",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataURL: "http://idp.example/metadata"}},
+			cfg:     Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataURL: "http://idp.example/metadata"}},
 			wantErr: "must use https",
 		},
 		{
 			name:    "saml entity id longer than SAML allows",
-			cfg:     ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: "idp.xml", SAMLEntityID: "urn:" + strings.Repeat("a", 1024)}},
+			cfg:     Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}, SAMLConfig: SAMLConfig{SAMLMetadataFile: "idp.xml", SAMLEntityID: "urn:" + strings.Repeat("a", 1024)}},
 			wantErr: "saml entity id must be at most 1024 characters",
 		},
 	}
@@ -1282,8 +1282,8 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 				if tt.cfg.IdentityProof != "" && strings.Contains(err.Error(), tt.cfg.IdentityProof) {
 					t.Fatalf("resolveApplicationAuthConfig() error %q contains the identity proof", err)
 				}
-				if validateErr := ValidateApplicationAuthConfig(tt.cfg); validateErr == nil || validateErr.Error() != err.Error() {
-					t.Fatalf("ValidateApplicationAuthConfig() = %v; want the resolver's error %v", validateErr, err)
+				if validateErr := Validate(tt.cfg); validateErr == nil || validateErr.Error() != err.Error() {
+					t.Fatalf("Validate() = %v; want the resolver's error %v", validateErr, err)
 				}
 				return
 			}
@@ -1300,11 +1300,11 @@ func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
 	t.Parallel()
 
 	sub := strings.Repeat("a", 255)
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
-		Provider:       ApplicationAuthProviderOIDC,
-		AllowedWallets: []string{"sub:" + sub},
-		OIDCConfig:     OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
-	}, nil)
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{
+		Provider:   ProviderOIDC,
+		Allow:      []string{"sub:" + sub},
+		OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1315,7 +1315,7 @@ func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	if err := gate.setSession(rec, subject, ApplicationAuthProviderOIDC, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
+	if err := gate.setSession(rec, subject, ProviderOIDC, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
@@ -1335,11 +1335,11 @@ func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 
 	newGate := func(t *testing.T, issuer, clientID, clientSecret string) *applicationAuth {
 		t.Helper()
-		handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
-			Provider:       ApplicationAuthProviderOIDC,
-			AllowedWallets: []string{"alice@example.com"},
-			OIDCConfig:     OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: clientID, OIDCClientSecret: clientSecret},
-		}, nil)
+		handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{
+			Provider:   ProviderOIDC,
+			Allow:      []string{"alice@example.com"},
+			OIDCConfig: OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: clientID, OIDCClientSecret: clientSecret},
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1355,7 +1355,7 @@ func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 
 	issuer := newGate(t, "https://idp.example", "portal-client", "secret")
 	rec := httptest.NewRecorder()
-	if err := issuer.setSession(rec, "alice@example.com", ApplicationAuthProviderOIDC, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
+	if err := issuer.setSession(rec, "alice@example.com", ProviderOIDC, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	cookies := rec.Result().Cookies()
@@ -1386,7 +1386,7 @@ func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 		t.Parallel()
 		token, err := encodeSignedApplicationAuthJSON(issuer.signingKey, applicationAuthClaims{
 			Subject:   "alice@example.com",
-			Provider:  ApplicationAuthProviderOIDC,
+			Provider:  ProviderOIDC,
 			Host:      "app.example",
 			ExpiresAt: time.Now().Add(time.Hour).Unix(),
 		})

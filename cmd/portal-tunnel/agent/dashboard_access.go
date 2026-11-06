@@ -27,15 +27,15 @@ func agentDashboardAccessMode(provider string) string {
 	switch provider {
 	case "":
 		return "open to anyone"
-	case appauth.ApplicationAuthProviderCredential:
+	case appauth.ProviderCredential:
 		return "credential"
-	case appauth.ApplicationAuthProviderSIWE:
+	case appauth.ProviderSIWE:
 		return "wallet (siwe)"
-	case appauth.ApplicationAuthProviderOIDC:
+	case appauth.ProviderOIDC:
 		return "OIDC"
-	case appauth.ApplicationAuthProviderSAML:
+	case appauth.ProviderSAML:
 		return "SAML"
-	case appauth.ApplicationAuthProviderEmail:
+	case appauth.ProviderEmail:
 		return "email link"
 	default:
 		return provider
@@ -47,11 +47,11 @@ func agentDashboardAccessMode(provider string) string {
 // principal, while OIDC, SAML and email refuse to run without at least one entry.
 func agentDashboardAllowedHint(provider string) string {
 	switch provider {
-	case appauth.ApplicationAuthProviderCredential:
+	case appauth.ProviderCredential:
 		return "any valid credential"
-	case appauth.ApplicationAuthProviderSIWE:
+	case appauth.ProviderSIWE:
 		return "any wallet"
-	case appauth.ApplicationAuthProviderOIDC, appauth.ApplicationAuthProviderSAML, appauth.ApplicationAuthProviderEmail:
+	case appauth.ProviderOIDC, appauth.ProviderSAML, appauth.ProviderEmail:
 		return "needs one entry"
 	default:
 		return ""
@@ -79,9 +79,9 @@ func agentDashboardSecretState(set bool) string {
 // provider: the OIDC client secret or the SMTP password of email.
 func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
 	switch provider {
-	case appauth.ApplicationAuthProviderOIDC:
+	case appauth.ProviderOIDC:
 		return tunnel.AuthOIDCClientSecretSet
-	case appauth.ApplicationAuthProviderEmail:
+	case appauth.ProviderEmail:
 		return tunnel.AuthSMTPPasswordSet
 	default:
 		return false
@@ -143,15 +143,15 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 	}
 	v.addAccessValue(th, width, "Headers", agentDashboardIdentityHeaders(tunnel.IdentityHeaders), th.text)
 	switch tunnel.Provider {
-	case appauth.ApplicationAuthProviderOIDC:
+	case appauth.ProviderOIDC:
 		v.addAccessValue(th, width, "Issuer", tunnel.OIDCIssuerURL, th.text)
 		v.addAccessValue(th, width, "Client ID", tunnel.OIDCClientID, th.text)
 		v.addAccessValue(th, width, "Client secret", agentDashboardSecretState(tunnel.AuthOIDCClientSecretSet), th.text)
-	case appauth.ApplicationAuthProviderSAML:
+	case appauth.ProviderSAML:
 		v.addAccessValue(th, width, "Metadata", cmp.Or(tunnel.SAMLMetadataURL, tunnel.SAMLMetadataFile), th.text)
 		v.addAccessValue(th, width, "Entity ID", cmp.Or(tunnel.SAMLEntityID, agentDashboardSAMLEntityIDDefault), th.text)
 		v.addAccessValue(th, width, "Subject", cmp.Or(tunnel.SAMLSubjectAttribute, agentDashboardSAMLSubjectDefault), th.text)
-	case appauth.ApplicationAuthProviderEmail:
+	case appauth.ProviderEmail:
 		v.addAccessValue(th, width, "SMTP server", tunnel.SMTPAddr, th.text)
 		v.addAccessValue(th, width, "SMTP user", cmp.Or(tunnel.SMTPUsername, agentDashboardSMTPUsernameDefault), th.text)
 		v.addAccessValue(th, width, "SMTP password", agentDashboardSecretState(tunnel.AuthSMTPPasswordSet), th.text)
@@ -170,11 +170,11 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 // right step through them.
 var agentDashboardAccessProviders = []string{
 	"",
-	appauth.ApplicationAuthProviderCredential,
-	appauth.ApplicationAuthProviderSIWE,
-	appauth.ApplicationAuthProviderOIDC,
-	appauth.ApplicationAuthProviderSAML,
-	appauth.ApplicationAuthProviderEmail,
+	appauth.ProviderCredential,
+	appauth.ProviderSIWE,
+	appauth.ProviderOIDC,
+	appauth.ProviderSAML,
+	appauth.ProviderEmail,
 }
 
 // What an empty SAML entity ID, subject attribute or SMTP username stands for.
@@ -331,7 +331,7 @@ func (m *agentDashboardModel) syncAccess() {
 // sameAccessSettings reports whether two statuses of a tunnel agree on
 // everything the Access screen edits or shows as stored.
 func sameAccessSettings(a, b AgentTunnelStatus) bool {
-	return authChanges(a.ApplicationAuthConfig, b.ApplicationAuthConfig) == nil &&
+	return authChanges(a.AuthConfig, b.AuthConfig) == nil &&
 		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet &&
 		a.AuthSMTPPasswordSet == b.AuthSMTPPasswordSet
 }
@@ -412,20 +412,20 @@ func (a agentDashboardAccess) fields() []agentDashboardAccessField {
 	}
 	fields = append(fields, agentDashboardAccessField{row: agentDashboardAccessRowAdd}, agentDashboardAccessField{row: agentDashboardAccessRowHeaders})
 	switch a.provider {
-	case appauth.ApplicationAuthProviderOIDC:
+	case appauth.ProviderOIDC:
 		fields = append(fields,
 			agentDashboardAccessField{row: agentDashboardAccessRowIssuer},
 			agentDashboardAccessField{row: agentDashboardAccessRowClientID},
 			agentDashboardAccessField{row: agentDashboardAccessRowSecret},
 		)
-	case appauth.ApplicationAuthProviderSAML:
+	case appauth.ProviderSAML:
 		fields = append(fields,
 			agentDashboardAccessField{row: agentDashboardAccessRowMetadataURL},
 			agentDashboardAccessField{row: agentDashboardAccessRowMetadataFile},
 			agentDashboardAccessField{row: agentDashboardAccessRowEntityID},
 			agentDashboardAccessField{row: agentDashboardAccessRowSubjectAttribute},
 		)
-	case appauth.ApplicationAuthProviderEmail:
+	case appauth.ProviderEmail:
 		fields = append(fields,
 			agentDashboardAccessField{row: agentDashboardAccessRowSMTPAddr},
 			agentDashboardAccessField{row: agentDashboardAccessRowSMTPUsername},
@@ -505,42 +505,42 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	// The draft holds the settings of its own provider only, so leaving OIDC,
 	// SAML or email clears the settings of the provider left, which the
 	// validators refuse for another provider.
-	draft := appauth.ApplicationAuthConfig{Provider: a.provider, IdentityHeaders: a.headers}
+	draft := appauth.Config{Provider: a.provider, IdentityHeaders: a.headers}
 	// A tunnel that stays on its provider keeps the key its list is stored under,
 	// so that opening the screen of a released config changes nothing.
-	if appauth.ApplicationAuthProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.AllowedWallets) == 0) {
+	if appauth.ProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.Allow) == 0) {
 		draft.EmailList = a.allowed
 	} else {
-		draft.AllowedWallets = a.allowed
+		draft.Allow = a.allowed
 	}
 	switch a.provider {
-	case appauth.ApplicationAuthProviderOIDC:
+	case appauth.ProviderOIDC:
 		draft.OIDCConfig = appauth.OIDCConfig{
 			OIDCIssuerURL: strings.TrimSpace(a.issuer.Value()),
 			OIDCClientID:  strings.TrimSpace(a.clientID.Value()),
 		}
-	case appauth.ApplicationAuthProviderSAML:
+	case appauth.ProviderSAML:
 		draft.SAMLConfig = appauth.SAMLConfig{
 			SAMLMetadataURL:      strings.TrimSpace(a.metadataURL.Value()),
 			SAMLMetadataFile:     strings.TrimSpace(a.metadataFile.Value()),
 			SAMLEntityID:         strings.TrimSpace(a.entityID.Value()),
 			SAMLSubjectAttribute: strings.TrimSpace(a.subjectAttribute.Value()),
 		}
-	case appauth.ApplicationAuthProviderEmail:
+	case appauth.ProviderEmail:
 		draft.EmailConfig = appauth.EmailConfig{
 			SMTPAddr:     strings.TrimSpace(a.smtpAddr.Value()),
 			SMTPUsername: strings.TrimSpace(a.smtpUsername.Value()),
 			SMTPFrom:     strings.TrimSpace(a.from.Value()),
 		}
 	}
-	req := AgentTunnelUpdateRequest{Auth: authChanges(stored.ApplicationAuthConfig, draft)}
+	req := AgentTunnelUpdateRequest{Auth: authChanges(stored.AuthConfig, draft)}
 
 	// Each secret belongs to one provider: the typed secret is the draft
 	// provider's, and a stored one is removed when the draft leaves its provider
 	// or clearSecret marks it.
 	for _, owned := range []struct{ provider, key string }{
-		{appauth.ApplicationAuthProviderOIDC, "auth_oidc_client_secret"},
-		{appauth.ApplicationAuthProviderEmail, "auth_smtp_password"},
+		{appauth.ProviderOIDC, "auth_oidc_client_secret"},
+		{appauth.ProviderEmail, "auth_smtp_password"},
 	} {
 		var secret string
 		if a.provider == owned.provider {
@@ -609,15 +609,15 @@ func (m *agentDashboardModel) addAccessEntry() {
 	if entry == "" {
 		return
 	}
-	normalized, err := appauth.NormalizeApplicationAuthAllowed(a.provider, []string{entry})
+	normalized, err := appauth.Config{Provider: a.provider, Allow: []string{entry}}.Normalize()
 	if err != nil {
 		a.err = err
 		return
 	}
 	a.err = nil
 	a.add.Reset()
-	if !slices.Contains(a.allowed, normalized[0]) {
-		a.allowed = append(slices.Clone(a.allowed), normalized[0])
+	if !slices.Contains(a.allowed, normalized.Allow[0]) {
+		a.allowed = append(slices.Clone(a.allowed), normalized.Allow[0])
 	}
 	// The entry row is one further down now that the list grew.
 	a.moveFocus(slices.IndexFunc(a.fields(), func(field agentDashboardAccessField) bool { return field.row == agentDashboardAccessRowAdd }))
@@ -720,7 +720,7 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 			body.addInputRow(th, inner, "Client ID", a.clientID, agentDashboardActionFocusAccessField, index, focused)
 		case agentDashboardAccessRowSecret:
 			input, label := a.secret, "Client secret"
-			if a.provider == appauth.ApplicationAuthProviderEmail {
+			if a.provider == appauth.ProviderEmail {
 				label = "SMTP password"
 			}
 			input.Placeholder = agentDashboardSecretPlaceholder(a, tunnel)
@@ -745,7 +745,7 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 		}
 	}
 	body.addLine("")
-	if tunnel.Provider == appauth.ApplicationAuthProviderOIDC || tunnel.Provider == appauth.ApplicationAuthProviderSAML || tunnel.Provider == appauth.ApplicationAuthProviderEmail {
+	if tunnel.Provider == appauth.ProviderOIDC || tunnel.Provider == appauth.ProviderSAML || tunnel.Provider == appauth.ProviderEmail {
 		check, style := agentDashboardProviderCheck(th, tunnel)
 		body.addAccessValue(th, inner, "Provider check", check, style)
 		for _, line := range agentDashboardWrap(tunnel.AuthProviderError, inner, agentDashboardAccessMessageLines) {
@@ -770,11 +770,11 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 
 func agentDashboardAccessEntryPlaceholder(provider string) string {
 	switch provider {
-	case appauth.ApplicationAuthProviderSIWE:
+	case appauth.ProviderSIWE:
 		return "0x... wallet address"
-	case appauth.ApplicationAuthProviderOIDC, appauth.ApplicationAuthProviderSAML:
+	case appauth.ProviderOIDC, appauth.ProviderSAML:
 		return "email, @domain, sub:id"
-	case appauth.ApplicationAuthProviderEmail:
+	case appauth.ProviderEmail:
 		return "email, @domain"
 	default:
 		return "subject"

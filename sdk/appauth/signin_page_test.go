@@ -9,11 +9,12 @@ import (
 
 func newSigninTestHandler(t *testing.T, provider string) http.Handler {
 	t.Helper()
-	cfg := ApplicationAuthConfig{Provider: provider}
-	if provider == ApplicationAuthProviderEmail {
+	cfg := Config{Provider: provider}
+	if provider == ProviderEmail {
 		cfg = emailTestConfig("127.0.0.1:25", "alice@example.com")
 	}
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg, nil)
+	cfg.PublicURLs = func() []string { return nil }
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,9 +39,9 @@ func TestSigninPagesShareOneShell(t *testing.T) {
 		provider string
 		control  string
 	}{
-		{ApplicationAuthProviderCredential, `id="credential"`},
-		{ApplicationAuthProviderSIWE, `data-connect`},
-		{ApplicationAuthProviderEmail, `id="email"`},
+		{ProviderCredential, `id="credential"`},
+		{ProviderSIWE, `data-connect`},
+		{ProviderEmail, `id="email"`},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			t.Parallel()
@@ -73,7 +74,7 @@ func TestSigninPagesShareOneShell(t *testing.T) {
 func TestSigninPageHeadCarriesNoBody(t *testing.T) {
 	t.Parallel()
 
-	handler := newSigninTestHandler(t, ApplicationAuthProviderCredential)
+	handler := newSigninTestHandler(t, ProviderCredential)
 	req := httptest.NewRequest(http.MethodHead, "https://app.example"+applicationAuthLoginPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -87,7 +88,7 @@ func TestSigninPageHeadCarriesNoBody(t *testing.T) {
 func TestSigninPageEscapesAndShortensHost(t *testing.T) {
 	t.Parallel()
 
-	handler := newSigninTestHandler(t, ApplicationAuthProviderCredential)
+	handler := newSigninTestHandler(t, ProviderCredential)
 
 	hostile := `x"><script>alert(1)</script>.example`
 	body := getSigninPage(handler, hostile).Body.String()
@@ -129,7 +130,7 @@ func TestFrontendSigninPreviewMatchesThePages(t *testing.T) {
 	}
 	loadFrontendFile(t, "signinCopy.json", &previewCopy)
 
-	for _, provider := range []string{ApplicationAuthProviderCredential, ApplicationAuthProviderSIWE, ApplicationAuthProviderEmail} {
+	for _, provider := range []string{ProviderCredential, ProviderSIWE, ProviderEmail} {
 		want, ok := previewCopy[provider]
 		if !ok {
 			t.Errorf("signinCopy.json has no %s entry", provider)

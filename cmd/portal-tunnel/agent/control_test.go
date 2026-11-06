@@ -90,9 +90,9 @@ func TestControlHandlerRejectsUntrustedHostBeforeAuthorization(t *testing.T) {
 func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	tunnelCfg := testTunnel("web")
 	tunnelCfg.Provider = "credential"
-	tunnelCfg.AllowedWallets = []string{"alice", "bob"}
+	tunnelCfg.Allow = []string{"alice", "bob"}
 	mailCfg := testTunnel("mail")
-	mailCfg.Provider = appauth.ApplicationAuthProviderEmail
+	mailCfg.Provider = appauth.ProviderEmail
 	mailCfg.EmailList = []string{"carol@example.com"}
 	mailCfg.EmailConfig = appauth.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "me@example.com", SMTPPassword: "not-a-real-secret-0123", SMTPFrom: "login@example.com"}
 	m, _ := testManager(t, tunnelCfg, mailCfg)
@@ -153,17 +153,17 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	}
 
 	token := statusAs(func(r *http.Request) { r.Header.Set("Authorization", "Bearer control-token") })
-	if got := token["web"].AllowedWallets; !slices.Equal(got, []string{"alice", "bob"}) {
+	if got := token["web"].Allow; !slices.Equal(got, []string{"alice", "bob"}) {
 		t.Fatalf("control token sees allowlist %v, want [alice bob]", got)
 	}
 	if got := token["mail"]; !slices.Equal(got.EmailList, []string{"carol@example.com"}) || got.SMTPUsername != "me@example.com" || got.SMTPPassword != "" || !got.AuthSMTPPasswordSet {
-		t.Fatalf("control token sees %+v, want the list and the account, not the password", got.ApplicationAuthConfig)
+		t.Fatalf("control token sees %+v, want the list and the account, not the password", got.AuthConfig)
 	}
 	signedIn := statusAs(func(r *http.Request) { r.AddCookie(&http.Cookie{Name: agentCookieName, Value: session}) })
-	if got := signedIn["web"].AllowedWallets; len(got) != 0 {
+	if got := signedIn["web"].Allow; len(got) != 0 {
 		t.Fatalf("wallet session sees allowlist %v, want none", got)
 	}
 	if got := signedIn["mail"]; len(got.EmailList) != 0 || got.EmailConfig != (appauth.EmailConfig{}) || got.AuthSMTPPasswordSet {
-		t.Fatalf("wallet session sees %+v, want no list and no mail account", got.ApplicationAuthConfig)
+		t.Fatalf("wallet session sees %+v, want no list and no mail account", got.AuthConfig)
 	}
 }

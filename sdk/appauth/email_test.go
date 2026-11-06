@@ -171,9 +171,9 @@ func (s *smtpTestServer) expectNoMore(t *testing.T) {
 	}
 }
 
-func emailTestConfig(smtpAddr string, allowed ...string) ApplicationAuthConfig {
-	return ApplicationAuthConfig{
-		Provider:  ApplicationAuthProviderEmail,
+func emailTestConfig(smtpAddr string, allowed ...string) Config {
+	return Config{
+		Provider:  ProviderEmail,
 		EmailList: allowed,
 		EmailConfig: EmailConfig{
 			SMTPAddr:     smtpAddr,
@@ -184,11 +184,10 @@ func emailTestConfig(smtpAddr string, allowed ...string) ApplicationAuthConfig {
 	}
 }
 
-func newEmailTestGate(t *testing.T, cfg ApplicationAuthConfig, next http.Handler) *applicationAuth {
+func newEmailTestGate(t *testing.T, cfg Config, next http.Handler) *applicationAuth {
 	t.Helper()
-	handler, err := NewApplicationAuth(next, applicationAuthTestIdentity(), cfg, func() []string {
-		return []string{"https://" + emailTestHost, ""}
-	})
+	cfg.PublicURLs = func() []string { return []string{"https://" + emailTestHost, ""} }
+	handler, err := New(next, applicationAuthTestIdentity(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +276,7 @@ func TestEmailLoginLinkCreatesSessionOnce(t *testing.T) {
 	req.AddCookie(cookies[0])
 	rec = httptest.NewRecorder()
 	gate.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent || upstreamUser != "alice@example.com" || upstreamAuth != ApplicationAuthProviderEmail {
+	if rec.Code != http.StatusNoContent || upstreamUser != "alice@example.com" || upstreamAuth != ProviderEmail {
 		t.Fatalf("session request = %d as %q via %q", rec.Code, upstreamUser, upstreamAuth)
 	}
 
@@ -401,8 +400,10 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 		t.Fatalf("link does not use the canonical host:\n%s", message.data)
 	}
 
-	// Without the list of public URLs no host qualifies.
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), emailTestConfig(server.addr, "alice@example.com"), nil)
+	// While the application is reachable nowhere, no host qualifies.
+	offline := emailTestConfig(server.addr, "alice@example.com")
+	offline.PublicURLs = func() []string { return nil }
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), offline)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,6 +411,16 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 		t.Fatalf("status without public URLs = %d; want 403", rec.Code)
 	}
 	server.expectNoMore(t)
+}
+
+// A gate that could never mail a link fails where the embedder sees it, not at
+// the first visitor, who is told only that a link may be on its way.
+func TestEmailGateRequiresPublicURLs(t *testing.T) {
+	t.Parallel()
+
+	if _, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), emailTestConfig("127.0.0.1:25", "alice@example.com")); !errors.Is(err, errEmailRequiresPublicURLs) {
+		t.Fatalf("New without PublicURLs = %v; want %v", err, errEmailRequiresPublicURLs)
+	}
 }
 
 // A mail client makes a link of any URL in the text, so the login link has to be
@@ -672,9 +683,9 @@ func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 	const alias = "alias.example"
 	var public atomic.Value
 	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), emailTestConfig("127.0.0.1:25", "alice@example.com"), func() []string {
-		return public.Load().([]string)
-	})
+	cfg := emailTestConfig("127.0.0.1:25", "alice@example.com")
+	cfg.PublicURLs = func() []string { return public.Load().([]string) }
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +775,7 @@ func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 	t.Parallel()
 
 	issued := newEmailTestGate(t, emailTestConfig("127.0.0.1:25", "alice@example.com"), http.NotFoundHandler())
-	session, err := issued.issueSession("alice@example.com", ApplicationAuthProviderEmail, emailTestHost, time.Now().Add(time.Hour))
+	session, err := issued.issueSession("alice@example.com", ProviderEmail, emailTestHost, time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,10 +801,10 @@ func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 
 	// A session is bound to the mail account that mailed its link, so a new
 	// SMTP server, username or sender ends it.
-	for name, change := range map[string]func(*ApplicationAuthConfig){
-		"server":   func(c *ApplicationAuthConfig) { c.SMTPAddr = "127.0.0.1:587" },
-		"username": func(c *ApplicationAuthConfig) { c.SMTPUsername = "other" },
-		"sender":   func(c *ApplicationAuthConfig) { c.SMTPFrom = "other@portal.example" },
+	for name, change := range map[string]func(*Config){
+		"server":   func(c *Config) { c.SMTPAddr = "127.0.0.1:587" },
+		"username": func(c *Config) { c.SMTPUsername = "other" },
+		"sender":   func(c *Config) { c.SMTPFrom = "other@portal.example" },
 	} {
 		cfg := emailTestConfig("127.0.0.1:25", "alice@example.com")
 		change(&cfg)
@@ -819,7 +830,7 @@ func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := applicationAuthSettings{
-		provider:          ApplicationAuthProviderEmail,
+		provider:          ProviderEmail,
 		allowed:           []string{"alice@example.com", "@team.example"},
 		emailSMTPAddr:     "smtp.example:587",
 		emailSMTPUsername: emailTestUsername,
@@ -831,22 +842,22 @@ func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 	}
 
 	for name, tc := range map[string]struct {
-		change  func(*ApplicationAuthConfig)
+		change  func(*Config)
 		wantErr error
 	}{
-		"no allowlist":           {func(c *ApplicationAuthConfig) { c.EmailList = nil }, errEmailRequiresEmailList},
-		"subject entry":          {func(c *ApplicationAuthConfig) { c.EmailList = []string{"sub:alice"} }, errEmailAllowsNoSubjectEntries},
-		"no smtp address":        {func(c *ApplicationAuthConfig) { c.SMTPAddr = "" }, errSMTPAddrIsRequired},
-		"no smtp port":           {func(c *ApplicationAuthConfig) { c.SMTPAddr = "smtp.example" }, errSMTPAddrMustHostPort},
-		"smtp port 0":            {func(c *ApplicationAuthConfig) { c.SMTPAddr = "smtp.example:0" }, errSMTPAddrMustHostPort},
-		"smtp port out of range": {func(c *ApplicationAuthConfig) { c.SMTPAddr = "smtp.example:65536" }, errSMTPAddrMustHostPort},
-		"no sender":              {func(c *ApplicationAuthConfig) { c.SMTPFrom = "" }, errSMTPFromIsRequired},
-		"two senders":            {func(c *ApplicationAuthConfig) { c.SMTPFrom = "a@example.com, b@example.com" }, errSMTPFromMustOneAddress},
-		"sender with line break": {func(c *ApplicationAuthConfig) { c.SMTPFrom = "a@example.com\r\nBcc: b@example.com" }, errSMTPFromMustOneAddress},
-		"username only":          {func(c *ApplicationAuthConfig) { c.SMTPPassword = "" }, errEmailSMTPCredentialsArePaired},
-		"password only":          {func(c *ApplicationAuthConfig) { c.SMTPUsername = "" }, errEmailSMTPCredentialsArePaired},
-		"settings of another provider": {func(c *ApplicationAuthConfig) {
-			c.Provider, c.EmailList = ApplicationAuthProviderCredential, nil
+		"no allowlist":           {func(c *Config) { c.EmailList = nil }, errEmailRequiresEmailList},
+		"subject entry":          {func(c *Config) { c.EmailList = []string{"sub:alice"} }, errEmailAllowsNoSubjectEntries},
+		"no smtp address":        {func(c *Config) { c.SMTPAddr = "" }, errSMTPAddrIsRequired},
+		"no smtp port":           {func(c *Config) { c.SMTPAddr = "smtp.example" }, errSMTPAddrMustHostPort},
+		"smtp port 0":            {func(c *Config) { c.SMTPAddr = "smtp.example:0" }, errSMTPAddrMustHostPort},
+		"smtp port out of range": {func(c *Config) { c.SMTPAddr = "smtp.example:65536" }, errSMTPAddrMustHostPort},
+		"no sender":              {func(c *Config) { c.SMTPFrom = "" }, errSMTPFromIsRequired},
+		"two senders":            {func(c *Config) { c.SMTPFrom = "a@example.com, b@example.com" }, errSMTPFromMustOneAddress},
+		"sender with line break": {func(c *Config) { c.SMTPFrom = "a@example.com\r\nBcc: b@example.com" }, errSMTPFromMustOneAddress},
+		"username only":          {func(c *Config) { c.SMTPPassword = "" }, errEmailSMTPCredentialsArePaired},
+		"password only":          {func(c *Config) { c.SMTPUsername = "" }, errEmailSMTPCredentialsArePaired},
+		"settings of another provider": {func(c *Config) {
+			c.Provider, c.EmailList = ProviderCredential, nil
 		}, errEmailSettingsRequireEmailApplicationAuth},
 	} {
 		cfg := emailTestConfig("smtp.example:587", "alice@example.com")
@@ -869,18 +880,18 @@ func TestAllowlistKeys(t *testing.T) {
 	smtp := EmailConfig{SMTPAddr: "smtp.example:587", SMTPFrom: emailTestSender}
 	list := []string{"Alice@Example.com"}
 	for name, tc := range map[string]struct {
-		cfg     ApplicationAuthConfig
+		cfg     Config
 		wantErr error
 	}{
-		"oidc reads the email list":       {ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, EmailList: list, OIDCConfig: oidc}, nil},
-		"oidc keeps its released key":     {ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: list, OIDCConfig: oidc}, nil},
-		"saml reads the email list":       {ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, EmailList: list, SAMLConfig: saml}, nil},
-		"saml keeps its released key":     {ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: list, SAMLConfig: saml}, nil},
-		"email reads the email list":      {ApplicationAuthConfig{Provider: ApplicationAuthProviderEmail, EmailList: list, EmailConfig: smtp}, nil},
-		"email has no released key":       {ApplicationAuthConfig{Provider: ApplicationAuthProviderEmail, AllowedWallets: list, EmailConfig: smtp}, errEmailProviderTakesEmailList},
-		"credential cannot read the list": {ApplicationAuthConfig{Provider: ApplicationAuthProviderCredential, EmailList: list}, errEmailListRequiresEmailProvider},
-		"siwe cannot read the list":       {ApplicationAuthConfig{Provider: ApplicationAuthProviderSIWE, EmailList: list}, errEmailListRequiresEmailProvider},
-		"both keys":                       {ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, AllowedWallets: list, EmailList: list, OIDCConfig: oidc}, errAllowlistIsSetTwice},
+		"oidc reads the email list":       {Config{Provider: ProviderOIDC, EmailList: list, OIDCConfig: oidc}, nil},
+		"oidc keeps its released key":     {Config{Provider: ProviderOIDC, Allow: list, OIDCConfig: oidc}, nil},
+		"saml reads the email list":       {Config{Provider: ProviderSAML, EmailList: list, SAMLConfig: saml}, nil},
+		"saml keeps its released key":     {Config{Provider: ProviderSAML, Allow: list, SAMLConfig: saml}, nil},
+		"email reads the email list":      {Config{Provider: ProviderEmail, EmailList: list, EmailConfig: smtp}, nil},
+		"email has no released key":       {Config{Provider: ProviderEmail, Allow: list, EmailConfig: smtp}, errEmailProviderTakesEmailList},
+		"credential cannot read the list": {Config{Provider: ProviderCredential, EmailList: list}, errEmailListRequiresEmailProvider},
+		"siwe cannot read the list":       {Config{Provider: ProviderSIWE, EmailList: list}, errEmailListRequiresEmailProvider},
+		"both keys":                       {Config{Provider: ProviderOIDC, Allow: list, EmailList: list, OIDCConfig: oidc}, errAllowlistIsSetTwice},
 	} {
 		settings, err := resolveApplicationAuthConfig(tc.cfg)
 		if !errors.Is(err, tc.wantErr) {
@@ -891,7 +902,7 @@ func TestAllowlistKeys(t *testing.T) {
 		}
 	}
 
-	normalized, err := ApplicationAuthConfig{Provider: "OIDC", EmailList: list}.Normalize()
+	normalized, err := Config{Provider: "OIDC", EmailList: list}.Normalize()
 	if err != nil || !slices.Equal(normalized.EmailList, []string{"alice@example.com"}) {
 		t.Fatalf("Normalize = %v, %v", normalized.EmailList, err)
 	}
@@ -904,12 +915,12 @@ func TestCheckEmailProviderSignsInWithoutSending(t *testing.T) {
 
 	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
 	ctx := context.Background()
-	if err := CheckApplicationAuthProvider(ctx, emailTestConfig(server.addr, "alice@example.com")); err != nil {
+	if err := Check(ctx, emailTestConfig(server.addr, "alice@example.com")); err != nil {
 		t.Fatalf("check = %v", err)
 	}
 	wrong := emailTestConfig(server.addr, "alice@example.com")
 	wrong.SMTPPassword = "wrong-smtp-secret"
-	err := CheckApplicationAuthProvider(ctx, wrong)
+	err := Check(ctx, wrong)
 	if err == nil {
 		t.Fatal("check with a wrong password passed")
 	}

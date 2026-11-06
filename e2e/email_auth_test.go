@@ -332,8 +332,8 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 		Identity:  tunnel.IdentitySpec{Name: "mail", Path: filepath.Join(t.TempDir(), "identity.json")},
 		Relays:    tunnel.RelaySpec{URLs: []string{"https://" + sniAddr}},
 		Transport: tunnel.TransportSpec{Target: strings.TrimPrefix(upstream.URL, "http://")},
-		HTTP: &tunnel.HTTPConfig{Auth: &appauth.ApplicationAuthConfig{
-			Provider:        appauth.ApplicationAuthProviderEmail,
+		HTTP: &tunnel.HTTPConfig{Auth: &appauth.Config{
+			Provider:        appauth.ProviderEmail,
 			EmailList:       []string{"@example.com"},
 			IdentityHeaders: true,
 			EmailConfig:     appauth.EmailConfig{SMTPAddr: catcher.addr, SMTPFrom: "Portal <login@portal.test>"},

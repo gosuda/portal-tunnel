@@ -890,11 +890,11 @@ func newOIDCTLSGate(t *testing.T, serve func(w http.ResponseWriter, r *http.Requ
 	provider.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serve(w, r, provider.URL) })
 	provider.StartTLS()
 	t.Cleanup(provider.Close)
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
-		Provider:       ApplicationAuthProviderOIDC,
-		AllowedWallets: []string{"alice@example.com"},
-		OIDCConfig:     OIDCConfig{OIDCIssuerURL: provider.URL, OIDCClientID: oidcTestClientID},
-	}, nil)
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{
+		Provider:   ProviderOIDC,
+		Allow:      []string{"alice@example.com"},
+		OIDCConfig: OIDCConfig{OIDCIssuerURL: provider.URL, OIDCClientID: oidcTestClientID},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -986,11 +986,11 @@ func newOIDCTestGate(t *testing.T, idp *oidcTestIdP, allowed ...string) *applica
 	if len(allowed) == 0 {
 		allowed = []string{"alice@example.com"}
 	}
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{
-		Provider:       ApplicationAuthProviderOIDC,
-		AllowedWallets: allowed,
-		OIDCConfig:     OIDCConfig{OIDCIssuerURL: idp.issuerURL, OIDCClientID: oidcTestClientID, OIDCClientSecret: idp.clientSecret},
-	}, nil)
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{
+		Provider:   ProviderOIDC,
+		Allow:      allowed,
+		OIDCConfig: OIDCConfig{OIDCIssuerURL: idp.issuerURL, OIDCClientID: oidcTestClientID, OIDCClientSecret: idp.clientSecret},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1202,54 +1202,54 @@ func oidcSessionExpiry(t *testing.T, gate *applicationAuth, rec *httptest.Respon
 	return time.Time{}
 }
 
-// CheckApplicationAuthProvider lets the tunnel report at startup a provider
+// Check lets the tunnel report at startup a provider
 // that visitors could not sign in with, instead of leaving the first login to
 // find out.
 func TestCheckApplicationAuthProvider(t *testing.T) {
 	t.Parallel()
 
-	oidcConfig := func(issuer string) ApplicationAuthConfig {
-		return ApplicationAuthConfig{
-			Provider:       ApplicationAuthProviderOIDC,
-			AllowedWallets: []string{"alice@example.com"},
-			OIDCConfig:     OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: oidcTestClientID},
+	oidcConfig := func(issuer string) Config {
+		return Config{
+			Provider:   ProviderOIDC,
+			Allow:      []string{"alice@example.com"},
+			OIDCConfig: OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: oidcTestClientID},
 		}
 	}
 
 	t.Run("reachable provider", func(t *testing.T) {
 		t.Parallel()
 		idp := newOIDCTestIdP(t, nil)
-		if err := CheckApplicationAuthProvider(t.Context(), oidcConfig(idp.issuerURL)); err != nil {
-			t.Fatalf("CheckApplicationAuthProvider() = %v; want nil", err)
+		if err := Check(t.Context(), oidcConfig(idp.issuerURL)); err != nil {
+			t.Fatalf("Check() = %v; want nil", err)
 		}
 	})
 	t.Run("issuer that publishes no discovery document", func(t *testing.T) {
 		t.Parallel()
 		idp := newOIDCTestIdP(t, nil)
-		if err := CheckApplicationAuthProvider(t.Context(), oidcConfig(idp.issuerURL+"/missing")); err == nil {
-			t.Fatal("CheckApplicationAuthProvider() = nil for an issuer without a discovery document")
+		if err := Check(t.Context(), oidcConfig(idp.issuerURL+"/missing")); err == nil {
+			t.Fatal("Check() = nil for an issuer without a discovery document")
 		}
 	})
 	t.Run("provider that is down", func(t *testing.T) {
 		t.Parallel()
 		idp := newOIDCTestIdP(t, nil)
 		idp.server.Close()
-		if err := CheckApplicationAuthProvider(t.Context(), oidcConfig(idp.issuerURL)); err == nil {
-			t.Fatal("CheckApplicationAuthProvider() = nil for a provider that is down")
+		if err := Check(t.Context(), oidcConfig(idp.issuerURL)); err == nil {
+			t.Fatal("Check() = nil for a provider that is down")
 		}
 	})
 	t.Run("configuration the resolver rejects", func(t *testing.T) {
 		t.Parallel()
-		cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
-		if err := CheckApplicationAuthProvider(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
-			t.Fatalf("CheckApplicationAuthProvider() = %v; want the resolver's error about the missing allowlist", err)
+		cfg := Config{Provider: ProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
+		if err := Check(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
+			t.Fatalf("Check() = %v; want the resolver's error about the missing allowlist", err)
 		}
 	})
 	t.Run("providers with nothing outside the tunnel", func(t *testing.T) {
 		t.Parallel()
-		for _, provider := range []string{ApplicationAuthProviderSIWE, ApplicationAuthProviderCredential} {
-			if err := CheckApplicationAuthProvider(t.Context(), ApplicationAuthConfig{Provider: provider}); err != nil {
-				t.Errorf("CheckApplicationAuthProvider(%s) = %v; want nil", provider, err)
+		for _, provider := range []string{ProviderSIWE, ProviderCredential} {
+			if err := Check(t.Context(), Config{Provider: provider}); err != nil {
+				t.Errorf("Check(%s) = %v; want nil", provider, err)
 			}
 		}
 	})

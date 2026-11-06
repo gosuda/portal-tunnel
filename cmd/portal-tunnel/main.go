@@ -100,7 +100,7 @@ func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlag
 	utils.StringFlag(fs, &cfg.Thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &cfg.Hide, "hide", false, "Hide service from relay listing screens")
 	utils.StringFlag(fs, &cfg.Provider, "auth", "", "Protect HTTP application access with siwe, credential, oidc, saml, or email authentication")
-	utils.RepeatedStringFlag(fs, &cfg.AllowedWallets, "auth-allow", "Principal allowed to sign in with siwe (Ethereum wallet) or credential (subject); repeat to allow multiple principals (empty allows any valid principal). oidc and saml also read it, as --auth-email-list")
+	utils.RepeatedStringFlag(fs, &cfg.Allow, "auth-allow", "Principal allowed to sign in with siwe (Ethereum wallet) or credential (subject); repeat to allow multiple principals (empty allows any valid principal). oidc and saml also read it, as --auth-email-list")
 	utils.RepeatedStringFlag(fs, &cfg.EmailList, "auth-email-list", "Who may sign in with oidc, saml, or email: an email address, an @domain, or, for oidc and saml, sub:<subject>; repeat to allow multiple entries (at least one is required)")
 	utils.BoolFlag(fs, &cfg.IdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
 	utils.StringFlagEnv(fs, &cfg.IdentityProof, "auth-identity-proof", "", "Secret sent as X-Portal-Proof with the identity headers so the upstream can verify they came from Portal (at least 16 visible ASCII characters; requires --auth-identity-headers). Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_IDENTITY_PROOF")
@@ -253,20 +253,22 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 		emailFlagGiven = emailFlagGiven || strings.HasPrefix(f.Name, "auth-smtp-")
 		proofFlagGiven = proofFlagGiven || f.Name == "auth-identity-proof"
 	})
-	provider, _ := appauth.NormalizeApplicationAuthProvider(cfg.Provider)
-	if provider != appauth.ApplicationAuthProviderOIDC && !oidcFlagGiven {
+	// An error here is the one Spec reports for this config.
+	normalized, _ := cfg.AuthConfig.Normalize()
+	provider := normalized.Provider
+	if provider != appauth.ProviderOIDC && !oidcFlagGiven {
 		cfg.OIDCConfig = appauth.OIDCConfig{}
 	}
-	if provider != appauth.ApplicationAuthProviderSAML && !samlFlagGiven {
+	if provider != appauth.ProviderSAML && !samlFlagGiven {
 		cfg.SAMLConfig = appauth.SAMLConfig{}
 	}
-	if provider != appauth.ApplicationAuthProviderEmail && !emailFlagGiven {
+	if provider != appauth.ProviderEmail && !emailFlagGiven {
 		cfg.EmailConfig = appauth.EmailConfig{}
 	}
 	if !cfg.IdentityHeaders && !proofFlagGiven {
 		cfg.IdentityProof = ""
 	}
-	auth := cfg.ApplicationAuthConfig
+	auth := cfg.AuthConfig
 	hasHTTPSource := strings.TrimSpace(cfg.Serve) != "" || len(cfg.HTTPRoutes) > 0 || strings.TrimSpace(cfg.TargetAddr) != ""
 	if len(cfg.StripRequestHeaders) > 0 && !hasHTTPSource && auth.IsZero() && cfg.Cache == nil {
 		return tunnel.Spec{}, errStripRequestHeaderRequiresHTTPRoute
@@ -310,11 +312,11 @@ func runAuthCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load tunnel identity: %w", err)
 	}
-	credential, err := appauth.IssueApplicationCredential(tunnelIdentity, host, subject, time.Now().UTC().Add(expires))
+	credential, err := appauth.IssueCredential(tunnelIdentity, host, subject, time.Now().UTC().Add(expires))
 	if err != nil {
 		return err
 	}
-	redeemURL, err := appauth.ApplicationCredentialRedeemURL(host, credential)
+	redeemURL, err := appauth.CredentialRedeemURL(host, credential)
 	if err != nil {
 		return err
 	}

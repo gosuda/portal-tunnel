@@ -50,8 +50,8 @@ var (
 )
 
 const (
-	applicationAuthSAMLACSPath      = "/_portal/auth/saml/acs"
-	applicationAuthSAMLMetadataPath = "/_portal/auth/saml/metadata"
+	applicationAuthSAMLACSPath      = ReservedPathPrefix + "saml/acs"
+	applicationAuthSAMLMetadataPath = ReservedPathPrefix + "saml/metadata"
 	applicationAuthSAMLStateCookie  = "__Host-portal_saml_state"
 	// samlMetadataBodyLimit leaves room for metadata with many certificates and
 	// attributes; an aggregate of many entities is not supported anyway.
@@ -360,7 +360,7 @@ func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "saml metadata is not available", http.StatusBadGateway)
 		return
 	}
-	host, err := NormalizeApplicationAuthHost(r.Host)
+	host, err := normalizeHost(r.Host)
 	if err != nil {
 		http.Error(w, "invalid request host", http.StatusBadRequest)
 		return
@@ -415,7 +415,7 @@ func setSAMLStateCookie(w http.ResponseWriter, value string, maxAge int) {
 // so a response the identity provider sends on its own (IdP-initiated SSO)
 // finds no state and is refused.
 func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderSAML || a.saml == nil {
+	if a.provider != ProviderSAML || a.saml == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -442,7 +442,7 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	host, err := NormalizeApplicationAuthHost(r.Host)
+	host, err := normalizeHost(r.Host)
 	if err != nil {
 		a.writeJSONError(w, http.StatusBadRequest, "invalid request host")
 		return
@@ -496,7 +496,7 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	if statement := assertion.AuthnStatement; statement != nil && statement.SessionNotOnOrAfter != nil {
 		lifetime = min(max(statement.SessionNotOnOrAfter.Sub(now), providerMinSessionTTL), applicationAuthSessionTTL)
 	}
-	if err := a.setSession(w, subject, ApplicationAuthProviderSAML, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
+	if err := a.setSession(w, subject, ProviderSAML, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -646,7 +646,7 @@ func (r *samlReplaySet) claim(id string, until, now time.Time) error {
 // it offers no key, because this tunnel neither signs its requests nor accepts
 // encrypted assertions.
 func (a *applicationAuth) serveSAMLMetadata(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderSAML || a.saml == nil {
+	if a.provider != ProviderSAML || a.saml == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -655,7 +655,7 @@ func (a *applicationAuth) serveSAMLMetadata(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	host, err := NormalizeApplicationAuthHost(r.Host)
+	host, err := normalizeHost(r.Host)
 	if err != nil {
 		a.writeJSONError(w, http.StatusBadRequest, "invalid request host")
 		return

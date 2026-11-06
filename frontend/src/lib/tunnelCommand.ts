@@ -306,7 +306,7 @@ export function needsAllowlist(method: TunnelAuthMethod): boolean {
 
 /**
  * Mirrors what `portal expose --auth-allow` and `--auth-email-list` accept for each method. The Go
- * owners are normalizeApplicationAuthSubject and NormalizeApplicationAuthAllowed
+ * owners are normalizeApplicationAuthSubject and normalizeAllowed
  * (sdk/appauth/credential.go), normalizeProviderPrincipal (sdk/appauth/appauth.go) and
  * identity.NormalizeEVMAddress. Email takes the email and @domain entries of
  * oidc and saml, but no sub:<id>, because a mailbox has no other id.
@@ -586,7 +586,7 @@ export function buildAuthRedirectURLs(
 
 /**
  * The host a private link is bound to, read from the URL handed to the
- * visitor the way NormalizeApplicationAuthHost (sdk/appauth/credential.go) reads
+ * visitor the way normalizeHost (sdk/appauth/credential.go) reads
  * it: an https URL or a bare host, without a path, query or fragment. The URL
  * parser also drops the `:443` Portal prints, as a browser leaves it out of
  * the Host it sends. Empty when the address is unusable.
