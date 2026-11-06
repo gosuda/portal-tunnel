@@ -73,3 +73,22 @@ func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
 		t.Fatal("equal settings have changes")
 	}
 }
+
+// An update decodes over the stored settings, and decoding reuses the array of a
+// slice, so a refused update must not have written into the stored lists.
+func TestApplyAuthLeavesTheStoredListsAlone(t *testing.T) {
+	t.Parallel()
+
+	stored := gateway.ApplicationAuthConfig{Provider: "oidc", AllowedWallets: []string{"a@example.com"}, EmailList: []string{"b@example.com"}}
+	applied := stored
+	request := AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{
+		"auth_allowed_wallets": json.RawMessage(`["c@example.com"]`),
+		"auth_email_list":      json.RawMessage(`["d@example.com"]`),
+	}}
+	if err := request.applyAuth(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if stored.AllowedWallets[0] != "a@example.com" || stored.EmailList[0] != "b@example.com" {
+		t.Fatalf("stored lists changed: %v, %v", stored.AllowedWallets, stored.EmailList)
+	}
+}
