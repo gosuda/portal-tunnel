@@ -50,6 +50,8 @@ type smtpTestServer struct {
 	dataReply string
 	// dropAtQuit closes the connection instead of answering QUIT.
 	dropAtQuit bool
+	// helloReply, when set, refuses EHLO and HELO.
+	helloReply string
 	// startTLS, when set, is offered as STARTTLS with this certificate.
 	startTLS *tls.Config
 }
@@ -97,6 +99,10 @@ func (s *smtpTestServer) serve(conn net.Conn) {
 		verb, arg, _ := strings.Cut(line, " ")
 		switch strings.ToUpper(verb) {
 		case "EHLO", "HELO":
+			if s.helloReply != "" {
+				reply(s.helloReply)
+				continue
+			}
 			reply("250-smtp.test")
 			if s.startTLS != nil {
 				reply("250-STARTTLS")
@@ -789,6 +795,33 @@ func TestEmailDeliverSurvivesAFailedQuit(t *testing.T) {
 		t.Fatalf("deliver = %v", err)
 	}
 	server.next(t)
+}
+
+// The startup check is the operator's main signal, so a server that signs in and
+// then drops the connection at QUIT must not read as an unusable one.
+func TestEmailCheckSurvivesAFailedQuit(t *testing.T) {
+	t.Parallel()
+
+	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+	server.dropAtQuit = true
+	if err := newEmailTestAuthenticator(t, server.addr).check(context.Background()); err != nil {
+		t.Fatalf("check = %v", err)
+	}
+}
+
+// A server that refuses EHLO has told us nothing about STARTTLS, and the advice
+// for a server without it would send the operator the wrong way.
+func TestEmailCheckReportsARefusedHello(t *testing.T) {
+	t.Parallel()
+
+	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
+	server.helloReply = "421 4.3.2 try later"
+	e := newEmailTestAuthenticator(t, server.addr)
+	e.smtpHost = "smtp.test"
+	err := e.check(context.Background())
+	if err == nil || errors.Is(err, errEmailSMTPOffersNoSTARTTLS) || !strings.Contains(err.Error(), "421") {
+		t.Fatalf("check = %v; want the server's refusal", err)
+	}
 }
 
 // Both TLS transports verify the server. The test cannot show a successful

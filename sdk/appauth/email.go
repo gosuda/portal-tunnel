@@ -315,7 +315,9 @@ func (e *emailAuthenticator) check(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = client.Close() }()
-	return client.Quit()
+	// dial has signed in, which is all this asks, so a failed QUIT is not a failure.
+	_ = client.Quit()
+	return nil
 }
 
 // deliver hands one mail to the SMTP server. The replies from RCPT on are about
@@ -397,6 +399,10 @@ func emailPlaintextHost(host string) bool {
 
 func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client) error {
 	if !e.implicitTLS && !emailPlaintextHost(e.smtpHost) {
+		// Extension reports a failed hello as a missing extension.
+		if err := client.Hello("localhost"); err != nil {
+			return fmt.Errorf("smtp EHLO: %w", err)
+		}
 		if ok, _ := client.Extension("STARTTLS"); !ok {
 			return errEmailSMTPOffersNoSTARTTLS
 		}
