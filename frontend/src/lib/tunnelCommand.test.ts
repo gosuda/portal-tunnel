@@ -286,7 +286,7 @@ describe("tunnelCommand sign-in", () => {
     };
     const command = runLine(buildTunnelCommand({ ...base, auth }));
     expect(command).toBe(
-      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-email-smtp-addr smtp.example.com:587 --auth-email-from 'Portal <login@example.com>' --auth-email-smtp-username 'login@example.com' --auth-allow 'alice@example.com' --auth-allow '@example.com'"
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-smtp-addr smtp.example.com:587 --auth-smtp-from 'Portal <login@example.com>' --auth-smtp-username 'login@example.com' --auth-allow 'alice@example.com' --auth-allow '@example.com'"
     );
     expect(command).not.toMatch(/PASSWORD|password/);
     expect(
@@ -297,7 +297,7 @@ describe("tunnelCommand sign-in", () => {
         })
       )
     ).toBe(
-      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-email-smtp-addr <host:port> --auth-email-from <sender> --auth-allow <email or @domain>"
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-smtp-addr <host:port> --auth-smtp-from <sender> --auth-allow <email or @domain>"
     );
   });
 
@@ -333,10 +333,10 @@ describe("tunnelCommand sign-in", () => {
       "$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password"
     );
     expect(buildSecretCommand("email", "unix")).toBe(
-      "printf 'SMTP password: '; stty -echo; read -r AUTH_EMAIL_SMTP_PASSWORD; stty echo; echo; export AUTH_EMAIL_SMTP_PASSWORD"
+      "printf 'SMTP password: '; stty -echo; read -r AUTH_SMTP_PASSWORD; stty echo; echo; export AUTH_SMTP_PASSWORD"
     );
     expect(buildSecretCommand("email", "windows")).toBe(
-      "$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_EMAIL_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password"
+      "$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password"
     );
     expect(buildSecretCommand("oidc", "unix")).not.toContain("<");
   });

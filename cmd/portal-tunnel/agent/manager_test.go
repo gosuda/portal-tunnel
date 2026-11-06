@@ -110,10 +110,10 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 	email := testTunnel("email")
 	email.Provider = "email"
 	email.AllowedWallets = []string{"alice@example.com"}
-	email.EmailSMTPAddr = "smtp.example.com:587"
-	email.EmailSMTPUsername = "portal"
-	email.EmailSMTPPassword = smtpPassword
-	email.EmailFrom = "login@example.com"
+	email.SMTPAddr = "smtp.example.com:587"
+	email.SMTPUsername = "portal"
+	email.SMTPPassword = smtpPassword
+	email.SMTPFrom = "login@example.com"
 	m, _ := testManager(t,
 		oidcTunnel("oidc", "https://accounts.example.com", secret),
 		credential,
@@ -144,10 +144,10 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 	if byID["oidc"]["auth_oidc_client_secret_set"] != true {
 		t.Fatalf("oidc auth_oidc_client_secret_set = %v, want true", byID["oidc"]["auth_oidc_client_secret_set"])
 	}
-	if byID["email"]["auth_email_smtp_password_set"] != true || byID["email"]["auth_email_smtp_addr"] != "smtp.example.com:587" {
-		t.Fatalf("email status = %v, want the SMTP server and auth_email_smtp_password_set", byID["email"])
+	if byID["email"]["auth_smtp_password_set"] != true || byID["email"]["auth_smtp_addr"] != "smtp.example.com:587" {
+		t.Fatalf("email status = %v, want the SMTP server and auth_smtp_password_set", byID["email"])
 	}
-	for _, key := range []string{"auth_allowed_wallets", "auth_oidc_client_secret_set", "auth_email_smtp_password_set", "auth_provider_checked", "auth_provider_error"} {
+	for _, key := range []string{"auth_allowed_wallets", "auth_oidc_client_secret_set", "auth_smtp_password_set", "auth_provider_checked", "auth_provider_error"} {
 		for _, id := range []string{"credential", "plain"} {
 			if _, ok := byID[id][key]; ok {
 				t.Fatalf("tunnel %q reports %s without it being configured", id, key)

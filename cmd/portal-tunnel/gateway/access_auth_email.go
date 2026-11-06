@@ -23,8 +23,8 @@ import (
 )
 
 var (
-	errEmailSMTPAddrMustHostPort = errors.New("email smtp address must be host:port with a port from 1 to 65535")
-	errEmailFromMustOneAddress   = errors.New("email sender must be one ASCII email address, optionally with a display name")
+	errSMTPAddrMustHostPort      = errors.New("email smtp address must be host:port with a port from 1 to 65535")
+	errSMTPFromMustOneAddress    = errors.New("email sender must be one ASCII email address, optionally with a display name")
 	errEmailAddressIsInvalid     = errors.New("email address is invalid")
 	errEmailSMTPOffersNoSTARTTLS = errors.New("smtp server does not offer STARTTLS; only a server at localhost, 127.0.0.1 or ::1 may be reached without TLS")
 	errEmailHeaderHasLineBreak   = errors.New("email header value contains a line break")
@@ -131,34 +131,34 @@ func newEmailAuthenticator(settings applicationAuthSettings, publicURLs func() [
 	}
 }
 
-// validateEmailSMTPAddr checks the host:port of the SMTP server. The transport
+// validateSMTPAddr checks the host:port of the SMTP server. The transport
 // follows from it: implicit TLS on port 465, STARTTLS on any other port, and
 // plaintext only to a local host (see emailPlaintextHost).
-func validateEmailSMTPAddr(addr string) error {
+func validateSMTPAddr(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errEmailSMTPAddrMustHostPort, err)
+		return fmt.Errorf("%w: %w", errSMTPAddrMustHostPort, err)
 	}
 	number, err := strconv.Atoi(port)
 	if host == "" || err != nil || number < 1 || number > 65535 || strings.ContainsFunc(host, unicode.IsControl) {
-		return errEmailSMTPAddrMustHostPort
+		return errSMTPAddrMustHostPort
 	}
 	return nil
 }
 
-// parseEmailFrom reads the fixed sender, the From header and the envelope
+// parseSMTPFrom reads the fixed sender, the From header and the envelope
 // sender of every link. It must be one address; a display name is kept for the
 // header only.
-func parseEmailFrom(raw string) (mail.Address, error) {
+func parseSMTPFrom(raw string) (mail.Address, error) {
 	if strings.ContainsFunc(raw, unicode.IsControl) {
-		return mail.Address{}, errEmailFromMustOneAddress
+		return mail.Address{}, errSMTPFromMustOneAddress
 	}
 	from, err := mail.ParseAddress(raw)
 	if err != nil {
-		return mail.Address{}, fmt.Errorf("%w: %w", errEmailFromMustOneAddress, err)
+		return mail.Address{}, fmt.Errorf("%w: %w", errSMTPFromMustOneAddress, err)
 	}
 	if strings.ContainsFunc(from.Address, func(r rune) bool { return r > unicode.MaxASCII }) {
-		return mail.Address{}, errEmailFromMustOneAddress
+		return mail.Address{}, errSMTPFromMustOneAddress
 	}
 	return *from, nil
 }

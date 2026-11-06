@@ -101,7 +101,7 @@ type verifiedIdentityHeadersContextKey struct{}
 // wallet addresses for siwe, credential subjects for credential, verified
 // emails, @domain entries, or sub: subjects for oidc and saml, or emails and
 // @domain entries for email). IdentityProof is a secret, like OIDCClientSecret
-// and EmailSMTPPassword: it is sent upstream with the identity headers and must
+// and SMTPPassword: it is sent upstream with the identity headers and must
 // not be logged. Only portal expose sets it; the agent config and the Agent API
 // have no key for it.
 type ApplicationAuthConfig struct {
@@ -133,14 +133,14 @@ type SAMLConfig struct {
 }
 
 // EmailConfig holds the settings of the email provider; any other provider
-// refuses them. The tunnel mails each login link from EmailFrom, the one fixed
-// sender, through the operator's SMTP server at EmailSMTPAddr. The username and
+// refuses them. The tunnel mails each login link from SMTPFrom, the one fixed
+// sender, through the operator's SMTP server at SMTPAddr. The username and
 // password are for a server that requires a login; the password is a secret.
 type EmailConfig struct {
-	EmailSMTPAddr     string `json:"auth_email_smtp_addr,omitempty" toml:"auth_email_smtp_addr,omitempty"`
-	EmailSMTPUsername string `json:"auth_email_smtp_username,omitempty" toml:"auth_email_smtp_username,omitempty"`
-	EmailSMTPPassword string `json:"auth_email_smtp_password,omitempty" toml:"auth_email_smtp_password,omitempty"`
-	EmailFrom         string `json:"auth_email_from,omitempty" toml:"auth_email_from,omitempty"`
+	SMTPAddr     string `json:"auth_smtp_addr,omitempty" toml:"auth_smtp_addr,omitempty"`
+	SMTPUsername string `json:"auth_smtp_username,omitempty" toml:"auth_smtp_username,omitempty"`
+	SMTPPassword string `json:"auth_smtp_password,omitempty" toml:"auth_smtp_password,omitempty"`
+	SMTPFrom     string `json:"auth_smtp_from,omitempty" toml:"auth_smtp_from,omitempty"`
 }
 
 // IsZero reports whether no auth setting is given. Any setting asks for the
@@ -165,10 +165,10 @@ func (c ApplicationAuthConfig) Normalize() (ApplicationAuthConfig, error) {
 	c.SAMLMetadataFile = strings.TrimSpace(c.SAMLMetadataFile)
 	c.SAMLEntityID = strings.TrimSpace(c.SAMLEntityID)
 	c.SAMLSubjectAttribute = strings.TrimSpace(c.SAMLSubjectAttribute)
-	c.EmailSMTPAddr = strings.TrimSpace(c.EmailSMTPAddr)
-	c.EmailSMTPUsername = strings.TrimSpace(c.EmailSMTPUsername)
-	c.EmailSMTPPassword = strings.TrimSpace(c.EmailSMTPPassword)
-	c.EmailFrom = strings.TrimSpace(c.EmailFrom)
+	c.SMTPAddr = strings.TrimSpace(c.SMTPAddr)
+	c.SMTPUsername = strings.TrimSpace(c.SMTPUsername)
+	c.SMTPPassword = strings.TrimSpace(c.SMTPPassword)
+	c.SMTPFrom = strings.TrimSpace(c.SMTPFrom)
 	if c.Provider == "" || len(c.AllowedWallets) == 0 {
 		c.AllowedWallets = slices.Clone(c.AllowedWallets)
 		return c, nil
@@ -187,7 +187,7 @@ func (c ApplicationAuthConfig) Public() ApplicationAuthConfig {
 	c.AllowedWallets = slices.Clone(c.AllowedWallets)
 	c.IdentityProof = ""
 	c.OIDCClientSecret = ""
-	c.EmailSMTPPassword = ""
+	c.SMTPPassword = ""
 	return c
 }
 

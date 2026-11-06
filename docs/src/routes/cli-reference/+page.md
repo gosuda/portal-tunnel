@@ -119,10 +119,10 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--auth-saml-metadata-file` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` (env: `AUTH_SAML_METADATA_FILE`) |
 | `--auth-saml-entity-id` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` (env: `AUTH_SAML_ENTITY_ID`) |
 | `--auth-saml-subject-attribute` | string | NameID | SAML attribute that names the visitor for `--auth saml`, such as `email` (env: `AUTH_SAML_SUBJECT_ATTRIBUTE`) |
-| `--auth-email-smtp-addr` | string | | SMTP server `host:port` that sends the login links for `--auth email`; port 465 uses TLS from the start, any other port must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext (env: `AUTH_EMAIL_SMTP_ADDR`) |
-| `--auth-email-smtp-username` | string | | SMTP username for `--auth email`; set it together with the password, or leave both empty for a server that needs no login (env: `AUTH_EMAIL_SMTP_USERNAME`) |
-| `--auth-email-smtp-password` | string | | SMTP password for `--auth email`; pass it by environment variable, because process lists show arguments (env: `AUTH_EMAIL_SMTP_PASSWORD`) |
-| `--auth-email-from` | string | | The one sender address of every login link for `--auth email`, with an optional display name (env: `AUTH_EMAIL_FROM`) |
+| `--auth-smtp-addr` | string | | SMTP server `host:port` that sends the login links for `--auth email`; port 465 uses TLS from the start, any other port must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext (env: `AUTH_SMTP_ADDR`) |
+| `--auth-smtp-username` | string | | SMTP username for `--auth email`; set it together with the password, or leave both empty for a server that needs no login (env: `AUTH_SMTP_USERNAME`) |
+| `--auth-smtp-password` | string | | SMTP password for `--auth email`; pass it by environment variable, because process lists show arguments (env: `AUTH_SMTP_PASSWORD`) |
+| `--auth-smtp-from` | string | | The one sender address of every login link for `--auth email`, with an optional display name (env: `AUTH_SMTP_FROM`) |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
@@ -305,17 +305,17 @@ Protect it with one-time sign-in links that Portal sends through your own SMTP
 account (see [Email links](/siwe-authentication#email-links)):
 
 ```bash
-# AUTH_EMAIL_SMTP_PASSWORD is set in this shell first, at a prompt
+# AUTH_SMTP_PASSWORD is set in this shell first, at a prompt
 portal expose 3000 --auth email \
-  --auth-email-smtp-addr smtp.gmail.com:587 \
-  --auth-email-smtp-username you@gmail.com \
-  --auth-email-from you@gmail.com \
+  --auth-smtp-addr smtp.gmail.com:587 \
+  --auth-smtp-username you@gmail.com \
+  --auth-smtp-from you@gmail.com \
   --auth-allow alice@example.com
 ```
 
-`--auth-allow` is required with `--auth email`. The `AUTH_EMAIL_*` variables
+`--auth-allow` is required with `--auth email`. The `AUTH_SMTP_*` variables
 follow the `AUTH_OIDC_*` rule: Portal reads them only with `--auth email`, and
-it rejects an `--auth-email-*` flag on the command line without `--auth email`.
+it rejects an `--auth-smtp-*` flag on the command line without `--auth email`.
 
 Portal protects the complete HTTP gateway, including routed, static, and x402
 paths. It always strips inbound Portal identity headers. The auth gate cannot be

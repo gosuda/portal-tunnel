@@ -7,12 +7,12 @@
 `--auth email` signs visitors in with a one-time link that the tunnel sends
 through the operator's own SMTP account. A visitor enters an email address, and
 an address on the allowlist gets a link that works once, for 10 minutes. The
-CLI flags are `--auth-email-smtp-addr`, `--auth-email-smtp-username`,
-`--auth-email-smtp-password` (`AUTH_EMAIL_SMTP_PASSWORD`), and
-`--auth-email-from`. The agent config and the Agent API take the same settings
-per tunnel as `auth_email_smtp_addr`, `auth_email_smtp_username`,
-`auth_email_smtp_password`, and `auth_email_from`. The password is write-only:
-`GET /agent/status` reports only `auth_email_smtp_password_set`. The provider
+CLI flags are `--auth-smtp-addr`, `--auth-smtp-username`,
+`--auth-smtp-password` (`AUTH_SMTP_PASSWORD`), and
+`--auth-smtp-from`. The agent config and the Agent API take the same settings
+per tunnel as `auth_smtp_addr`, `auth_smtp_username`,
+`auth_smtp_password`, and `auth_smtp_from`. The password is write-only:
+`GET /agent/status` reports only `auth_smtp_password_set`. The provider
 requires at least one `--auth-allow` entry. The startup check signs in to the
 SMTP server without sending mail and reports in `auth_provider_checked` and
 `auth_provider_error`.

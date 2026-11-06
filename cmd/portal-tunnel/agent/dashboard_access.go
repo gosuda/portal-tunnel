@@ -82,7 +82,7 @@ func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
 	case gateway.ApplicationAuthProviderOIDC:
 		return tunnel.AuthOIDCClientSecretSet
 	case gateway.ApplicationAuthProviderEmail:
-		return tunnel.AuthEmailSMTPPasswordSet
+		return tunnel.AuthSMTPPasswordSet
 	default:
 		return false
 	}
@@ -152,10 +152,10 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 		v.addAccessValue(th, width, "Entity ID", cmp.Or(tunnel.SAMLEntityID, agentDashboardSAMLEntityIDDefault), th.text)
 		v.addAccessValue(th, width, "Subject", cmp.Or(tunnel.SAMLSubjectAttribute, agentDashboardSAMLSubjectDefault), th.text)
 	case gateway.ApplicationAuthProviderEmail:
-		v.addAccessValue(th, width, "SMTP server", tunnel.EmailSMTPAddr, th.text)
-		v.addAccessValue(th, width, "SMTP user", cmp.Or(tunnel.EmailSMTPUsername, agentDashboardSMTPUsernameDefault), th.text)
-		v.addAccessValue(th, width, "SMTP password", agentDashboardSecretState(tunnel.AuthEmailSMTPPasswordSet), th.text)
-		v.addAccessValue(th, width, "Sender", tunnel.EmailFrom, th.text)
+		v.addAccessValue(th, width, "SMTP server", tunnel.SMTPAddr, th.text)
+		v.addAccessValue(th, width, "SMTP user", cmp.Or(tunnel.SMTPUsername, agentDashboardSMTPUsernameDefault), th.text)
+		v.addAccessValue(th, width, "SMTP password", agentDashboardSecretState(tunnel.AuthSMTPPasswordSet), th.text)
+		v.addAccessValue(th, width, "Sender", tunnel.SMTPFrom, th.text)
 	default:
 		return
 	}
@@ -333,7 +333,7 @@ func (m *agentDashboardModel) syncAccess() {
 func sameAccessSettings(a, b AgentTunnelStatus) bool {
 	return authChanges(a.ApplicationAuthConfig, b.ApplicationAuthConfig) == nil &&
 		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet &&
-		a.AuthEmailSMTPPasswordSet == b.AuthEmailSMTPPasswordSet
+		a.AuthSMTPPasswordSet == b.AuthSMTPPasswordSet
 }
 
 // load makes the draft equal to what the tunnel has stored. The secret input
@@ -354,9 +354,9 @@ func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
 		&a.metadataFile:     tunnel.SAMLMetadataFile,
 		&a.entityID:         tunnel.SAMLEntityID,
 		&a.subjectAttribute: tunnel.SAMLSubjectAttribute,
-		&a.smtpAddr:         tunnel.EmailSMTPAddr,
-		&a.smtpUsername:     tunnel.EmailSMTPUsername,
-		&a.from:             tunnel.EmailFrom,
+		&a.smtpAddr:         tunnel.SMTPAddr,
+		&a.smtpUsername:     tunnel.SMTPUsername,
+		&a.from:             tunnel.SMTPFrom,
 	} {
 		input.SetValue(value)
 		input.CursorEnd()
@@ -521,9 +521,9 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 		}
 	case gateway.ApplicationAuthProviderEmail:
 		draft.EmailConfig = gateway.EmailConfig{
-			EmailSMTPAddr:     strings.TrimSpace(a.smtpAddr.Value()),
-			EmailSMTPUsername: strings.TrimSpace(a.smtpUsername.Value()),
-			EmailFrom:         strings.TrimSpace(a.from.Value()),
+			SMTPAddr:     strings.TrimSpace(a.smtpAddr.Value()),
+			SMTPUsername: strings.TrimSpace(a.smtpUsername.Value()),
+			SMTPFrom:     strings.TrimSpace(a.from.Value()),
 		}
 	}
 	req := AgentTunnelUpdateRequest{Auth: authChanges(stored.ApplicationAuthConfig, draft)}
@@ -533,7 +533,7 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	// or clearSecret marks it.
 	for _, owned := range []struct{ provider, key string }{
 		{gateway.ApplicationAuthProviderOIDC, "auth_oidc_client_secret"},
-		{gateway.ApplicationAuthProviderEmail, "auth_email_smtp_password"},
+		{gateway.ApplicationAuthProviderEmail, "auth_smtp_password"},
 	} {
 		var secret string
 		if a.provider == owned.provider {

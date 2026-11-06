@@ -108,8 +108,8 @@ portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json
 Do these in order. Stop and ask the user for the missing value instead of guessing it.
 
 1. Get the SMTP server as `host:port`, for example `smtp.gmail.com:587`. Port 465 uses TLS from the start. On any other port the server must offer STARTTLS. Only a server at `localhost`, `127.0.0.1` or `::1` can receive plaintext.
-2. Get the SMTP username, when the server requires a login. The password reaches Portal only as `AUTH_EMAIL_SMTP_PASSWORD` in the environment of the shell that runs `portal expose`, never on the command line. Handle it as step 5 of the oidc section handles the client secret: the user reads it at a prompt and starts the tunnel in their own terminal, and you do not ask for it, type it, print it, or write it to a file. Username and password are set together or not at all.
-3. Get the sender for `--auth-email-from`: one address that the SMTP account can send from, with an optional display name such as `"Portal <login@example.com>"`. Every mail comes from it, and no visitor input can change it.
+2. Get the SMTP username, when the server requires a login. The password reaches Portal only as `AUTH_SMTP_PASSWORD` in the environment of the shell that runs `portal expose`, never on the command line. Handle it as step 5 of the oidc section handles the client secret: the user reads it at a prompt and starts the tunnel in their own terminal, and you do not ask for it, type it, print it, or write it to a file. Username and password are set together or not at all.
+3. Get the sender for `--auth-smtp-from`: one address that the SMTP account can send from, with an optional display name such as `"Portal <login@example.com>"`. Every mail comes from it, and no visitor input can change it.
 4. Decide who may sign in. `--auth-allow` is required with `email`; without at least one entry Portal refuses to start, because anyone could make the tunnel mail any address.
    - `alice@example.com`: that address.
    - `@example.com`: any address on exactly that domain, not its subdomains.
@@ -119,26 +119,26 @@ Do these in order. Stop and ask the user for the missing value instead of guessi
 The user first reads the password at a prompt. Linux and macOS (bash, zsh):
 
 ```sh
-printf 'SMTP password: '; stty -echo; read -r AUTH_EMAIL_SMTP_PASSWORD; stty echo; echo; export AUTH_EMAIL_SMTP_PASSWORD
+printf 'SMTP password: '; stty -echo; read -r AUTH_SMTP_PASSWORD; stty echo; echo; export AUTH_SMTP_PASSWORD
 ```
 
 Windows PowerShell:
 
 ```powershell
-$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_EMAIL_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
 ```
 
 Then, in that same shell, the user starts the tunnel (on PowerShell, on one line):
 
 ```sh
 portal expose 3000 --name my-app --identity-path /absolute/path/to/identity.json \
-  --auth email --auth-email-smtp-addr smtp.gmail.com:587 \
-  --auth-email-smtp-username you@gmail.com --auth-email-from you@gmail.com \
+  --auth email --auth-smtp-addr smtp.gmail.com:587 \
+  --auth-smtp-username you@gmail.com --auth-smtp-from you@gmail.com \
   --auth-allow alice@example.com --auth-allow @example.com
 ```
 
 - When the server needs no login, no secret is involved, so you can run the command yourself.
-- `AUTH_EMAIL_SMTP_ADDR`, `AUTH_EMAIL_SMTP_USERNAME`, `AUTH_EMAIL_SMTP_PASSWORD` and `AUTH_EMAIL_FROM` stand in for the four flags, and are used only together with `--auth email`. An `--auth-email-*` flag without `--auth email` is refused.
+- `AUTH_SMTP_ADDR`, `AUTH_SMTP_USERNAME`, `AUTH_SMTP_PASSWORD` and `AUTH_SMTP_FROM` stand in for the four flags, and are used only together with `--auth email`. An `--auth-smtp-*` flag without `--auth email` is refused.
 - The visitor enters an address on the sign-in page and gets a link `https://<host>/_portal/auth/login#email_token=...`. The link works once, for 10 minutes, and only on the host it was sent for. The token is in the fragment, so a mail scanner that opens the link cannot use it. Links are kept in memory: a restart cancels the unused ones, and the visitor asks again.
 - Portal sends a link only for a host where the tunnel is published now (a relay's address-bound URL, or its short URL while granted). A request for any other host gets `403`.
 - The page answers every well-formed address the same way, whether it is allowed or not, and sends the mail after it answers. One address gets at most one link per minute and five per hour. The addresses that only an `@domain` entry allows share 50 links per hour, so made-up addresses in that domain can use up the budget and block its real users for up to an hour; list addresses exactly where that matters. An exactly listed address is outside that budget. So a visitor never sees why no mail came: a failed send shows only in the tunnel log as `email login link not sent`.
@@ -184,7 +184,7 @@ auth_identity_headers = true
 
 A `saml` entry takes `auth = "saml"`, `auth_saml_metadata_url` (or `auth_saml_metadata_file`, relative to the config file), and the optional `auth_saml_entity_id` and `auth_saml_subject_attribute`. It holds no secret.
 
-An `email` entry takes `auth = "email"`, `auth_email_smtp_addr`, `auth_email_from`, and, for a server that requires a login, `auth_email_smtp_username` and `auth_email_smtp_password`. Each tunnel holds its own SMTP settings. The agent does not read the `AUTH_EMAIL_*` variables, so the password can only be stored in the TOML file as plain text: it is a secret like the client secret, and the same consent, the same `0600` first, and the same rules for who types it apply. The Agent API never returns it and reports only `auth_email_smtp_password_set`.
+An `email` entry takes `auth = "email"`, `auth_smtp_addr`, `auth_smtp_from`, and, for a server that requires a login, `auth_smtp_username` and `auth_smtp_password`. Each tunnel holds its own SMTP settings. The agent does not read the `AUTH_SMTP_*` variables, so the password can only be stored in the TOML file as plain text: it is a secret like the client secret, and the same consent, the same `0600` first, and the same rules for who types it apply. The Agent API never returns it and reports only `auth_smtp_password_set`.
 
 `auth_allowed_wallets` holds the allowlist for every method, not only wallets. To change it on a running agent tunnel, edit the file and run `portal agent restart`, which restarts every tunnel of the service, or have the user change it in the dashboard's Access screen (`F4`), or send `PATCH /agent/tunnels/{id}` (documented on the agent page), which restarts only that tunnel and writes the file too.
 
@@ -213,11 +213,11 @@ Without signing in as the user:
 | `saml settings require the saml application auth provider` | An `--auth-saml-*` flag was given together with another `--auth` provider. |
 | `email requires at least one --auth-allow entry` | Add an allowlist entry. |
 | `email allows email addresses and @domain entries only` | Remove the `sub:` entries. |
-| `email requires an SMTP server` / `email smtp address must be host:port` | Pass `--auth-email-smtp-addr host:port` with a port from 1 to 65535. |
-| `email requires a sender address` / `email sender must be one ASCII email address` | Pass one sender address with `--auth-email-from`. |
-| `email smtp username and password are set together or not at all` | Set both `--auth-email-smtp-username` and `AUTH_EMAIL_SMTP_PASSWORD`, or neither. |
-| `email settings require the email application auth provider` | An `--auth-email-*` flag was given together with another `--auth` provider. |
-| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers`, `--auth-identity-proof`, or an `--auth-oidc-*`, `--auth-saml-*` or `--auth-email-*` flag was given without `--auth`. |
+| `email requires an SMTP server` / `email smtp address must be host:port` | Pass `--auth-smtp-addr host:port` with a port from 1 to 65535. |
+| `email requires a sender address` / `email sender must be one ASCII email address` | Pass one sender address with `--auth-smtp-from`. |
+| `email smtp username and password are set together or not at all` | Set both `--auth-smtp-username` and `AUTH_SMTP_PASSWORD`, or neither. |
+| `email settings require the email application auth provider` | An `--auth-smtp-*` flag was given together with another `--auth` provider. |
+| `unsupported application auth provider ""` | `--auth-allow`, `--auth-identity-headers`, `--auth-identity-proof`, or an `--auth-oidc-*`, `--auth-saml-*` or `--auth-smtp-*` flag was given without `--auth`. |
 | `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) requires --auth-identity-headers` | Add `--auth-identity-headers`, or drop the proof. |
 | `identity proof (--auth-identity-proof / AUTH_IDENTITY_PROOF) must be at least 16 characters of visible ASCII without spaces` | Generate the value with `openssl rand -hex 32` as above. |
 | `HTTP tunnel cannot be combined with TCP or UDP` | Remove `--tcp` / `--udp`, or drop sign-in. |

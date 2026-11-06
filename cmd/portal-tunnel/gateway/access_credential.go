@@ -27,8 +27,8 @@ var (
 	errEmailSettingsRequireEmailApplicationAuth = errors.New("email settings require the email application auth provider")
 	errEmailRequiresLeastOneAuthAllow           = errors.New("email requires at least one --auth-allow entry: an email address or an @domain")
 	errEmailAllowsNoSubjectEntries              = errors.New("email allows email addresses and @domain entries only, not sub:<subject>")
-	errEmailSMTPAddrIsRequired                  = errors.New("email requires an SMTP server: --auth-email-smtp-addr host:port")
-	errEmailFromIsRequired                      = errors.New("email requires a sender address: --auth-email-from")
+	errSMTPAddrIsRequired                       = errors.New("email requires an SMTP server: --auth-smtp-addr host:port")
+	errSMTPFromIsRequired                       = errors.New("email requires a sender address: --auth-smtp-from")
 	errEmailSMTPCredentialsArePaired            = errors.New("email smtp username and password are set together or not at all")
 	errTunnelIdentityIsRequired                 = errors.New("tunnel identity is required")
 	errApplicationCredentialExpiryMustFuture    = errors.New("application credential expiry must be in the future")
@@ -152,10 +152,10 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	metadataFile := strings.TrimSpace(cfg.SAMLMetadataFile)
 	entityID := strings.TrimSpace(cfg.SAMLEntityID)
 	subjectAttribute := strings.TrimSpace(cfg.SAMLSubjectAttribute)
-	smtpAddr := strings.TrimSpace(cfg.EmailSMTPAddr)
-	smtpUsername := strings.TrimSpace(cfg.EmailSMTPUsername)
-	smtpPassword := strings.TrimSpace(cfg.EmailSMTPPassword)
-	from := strings.TrimSpace(cfg.EmailFrom)
+	smtpAddr := strings.TrimSpace(cfg.SMTPAddr)
+	smtpUsername := strings.TrimSpace(cfg.SMTPUsername)
+	smtpPassword := strings.TrimSpace(cfg.SMTPPassword)
+	from := strings.TrimSpace(cfg.SMTPFrom)
 	hasOIDCSettings := issuer != "" || clientID != "" || clientSecret != ""
 	hasSAMLSettings := metadataURL != "" || metadataFile != "" || entityID != "" || subjectAttribute != ""
 	hasEmailSettings := smtpAddr != "" || smtpUsername != "" || smtpPassword != "" || from != ""
@@ -213,15 +213,15 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 			return applicationAuthSettings{}, errEmailRequiresLeastOneAuthAllow
 		}
 		if smtpAddr == "" {
-			return applicationAuthSettings{}, errEmailSMTPAddrIsRequired
+			return applicationAuthSettings{}, errSMTPAddrIsRequired
 		}
-		if err := validateEmailSMTPAddr(smtpAddr); err != nil {
+		if err := validateSMTPAddr(smtpAddr); err != nil {
 			return applicationAuthSettings{}, err
 		}
 		if from == "" {
-			return applicationAuthSettings{}, errEmailFromIsRequired
+			return applicationAuthSettings{}, errSMTPFromIsRequired
 		}
-		if settings.emailFrom, err = parseEmailFrom(from); err != nil {
+		if settings.emailFrom, err = parseSMTPFrom(from); err != nil {
 			return applicationAuthSettings{}, err
 		}
 		if (smtpUsername == "") != (smtpPassword == "") {

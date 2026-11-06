@@ -300,22 +300,22 @@ password or a transactional mail service. The SMTP settings and the password
 stay on your machine. The relay never sees them.
 
 ```bash
-# AUTH_EMAIL_SMTP_PASSWORD is set in this shell first; see the prompt below
+# AUTH_SMTP_PASSWORD is set in this shell first; see the prompt below
 portal expose 3000 \
   --name myapp \
   --auth email \
-  --auth-email-smtp-addr smtp.gmail.com:587 \
-  --auth-email-smtp-username you@gmail.com \
-  --auth-email-from you@gmail.com \
+  --auth-smtp-addr smtp.gmail.com:587 \
+  --auth-smtp-username you@gmail.com \
+  --auth-smtp-from you@gmail.com \
   --auth-allow alice@example.com \
   --auth-allow @example.com
 ```
 
 ### Set up the SMTP account
 
-1. Find the submission server of your mail provider as `host:port`, for example `smtp.gmail.com:587`. Set it with `--auth-email-smtp-addr`.
-2. Create an app password or an SMTP credential at the provider. Set the username with `--auth-email-smtp-username` and the password with `AUTH_EMAIL_SMTP_PASSWORD`. Leave both empty only for a server that needs no login.
-3. Set the sender with `--auth-email-from`. Use an address that your SMTP account can send from. You can add a display name, for example `"Portal <login@example.com>"`.
+1. Find the submission server of your mail provider as `host:port`, for example `smtp.gmail.com:587`. Set it with `--auth-smtp-addr`.
+2. Create an app password or an SMTP credential at the provider. Set the username with `--auth-smtp-username` and the password with `AUTH_SMTP_PASSWORD`. Leave both empty only for a server that needs no login.
+3. Set the sender with `--auth-smtp-from`. Use an address that your SMTP account can send from. You can add a display name, for example `"Portal <login@example.com>"`.
 
 Every link comes from this one sender. No visitor input can change the sender,
 the subject or the text of the mail.
@@ -326,7 +326,7 @@ password without it. Only a server at `localhost`, `127.0.0.1` or `::1`, such
 as a local mail relay on `127.0.0.1:25`, can receive plaintext. These are the
 names to which Go's SMTP client sends a password without TLS.
 
-Pass the password as `AUTH_EMAIL_SMTP_PASSWORD`, as with the OIDC client
+Pass the password as `AUTH_SMTP_PASSWORD`, as with the OIDC client
 secret, so that it stays out of the process list. Read it at a prompt to keep it
 out of the shell history. Run these lines in the same shell session that then
 starts `portal expose`.
@@ -334,13 +334,13 @@ starts `portal expose`.
 Linux and macOS (bash, zsh):
 
 ```bash
-printf 'SMTP password: '; stty -echo; read -r AUTH_EMAIL_SMTP_PASSWORD; stty echo; echo; export AUTH_EMAIL_SMTP_PASSWORD
+printf 'SMTP password: '; stty -echo; read -r AUTH_SMTP_PASSWORD; stty echo; echo; export AUTH_SMTP_PASSWORD
 ```
 
 Windows PowerShell:
 
 ```powershell
-$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_EMAIL_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
 ```
 
 When the tunnel starts, Portal signs in to the SMTP server once and sends no

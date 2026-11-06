@@ -367,7 +367,7 @@ func TestDashboardAccessRequestNamesOnlyWhatChanged(t *testing.T) {
 			`{"auth":"saml","auth_allowed_wallets":["@example.com"],"auth_saml_metadata_url":"https://idp.example/metadata","auth_saml_entity_id":"urn:portal:web","auth_saml_subject_attribute":"email"}`},
 		{"open to email", accessOpen,
 			[]tea.Msg{keyLeft, keyDown, typed("alice@example.com"), keyEnter, keyDown, keyDown, typed("smtp.example.com:587"), keyDown, typed("portal"), keyDown, typed(fakeSecret), keyDown, typed("login@example.com")},
-			`{"auth":"email","auth_allowed_wallets":["alice@example.com"],"auth_email_smtp_addr":"smtp.example.com:587","auth_email_smtp_username":"portal","auth_email_smtp_password":"` + fakeSecret + `","auth_email_from":"login@example.com"}`},
+			`{"auth":"email","auth_allowed_wallets":["alice@example.com"],"auth_smtp_addr":"smtp.example.com:587","auth_smtp_username":"portal","auth_smtp_password":"` + fakeSecret + `","auth_smtp_from":"login@example.com"}`},
 		{"open to credential", accessOpen, []tea.Msg{keyRight}, `{"auth":"credential"}`},
 		{"wallet to OIDC", accessWallet,
 			[]tea.Msg{keyRight, keyDown, typed("carol@example.com"), keyEnter, keyDown, keyDown, typed("https://idp.example.org"), keyDown, typed("client-1"), keyDown, typed(fakeSecret)},

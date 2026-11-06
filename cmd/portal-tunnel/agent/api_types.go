@@ -42,10 +42,10 @@ type AgentTunnelStatus struct {
 	// The auth settings come without their secrets (see
 	// gateway.ApplicationAuthConfig.Public). The OIDC client secret and the
 	// SMTP password are write-only: AuthOIDCClientSecretSet and
-	// AuthEmailSMTPPasswordSet say whether one is configured.
+	// AuthSMTPPasswordSet say whether one is configured.
 	gateway.ApplicationAuthConfig
-	AuthOIDCClientSecretSet  bool `json:"auth_oidc_client_secret_set,omitempty"`
-	AuthEmailSMTPPasswordSet bool `json:"auth_email_smtp_password_set,omitempty"`
+	AuthOIDCClientSecretSet bool `json:"auth_oidc_client_secret_set,omitempty"`
+	AuthSMTPPasswordSet     bool `json:"auth_smtp_password_set,omitempty"`
 	// The provider fields report the startup check of the OIDC or SAML
 	// identity provider, or of the SMTP server of email, of a running tunnel:
 	// both are empty until the check finishes, and the error stays empty while

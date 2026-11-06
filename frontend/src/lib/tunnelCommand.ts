@@ -225,12 +225,12 @@ function buildAuthArgs(auth: TunnelAuthOptions, os: TunnelCommandOS): string[] {
   }
   if (auth.method === "email") {
     args.push(
-      `--auth-email-smtp-addr ${valueOrPlaceholder(auth.emailSMTPAddr, "<host:port>", os)}`,
-      `--auth-email-from ${valueOrPlaceholder(auth.emailFrom, "<sender>", os)}`
+      `--auth-smtp-addr ${valueOrPlaceholder(auth.emailSMTPAddr, "<host:port>", os)}`,
+      `--auth-smtp-from ${valueOrPlaceholder(auth.emailFrom, "<sender>", os)}`
     );
     if (auth.emailSMTPUsername.trim() !== "") {
       args.push(
-        `--auth-email-smtp-username ${formatToken(auth.emailSMTPUsername.trim(), os)}`
+        `--auth-smtp-username ${formatToken(auth.emailSMTPUsername.trim(), os)}`
       );
     }
   }
@@ -254,7 +254,7 @@ function buildAuthArgs(auth: TunnelAuthOptions, os: TunnelCommandOS): string[] {
 // that asks for each.
 const SECRETS = {
   oidc: { prompt: "OIDC client secret", variable: "AUTH_OIDC_CLIENT_SECRET" },
-  email: { prompt: "SMTP password", variable: "AUTH_EMAIL_SMTP_PASSWORD" },
+  email: { prompt: "SMTP password", variable: "AUTH_SMTP_PASSWORD" },
 } as const;
 
 /**
@@ -416,7 +416,7 @@ function isSAMLMetadataURL(raw: string): boolean {
   }
 }
 
-// validateEmailSMTPAddr (access_auth_email.go) reads host:port the way
+// validateSMTPAddr (access_auth_email.go) reads host:port the way
 // net.SplitHostPort and strconv.Atoi do: an IPv6 host in brackets, a host
 // without control characters, and a port from 1 to 65535.
 function isEmailSMTPAddr(raw: string): boolean {

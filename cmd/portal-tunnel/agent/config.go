@@ -146,7 +146,7 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 // an x402 facilitator token.
 func (cfg TunnelConfig) holdsSecret() bool {
 	return strings.TrimSpace(cfg.OIDCClientSecret) != "" ||
-		strings.TrimSpace(cfg.EmailSMTPPassword) != "" ||
+		strings.TrimSpace(cfg.SMTPPassword) != "" ||
 		strings.TrimSpace(cfg.IdentityJSON) != "" ||
 		strings.TrimSpace(cfg.FacilitatorToken) != ""
 }

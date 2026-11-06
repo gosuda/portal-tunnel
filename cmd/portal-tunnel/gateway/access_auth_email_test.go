@@ -147,10 +147,10 @@ func emailTestConfig(smtpAddr string, allowed ...string) ApplicationAuthConfig {
 		Provider:       ApplicationAuthProviderEmail,
 		AllowedWallets: allowed,
 		EmailConfig: EmailConfig{
-			EmailSMTPAddr:     smtpAddr,
-			EmailSMTPUsername: emailTestUsername,
-			EmailSMTPPassword: emailTestPassword,
-			EmailFrom:         emailTestFrom,
+			SMTPAddr:     smtpAddr,
+			SMTPUsername: emailTestUsername,
+			SMTPPassword: emailTestPassword,
+			SMTPFrom:     emailTestFrom,
 		},
 	}
 }
@@ -518,9 +518,9 @@ func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 	// A session is bound to the mail account that mailed its link, so a new
 	// SMTP server, username or sender ends it.
 	for name, change := range map[string]func(*ApplicationAuthConfig){
-		"server":   func(c *ApplicationAuthConfig) { c.EmailSMTPAddr = "127.0.0.1:587" },
-		"username": func(c *ApplicationAuthConfig) { c.EmailSMTPUsername = "other" },
-		"sender":   func(c *ApplicationAuthConfig) { c.EmailFrom = "other@portal.example" },
+		"server":   func(c *ApplicationAuthConfig) { c.SMTPAddr = "127.0.0.1:587" },
+		"username": func(c *ApplicationAuthConfig) { c.SMTPUsername = "other" },
+		"sender":   func(c *ApplicationAuthConfig) { c.SMTPFrom = "other@portal.example" },
 	} {
 		cfg := emailTestConfig("127.0.0.1:25", "alice@example.com")
 		change(&cfg)
@@ -563,15 +563,15 @@ func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 	}{
 		"no allowlist":           {func(c *ApplicationAuthConfig) { c.AllowedWallets = nil }, errEmailRequiresLeastOneAuthAllow},
 		"subject entry":          {func(c *ApplicationAuthConfig) { c.AllowedWallets = []string{"sub:alice"} }, errEmailAllowsNoSubjectEntries},
-		"no smtp address":        {func(c *ApplicationAuthConfig) { c.EmailSMTPAddr = "" }, errEmailSMTPAddrIsRequired},
-		"no smtp port":           {func(c *ApplicationAuthConfig) { c.EmailSMTPAddr = "smtp.example" }, errEmailSMTPAddrMustHostPort},
-		"smtp port 0":            {func(c *ApplicationAuthConfig) { c.EmailSMTPAddr = "smtp.example:0" }, errEmailSMTPAddrMustHostPort},
-		"smtp port out of range": {func(c *ApplicationAuthConfig) { c.EmailSMTPAddr = "smtp.example:65536" }, errEmailSMTPAddrMustHostPort},
-		"no sender":              {func(c *ApplicationAuthConfig) { c.EmailFrom = "" }, errEmailFromIsRequired},
-		"two senders":            {func(c *ApplicationAuthConfig) { c.EmailFrom = "a@example.com, b@example.com" }, errEmailFromMustOneAddress},
-		"sender with line break": {func(c *ApplicationAuthConfig) { c.EmailFrom = "a@example.com\r\nBcc: b@example.com" }, errEmailFromMustOneAddress},
-		"username only":          {func(c *ApplicationAuthConfig) { c.EmailSMTPPassword = "" }, errEmailSMTPCredentialsArePaired},
-		"password only":          {func(c *ApplicationAuthConfig) { c.EmailSMTPUsername = "" }, errEmailSMTPCredentialsArePaired},
+		"no smtp address":        {func(c *ApplicationAuthConfig) { c.SMTPAddr = "" }, errSMTPAddrIsRequired},
+		"no smtp port":           {func(c *ApplicationAuthConfig) { c.SMTPAddr = "smtp.example" }, errSMTPAddrMustHostPort},
+		"smtp port 0":            {func(c *ApplicationAuthConfig) { c.SMTPAddr = "smtp.example:0" }, errSMTPAddrMustHostPort},
+		"smtp port out of range": {func(c *ApplicationAuthConfig) { c.SMTPAddr = "smtp.example:65536" }, errSMTPAddrMustHostPort},
+		"no sender":              {func(c *ApplicationAuthConfig) { c.SMTPFrom = "" }, errSMTPFromIsRequired},
+		"two senders":            {func(c *ApplicationAuthConfig) { c.SMTPFrom = "a@example.com, b@example.com" }, errSMTPFromMustOneAddress},
+		"sender with line break": {func(c *ApplicationAuthConfig) { c.SMTPFrom = "a@example.com\r\nBcc: b@example.com" }, errSMTPFromMustOneAddress},
+		"username only":          {func(c *ApplicationAuthConfig) { c.SMTPPassword = "" }, errEmailSMTPCredentialsArePaired},
+		"password only":          {func(c *ApplicationAuthConfig) { c.SMTPUsername = "" }, errEmailSMTPCredentialsArePaired},
 		"settings of another provider": {func(c *ApplicationAuthConfig) {
 			c.Provider, c.AllowedWallets = ApplicationAuthProviderCredential, nil
 		}, errEmailSettingsRequireEmailApplicationAuth},
@@ -595,12 +595,12 @@ func TestCheckEmailProviderSignsInWithoutSending(t *testing.T) {
 		t.Fatalf("check = %v", err)
 	}
 	wrong := emailTestConfig(server.addr, "alice@example.com")
-	wrong.EmailSMTPPassword = "wrong-smtp-secret"
+	wrong.SMTPPassword = "wrong-smtp-secret"
 	err := CheckApplicationAuthProvider(ctx, wrong)
 	if err == nil {
 		t.Fatal("check with a wrong password passed")
 	}
-	if strings.Contains(err.Error(), wrong.EmailSMTPPassword) {
+	if strings.Contains(err.Error(), wrong.SMTPPassword) {
 		t.Fatalf("check error %q shows the password", err)
 	}
 	server.expectNoMore(t)
