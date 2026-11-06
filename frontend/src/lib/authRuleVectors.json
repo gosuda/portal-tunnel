@@ -57,6 +57,8 @@
    {"method": "saml", "typed": "alice", "valid": false},
    {"method": "saml", "typed": "münchen@example.de", "valid": false},
    {"method": "saml", "typed": "", "valid": false},
+   {"method": "email", "typed": "@example.com.", "valid": false},
+   {"method": "email", "typed": "@.example.com", "valid": false},
    {"method": "email", "typed": "Alice@Example.COM", "valid": true, "canonical": "alice@example.com"},
    {"method": "email", "typed": "@Example.COM", "valid": true, "canonical": "@example.com"},
    {"method": "email", "typed": "alice@xn--mnchen-3ya.de", "valid": true, "canonical": "alice@xn--mnchen-3ya.de"},

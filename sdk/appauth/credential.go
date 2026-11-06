@@ -288,12 +288,14 @@ func normalizeAllowed(provider string, values []string) ([]string, error) {
 			if strings.HasPrefix(principal, subjectPrincipalPrefix) {
 				return nil, errEmailAllowsNoSubjectEntries
 			}
-			// An address no visitor can sign in with would fail in silence, so
-			// it fails at the start.
-			if !strings.HasPrefix(principal, "@") {
-				if _, err := normalizeVisitorEmail(principal); err != nil {
-					return nil, fmt.Errorf("principal %q: %w", principal, err)
-				}
+			// An entry no visitor can sign in with would fail in silence, so it
+			// fails at the start. A domain is tried with the shortest local part.
+			address := principal
+			if strings.HasPrefix(principal, "@") {
+				address = "a" + principal
+			}
+			if _, err := normalizeVisitorEmail(address); err != nil {
+				return nil, fmt.Errorf("principal %q: %w", principal, err)
 			}
 		}
 		return allowed, nil

@@ -894,6 +894,8 @@ func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 		wantErr error
 	}{
 		"no allowlist":           {func(c *Config) { c.EmailList = nil }, errEmailRequiresEmailList},
+		"domain with a dot":      {func(c *Config) { c.EmailList = []string{"@example.com."} }, errEmailAddressIsInvalid},
+		"domain with a comma":    {func(c *Config) { c.EmailList = []string{"@team.example,"} }, errEmailAddressIsInvalid},
 		"subject entry":          {func(c *Config) { c.EmailList = []string{"sub:alice"} }, errEmailAllowsNoSubjectEntries},
 		"no smtp address":        {func(c *Config) { c.SMTPAddr = "" }, errSMTPAddrIsRequired},
 		"no smtp port":           {func(c *Config) { c.SMTPAddr = "smtp.example" }, errSMTPAddrMustHostPort},

@@ -362,7 +362,7 @@ export function classifyAuthAllow(
       error: `${entry} is not an email, an @domain or sub:<id>.`,
     };
   }
-  if (method === "email" && at > 0 && !isVisitorEmail(entry)) {
+  if (method === "email" && !isVisitorEmail(at === 0 ? `a${entry}` : entry)) {
     return { ok: false, error: `${entry} is not an address a visitor can sign in with.` };
   }
   return { ok: true, kind: at === 0 ? "domain" : "person" };
