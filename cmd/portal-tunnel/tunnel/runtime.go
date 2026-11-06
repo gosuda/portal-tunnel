@@ -278,17 +278,16 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	return runtime, nil
 }
 
-// publicURLs lists the URLs the tunnel is reachable at now: the canonical URL
-// of each relay, which always routes to this tunnel, and an alias only while
-// its relay is ready, because the relay may give the name to another identity
-// once the lease ends.
+// publicURLs lists the URLs the tunnel is reachable at now: the canonical URL of
+// each relay, which always routes to this tunnel, and the alias its lease holds.
+// The SDK clears an alias as soon as the lease may be gone, because the relay may
+// then give the name to another identity, so the alias itself is the signal. The
+// relay state is not: every visitor connection takes an idle reverse session, so
+// a relay reports connecting while it serves a burst of requests on that alias.
 func (runtime *Runtime) publicURLs() []string {
 	var urls []string
 	for _, relay := range runtime.Exposure.Relays() {
-		urls = append(urls, relay.PublicURL)
-		if relay.State == sdk.RelayReady {
-			urls = append(urls, relay.AliasURL)
-		}
+		urls = append(urls, relay.PublicURL, relay.AliasURL)
 	}
 	return urls
 }

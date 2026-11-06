@@ -413,7 +413,8 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: canonical.Hostname(), MinVersion: tls.VersionTLS12},
+		DisableKeepAlives: true,
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true, ServerName: canonical.Hostname(), MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, sniAddr)
 		},
@@ -429,7 +430,8 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {
-			t.Fatalf("request a link at %s: %v", host, err)
+			t.Errorf("request a link at %s: %v", host, err)
+			return 0
 		}
 		defer func() { _ = resp.Body.Close() }()
 		return resp.StatusCode
@@ -448,4 +450,19 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 	if link := catcher.next(t).link(t); !strings.HasPrefix(link, aliasURL+"/") {
 		t.Fatalf("link %q is not for the alias %s", link, aliasURL)
 	}
+
+	// Each visitor connection takes an idle reverse session, so a burst makes the
+	// relay report connecting while it is serving that very burst. The tunnel
+	// still holds the alias, so nobody on the short URL may be refused.
+	const burst = 24
+	codes := make(chan int, burst)
+	for range burst {
+		go func() { codes <- ask(alias.Host, "nobody@elsewhere.test") }()
+	}
+	for range burst {
+		if code := <-codes; code != http.StatusAccepted {
+			t.Errorf("request at the alias during a burst = %d, want 202", code)
+		}
+	}
+	catcher.expectNone(t)
 }
