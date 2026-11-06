@@ -382,7 +382,8 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
 | `--auth` | | string | | Protect the complete HTTP application with `siwe`, `credential`, `oidc`, `saml`, or `email`; excludes cache, TCP, and UDP |
-| `--auth-allow` | | string | | Allowed principal (Ethereum wallet for `siwe`, subject for `credential`, verified email, `@example.com` domain, or `sub:<subject>` for `oidc` and `saml`, or email or `@example.com` domain for `email`); repeatable; empty allows any valid principal, except for `oidc`, `saml`, and `email`, which require at least one entry; requires `--auth` |
+| `--auth-allow` | | string | | Allowed principal for `siwe` (Ethereum wallet) or `credential` (subject); repeatable; empty allows any valid principal; `oidc` and `saml` also read it, as `--auth-email-list`; requires `--auth` |
+| `--auth-email-list` | | string | | Who may sign in with `oidc` or `saml` (verified email, `@example.com` domain, or `sub:<subject>`) or `email` (email or `@example.com` domain); repeatable; at least one entry is required; requires `--auth` |
 | `--auth-oidc-issuer` | `AUTH_OIDC_ISSUER` | string | | OIDC issuer URL for `--auth oidc` |
 | `--auth-oidc-client-id` | `AUTH_OIDC_CLIENT_ID` | string | | OIDC client ID for `--auth oidc` |
 | `--auth-oidc-client-secret` | `AUTH_OIDC_CLIENT_SECRET` | string | | Optional OIDC client secret for `--auth oidc` |
@@ -509,6 +510,13 @@ auth_allowed_wallets = ["alice"]
 auth_identity_headers = true
 ```
 
+`--auth-allow` / `auth_allowed_wallets` is the list for `siwe` and `credential`.
+`--auth-email-list` / `auth_email_list` is the list for `oidc`, `saml`, and
+`email`: a tunnel runs one provider, so the one list serves all three. `oidc` and
+`saml` still read `--auth-allow` / `auth_allowed_wallets`, so existing configs
+keep working. Setting both keys is refused. `email` takes only
+`--auth-email-list`.
+
 Agent fields:
 
 | Field | Default | Description |
@@ -542,7 +550,8 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
 | `auth` | string | Application login provider: `siwe`, `credential`, `oidc`, `saml`, or `email`; cannot be combined with TCP or UDP |
-| `auth_allowed_wallets` | string array | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, verified emails, `@example.com` domains, or `sub:` subjects for `oidc` and `saml`, or emails and `@example.com` domains for `email`); empty allows any valid principal, except for `oidc`, `saml`, and `email`, which require at least one entry; requires `auth` when set |
+| `auth_allowed_wallets` | string array | Principals allowed to sign in with `siwe` (Ethereum wallets) or `credential` (subjects); empty allows any valid principal; `oidc` and `saml` also read it, as `auth_email_list`; requires `auth` when set |
+| `auth_email_list` | string array | Who may sign in with `oidc` or `saml` (verified emails, `@example.com` domains, or `sub:` subjects) or `email` (emails and `@example.com` domains); at least one entry is required; requires `auth` when set |
 | `auth_oidc_issuer` | string | OIDC issuer URL; required when `auth = "oidc"` |
 | `auth_oidc_client_id` | string | OIDC client ID; required when `auth = "oidc"` |
 | `auth_oidc_client_secret` | string | Optional OIDC client secret for `auth = "oidc"` |

@@ -959,15 +959,16 @@ function EmailSetup({
       )}
 
       <p className={s.help}>
-        The sign-in page answers every address the same way, so it does not
-        show who is on the list. One address gets at most one link per minute
-        and five per hour. The addresses that only an @domain entry allows
-        share fifty links per hour, so made-up addresses in a domain can use
-        that budget up for an hour; list addresses exactly where that matters.
-        A link
+        The sign-in page answers every well-formed address the same way, so it
+        does not show who is on the list. One address gets at most one link per
+        minute and five per hour. The addresses that only an @domain entry
+        allows share fifty links per hour across all @domain entries, so
+        made-up addresses can use that budget up while the flood lasts and for
+        up to an hour after; list addresses exactly where that matters. A link
         works once, for 10 minutes; restarting the tunnel cancels the links
-        not used yet. A visitor is not told when a mail fails: check the tunnel
-        log.
+        not used yet. A visitor is not told when a mail fails: a failed send
+        shows in the tunnel log, and a refusal by a limit or by the list logs
+        nothing.
       </p>
     </div>
   );
