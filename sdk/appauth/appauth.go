@@ -579,13 +579,19 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
 	var (
-		siwe            *siweauth.Authenticator
-		oidc            *oidcAuthenticator
-		saml            *samlAuthenticator
-		email           *emailAuthenticator
-		allowedSubjects map[string]struct{}
-		allowAnySubject = true
+		siwe  *siweauth.Authenticator
+		oidc  *oidcAuthenticator
+		saml  *samlAuthenticator
+		email *emailAuthenticator
 	)
+	allowedSubjects := make(map[string]struct{}, len(settings.allowed))
+	for _, subject := range settings.allowed {
+		allowedSubjects[subject] = struct{}{}
+	}
+	// Only a credential gate may run without a list, and siwe keeps its own.
+	// resolveApplicationAuthConfig refuses an empty list for every identity
+	// provider and for email, because any account or address would pass.
+	allowAnySubject := settings.provider == ProviderSIWE || (settings.provider == ProviderCredential && len(settings.allowed) == 0)
 	switch settings.provider {
 	case ProviderSIWE:
 		siwe, err = siweauth.New(siweauth.Config{
@@ -597,22 +603,7 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 		if err != nil {
 			return nil, err
 		}
-	case ProviderCredential:
-		if len(settings.allowed) > 0 {
-			allowAnySubject = false
-			allowedSubjects = make(map[string]struct{}, len(settings.allowed))
-			for _, subject := range settings.allowed {
-				allowedSubjects[subject] = struct{}{}
-			}
-		}
 	case ProviderOIDC, ProviderSAML:
-		// An identity provider never runs open: resolveApplicationAuthConfig
-		// rejects an empty allowlist, because any account at the provider would pass.
-		allowAnySubject = false
-		allowedSubjects = make(map[string]struct{}, len(settings.allowed))
-		for _, principal := range settings.allowed {
-			allowedSubjects[principal] = struct{}{}
-		}
 		stateKey, err := identity.DeriveToken(id, "application-access-"+settings.provider+"-state")
 		if err != nil {
 			return nil, fmt.Errorf("derive %s state signing key: %w", settings.provider, err)
@@ -625,13 +616,6 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 	case ProviderEmail:
 		if cfg.PublicURLs == nil {
 			return nil, errEmailRequiresPublicURLs
-		}
-		// Like an identity provider, email never runs open: resolveApplicationAuthConfig
-		// rejects an empty allowlist.
-		allowAnySubject = false
-		allowedSubjects = make(map[string]struct{}, len(settings.allowed))
-		for _, principal := range settings.allowed {
-			allowedSubjects[principal] = struct{}{}
 		}
 		email = newEmailAuthenticator(settings, cfg.PublicURLs)
 	}
@@ -1397,7 +1381,7 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	if _, ok := a.allowedSubjects[subject]; ok {
 		return true
 	}
-	if a.provider != ProviderOIDC && a.provider != ProviderSAML && a.provider != ProviderEmail {
+	if !ProviderTakesEmailList(a.provider) {
 		return false
 	}
 	// A `sub:` session subject is an opaque subject principal: it matches only

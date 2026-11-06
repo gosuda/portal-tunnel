@@ -384,7 +384,7 @@ func (e *emailAuthenticator) dial(ctx context.Context) (*smtp.Client, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("smtp greeting: %w", err)
 	}
-	if err := e.secureAndSignIn(client); err != nil {
+	if err := e.secureAndSignIn(client, tlsConfig); err != nil {
 		_ = client.Close()
 		return nil, err
 	}
@@ -398,7 +398,7 @@ func emailPlaintextHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
-func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client) error {
+func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client, tlsConfig *tls.Config) error {
 	if !e.implicitTLS && !emailPlaintextHost(e.smtpHost) {
 		// Extension reports a failed hello as a missing extension.
 		if err := client.Hello("localhost"); err != nil {
@@ -407,7 +407,7 @@ func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client) error {
 		if ok, _ := client.Extension("STARTTLS"); !ok {
 			return errEmailSMTPOffersNoSTARTTLS
 		}
-		if err := client.StartTLS(&tls.Config{ServerName: e.smtpHost, MinVersion: tls.VersionTLS12}); err != nil {
+		if err := client.StartTLS(tlsConfig); err != nil {
 			return fmt.Errorf("smtp STARTTLS: %w", err)
 		}
 	}
@@ -540,5 +540,5 @@ func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Reques
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
-	a.writeJSON(w, http.StatusOK, map[string]string{"subject": email, "next": sanitizeApplicationAuthNext(next)})
+	a.writeJSON(w, http.StatusOK, map[string]string{"subject": email, "next": next})
 }
