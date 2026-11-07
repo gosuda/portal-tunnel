@@ -78,6 +78,9 @@ type leaseRegistry struct {
 
 	udpEnabled, tcpPortEnabled bool
 	udpMaxLeases, tcpMaxLeases int
+	// unapprovedPerSource bounds the leases one source can hold without being
+	// routable. Zero disables the bound.
+	unapprovedPerSource int
 
 	mu sync.RWMutex
 }
@@ -374,6 +377,55 @@ func (r *leaseRegistry) recordForVerifiedLease(key types.ServiceIdentityKey, lea
 	return record, nil
 }
 
+// refuseChallengeOverBudget treats unapproved leases as a resource to bound, not
+// as an intent to judge: they hold aliases, ports and capacity, so one source
+// gets a fixed budget of them, and a challenge counts until it is used. A
+// routable identity is never refused, and an unknown source fails open.
+// Concurrent registrations can overshoot the limit by the few that pass between
+// a challenge being used and its lease being recorded.
+//
+// A refusal takes back the challenge just issued for key, so the client waits
+// holding nothing: no challenge to expire and no slot of the pending cap, which
+// the same source's approved identities also need.
+func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, challengeID string, source netip.Addr) error {
+	now := time.Now().UTC()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.unapprovedPerSource <= 0 || !source.IsValid() || r.isRoutableLocked(key) {
+		return nil
+	}
+	held := make(map[types.ServiceIdentityKey]struct{})
+	issued := -1
+	for i, record := range r.records {
+		if record == nil || record.isExpired(now) {
+			continue
+		}
+		var holder types.ServiceIdentityKey
+		switch {
+		case record.registerChallenge != nil && record.sourceAddr == source:
+			if record.registerChallenge.ChallengeID == challengeID {
+				issued = i
+			}
+			holder = record.registerChallenge.Request.Identity.ServiceKey()
+		case record.reverse != nil && record.registerSource == source:
+			holder = record.ServiceKey()
+		default:
+			continue
+		}
+		if holder != key && !r.isRoutableLocked(holder) {
+			held[holder] = struct{}{}
+		}
+	}
+	if len(held) < r.unapprovedPerSource {
+		return nil
+	}
+	if issued >= 0 {
+		r.deleteRecord(issued)
+	}
+	return errUnapprovedLeaseLimit
+}
+
 // Register admits a lease. served is the relay certificate served now, whose
 // chain the tenant is about to pin (nil when unknown).
 func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, types.RegisterResponse, error) {
@@ -431,6 +483,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		FirstSeenAt:       issuedAt,
 		LastSeenAt:        issuedAt,
 		sourceAddr:        sourceAddr,
+		registerSource:    sourceAddr,
 		ReportedIP:        utils.SanitizeReportedIP(reportedIP),
 		reverse:           transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
@@ -877,10 +930,13 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	}, nil
 }
 
-func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*identity.RegisterChallenge, error) {
+// consumeVerifiedRegisterChallenge takes one verified challenge and the source
+// that asked for it. The lease belongs to that source, because the unapproved
+// budget is checked there: registering from a second address must not escape it.
+func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*identity.RegisterChallenge, netip.Addr, error) {
 	challengeID := strings.TrimSpace(req.ChallengeID)
 	if challengeID == "" {
-		return nil, identity.ErrRegisterChallengeNotFound
+		return nil, netip.Addr{}, identity.ErrRegisterChallengeNotFound
 	}
 
 	now := time.Now().UTC()
@@ -891,19 +947,19 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 		if record == nil || record.registerChallenge == nil || record.registerChallenge.ChallengeID != challengeID {
 			continue
 		}
-		challenge := record.registerChallenge
+		challenge, source := record.registerChallenge, record.sourceAddr
 		if challenge.Expired(now) {
 			r.deleteRecord(i)
-			return nil, identity.ErrRegisterChallengeExpired
+			return nil, netip.Addr{}, identity.ErrRegisterChallengeExpired
 		}
 		if err := challenge.Verify(req, now); err != nil {
-			return nil, err
+			return nil, netip.Addr{}, err
 		}
 
 		r.deleteRecord(i)
-		return challenge, nil
+		return challenge, source, nil
 	}
-	return nil, identity.ErrRegisterChallengeNotFound
+	return nil, netip.Addr{}, identity.ErrRegisterChallengeNotFound
 }
 
 // verifySigningAccessTokenLease authenticates the access-token header of a

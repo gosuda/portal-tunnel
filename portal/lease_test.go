@@ -565,6 +565,135 @@ func TestRoutingDecisionControlsIdleReverseStreams(t *testing.T) {
 	}
 }
 
+func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	registry.unapprovedPerSource = 2
+	source := netip.MustParseAddr("203.0.113.20")
+	other := netip.MustParseAddr("203.0.113.21")
+	// ask is the relay's challenge step once the access decision is applied.
+	ask := func(leaseIdentity types.Identity, from netip.Addr) (types.RegisterChallengeResponse, error) {
+		t.Helper()
+		challenge, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{Identity: leaseIdentity}, "example.com", "https://example.com"+types.PathSDKRegister, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return challenge, registry.refuseChallengeOverBudget(leaseIdentity.ServiceKey(), challenge.ChallengeID, from)
+	}
+	register := func(name string, from netip.Addr, access types.LeaseAccess, revision uint64) (types.Identity, types.RegisterResponse) {
+		t.Helper()
+		leaseIdentity := newTestLeaseIdentity(t, name)
+		registry.setIdentityAccess(leaseIdentity.ServiceKey(), access, revision)
+		issued, err := ask(leaseIdentity, from)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(issued.SIWEMessage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		challenge, asked, err := registry.consumeVerifiedRegisterChallenge(types.RegisterRequest{ChallengeID: issued.ChallengeID, SIWEMessage: issued.SIWEMessage, SIWESignature: signature})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if asked != from {
+			t.Fatalf("%s: challenge source = %v; want %v", name, asked, from)
+		}
+		record, registered, err := registry.Register(challenge.Request, asked, "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(record.Close)
+		return leaseIdentity, registered
+	}
+	first, firstLease := register("first", source, types.LeasePending, 1)
+	second, _ := register("second", source, types.LeaseDenied, 2)
+	register("approved", source, types.LeaseRoutable, 3) // an approved lease neither counts nor waits
+
+	newcomer := newTestLeaseIdentity(t, "third")
+	registry.setIdentityAccess(newcomer.ServiceKey(), types.LeasePending, 4)
+	// More refusals than the pending cap: ask fails the test if one kept its slot.
+	for range defaultRegisterChallengeOutstandingPerIP + 1 {
+		if _, err := ask(newcomer, source); !errors.Is(err, errUnapprovedLeaseLimit) {
+			t.Fatalf("third unapproved lease = %v", err)
+		}
+	}
+	if _, err := ask(first, source); err != nil {
+		t.Fatalf("a repeat registration counted against itself: %v", err)
+	}
+	if _, err := ask(newcomer, other); err != nil {
+		t.Fatalf("another source was refused: %v", err)
+	}
+
+	// A lease stays on the budget of the source that registered it.
+	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: firstLease.AccessToken, TTL: 60}, other, nil); err != nil {
+		t.Fatal(err)
+	}
+	registry.Touch(second.ServiceKey(), other, time.Now())
+	if _, err := ask(newcomer, source); !errors.Is(err, errUnapprovedLeaseLimit) {
+		t.Fatalf("a renew from elsewhere freed a slot: %v", err)
+	}
+
+	for revision, name := range []string{"unknown-first", "unknown-second"} {
+		register(name, netip.Addr{}, types.LeasePending, uint64(revision+5))
+	}
+	if _, err := ask(newcomer, netip.Addr{}); err != nil {
+		t.Fatalf("an unknown source must fail open: %v", err)
+	}
+
+	registry.setIdentityAccess(first.ServiceKey(), types.LeaseRoutable, 7)
+	if _, err := ask(newcomer, source); err != nil {
+		t.Fatalf("the refused identity did not pass once a slot freed: %v", err)
+	}
+	registry.setIdentityAccess(first.ServiceKey(), types.LeasePending, 8)
+	registry.unapprovedPerSource = 0
+	if _, err := ask(newcomer, source); err != nil {
+		t.Fatalf("a zero limit must disable the bound: %v", err)
+	}
+}
+
+// Challenges not used yet count, so a burst cannot run past the budget by
+// asking for them all before the first lease lands.
+func TestUnapprovedLeaseLimitCountsPendingChallenges(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	registry.unapprovedPerSource = 2
+	source := netip.MustParseAddr("203.0.113.20")
+	other := netip.MustParseAddr("203.0.113.21")
+	ask := func(revision uint64, from netip.Addr) error {
+		t.Helper()
+		leaseIdentity := newTestLeaseIdentity(t, fmt.Sprintf("burst-%d", revision))
+		registry.setIdentityAccess(leaseIdentity.ServiceKey(), types.LeasePending, revision)
+		challenge, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{Identity: leaseIdentity}, "example.com", "https://example.com"+types.PathSDKRegister, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return registry.refuseChallengeOverBudget(leaseIdentity.ServiceKey(), challenge.ChallengeID, from)
+	}
+	for revision := range uint64(2) {
+		if err := ask(revision+1, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ask(3, source); !errors.Is(err, errUnapprovedLeaseLimit) {
+		t.Fatalf("third challenge of the burst = %v", err)
+	}
+	if err := ask(4, other); err != nil {
+		t.Fatalf("another source's challenges counted: %v", err)
+	}
+
+	// An identity holds one slot however many challenges it has asked for.
+	registry.unapprovedPerSource = 3
+	again := newTestLeaseIdentity(t, "burst-twice")
+	registry.setIdentityAccess(again.ServiceKey(), types.LeasePending, 5)
+	for range 2 {
+		if _, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{Identity: again}, "example.com", "https://example.com"+types.PathSDKRegister, other); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ask(6, other); err != nil {
+		t.Fatalf("one identity took two slots: %v", err)
+	}
+}
+
 func TestAccessRevisionRejectsInFlightAllow(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	leaseIdentity := newTestLeaseIdentity(t, "revision")
