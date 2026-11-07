@@ -33,6 +33,9 @@ func TestCommentsPersistAndStayWithTheirAppIdentity(t *testing.T) {
 	if got := store.List("app-owner-b", "", "author"); len(got) != 0 {
 		t.Fatalf("another owner inherited comments: %v", got)
 	}
+	if _, err := store.Delete("app-owner-a", comments[0].ID, "", "stranger"); !errors.Is(err, ErrCommentNotFound) {
+		t.Fatalf("stranger was able to delete comment: %v", err)
+	}
 	if _, err := store.Delete("app-owner-a", comments[0].ID, "", "author"); err != nil {
 		t.Fatal(err)
 	}

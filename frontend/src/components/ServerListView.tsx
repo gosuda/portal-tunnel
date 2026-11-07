@@ -455,7 +455,7 @@ export function ServerListView({
                   {browseView === "favorites" ? "Favorites" : searchQuery.trim() ? `Results for ${searchQuery}` : sortBy === "recommended" ? "Most recommended" : status === "online" ? "Live now" : browseView === "home" ? "Home" : "Discover apps"}
                 </h1>
                 <p role="status" className="text-xs text-muted-foreground">{showConnecting ? "Connecting to relay..." : `${filteredServers.length.toLocaleString()} apps${paymentAppCount ? ` / ${paymentAppCount} paid` : ""}`}</p>
-                {hiddenCount > 0 && <button type="button" aria-pressed={showHidden} onClick={() => onShowHiddenChange(!showHidden)} className="ml-auto rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground">{showHidden ? "Hide downvoted apps" : `Show hidden apps (${hiddenCount})`}</button>}
+                {(hiddenCount > 0 || showHidden) && <button type="button" aria-pressed={showHidden} onClick={() => onShowHiddenChange(!showHidden)} className="ml-auto rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground">{showHidden ? "Hide downvoted apps" : `Show hidden apps (${hiddenCount})`}</button>}
               </div>
               {filteredServers.length > 0 ? (
                 <div ref={gridRef} className="grid grid-cols-1 gap-x-4 gap-y-10 min-[600px]:grid-cols-2 min-[1150px]:grid-cols-3 min-[1600px]:grid-cols-4 min-[2000px]:grid-cols-5">

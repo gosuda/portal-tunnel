@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { BadgeDollarSign, Menu, MessageSquare } from "lucide-react";
 import type { BaseServer } from "@/hooks/useList";
 import { useCopy } from "@/hooks/useCopy";
+import { isHiddenByVotes } from "@/utils/reputation";
 
 const PLACEHOLDER_THUMBNAILS = [
   "/placeholders/aurora-peaks.svg",
@@ -121,6 +122,11 @@ export function ServerCard({
           <div className="pointer-events-auto absolute top-2.5 right-2.5 z-30">
             {action}
           </div>
+        )}
+        {server.reputation && isHiddenByVotes(server.reputation.up, server.reputation.down) && (
+          <span className="absolute top-2.5 right-2.5 rounded bg-black/80 px-2 py-0.5 text-xs text-white">
+            Hidden by downvotes
+          </span>
         )}
 
         {/* Payment badge */}

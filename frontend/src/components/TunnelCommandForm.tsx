@@ -22,13 +22,13 @@ import {
 } from "@/hooks/useTunnelCommand";
 import type { ShareKind } from "@/lib/shareLink";
 
-const SHARE_KIND_LABEL: Record<ShareKind, string> = {
+const TARGET_KIND_LABEL: Record<ShareKind, string> = {
   url: "URL",
   file: "File",
   port: "Port",
 };
 
-const SHARE_PLACEHOLDER = "Port, URL, or file path";
+const TARGET_PLACEHOLDER = "Port, URL, or file path";
 
 export function TunnelCommandForm() {
   const inputId = useId();
@@ -145,14 +145,14 @@ export function TunnelCommandForm() {
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <label htmlFor={`${inputId}-host`} className={formStyles.section}>
-            Share
+            Target
           </label>
           {target.trim() !== "" && (
             <span
               className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-normal text-text-muted"
-              title="Detected share type"
+              title="Detected target type"
             >
-              {SHARE_KIND_LABEL[shareKind]}
+              {TARGET_KIND_LABEL[shareKind]}
             </span>
           )}
         </div>
@@ -162,12 +162,12 @@ export function TunnelCommandForm() {
             type="text"
             value={target}
             onChange={(event) => setTarget(event.target.value)}
-            placeholder={SHARE_PLACEHOLDER}
-            aria-label="Local port, URL, or file path to share"
+            placeholder={TARGET_PLACEHOLDER}
+            aria-label="Local port, URL, or file path to expose"
             className={inlineInputClass}
           />
         </div>
-        <div className="flex flex-wrap gap-1.5" aria-label="Accepted share targets">
+        <div className="flex flex-wrap gap-1.5" aria-label="Accepted targets">
           {[
             ["Port", "3000"],
             ["URL", "localhost:3000"],
@@ -328,7 +328,7 @@ export function TunnelCommandForm() {
                     className={formStyles.input}
                   />
                   <p className={formStyles.help}>
-                    Local UDP port to forward. Defaults to the same as Host.
+                    Local UDP port to forward. Defaults to the same as Target.
                   </p>
                 </div>
               )}
