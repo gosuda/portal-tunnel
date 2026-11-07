@@ -29,7 +29,8 @@ function resolveAPIURL(path: string): string {
   if (!baseURL) {
     return path;
   }
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const relativeURL = new URL(path, window.location.origin);
+  const normalizedPath = relativeURL.pathname;
   const parsedBase = new URL(baseURL);
   const rawBasePath = parsedBase.pathname.replace(/\/$/, "");
   const basePath = rawBasePath.endsWith("/api")
@@ -43,8 +44,8 @@ function resolveAPIURL(path: string): string {
   } else {
     parsedBase.pathname = `${basePath}${normalizedPath}`;
   }
-  parsedBase.search = "";
-  parsedBase.hash = "";
+  parsedBase.search = relativeURL.search;
+  parsedBase.hash = relativeURL.hash;
   return parsedBase.toString();
 }
 

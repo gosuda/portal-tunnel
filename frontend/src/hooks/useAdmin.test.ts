@@ -17,14 +17,12 @@ vi.mock("@/hooks/useList", () => ({
     status: "all",
     sortBy: "default",
     selectedTags: [],
-    favorites: [],
     availableTags: [],
     filteredServers: [],
     handleSearchChange: vi.fn(),
     handleStatusChange: vi.fn(),
     handleSortByChange: vi.fn(),
     handleTagToggle: vi.fn(),
-    handleToggleFavorite: vi.fn(),
   })),
 }));
 
@@ -45,7 +43,6 @@ vi.mock("@/lib/apiClient", async () => {
 function buildSettings(approvalMode: "auto" | "manual" = "auto"): PolicySettings {
   return {
     approval_mode: approvalMode,
-    landing_page_enabled: false,
     udp: { enabled: false, max_leases: 0 },
     tcp_port: { enabled: false, max_leases: 0 },
   };

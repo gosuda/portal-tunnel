@@ -59,21 +59,12 @@
     --green-status: oklch(55% 0.16 150);
     --text-muted: oklch(55% 0.03 250);
 
-    /* Landing hero stage. Values are bare "r g b" triplets so the globe
-       canvas and SVG can apply their own alpha: rgb(var(--stage-x) / a). */
+    /* Directory backdrop colors are RGB triplets for configurable alpha. */
     --stage-bg: 238 244 250;
     --stage-bg-edge: 247 249 252;
     --stage-star: 148 163 184;
     --stage-accent: 15 118 110;
     --stage-accent-2: 3 105 161;
-    --stage-accent-3: 79 70 229;
-    --stage-on-accent: 255 255 255;
-    --stage-highlight: 255 255 255;
-    --stage-ocean-1: 240 247 255;
-    --stage-ocean-2: 220 235 249;
-    --stage-ocean-3: 195 216 238;
-    --stage-ocean-4: 169 195 223;
-    --stage-void: 6 26 46;
     --stage-glow: 0.55;
   }
 
@@ -106,14 +97,6 @@
     --stage-star: 224 242 254;
     --stage-accent: 94 252 232;
     --stage-accent-2: 56 189 248;
-    --stage-accent-3: 129 140 248;
-    --stage-on-accent: 3 19 34;
-    --stage-highlight: 255 255 255;
-    --stage-ocean-1: 16 69 125;
-    --stage-ocean-2: 13 42 94;
-    --stage-ocean-3: 9 21 60;
-    --stage-ocean-4: 2 7 24;
-    --stage-void: 3 13 30;
     --stage-glow: 1;
   }
 
@@ -187,4 +170,61 @@
     animation-duration: 280ms;
     animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
   }
+}
+
+@layer base {
+  :where(a, button, input, select, textarea):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+}
+/* Keep the original Portal palette and atmosphere around the directory. */
+.portal-browser {
+  background:
+    radial-gradient(ellipse 340px 48px at 58% 100%, rgb(var(--stage-accent) / calc(0.22 * var(--stage-glow))), transparent 100%),
+    radial-gradient(ellipse at 70% 0%, rgb(var(--stage-accent-2) / 0.12), transparent 45%),
+    linear-gradient(180deg, rgb(var(--stage-bg)) 0, rgb(var(--stage-bg-edge)) 420px, var(--background) 900px);
+}
+.portal-nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 1rem;
+  border-radius: 0.625rem;
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.portal-nav-item > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.portal-nav-item > svg {
+  flex-shrink: 0;
+}
+
+.portal-nav-item:hover,
+.portal-nav-item[aria-current="page"] {
+  background: var(--secondary);
+}
+
+.portal-nav-item[aria-current="page"] {
+  font-weight: 600;
+}
+
+.portal-category {
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.portal-category:hover {
+  filter: brightness(0.92);
 }

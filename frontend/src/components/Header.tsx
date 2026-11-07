@@ -89,7 +89,7 @@ export function Header({
         <div className="flex min-w-0 flex-1 items-center text-foreground">
           <div className="flex min-w-0 items-center">
             <a
-              href="#"
+              href="/"
               className="flex shrink-0 items-center justify-center"
               aria-label="Portal home"
             >
@@ -111,13 +111,13 @@ export function Header({
               <h2 className="min-w-0 text-[21px] leading-none font-extrabold tracking-[0.02em] text-foreground">
                 {title}
               </h2>
-              {releaseVersion && (
+              {isAdmin && releaseVersion && (
                 <span className="inline-flex h-[24px] items-center rounded-[6px] border border-border bg-secondary/85 px-[10px] font-mono text-[11px] font-semibold text-foreground/80">
                   {releaseVersion}
                 </span>
               )}
               {ensVerified && (
-                <span className="inline-flex h-[24px] items-center rounded-[6px] bg-primary/12 px-2.5 text-xs font-semibold text-primary ring-1 ring-primary/20">
+                <span className="hidden lg:inline-flex h-[24px] items-center rounded-[6px] bg-primary/12 px-2.5 text-xs font-semibold text-primary ring-1 ring-primary/20">
                   ENS verified
                 </span>
               )}
@@ -127,7 +127,7 @@ export function Header({
           {!isAdmin && (
             <nav
               aria-label="Primary"
-              className="ml-[40px] hidden items-center gap-[27px] text-[13.5px] font-medium text-foreground/80 md:flex"
+              className="ml-[40px] hidden items-center gap-[27px] text-[13.5px] font-medium text-foreground/80 lg:flex"
             >
               <a
                 href="#live-servers"
@@ -251,7 +251,7 @@ export function Header({
       {!isAdmin && (
         <nav
           aria-label="Mobile navigation"
-          className="flex items-center gap-5 overflow-x-auto border-t border-border pt-2.5 text-xs font-medium text-foreground/80 md:hidden"
+          className="flex items-center gap-5 overflow-x-auto border-t border-border pt-2.5 text-xs font-medium text-foreground/80 lg:hidden"
         >
           <a
             href="#live-servers"

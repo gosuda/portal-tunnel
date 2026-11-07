@@ -202,8 +202,7 @@ type ENSStatus struct {
 }
 
 type PublicStateResponse struct {
-	Leases             []Lease `json:"leases,omitempty"`
-	LandingPageEnabled bool    `json:"landing_page_enabled"`
+	Leases []Lease `json:"leases,omitempty"`
 }
 
 type AdminAuthLoginRequest struct {
@@ -250,10 +249,9 @@ type PolicyStateResponse struct {
 }
 
 type PolicySettings struct {
-	ApprovalMode       string             `json:"approval_mode"`
-	LandingPageEnabled bool               `json:"landing_page_enabled"`
-	UDP                PolicyPortSettings `json:"udp"`
-	TCPPort            PolicyPortSettings `json:"tcp_port"`
+	ApprovalMode string             `json:"approval_mode"`
+	UDP          PolicyPortSettings `json:"udp"`
+	TCPPort      PolicyPortSettings `json:"tcp_port"`
 }
 
 type LeasePolicyUpdate struct {

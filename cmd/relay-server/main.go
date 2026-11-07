@@ -48,17 +48,16 @@ func main() {
 }
 
 type appConfig struct {
-	Relay              portal.ServerConfig
-	UDPEnabled         bool
-	TCPEnabled         bool
-	PreAuth            types.PreAuthConfig
-	TrustProxyHeaders  bool
-	TrustedProxyCIDRs  string
-	FrontendDir        string
-	LandingPageEnabled bool
-	AdminToken         string
-	PprofEnabled       bool
-	PprofListenAddr    string
+	Relay             portal.ServerConfig
+	UDPEnabled        bool
+	TCPEnabled        bool
+	PreAuth           types.PreAuthConfig
+	TrustProxyHeaders bool
+	TrustedProxyCIDRs string
+	FrontendDir       string
+	AdminToken        string
+	PprofEnabled      bool
+	PprofListenAddr   string
 	// Relay-owned x402 facilitator surface: portal.Server is x402-blind, so
 	// this application resolves the flags and mounts the payment endpoints.
 	X402Enabled bool
@@ -119,7 +118,6 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 
 	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
-	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "show the dashboard landing page", "LANDING_PAGE_ENABLED")
 	utils.IntFlagEnv(fs, &cfg.Relay.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	utils.IntFlagEnv(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
@@ -228,10 +226,9 @@ func runServer(ctx context.Context, cfg appConfig) error {
 
 	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
 	initialPolicy := types.PolicySettings{
-		ApprovalMode:       string(policy.ModeAuto),
-		LandingPageEnabled: cfg.LandingPageEnabled,
-		UDP:                types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
-		TCPPort:            types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
+		ApprovalMode: string(policy.ModeAuto),
+		UDP:          types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
+		TCPPort:      types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
 	}
 	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
 	if err != nil {

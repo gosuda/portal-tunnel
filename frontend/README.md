@@ -22,7 +22,6 @@ lease data.
 - Public state is loaded directly from `/api/state`.
 - Lease cards render a user-provided `thumbnail` metadata URL; Portal does not generate screenshots when it is empty.
 - Operator policy state is loaded directly from `/api/policy/state`.
-- Landing-page visibility is owned and persisted by the Go relay policy API.
 - All JSON API responses use the `{ ok, data?, error? }` envelope parsed by `src/lib/apiClient.ts`.
 - `VITE_PORTAL_API_BASE_URL` points local development at a Portal origin or deployment base path, not at `/api`. Production uses same-origin requests. Admin auth uses a bearer token returned by `/api/admin/auth/login`.
 
@@ -125,3 +124,30 @@ Relay server exposes:
 - Relay path constants are owned by Go (`types/paths.go`) and mirrored in `src/lib/apiPaths.ts` for browser calls.
 - Frontend API wire types live in `src/types/api.ts`.
 - Radix Select values cannot be empty strings. Use stable values such as `"all"` and `"default"`.
+
+## Recommendations
+
+Favorites lists the current relay's public apps that the viewer has recommended.
+Selecting the same vote again clears it. The relay stores votes and identifies
+the viewer with a browser cookie; old browser-only favorites are not converted
+into public votes.
+
+## App Comments
+
+The card's **Comments** action opens a separate right panel while the directory
+remains usable. Comments are anonymous (displayed as Guest) and shared by
+visitors of the same relay. Opening another app starts a separate draft.
+
+`GET /api/comments?hostname=...` reads a public app's thread and
+`POST /api/comments` accepts `{ hostname, text }`. Threads are attached to the
+app's stable lease identity, so reusing a hostname does not inherit another
+owner's comments. The relay saves them in `comments.json` beside its policy
+state, independently of the app's current connection.
+
+Comments are limited to 2,000 characters, 100 per app, and 1,000 per relay.
+Posting uses a per-source budget of three comments per minute (burst three),
+with a shared relay budget of 30 per minute (burst ten). Signed-in relay
+administrators can delete a comment through
+`POST /api/admin/comments/delete` with `{ id }`; the panel exposes this action
+only after admin authentication. Reading and posting require an app to remain
+in the public directory; admin deletion also works for offline threads.

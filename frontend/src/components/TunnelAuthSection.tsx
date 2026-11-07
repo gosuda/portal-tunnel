@@ -21,7 +21,6 @@ import {
   ChipField,
   Notice,
   TUNNEL_FORM_STYLES,
-  type TunnelFormTheme,
 } from "@/components/TunnelFormParts";
 import { useCopy } from "@/hooks/useCopy";
 import signinCopy from "@/lib/signinCopy.json";
@@ -47,8 +46,6 @@ import {
 interface MethodChoice {
   id: TunnelAuthMethod;
   label: string;
-  short: string;
-  description: string;
   icon: LucideIcon;
 }
 
@@ -56,30 +53,21 @@ const METHODS: MethodChoice[] = [
   {
     id: "none",
     label: "No sign-in",
-    short: "No sign-in",
-    description: "Anyone who discovers the public address can open the app.",
     icon: Globe,
   },
   {
     id: "credential",
     label: "Private link",
-    short: "Private link",
-    description: "You make one personal link per person. Nothing to set up.",
     icon: Link2,
   },
   {
     id: "siwe",
     label: "Ethereum wallet",
-    short: "Wallet",
-    description: "Visitors sign one message in their browser wallet.",
     icon: Wallet,
   },
   {
     id: "oidc",
     label: "Google or company login",
-    short: "Google / company",
-    description:
-      "Visitors use an account they already have. You register an OAuth client first.",
     icon: ShieldCheck,
   },
 ];
@@ -122,19 +110,6 @@ const ALLOW_COPY: Record<
   },
 };
 
-/** One line for the collapsed hero row, e.g. "Private link · 2 entries". */
-export function describeAuth(auth: TunnelAuthOptions): string {
-  const label = METHODS.find((method) => method.id === auth.method)?.label ?? "";
-  const count = auth.allow.length;
-  if (auth.method === "none") {
-    return label;
-  }
-  if (count === 0) {
-    return `${label} · ${auth.method === "oidc" ? "no list yet" : "open list"}`;
-  }
-  return `${label} · ${count} ${count === 1 ? "entry" : "entries"}`;
-}
-
 interface TunnelAuthSectionProps {
   auth: TunnelAuthOptions;
   onChange: (next: TunnelAuthOptions) => void;
@@ -147,9 +122,6 @@ interface TunnelAuthSectionProps {
   /** The normalized public name; empty while the user has not chosen one. */
   name: string;
   os: TunnelCommandOS;
-  theme: TunnelFormTheme;
-  /** Pills instead of cards and no visitor preview, for the narrow hero card. */
-  compact?: boolean;
 }
 
 export function TunnelAuthSection({
@@ -160,10 +132,8 @@ export function TunnelAuthSection({
   discovery,
   name,
   os,
-  theme,
-  compact = false,
 }: TunnelAuthSectionProps) {
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const patch = (next: Partial<TunnelAuthOptions>) =>
     onChange({ ...auth, ...next });
   // Each method reads its own kind of entry, so a list does not carry over.
@@ -179,39 +149,24 @@ export function TunnelAuthSection({
         role="radiogroup"
         aria-label="Who can open it"
         onKeyDown={methods.onKeyDown}
-        className={cn(
-          compact ? "flex flex-wrap gap-1.5" : "grid gap-2 sm:grid-cols-2"
-        )}
+        className="grid gap-2 sm:grid-cols-2"
       >
         {METHODS.map((method) => (
           <MethodCard
             key={method.id}
             method={method}
             radio={methods.option(method.id)}
-            compact={compact}
-            theme={theme}
-            badge={
-              method.id === "oidc" && !compact ? (
-                <Badge theme={theme}>OpenID Connect</Badge>
-              ) : null
-            }
           />
         ))}
       </div>
 
-      {auth.method === "none" ? (
-        <p className={s.help}>
-          Anyone who discovers the public address can open the app. Choose a
-          sign-in method to limit it.
-        </p>
-      ) : (
+      {auth.method !== "none" && (
         <div className={cn("space-y-4 rounded-lg border p-3", s.panel)}>
           <AllowList
             key={auth.method}
             auth={auth}
             patch={patch}
             issues={issues}
-            theme={theme}
           />
           {auth.method === "oidc" && (
             <OIDCSetup
@@ -222,7 +177,6 @@ export function TunnelAuthSection({
               discovery={discovery}
               name={name}
               os={os}
-              theme={theme}
             />
           )}
           {auth.method === "credential" && (
@@ -230,7 +184,6 @@ export function TunnelAuthSection({
               allow={auth.allow}
               exampleURL={buildTunnelPreviewURL(relayUrls[0] ?? "", name)}
               os={os}
-              theme={theme}
             />
           )}
           <label
@@ -258,12 +211,11 @@ export function TunnelAuthSection({
         </div>
       )}
 
-      {!compact && auth.method !== "none" && (
+      {auth.method !== "none" && (
         <VisitorPreview
           auth={auth}
           relayURL={relayUrls[0] ?? ""}
           name={name}
-          theme={theme}
         />
       )}
     </div>
@@ -324,17 +276,11 @@ function useRadioGroup<Id extends string>(
 function MethodCard({
   method,
   radio,
-  compact,
-  theme,
-  badge,
 }: {
   method: MethodChoice;
   radio: RadioOptionProps;
-  compact: boolean;
-  theme: TunnelFormTheme;
-  badge?: ReactNode;
 }) {
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const Icon = method.icon;
   const selected = radio["aria-checked"];
   return (
@@ -343,9 +289,7 @@ function MethodCard({
       {...radio}
       className={cn(
         "border text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        compact
-          ? "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
-          : "grid grid-cols-[auto_1fr] content-start gap-x-2.5 gap-y-0.5 rounded-lg px-3 py-2.5",
+        "flex items-center gap-2.5 rounded-lg px-3 py-2.5",
         s.card,
         selected && SELECTED
       )}
@@ -353,41 +297,21 @@ function MethodCard({
       <Icon
         aria-hidden="true"
         className={cn(
-          compact ? "h-3.5 w-3.5" : "row-span-2 mt-0.5 h-4 w-4",
+          "h-4 w-4 shrink-0",
           selected && "text-primary"
         )}
       />
-      <span
-        className={cn(
-          "flex flex-wrap items-center gap-1.5",
-          !compact && "text-[13px] font-semibold"
-        )}
-      >
-        {compact ? method.short : method.label}
-        {badge}
+      <span className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold">
+        {method.label}
       </span>
-      {!compact && (
-        <span className={cn("col-start-2", s.help)}>{method.description}</span>
-      )}
     </button>
   );
 }
 
-function Badge({
-  theme,
-  children,
-}: {
-  theme: TunnelFormTheme;
-  children: ReactNode;
-}) {
+function Badge({ children }: { children: ReactNode }) {
   return (
     <span
-      className={cn(
-        "rounded px-1.5 py-px text-[10px] font-semibold uppercase",
-        theme === "terminal"
-          ? "bg-white/10 text-slate-300"
-          : "bg-secondary text-secondary-foreground dark:bg-primary/14 dark:text-primary"
-      )}
+      className="rounded bg-secondary px-1.5 py-px text-[10px] font-semibold uppercase text-secondary-foreground dark:bg-primary/14 dark:text-primary"
     >
       {children}
     </span>
@@ -397,16 +321,14 @@ function Badge({
 function FieldIssues({
   issues,
   field,
-  theme,
 }: {
   issues: TunnelAuthIssue[];
   field: TunnelAuthField;
-  theme: TunnelFormTheme;
 }) {
   return issues
     .filter((issue) => issue.field === field)
     .map((issue) => (
-      <Notice key={issue.message} tone="error" theme={theme}>
+      <Notice key={issue.message} tone="error">
         {issue.message}
       </Notice>
     ));
@@ -416,16 +338,14 @@ function AllowList({
   auth,
   patch,
   issues,
-  theme,
 }: {
   auth: TunnelAuthOptions;
   patch: (next: Partial<TunnelAuthOptions>) => void;
   issues: TunnelAuthIssue[];
-  theme: TunnelFormTheme;
 }) {
   const inputId = useId();
   const [draft, setDraft] = useState("");
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const method = auth.method;
   if (method === "none") {
     return null;
@@ -447,7 +367,6 @@ function AllowList({
       </label>
       <ChipField
         id={inputId}
-        theme={theme}
         draft={draft}
         placeholder={copy.placeholder}
         commitKeys={["Enter", ","]}
@@ -460,7 +379,6 @@ function AllowList({
           return (
             <Chip
               key={entry}
-              theme={theme}
               text={entry}
               kind={check.ok ? check.kind : "invalid"}
               invalid={!check.ok}
@@ -475,17 +393,17 @@ function AllowList({
         const check = classifyAuthAllow(method, entry);
         return (
           !check.ok && (
-            <Notice key={entry} tone="error" theme={theme}>
+            <Notice key={entry} tone="error">
               {check.error}
             </Notice>
           )
         );
       })}
-      <FieldIssues issues={issues} field="allow" theme={theme} />
+      <FieldIssues issues={issues} field="allow" />
       {/* Always mounted: a live region announces text that appears inside it. */}
       <div role="status">
         {auth.allow.length === 0 && method === "siwe" && (
-          <Notice tone="warn" theme={theme}>
+          <Notice tone="warn">
             The list is empty, so any wallet that signs in gets through, which
             proves a wallet exists, not who owns it. Removing the last address
             does not end its access: stop the tunnel instead (or list a
@@ -493,7 +411,7 @@ function AllowList({
           </Notice>
         )}
         {auth.allow.length === 0 && method === "credential" && (
-          <Notice tone="warn" theme={theme}>
+          <Notice tone="warn">
             The list is empty, so every unexpired link works and none can be
             revoked before it expires. Removing the last name does not end its
             access: stop the tunnel instead (or list a name no link was issued
@@ -513,7 +431,6 @@ function OIDCSetup({
   discovery,
   name,
   os,
-  theme,
 }: {
   auth: TunnelAuthOptions;
   patch: (next: Partial<TunnelAuthOptions>) => void;
@@ -522,11 +439,10 @@ function OIDCSetup({
   discovery: boolean;
   name: string;
   os: TunnelCommandOS;
-  theme: TunnelFormTheme;
 }) {
   const issuerId = useId();
   const clientId = useId();
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const isGoogle = auth.oidcIssuer === GOOGLE_OIDC_ISSUER;
   const providers = useRadioGroup(
     PROVIDERS.map((provider) => provider.id),
@@ -583,7 +499,7 @@ function OIDCSetup({
             spellCheck={false}
             className={inputClass}
           />
-          <FieldIssues issues={issues} field="issuer" theme={theme} />
+          <FieldIssues issues={issues} field="issuer" />
           {!isGoogle && (
             <p className={s.help}>
               Any provider that publishes{" "}
@@ -606,7 +522,7 @@ function OIDCSetup({
             spellCheck={false}
             className={inputClass}
           />
-          <FieldIssues issues={issues} field="clientId" theme={theme} />
+          <FieldIssues issues={issues} field="clientId" />
         </div>
       </div>
 
@@ -622,7 +538,6 @@ function OIDCSetup({
             key={url}
             value={url}
             label={`Copy redirect address ${url}`}
-            theme={theme}
           />
         ))}
         <p className={s.help}>
@@ -660,7 +575,6 @@ function OIDCSetup({
         <CopyLine
           value={buildOIDCSecretCommand(os)}
           label="Copy secret prompt"
-          theme={theme}
         />
       </div>
     </div>
@@ -671,18 +585,16 @@ function InviteBlock({
   allow,
   exampleURL,
   os,
-  theme,
 }: {
   allow: string[];
   /** The short URL on the first relay, shown as the placeholder; may be empty. */
   exampleURL: string;
   os: TunnelCommandOS;
-  theme: TunnelFormTheme;
 }) {
   const addressId = useId();
   const subjectId = useId();
   const expiresId = useId();
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const [address, setAddress] = useState("");
   const [subject, setSubject] = useState("");
   const [expires, setExpires] = useState("720h");
@@ -715,7 +627,7 @@ function InviteBlock({
           className={cn(fieldClass, "font-mono")}
         />
         {badAddress && (
-          <Notice tone="error" theme={theme}>
+          <Notice tone="error">
             Paste an https:// address without a path, as Portal prints it.
           </Notice>
         )}
@@ -760,18 +672,18 @@ function InviteBlock({
         </div>
       </div>
       {check && !check.ok && (
-        <Notice tone="error" theme={theme}>
+        <Notice tone="error">
           {check.error}
         </Notice>
       )}
       {notListed && (
-        <Notice tone="warn" theme={theme}>
+        <Notice tone="warn">
           {trimmed} is not in Link names, so the tunnel will not let that link
           in.
         </Notice>
       )}
       {command !== "" ? (
-        <CopyLine value={command} label="Copy invite command" theme={theme} />
+        <CopyLine value={command} label="Copy invite command" />
       ) : (
         missing && (
           <p className={s.help}>
@@ -793,14 +705,12 @@ function VisitorPreview({
   auth,
   relayURL,
   name,
-  theme,
 }: {
   auth: TunnelAuthOptions;
   relayURL: string;
   name: string;
-  theme: TunnelFormTheme;
 }) {
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const hostname =
     buildServiceStatusHostname(relayURL, name) || "your-name.relay";
   let issuerHost = "your provider";
@@ -829,7 +739,7 @@ function VisitorPreview({
         aria-hidden="true"
         className={cn("rounded-lg border px-4 py-5 text-center", s.preview)}
       >
-        <Badge theme={theme}>{hostname}</Badge>
+        <Badge>{hostname}</Badge>
         <p className={cn("mt-2 text-sm font-semibold", s.strong)}>
           {page.title}
         </p>
@@ -850,14 +760,12 @@ function VisitorPreview({
 function CopyLine({
   value,
   label,
-  theme,
 }: {
   value: string;
   label: string;
-  theme: TunnelFormTheme;
 }) {
   const { copiedKey, copy } = useCopy();
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const copied = copiedKey !== null;
 
   return (

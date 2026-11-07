@@ -45,6 +45,15 @@ describe("apiClient", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://portal.example.com/custom/api/state");
   });
 
+  it("preserves query parameters under a custom base URL", async () => {
+    vi.stubEnv("VITE_PORTAL_API_BASE_URL", "https://portal.example.com/custom");
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true, data: { comments: [] } }));
+
+    await apiClient.get("/api/comments?hostname=notes.example.com");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://portal.example.com/custom/api/comments?hostname=notes.example.com");
+  });
+
   it("treats an API base URL suffix as the public edge root", async () => {
     vi.stubEnv("VITE_PORTAL_API_BASE_URL", "https://portal.example.com/api");
     fetchMock.mockResolvedValueOnce(

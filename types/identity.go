@@ -227,3 +227,36 @@ type RelayDescriptor struct {
 	TCPBPS            float64   `json:"tcp_bps,omitempty"`
 	Signature         string    `json:"signature,omitempty"`
 }
+
+const CommentMaxLength = 2000
+
+// AppComment is an anonymous, relay-local comment on a stable app identity.
+type AppComment struct {
+	ID         string    `json:"id"`
+	Text       string    `json:"text"`
+	CreatedAt  time.Time `json:"created_at"`
+	Up         int       `json:"up"`
+	Down       int       `json:"down"`
+	ViewerVote string    `json:"viewer_vote,omitempty"`
+	CanDelete  bool      `json:"can_delete,omitempty"`
+}
+
+type CommentListResponse struct {
+	Comments []AppComment `json:"comments"`
+}
+
+type CreateCommentRequest struct {
+	Hostname string `json:"hostname"`
+	Text     string `json:"text"`
+}
+
+type DeleteCommentRequest struct {
+	Hostname string `json:"hostname"`
+	ID       string `json:"id"`
+}
+
+type VoteCommentRequest struct {
+	Hostname string `json:"hostname"`
+	ID       string `json:"id"`
+	Vote     string `json:"vote"`
+}

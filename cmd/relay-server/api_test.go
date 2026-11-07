@@ -36,6 +36,7 @@ func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
 	api := newTestReputationAPI(t)
 	post := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, pathReputationVote, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
 		req.RemoteAddr = "203.0.113.11:2000"
 		rec := httptest.NewRecorder()
 		api.Handler().ServeHTTP(rec, req)

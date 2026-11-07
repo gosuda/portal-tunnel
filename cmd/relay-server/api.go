@@ -2,14 +2,17 @@ package main
 
 import (
 	"cmp"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -45,6 +48,7 @@ const (
 	pathReputationVote    = types.PathAPIPrefix + "/reputation/vote"
 	reputationFilename    = "reputation.json"
 	reputationVoterCookie = "portal_voter"
+	commentAuthorCookie   = "portal_comment_author"
 )
 
 type RelayAPI struct {
@@ -59,13 +63,13 @@ type RelayAPI struct {
 	// reputation is the relay-local vote ledger owned by the policy
 	// package and persisted in reputation.json.
 	reputation *policy.ReputationStore
+	comments   *policy.CommentsStore
 	// policyWriteMu serializes mutations including the state-file write;
 	// policyMu guards in-memory state only, so readers never block on disk I/O.
-	policyWriteMu      sync.Mutex
-	policyMu           sync.RWMutex
-	udpPolicy          types.PolicyPortSettings
-	tcpPortPolicy      types.PolicyPortSettings
-	landingPageEnabled bool
+	policyWriteMu sync.Mutex
+	policyMu      sync.RWMutex
+	udpPolicy     types.PolicyPortSettings
+	tcpPortPolicy types.PolicyPortSettings
 }
 
 func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.Ingress, policyStatePath, adminToken, frontendDir string, initialSettings types.PolicySettings) (*RelayAPI, error) {
@@ -88,6 +92,11 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 		return nil, err
 	}
 
+	commentsStore, err := policy.NewCommentsStore(filepath.Join(filepath.Dir(policyStatePath), "comments.json"))
+	if err != nil {
+		return nil, err
+	}
+
 	api := &RelayAPI{
 		server:               server,
 		access:               access,
@@ -97,9 +106,9 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 		frontendFS:           frontendFS,
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
 		reputation:           reputationStore,
+		comments:             commentsStore,
 		udpPolicy:            initialSettings.UDP,
 		tcpPortPolicy:        initialSettings.TCPPort,
-		landingPageEnabled:   initialSettings.LandingPageEnabled,
 	}
 	if mode := strings.TrimSpace(initialSettings.ApprovalMode); mode != "" {
 		initialAccess := api.access.Snapshot()
@@ -129,6 +138,9 @@ func (api *RelayAPI) Handler() *http.ServeMux {
 	mux.HandleFunc(types.PathPolicyPrefix, api.servePolicy)
 	mux.HandleFunc(types.PathState, api.servePublicState)
 	mux.HandleFunc(pathReputationVote, api.serveReputationVote)
+	mux.HandleFunc(types.PathComments, api.serveComments)
+	mux.HandleFunc(types.PathCommentsVote, api.serveCommentVote)
+	mux.HandleFunc(types.PathCommentsDelete, api.deleteComment)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, api.server.PortalURL(), false)
 	})
@@ -147,15 +159,12 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leases := api.server.PublicLeases()
-	api.policyMu.RLock()
-	landingPageEnabled := api.landingPageEnabled
-	api.policyMu.RUnlock()
 	voterCookieID := ""
 	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
 		voterCookieID = cookie.Value
 	}
 	utils.WriteAPIData(w, http.StatusOK, publicStateResponse{
-		PublicStateResponse: types.PublicStateResponse{Leases: leases, LandingPageEnabled: landingPageEnabled},
+		PublicStateResponse: types.PublicStateResponse{Leases: leases},
 		Reputation:          api.reputation.Summaries(api.reputation.ViewerHashFor(voterCookieID), publicIdentityLeases(leases, api.server)),
 	})
 }
@@ -370,10 +379,9 @@ func (api *RelayAPI) commitAccess(next policy.AccessState) {
 
 func (api *RelayAPI) policySettings() types.PolicySettings {
 	return types.PolicySettings{
-		ApprovalMode:       string(api.access.Snapshot().Mode()),
-		LandingPageEnabled: api.landingPageEnabled,
-		UDP:                api.udpPolicy,
-		TCPPort:            api.tcpPortPolicy,
+		ApprovalMode: string(api.access.Snapshot().Mode()),
+		UDP:          api.udpPolicy,
+		TCPPort:      api.tcpPortPolicy,
 	}
 }
 
@@ -394,7 +402,6 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.Policy
 	_ = access.SetMode(mode)
 	api.udpPolicy = req.UDP
 	api.tcpPortPolicy = req.TCPPort
-	api.landingPageEnabled = req.LandingPageEnabled
 	return true
 }
 
@@ -510,7 +517,6 @@ func (api *RelayAPI) savePolicyState(payload persistedPolicyState) error {
 func (api *RelayAPI) policyState(access policy.AccessState) persistedPolicyState {
 	udpEnabled, udpMaxLeases := api.udpPolicy.Enabled, api.udpPolicy.MaxLeases
 	tcpPortEnabled, tcpPortMaxLeases := api.tcpPortPolicy.Enabled, api.tcpPortPolicy.MaxLeases
-	landingPageEnabled := api.landingPageEnabled
 	approved := access.ApprovedKeys()
 	approvedStrings := make([]string, len(approved))
 	for i, key := range approved {
@@ -536,7 +542,6 @@ func (api *RelayAPI) policyState(access policy.AccessState) persistedPolicyState
 		UDPMaxLeases:         &udpMaxLeases,
 		TCPPortEnabled:       &tcpPortEnabled,
 		TCPPortMaxLeases:     &tcpPortMaxLeases,
-		LandingPageEnabled:   &landingPageEnabled,
 	}
 }
 
@@ -550,7 +555,6 @@ type persistedPolicyState struct {
 	UDPMaxLeases         *int             `json:"udp_max_leases,omitempty"`
 	TCPPortEnabled       *bool            `json:"tcp_port_enabled,omitempty"`
 	TCPPortMaxLeases     *int             `json:"tcp_port_max_leases,omitempty"`
-	LandingPageEnabled   *bool            `json:"landing_page_enabled,omitempty"`
 }
 
 func applyOptionalPolicy(enabled *bool, maxLeases *int, current types.PolicyPortSettings) types.PolicyPortSettings {
@@ -603,9 +607,6 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 	api.server.BPSManager().SetServiceIdentityBPSLimits(identityBPS)
 	api.udpPolicy = udpPolicy
 	api.tcpPortPolicy = tcpPortPolicy
-	if s.LandingPageEnabled != nil {
-		api.landingPageEnabled = *s.LandingPageEnabled
-	}
 	api.commitAccess(access)
 	return nil
 }
@@ -764,6 +765,9 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
+	if !requireJSONContentType(w, r) {
+		return
+	}
 	sourceAddr := api.ingress.SourceAddr(r)
 	if retry := api.reputation.AllowVote(sourceAddr); retry > 0 {
 		policy.WriteRetryAfter(w, retry, "vote request budget exhausted")
@@ -779,17 +783,11 @@ func (api *RelayAPI) serveReputationVote(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	vote := strings.TrimSpace(req.Vote)
-	if vote != policy.VoteUp && vote != policy.VoteDown {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "vote must be 'up' or 'down'")
+	if vote != policy.VoteUp && vote != policy.VoteDown && vote != policy.VoteClear {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "vote must be 'up', 'down', or 'clear'")
 		return
 	}
-	identity := ""
-	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server) {
-		if utils.NormalizeHostname(lease.Hostname) == hostname || utils.NormalizeHostname(lease.CanonicalHostname) == hostname {
-			identity = lease.IdentityKey
-			break
-		}
-	}
+	identity := api.publicIdentityFor(hostname)
 	voterCookieID := ""
 	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
 		voterCookieID = cookie.Value
@@ -833,4 +831,208 @@ func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.P
 		}
 	}
 	return leases
+}
+
+func commentAuthorHash(r *http.Request) string {
+	cookie, err := r.Cookie(commentAuthorCookie)
+	if err != nil {
+		return ""
+	}
+	token, err := base64.RawURLEncoding.DecodeString(cookie.Value)
+	if err != nil || len(token) != 32 {
+		return ""
+	}
+	hash := sha256.Sum256(token)
+	return hex.EncodeToString(hash[:])
+}
+
+func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		utils.WriteAPIError(w, http.StatusUnsupportedMediaType, types.APIErrorCodeInvalidRequest, "application/json is required")
+		return false
+	}
+	return true
+}
+
+func (api *RelayAPI) serveComments(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var hostname, text string
+	switch r.Method {
+	case http.MethodGet:
+		hostname = utils.NormalizeHostname(r.URL.Query().Get("hostname"))
+	case http.MethodPost:
+		if retry := api.comments.AllowPost(api.ingress.SourceAddr(r)); retry > 0 {
+			policy.WriteRetryAfter(w, retry, "Please wait before posting another comment.")
+			return
+		}
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		req, ok := utils.DecodeJSONRequestAs[types.CreateCommentRequest](w, r, 1<<15, utils.InvalidRequestError(errors.New("invalid comment request")))
+		if !ok {
+			return
+		}
+		hostname, text = utils.NormalizeHostname(req.Hostname), req.Text
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		utils.MethodNotAllowedError().Write(w)
+		return
+	}
+	identity := api.publicIdentityFor(hostname)
+	if identity == "" {
+		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
+		return
+	}
+	voterCookieID := ""
+	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
+		voterCookieID = cookie.Value
+	}
+	viewerHash := api.reputation.ViewerHashFor(voterCookieID)
+	authorHash := commentAuthorHash(r)
+
+	if r.Method == http.MethodGet {
+		utils.WriteAPIData(w, http.StatusOK, types.CommentListResponse{Comments: api.comments.List(identity, viewerHash, authorHash)})
+		return
+	}
+	minted := ""
+	if authorHash == "" {
+		token := make([]byte, 32)
+		if _, err := rand.Read(token); err != nil {
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "Could not create comment identity.")
+			return
+		}
+		minted = base64.RawURLEncoding.EncodeToString(token)
+		hash := sha256.Sum256(token)
+		authorHash = hex.EncodeToString(hash[:])
+	}
+	comments, err := api.comments.Add(identity, text, viewerHash, authorHash)
+	if err != nil {
+		switch {
+		case errors.Is(err, policy.ErrCommentInvalid):
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+		case errors.Is(err, policy.ErrCommentCapacity):
+			utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeInvalidRequest, "Comment storage is full. Contact the relay administrator.")
+		default:
+			log.Error().Err(err).Msg("persist comment")
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "Could not save your comment.")
+		}
+		return
+	}
+	if minted != "" {
+		http.SetCookie(w, &http.Cookie{Name: commentAuthorCookie, Value: minted, Path: types.PathComments, MaxAge: int((10 * 365 * 24 * time.Hour).Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
+	}
+	utils.WriteAPIData(w, http.StatusCreated, types.CommentListResponse{Comments: comments})
+}
+
+func (api *RelayAPI) serveCommentVote(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if !requireJSONContentType(w, r) {
+		return
+	}
+	sourceAddr := api.ingress.SourceAddr(r)
+	if retry := api.comments.AllowVote(sourceAddr); retry > 0 {
+		policy.WriteRetryAfter(w, retry, "comment vote budget exhausted")
+		return
+	}
+	req, ok := utils.DecodeJSONRequestAs[types.VoteCommentRequest](w, r, 1<<12, utils.InvalidRequestError(errors.New("invalid request body")))
+	if !ok {
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "comment id is required")
+		return
+	}
+	identity := api.publicIdentityFor(utils.NormalizeHostname(req.Hostname))
+	if identity == "" {
+		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
+		return
+	}
+	vote := strings.TrimSpace(req.Vote)
+	if vote != policy.VoteUp && vote != policy.VoteDown && vote != policy.VoteClear {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "vote must be 'up', 'down', or 'clear'")
+		return
+	}
+	voterCookieID := ""
+	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
+		voterCookieID = cookie.Value
+	}
+	voterHash, minted, err := api.reputation.ResolveVoter(voterCookieID, sourceAddr)
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "vote capacity reached")
+		return
+	}
+	comments, err := api.comments.Vote(identity, req.ID, vote, voterHash, commentAuthorHash(r))
+	if err != nil {
+		switch {
+		case errors.Is(err, policy.ErrCommentNotFound):
+			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "comment not found")
+		case errors.Is(err, policy.ErrCommentCapacity):
+			utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeInvalidRequest, "comment vote storage limit reached")
+		default:
+			log.Error().Err(err).Msg("persist comment vote")
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "could not save comment vote")
+		}
+		return
+	}
+	if minted != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     reputationVoterCookie,
+			Value:    minted,
+			Path:     types.PathAPIPrefix,
+			MaxAge:   int((10 * 365 * 24 * time.Hour).Seconds()),
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.TLS != nil,
+		})
+	}
+	utils.WriteAPIData(w, http.StatusOK, types.CommentListResponse{Comments: comments})
+}
+
+func (api *RelayAPI) deleteComment(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if !requireJSONContentType(w, r) {
+		return
+	}
+	req, ok := utils.DecodeJSONRequestAs[types.DeleteCommentRequest](w, r, 1<<12, utils.InvalidRequestError(errors.New("invalid comment deletion request")))
+	if !ok {
+		return
+	}
+	identity := api.publicIdentityFor(utils.NormalizeHostname(req.Hostname))
+	if identity == "" {
+		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
+		return
+	}
+	viewerHash := ""
+	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
+		viewerHash = api.reputation.ViewerHashFor(cookie.Value)
+	}
+	comments, err := api.comments.Delete(identity, strings.TrimSpace(req.ID), viewerHash, commentAuthorHash(r))
+	if err != nil {
+		if errors.Is(err, policy.ErrCommentNotFound) {
+			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "Comment not found.")
+		} else {
+			log.Error().Err(err).Msg("delete comment")
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "Could not delete this comment.")
+		}
+		return
+	}
+	utils.WriteAPIData(w, http.StatusOK, types.CommentListResponse{Comments: comments})
+}
+
+func (api *RelayAPI) publicIdentityFor(hostname string) string {
+	if hostname == "" {
+		return ""
+	}
+	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server) {
+		if utils.NormalizeHostname(lease.Hostname) == hostname || utils.NormalizeHostname(lease.CanonicalHostname) == hostname {
+			return lease.IdentityKey
+		}
+	}
+	return ""
 }
