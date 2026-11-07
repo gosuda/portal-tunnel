@@ -24,9 +24,17 @@ const (
 )
 
 var (
-	ErrCommentInvalid  = errors.New("comment must contain 1 to 2000 characters")
-	ErrCommentCapacity = errors.New("comment storage limit reached")
-	ErrCommentNotFound = errors.New("comment not found")
+	ErrCommentInvalid           = errors.New("comment must contain 1 to 2000 characters")
+	ErrCommentCapacity          = errors.New("comment storage limit reached")
+	ErrCommentNotFound          = errors.New("comment not found")
+	ErrCommentStorePathRequired = errors.New("comments store requires a state path")
+	ErrCommentThreadInvalid     = errors.New("invalid comment thread")
+	ErrCommentStoredInvalid     = errors.New("invalid stored comment")
+	ErrCommentVotesInvalid      = errors.New("invalid comment votes")
+	ErrCommentVoteInvalid       = errors.New("invalid comment vote")
+	ErrCommentAuthorInvalid     = errors.New("invalid comment author")
+	ErrCommentVoteChoice        = errors.New("vote must be 'up', 'down', or 'clear'")
+	ErrCommentVoterRequired     = errors.New("voter identification required")
 )
 
 type persistedComments struct {
@@ -49,7 +57,7 @@ type CommentsStore struct {
 
 func NewCommentsStore(path string) (*CommentsStore, error) {
 	if strings.TrimSpace(path) == "" {
-		return nil, errors.New("comments store requires a state path")
+		return nil, ErrCommentStorePathRequired
 	}
 	s := &CommentsStore{
 		path:        path,
@@ -60,9 +68,11 @@ func NewCommentsStore(path string) (*CommentsStore, error) {
 		authors:     make(map[string]string),
 	}
 	var raw json.RawMessage
-	if exists, err := utils.ReadJSONFileIfExists(path, &raw); err != nil {
+	exists, err := utils.ReadJSONFileIfExists(path, &raw)
+	if err != nil {
 		return nil, fmt.Errorf("load comments: %w", err)
-	} else if exists && len(raw) > 0 {
+	}
+	if exists && len(raw) > 0 {
 		var persisted persistedComments
 		if err := json.Unmarshal(raw, &persisted); err == nil && persisted.Threads != nil {
 			s.threads = persisted.Threads
@@ -85,11 +95,11 @@ func NewCommentsStore(path string) (*CommentsStore, error) {
 	ids := make(map[string]bool)
 	for identity, comments := range s.threads {
 		if identity == "" || len(comments) == 0 || len(comments) > commentsMaxPerApp {
-			return nil, errors.New("invalid comment thread")
+			return nil, ErrCommentThreadInvalid
 		}
 		for _, comment := range comments {
 			if comment.ID == "" || ids[comment.ID] || comment.CreatedAt.IsZero() || strings.TrimSpace(comment.Text) == "" || utf8.RuneCountInString(comment.Text) > types.CommentMaxLength {
-				return nil, errors.New("invalid stored comment")
+				return nil, ErrCommentStoredInvalid
 			}
 			ids[comment.ID] = true
 		}
@@ -101,11 +111,11 @@ func NewCommentsStore(path string) (*CommentsStore, error) {
 	voteTotal := 0
 	for id, votes := range s.votes {
 		if !ids[id] || len(votes) > 1024 {
-			return nil, errors.New("invalid comment votes")
+			return nil, ErrCommentVotesInvalid
 		}
 		for voter, vote := range votes {
 			if voter == "" || (vote != VoteUp && vote != VoteDown) {
-				return nil, errors.New("invalid comment vote")
+				return nil, ErrCommentVoteInvalid
 			}
 		}
 		voteTotal += len(votes)
@@ -115,7 +125,7 @@ func NewCommentsStore(path string) (*CommentsStore, error) {
 	}
 	for id, hash := range s.authors {
 		if !ids[id] || hash == "" {
-			return nil, errors.New("invalid comment author")
+			return nil, ErrCommentAuthorInvalid
 		}
 	}
 	return s, nil
@@ -207,10 +217,10 @@ func (s *CommentsStore) Delete(identity, id, viewerHash, authorHash string) ([]t
 func (s *CommentsStore) Vote(identity, id, vote, voterHash, authorHash string) ([]types.AppComment, error) {
 	vote = strings.TrimSpace(vote)
 	if vote != VoteUp && vote != VoteDown && vote != VoteClear {
-		return nil, errors.New("vote must be 'up', 'down', or 'clear'")
+		return nil, ErrCommentVoteChoice
 	}
 	if voterHash == "" {
-		return nil, errors.New("voter identification required")
+		return nil, ErrCommentVoterRequired
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
