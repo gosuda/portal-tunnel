@@ -40,7 +40,7 @@ function animateReorder(update: () => void, maxCards: number): void {
   if (
     typeof document.startViewTransition !== "function" ||
     maxCards > REORDER_ANIMATION_MAX_CARDS ||
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    (typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
   ) {
     update();
     return;
@@ -315,9 +315,7 @@ export function ServerListView({
       return;
     }
 
-    const animateEntrance = window.matchMedia(
-      "(prefers-reduced-motion: no-preference)"
-    ).matches;
+    const animateEntrance = typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: no-preference)").matches;
 
     const observer = new IntersectionObserver(
       (entries) => {

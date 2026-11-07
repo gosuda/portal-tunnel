@@ -78,7 +78,11 @@ export function useServerList() {
   const [commentServer, setCommentServer] = useState<BaseServer | null>(null);
   const [browseView, setBrowseView] = useState<BrowseView>("home");
   const [showHidden, setShowHidden] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(min-width: 1024px)").matches
+      : false
+  );
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     stale: true,
@@ -86,6 +90,9 @@ export function useServerList() {
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
 
   useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
     const desktop = window.matchMedia("(min-width: 1024px)");
     const handleBreakpointChange = (event: MediaQueryListEvent) => {
       setSidebarOpen(event.matches);
@@ -207,7 +214,7 @@ export function useServerList() {
       : list.filteredServers,
     handleBrowseViewChange: (view: BrowseView) => {
       setBrowseView(view);
-      if (!window.matchMedia("(min-width: 1024px)").matches) {
+      if (typeof window !== "undefined" && typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 1024px)").matches) {
         setSidebarOpen(false);
       }
       list.handleSearchChange("");
