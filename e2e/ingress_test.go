@@ -141,7 +141,7 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	}
 	proposedAccess.Ban(identityKey)
 	committed := access.Commit(proposedAccess)
-	server.SetServiceIdentityRoutable(identityKey, committed.Routable(identityKey), committed.Revision())
+	server.SetServiceIdentityAccess(identityKey, committed.Access(identityKey), committed.Revision())
 
 	// A new challenge pushes the current relay decision again. It must not
 	// restore access to the existing lease after the ban has been applied.

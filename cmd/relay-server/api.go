@@ -367,7 +367,7 @@ func (api *RelayAPI) commitAccess(next policy.AccessState) {
 		keys[key] = struct{}{}
 	}
 	for key := range keys {
-		api.server.SetServiceIdentityRoutable(key, committed.Routable(key), committed.Revision())
+		api.server.SetServiceIdentityAccess(key, committed.Access(key), committed.Revision())
 	}
 }
 

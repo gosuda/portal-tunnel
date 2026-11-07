@@ -21,6 +21,8 @@ func TestRelayDashboardMode(t *testing.T) {
 		{name: "connected", relay: AgentRelayStatus{RelayURL: relayURL, PublicURL: "https://web.relay.example.com"}, want: "direct"},
 		{name: "banned", relay: AgentRelayStatus{RelayURL: relayURL, Banned: true}, want: "banned"},
 		{name: "connecting", relay: AgentRelayStatus{RelayURL: relayURL, Connecting: true}, want: "connecting..."},
+		{name: "waiting for approval", relay: AgentRelayStatus{RelayURL: relayURL, Connecting: true, Approval: "pending"}, want: "waiting"},
+		{name: "refused by relay", relay: AgentRelayStatus{RelayURL: relayURL, Connecting: true, Approval: "refused"}, want: "refused"},
 		{
 			name:     "connect requested and not reported yet",
 			relay:    AgentRelayStatus{RelayURL: relayURL},

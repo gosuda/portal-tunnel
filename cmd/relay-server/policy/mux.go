@@ -42,11 +42,11 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			return true
 		}
 		if access == nil {
-			return s.SetServiceIdentityRoutable(key, true, 1)
+			return s.SetServiceIdentityAccess(key, types.LeaseRoutable, 1)
 		}
 		for range accessPublishAttempts {
 			state := access.Snapshot()
-			if s.SetServiceIdentityRoutable(key, state.Routable(key), state.Revision()) {
+			if s.SetServiceIdentityAccess(key, state.Access(key), state.Revision()) {
 				return true
 			}
 		}

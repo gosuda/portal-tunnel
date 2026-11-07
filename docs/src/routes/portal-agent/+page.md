@@ -300,6 +300,8 @@ For a ready named tunnel, the Relays pane displays and opens the short URL
 without an Ethereum address when the relay granted that name. Otherwise it uses
 the identity-bound URL. `/agent/status` keeps `public_url` as the identity-bound
 URL and includes `alias_url` only for a ready relay with an assigned short name.
+It includes `approval` as `pending` or `refused` while the relay refuses the
+tunnel. Its absence does not mean approved.
 
 Dashboard panes:
 
@@ -307,7 +309,7 @@ Dashboard panes:
 |------|---------|
 | Tunnels | Add, select, and delete tunnels |
 | Settings | Edit max active relays and public metadata, and see how the tunnel is protected |
-| Relays | Connect or disconnect relays for the selected tunnel |
+| Relays | Connect or disconnect relays for the selected tunnel. `waiting` means waiting for relay approval, and `refused` means refused by relay |
 
 The active pane has its title in brackets and gets the most rows; the other
 panes shrink to a few rows until you switch to them. Each tunnel row starts

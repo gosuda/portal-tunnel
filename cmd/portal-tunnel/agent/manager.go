@@ -640,6 +640,7 @@ func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
 			TCPAddr:    relay.TCPAddr,
 			Version:    relay.Version,
 			Connecting: relay.State == sdk.RelayConnecting,
+			Approval:   string(relay.Approval),
 		})
 	}
 	return statuses

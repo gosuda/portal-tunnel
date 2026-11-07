@@ -81,6 +81,7 @@ type listenerConfig struct {
 type listenerStatus struct {
 	state     RelayState
 	failure   RelayFailure
+	approval  RelayApproval
 	err       error
 	publicURL string
 	aliasURL  string
@@ -115,6 +116,20 @@ func isTerminalRelayError(err error) bool {
 	}
 	var apiErr *types.APIRequestError
 	return errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
+}
+
+// relayApprovalFromError reads the routing decision out of a refused reverse
+// connect, the one place a relay reports it. Renew stays silent on purpose: an
+// SDK treats a renew 4xx as terminal, and a retry already answers within seconds.
+func relayApprovalFromError(err error) RelayApproval {
+	switch {
+	case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}):
+		return RelayApprovalPending
+	case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}):
+		return RelayApprovalRefused
+	default:
+		return ""
+	}
 }
 
 // staleLeaseError reports whether err means credentials this listener
@@ -246,7 +261,60 @@ func (l *listener) UpdateMetadata(metadata types.LeaseMetadata) {
 
 func (l *listener) reportStreamReady() {
 	l.readySessions.Add(1)
+	l.setApproval("")
 	l.reportAvailable()
+	l.logRawEndpoints()
+}
+
+// reportRefusal publishes a relay's refusal of a reverse connect. An open stream
+// outranks it: the other session slot can get its answer just after a stream
+// opened, from a decision the relay has already changed.
+func (l *listener) reportRefusal(err error) {
+	approval := relayApprovalFromError(err)
+	if approval == "" || !l.setApproval(approval) {
+		return
+	}
+	l.reportAvailable()
+}
+
+// setApproval reads the open streams inside the update, so a refusal that loses
+// the race with a stream opening does not stick to a lease that routes.
+func (l *listener) setApproval(approval RelayApproval) bool {
+	_, changed := l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
+		if approval != "" && l.readySessions.Load() > 0 {
+			return current, false
+		}
+		if current.accessToken == "" || current.approval == approval {
+			return current, false
+		}
+		current.approval = approval
+		return current, true
+	})
+	return changed
+}
+
+// logRawEndpoints prints, once per lease, the line that tells a raw TCP or UDP
+// publisher its address. It waits for an open stream, because the relay refuses
+// visitors before that.
+func (l *listener) logRawEndpoints() {
+	lease, first := l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
+		if current.endpointsLogged || !current.hasRawEndpoint() {
+			return current, false
+		}
+		current.endpointsLogged = true
+		return current, true
+	})
+	if !first {
+		return
+	}
+	event := log.Info().Str("address", l.identity.Address)
+	if lease.udpAddr != "" {
+		event = event.Str("udp_addr", lease.udpAddr)
+	}
+	if lease.tcpAddr != "" {
+		event = event.Str("tcp_addr", lease.tcpAddr)
+	}
+	event.Msg("raw transport endpoints allocated")
 }
 
 func (l *listener) reportStreamClosed() {
@@ -270,6 +338,10 @@ func (l *listener) reportAvailable() {
 	state := RelayConnecting
 	if l.readySessions.Load() > 0 {
 		state = RelayReady
+	}
+	if state == RelayConnecting && lease.approval != "" {
+		l.report(listenerStatus{state: state, approval: lease.approval, version: l.api.relayReleaseVersion()})
+		return
 	}
 	udpAddr := ""
 	if l.datagram != nil && l.datagram.Connected() {
@@ -311,25 +383,8 @@ func (l *listener) run(ctx context.Context) {
 		}
 
 		retries = 0
-		publicURL := ""
-		udpAddr := ""
-		tcpAddr := ""
-		if lease, ok := l.leaseSnapshot(); ok {
-			publicURL = l.publicURLForLease(lease)
-			udpAddr = lease.udpAddr
-			tcpAddr = lease.tcpAddr
-		}
-		event := log.Info().Str("address", l.identity.Address)
-		if udpAddr != "" {
-			event = event.Str("udp_addr", udpAddr)
-		}
-		if tcpAddr != "" {
-			event = event.Str("tcp_addr", tcpAddr)
-		}
-		if udpAddr != "" || tcpAddr != "" {
-			event.Msg("raw transport endpoints allocated")
-		} else if publicURL == "" {
-			event.Msg("relay listener registered")
+		if lease, ok := l.leaseSnapshot(); !ok || (l.publicURLForLease(lease) == "" && !lease.hasRawEndpoint()) {
+			log.Info().Str("address", l.identity.Address).Msg("relay listener registered")
 		}
 		// The ready advertisement ("service ready at") is logged by
 		// Exposure.applyRelayStatus once the public URL is committed to
@@ -424,6 +479,10 @@ type listenerSnapshot struct {
 	reverse       types.ReverseEndpoint
 	expiresAt     time.Time
 	tenantTLS     *keyless.Client
+	// approval is the relay's latest refusal of this lease, if any.
+	approval RelayApproval
+	// endpointsLogged records that this lease's raw endpoints were printed.
+	endpointsLogged bool
 	// chainCheckedAt is when the relay chain tenantTLS pins was last found
 	// current: at registration, and at each scheduled check that completed.
 	chainCheckedAt time.Time
@@ -431,6 +490,10 @@ type listenerSnapshot struct {
 
 func (s listenerSnapshot) snapshot() listenerSnapshot {
 	return s
+}
+
+func (s listenerSnapshot) hasRawEndpoint() bool {
+	return s.udpAddr != "" || s.tcpAddr != ""
 }
 
 func (l *listener) clearLease(reason string) *listenerSnapshot {
@@ -707,6 +770,7 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 			if staleLeaseError(err) {
 				return errLeaseRefreshRequired
 			}
+			l.reportRefusal(err)
 			if l.isAlternateReverseEndpoint(lease.reverse.URL) {
 				if err := l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability); err != nil {
 					return err
@@ -1305,6 +1369,10 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	retryWait := defaultRetryWait
 	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok {
 		retryWait = max(retryWait, apiErr.RetryAfter)
+	}
+	// The relay_status event reports this once per change, not once per slot.
+	if relayApprovalFromError(err) != "" {
+		return utils.SleepOrDone(ctx, retryWait)
 	}
 	relayURL := ""
 	if l.api != nil && l.api.relayURL != nil {

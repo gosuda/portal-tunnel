@@ -2,12 +2,15 @@ package sdk
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func TestPublicURLForLeaseUsesRelayAuthority(t *testing.T) {
@@ -57,6 +60,141 @@ func TestProxyValidationDoesNotCloseExposure(t *testing.T) {
 	default:
 	}
 	_ = exposure.Close()
+}
+
+func TestRelayApprovalReadsTheRefusalCode(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want RelayApproval
+	}{
+		{&types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}, RelayApprovalPending},
+		{fmt.Errorf("open: %w", &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}), RelayApprovalRefused},
+		{&types.APIRequestError{Code: types.APIErrorCodeRateLimited}, ""},
+		{&types.APIRequestError{Code: types.APIErrorCodeUnauthorized}, ""},
+		{io.EOF, ""},
+	} {
+		if got := relayApprovalFromError(tc.err); got != tc.want {
+			t.Fatalf("relayApprovalFromError(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
+	relayURL, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &listener{
+		api:           &apiClient{relayURL: relayURL},
+		statusUpdates: make(chan listenerStatus, 8),
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "token",
+			hostname:    "demo.relay.example",
+			tcpAddr:     "demo.relay.example:40000",
+		}, listenerSnapshot.snapshot),
+	}
+	pending := &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}
+	denied := &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}
+	update := func() listenerStatus {
+		t.Helper()
+		select {
+		case status := <-l.statusUpdates:
+			return status
+		default:
+			t.Fatal("no status update")
+			return listenerStatus{}
+		}
+	}
+	quiet := func() {
+		t.Helper()
+		select {
+		case status := <-l.statusUpdates:
+			t.Fatalf("unexpected status update: %+v", status)
+		default:
+		}
+	}
+
+	l.reportRefusal(pending)
+	if got := update(); got.state != RelayConnecting || got.approval != RelayApprovalPending || got.publicURL != "" || got.tcpAddr != "" {
+		t.Fatalf("waiting status = %+v", got)
+	}
+	l.reportRefusal(pending) // the second session slot says the same
+	quiet()
+	l.reportRefusal(denied)
+	if got := update(); got.approval != RelayApprovalRefused {
+		t.Fatalf("denied status = %+v", got)
+	}
+
+	l.reportStreamReady()
+	if got := update(); got.state != RelayReady || got.approval != "" || got.publicURL == "" {
+		t.Fatalf("ready status = %+v", got)
+	}
+	// The other slot's answer can arrive after a stream opened.
+	l.reportRefusal(pending)
+	quiet()
+
+	l.reportStreamClosed()
+	if got := update(); got.state != RelayConnecting || got.approval != "" {
+		t.Fatalf("reconnecting status = %+v", got)
+	}
+	l.reportRefusal(pending)
+	if got := update(); got.approval != RelayApprovalPending {
+		t.Fatalf("revoked status = %+v", got)
+	}
+
+	l.clearLease("")
+	l.reportRefusal(pending) // a lease that is gone has nothing to report
+	quiet()
+}
+
+func TestApprovalKeepsARelayOutOfTheActiveSet(t *testing.T) {
+	const relayURL = "https://relay.example"
+	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 8)}
+	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: "https://demo.relay.example", tcpAddr: "demo.relay.example:40000"})
+	if got := exposure.ActiveRelays(); len(got) != 1 {
+		t.Fatalf("ActiveRelays() = %v", got)
+	}
+	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting, approval: RelayApprovalPending})
+	status := exposure.Relays()[0]
+	if status.Approval != RelayApprovalPending || status.PublicURL != "" || status.TCPAddr != "" || status.Active() {
+		t.Fatalf("waiting status = %+v", status)
+	}
+	if got := exposure.ActiveRelays(); len(got) != 0 {
+		t.Fatalf("ActiveRelays() = %v while the relay refuses the lease", got)
+	}
+	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting, approval: RelayApprovalRefused})
+	if status := exposure.Relays()[0]; status.Approval != RelayApprovalRefused {
+		t.Fatalf("refused status = %+v", status)
+	}
+	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: "https://demo.relay.example"})
+	if status := exposure.Relays()[0]; status.Approval != "" || status.State != RelayReady {
+		t.Fatalf("approved status = %+v", status)
+	}
+}
+
+// A relay that stays in the set keeps its whole status: a listener reports only
+// changes, so nothing else would restore what a set change dropped.
+func TestRelaySetChangeKeepsTheStatus(t *testing.T) {
+	const waiting, ready = "https://waiting.example", "https://ready.example"
+	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 8)}
+	exposure.setRelayStatus(waiting, listenerStatus{state: RelayConnecting, approval: RelayApprovalPending})
+	exposure.setRelayStatus(ready, listenerStatus{state: RelayReady, publicURL: "https://demo.ready.example", tcpAddr: "ready.example:40000"})
+	before := exposure.Relays()
+
+	exposure.syncRelayStatuses([]string{waiting, ready, "https://added.example"})
+
+	statuses := make(map[string]RelayStatus)
+	for _, status := range exposure.Relays() {
+		statuses[status.RelayURL] = status
+	}
+	if len(statuses) != 3 {
+		t.Fatalf("Relays() = %+v", statuses)
+	}
+	for _, status := range before {
+		if got := statuses[status.RelayURL]; !relayStatusEqual(got, status) {
+			t.Fatalf("status of %s = %+v; want %+v", status.RelayURL, got, status)
+		}
+	}
 }
 
 func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {

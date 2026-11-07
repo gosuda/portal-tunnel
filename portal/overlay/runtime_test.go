@@ -3,6 +3,8 @@ package overlay
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -252,6 +254,57 @@ func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr(source))
 		if response.Code != http.StatusServiceUnavailable {
 			t.Fatalf("released capacity for %s: status=%d", source, response.Code)
+		}
+	}
+}
+
+// A lease that waits for approval must not read as a stale credential, or the
+// SDK re-registers for as long as the wait lasts.
+func TestGatewayKeepsTheRefusalReason(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		status byte
+		code   int
+		api    string
+	}{
+		{statusPending, http.StatusForbidden, types.APIErrorCodeLeaseRejected},
+		{statusDenied, http.StatusForbidden, types.APIErrorCodeLeaseDenied},
+		{statusCapacity, http.StatusTooManyRequests, types.APIErrorCodeRateLimited},
+		{statusUnavailable, http.StatusForbidden, types.APIErrorCodeUnauthorized},
+		{9, http.StatusForbidden, types.APIErrorCodeUnauthorized}, // a status from a newer peer
+	} {
+		gate, capability := testGateway(t)
+		gate.sourceLimiter = newSourceLimiter(1000, 1000)
+		gate.endpoint = endpointStub{
+			destination: testDestination("gateway"),
+			dial: func(context.Context, string, string) (net.Conn, error) {
+				local, remote := net.Pipe()
+				go func() {
+					defer remote.Close()
+					var size uint16
+					if binary.Read(remote, binary.BigEndian, &size) != nil {
+						return
+					}
+					if _, err := io.ReadFull(remote, make([]byte, size)); err != nil {
+						return
+					}
+					_, _ = remote.Write([]byte{tc.status})
+				}()
+				return peerConn{Conn: local, remote: ivnp.Addr{Hash: sha256.Sum256([]byte("ingress")), Port: 4017}}, nil
+			},
+		}
+		response := httptest.NewRecorder()
+		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+		var body struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if response.Code != tc.code || body.Error.Code != tc.api {
+			t.Fatalf("status %d answered %d %q, want %d %q", tc.status, response.Code, body.Error.Code, tc.code, tc.api)
 		}
 	}
 }

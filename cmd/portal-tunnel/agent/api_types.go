@@ -58,13 +58,16 @@ type AgentTunnelStatus struct {
 }
 
 type AgentRelayStatus struct {
-	RelayURL    string `json:"relay_url"`
-	PublicURL   string `json:"public_url,omitempty"`
-	AliasURL    string `json:"alias_url,omitempty"`
-	TCPAddr     string `json:"tcp_addr,omitempty"`
-	Version     string `json:"version,omitempty"`
-	Explicit    bool   `json:"explicit,omitempty"`
-	Connecting  bool   `json:"connecting"`
+	RelayURL   string `json:"relay_url"`
+	PublicURL  string `json:"public_url,omitempty"`
+	AliasURL   string `json:"alias_url,omitempty"`
+	TCPAddr    string `json:"tcp_addr,omitempty"`
+	Version    string `json:"version,omitempty"`
+	Explicit   bool   `json:"explicit,omitempty"`
+	Connecting bool   `json:"connecting"`
+	// Approval is pending or refused while the relay refuses this tunnel's
+	// lease. Empty never means approved.
+	Approval    string `json:"approval,omitempty"`
 	Bootstrap   bool   `json:"bootstrap"`
 	Banned      bool   `json:"banned"`
 	SupportsUDP bool   `json:"supports_udp"`

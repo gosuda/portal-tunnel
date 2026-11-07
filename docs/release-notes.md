@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Tunnels report the approval wait
+
+On a `manual` relay, a tunnel now tells you when the relay does not route it.
+`RelayStatus.Approval` is `pending` or `refused`, the `relay_status` log event
+has the same `approval` field, and `/agent/status` reports it per relay. The
+dashboard shows `waiting` or `refused`. While it is set, the status carries no
+URL and no raw address.
+
+A revoke, denial, or ban used to leave the tunnel `ready` while nothing routed.
+The relay now closes the lease's idle reverse streams, so every SDK version
+leaves `ready` at once. A denied or banned lease gets the new `lease_denied`
+code on reverse connect. `lease_rejected` keeps meaning not approved yet. The
+browser SDK cannot read these refusals, so a revoked lease there registers again
+on each retry until the relay approves it.
+
+Raw TCP and UDP tunnels now log `raw transport endpoints allocated` when a
+reverse stream opens, not at registration. Automation that reads this line as
+ready now waits for approval, which is what it needed.
+
+In Go, `portal.Server.SetServiceIdentityRoutable` is now
+`SetServiceIdentityAccess` and takes a `types.LeaseAccess`.
+`SetIdentityRoutable` is gone.
+
 ### Relay: initial approval mode
 
 `--approval-mode` (`APPROVAL_MODE`) sets the lease approval mode on startup, so
