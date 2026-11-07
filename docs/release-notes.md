@@ -1,6 +1,6 @@
 # Release notes
 
-## Unreleased
+## v2.7.3
 
 ### Application auth: a tunnel answers only for hosts it holds
 
@@ -19,7 +19,7 @@ v2.7.2, so an embedder must rename the field and return dated hosts, and it now
 applies to every provider. Set it whenever the gate serves an exposure: without it
 the gate believes the `Host` of a request.
 
-## v2.7.2
+## v2.7.2 and earlier
 
 ### Relay: a budget for unapproved leases
 
