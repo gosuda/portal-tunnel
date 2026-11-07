@@ -59,7 +59,7 @@ func TestIssueIsStatelessUnderFlood(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	address, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now)
+	address, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, time.Time{}, now)
 	if err != nil {
 		t.Fatalf("verify after flood: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestVerifyRejectsTamperedToken(t *testing.T) {
 	}
 	for name, token := range tampered {
 		t.Run(name, func(t *testing.T) {
-			if _, err := auth.Verify(token, challenge.Message, "", testDomain, now); !errors.Is(err, ErrChallengeInvalid) {
+			if _, err := auth.Verify(token, challenge.Message, "", testDomain, time.Time{}, now); !errors.Is(err, ErrChallengeInvalid) {
 				t.Fatalf("err = %v; want ErrChallengeInvalid", err)
 			}
 		})
@@ -103,7 +103,7 @@ func TestVerifyRejectsExpiredChallenge(t *testing.T) {
 
 	// Expiry is checked before the signature, so an unsigned placeholder
 	// keeps the assertion on the expiry path.
-	if _, err := auth.Verify(challenge.ID, challenge.Message, "", testDomain, now.Add(challengeTTL+time.Minute)); !errors.Is(err, ErrChallengeExpired) {
+	if _, err := auth.Verify(challenge.ID, challenge.Message, "", testDomain, time.Time{}, now.Add(challengeTTL+time.Minute)); !errors.Is(err, ErrChallengeExpired) {
 		t.Fatalf("err = %v; want ErrChallengeExpired", err)
 	}
 }
@@ -114,6 +114,23 @@ func TestVerifyRejectsExpiredChallenge(t *testing.T) {
 // is deliberately omitted: it cannot create a new identity, and its
 // global consumed set would reintroduce the capacity failure mode issue
 // #530 removes.
+func TestVerifyRejectsChallengeFromBeforeNotBefore(t *testing.T) {
+	auth := newTestAuthenticator(t)
+	wallet := testWallet(t)
+	now := time.Now().UTC()
+	challenge := issueTestChallenge(t, auth, wallet, now)
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now.Add(time.Second), now); !errors.Is(err, ErrChallengeExpired) {
+		t.Fatalf("Verify() error = %v, want %v", err, ErrChallengeExpired)
+	}
+	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now, now); err != nil {
+		t.Fatalf("Verify() from the first moment = %v", err)
+	}
+}
+
 func TestVerifyAllowsReplayWithinTTL(t *testing.T) {
 	auth := newTestAuthenticator(t)
 	wallet := testWallet(t)
@@ -125,7 +142,7 @@ func TestVerifyAllowsReplayWithinTTL(t *testing.T) {
 	}
 
 	for i := range 2 {
-		address, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now)
+		address, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, time.Time{}, now)
 		if err != nil {
 			t.Fatalf("verify %d: %v", i+1, err)
 		}
@@ -150,7 +167,7 @@ func TestVerifyRejectsTamperedMessage(t *testing.T) {
 	if tampered == challenge.Message {
 		t.Fatal("message tamper did not change anything")
 	}
-	if _, err := auth.Verify(challenge.ID, tampered, signature, testDomain, now); !errors.Is(err, ErrInvalidSignature) {
+	if _, err := auth.Verify(challenge.ID, tampered, signature, testDomain, time.Time{}, now); !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("err = %v; want ErrInvalidSignature", err)
 	}
 }
@@ -164,7 +181,7 @@ func TestVerifyRejectsWrongDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, "other.example", now); !errors.Is(err, ErrInvalidSignature) {
+	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, "other.example", time.Time{}, now); !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("err = %v; want ErrInvalidSignature", err)
 	}
 }
@@ -183,12 +200,12 @@ func TestNewKeyIsInstanceLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.Verify(challenge.ID, challenge.Message, signature, testDomain, now); err != nil {
+	if _, err := first.Verify(challenge.ID, challenge.Message, signature, testDomain, time.Time{}, now); err != nil {
 		t.Fatalf("first verify: %v", err)
 	}
 
 	recreated := newTestAuthenticator(t)
-	if _, err := recreated.Verify(challenge.ID, challenge.Message, signature, testDomain, now); !errors.Is(err, ErrChallengeInvalid) {
+	if _, err := recreated.Verify(challenge.ID, challenge.Message, signature, testDomain, time.Time{}, now); !errors.Is(err, ErrChallengeInvalid) {
 		t.Fatalf("recreated-instance err = %v; want ErrChallengeInvalid", err)
 	}
 }

@@ -436,8 +436,8 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 		defer func() { _ = resp.Body.Close() }()
 		return resp.StatusCode
 	}
-	if code := ask("attacker.localhost:"+strconv.Itoa(port), "bob@example.com"); code != http.StatusForbidden {
-		t.Fatalf("request at a foreign host = %d, want 403", code)
+	if code := ask("attacker.localhost:"+strconv.Itoa(port), "bob@example.com"); code != http.StatusMisdirectedRequest {
+		t.Fatalf("request at a foreign host = %d, want 421", code)
 	}
 	catcher.expectNone(t)
 	alias, err := url.Parse(aliasURL)

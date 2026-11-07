@@ -40,7 +40,8 @@ var (
 	errProviderRedirectedTooManyTimes   = errors.New("identity provider redirected too many times")
 	errEmailPrincipalsMustASCII         = errors.New("email principals must be ASCII; write internationalized domains in punycode")
 	errApplicationAuthHandlerIsRequired = errors.New("application auth handler is required")
-	errEmailRequiresPublicURLs          = errors.New("email requires PublicURLs: without them no host qualifies for a login link")
+	errEmailRequiresPublicHosts         = errors.New("email requires PublicHosts: without them no host qualifies for a login link")
+	errRequestHostNotPublic             = errors.New("request host is not a public address of this tunnel")
 	errMissingIDTokenTokenResponse      = errors.New("missing id_token in token response")
 	errIDTokenExpiryIsRequired          = errors.New("id_token expiry is required")
 	errIDTokenNonceMismatch             = errors.New("id_token nonce mismatch")
@@ -106,6 +107,16 @@ var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
 
 type principalContextKey struct{}
 
+// PublicHost is a URL the application is reachable at now.
+type PublicHost struct {
+	URL string
+	// Since is when the application came to hold URL. Set it for a URL that can
+	// change hands, such as an alias, so that a session or a sign-in from an
+	// earlier hold does not count. Credentials are not dated, because they have to
+	// outlive a restart. Leave Since zero for a URL only this identity can hold.
+	Since time.Time
+}
+
 // Principal is the visitor the gate signed in.
 type Principal struct {
 	// Provider is the method that signed the visitor in, such as ProviderOIDC.
@@ -146,11 +157,13 @@ func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 // upstream with the identity headers and must not be logged. Only portal expose
 // sets it; the agent config and the Agent API have no key for it.
 //
-// PublicURLs lists the URLs the application is reachable at now, and the email
-// provider requires it: a request names its own Host, so a login link is mailed,
-// and an email session works, only for a host on that list. It is called on each
-// request and is no setting, so no config format carries it and a stored Config
-// leaves it nil.
+// PublicHosts lists the hosts the application holds now, and the email provider
+// requires it. A request names its own Host, and the next owner of an alias reads
+// whatever a browser sends there, so with PublicHosts set the gate answers no
+// request for any other host, and a session or sign-in on a host with a Since must
+// be newer than it. Without it the gate believes the Host of a request. It is called on
+// each request and is no setting, so no config format carries it and a stored
+// Config leaves it nil.
 type Config struct {
 	Provider        string   `json:"auth,omitempty" toml:"auth,omitempty"`
 	Allow           []string `json:"auth_allowed_wallets,omitempty" toml:"auth_allowed_wallets,omitempty"`
@@ -160,7 +173,7 @@ type Config struct {
 	OIDCConfig
 	SAMLConfig
 	EmailConfig
-	PublicURLs func() []string `json:"-" toml:"-"`
+	PublicHosts func() []PublicHost `json:"-" toml:"-"`
 }
 
 // OIDCConfig holds the settings of the oidc provider; any other provider
@@ -267,6 +280,7 @@ type applicationAuth struct {
 	oidc            *oidcAuthenticator
 	saml            *samlAuthenticator
 	email           *emailAuthenticator
+	publicHosts     func() []PublicHost
 	allowedSubjects map[string]struct{}
 	allowAnySubject bool
 	identityHeaders bool
@@ -274,11 +288,14 @@ type applicationAuth struct {
 }
 
 type applicationAuthClaims struct {
-	Subject   string `json:"sub"`
-	Provider  string `json:"auth,omitempty"`
-	Email     string `json:"email,omitempty"`
-	Host      string `json:"host"`
-	ExpiresAt int64  `json:"exp"`
+	Subject  string `json:"sub"`
+	Provider string `json:"auth,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Host     string `json:"host"`
+	// IssuedAtMillis is in milliseconds, because a tunnel that restarts within a
+	// second of a sign-in must still tell the session from its new hold.
+	IssuedAtMillis int64 `json:"iat_ms,omitempty"`
+	ExpiresAt      int64 `json:"exp"`
 	// Binding names the OIDC issuer and client, the SAML identity provider
 	// and service provider, or the SMTP account and sender of email, that
 	// authenticated the visitor.
@@ -614,10 +631,10 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 			saml = newSAMLAuthenticator(settings, []byte(stateKey))
 		}
 	case ProviderEmail:
-		if cfg.PublicURLs == nil {
-			return nil, errEmailRequiresPublicURLs
+		if cfg.PublicHosts == nil {
+			return nil, errEmailRequiresPublicHosts
 		}
-		email = newEmailAuthenticator(settings, cfg.PublicURLs)
+		email = newEmailAuthenticator(settings)
 	}
 	credentialKey, err := identity.DeriveToken(id, applicationCredentialKeyUse)
 	if err != nil {
@@ -633,6 +650,7 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 		oidc:            oidc,
 		saml:            saml,
 		email:           email,
+		publicHosts:     cfg.PublicHosts,
 		allowedSubjects: allowedSubjects,
 		allowAnySubject: allowAnySubject,
 		identityHeaders: cfg.IdentityHeaders,
@@ -659,7 +677,7 @@ func Check(ctx context.Context, cfg Config) error {
 	case ProviderSAML:
 		_, err = newSAMLAuthenticator(settings, nil).identityProvider(ctx)
 	case ProviderEmail:
-		err = newEmailAuthenticator(settings, nil).check(ctx)
+		err = newEmailAuthenticator(settings).check(ctx)
 	}
 	return err
 }
@@ -668,6 +686,12 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	credential := strings.TrimSpace(r.Header.Get(types.HeaderAccessCredential))
 	utils.DelHeaderSpellings(r.Header, types.HeaderAccessCredential)
 	utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
+	if a.publicHosts != nil {
+		if _, _, public := a.publicHost(r.Host); !public {
+			a.writeJSONError(w, http.StatusMisdirectedRequest, errRequestHostNotPublic.Error())
+			return
+		}
+	}
 
 	switch r.URL.Path {
 	case applicationAuthLoginPath:
@@ -710,6 +734,33 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		a.next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)))
 	}
+}
+
+// heldSince returns when the application came to hold rawHost, a request's Host,
+// and the zero time for a host that cannot change hands or without PublicHosts.
+// A session or a sign-in begun before then must not count: the next owner of an
+// alias reads what a browser sends there, and the alias may have come back since.
+func (a *applicationAuth) heldSince(rawHost string) time.Time {
+	if a.publicHosts == nil {
+		return time.Time{}
+	}
+	_, since, _ := a.publicHost(rawHost)
+	return since
+}
+
+// publicHost returns the host of the public URL that rawHost, a request's Host,
+// names, and since when the application holds it.
+func (a *applicationAuth) publicHost(rawHost string) (string, time.Time, bool) {
+	requestHost, err := normalizeHost(rawHost)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	for _, candidate := range a.publicHosts() {
+		if host, err := normalizeHost(candidate.URL); err == nil && host == requestHost {
+			return host, candidate.Since, true
+		}
+	}
+	return "", time.Time{}, false
 }
 
 func stripApplicationAuthCookie(r *http.Request) {
@@ -865,7 +916,8 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	var stateClaims oidcStateClaims
 	if err := decodeSignedApplicationAuthJSON(a.oidc.stateKey, stateCookie.Value, &stateClaims); err != nil ||
 		!sameApplicationHost(stateClaims.Host, host) ||
-		now.Unix() >= stateClaims.ExpiresAt {
+		now.Unix() >= stateClaims.ExpiresAt ||
+		loginStateIssuedAt(stateClaims.ExpiresAt).Before(a.heldSince(host)) {
 		// Only a state that verified carries a target worth keeping.
 		next := "/"
 		if err == nil {
@@ -1257,7 +1309,7 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	address, err := a.siwe.Verify(req.ChallengeID, req.Message, req.Signature, r.Host, now)
+	address, err := a.siwe.Verify(req.ChallengeID, req.Message, req.Signature, r.Host, a.heldSince(r.Host), now)
 	if err != nil {
 		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
 		return
@@ -1341,12 +1393,8 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (Principal, bool)
 	if provider != a.provider {
 		return Principal{}, false
 	}
-	// An alias this tunnel lost may have a new owner, who reads the cookie of
-	// whoever opens it there and must not be able to replay it here.
-	if a.email != nil {
-		if _, public := a.email.publicHost(r.Host); !public {
-			return Principal{}, false
-		}
+	if claims.IssuedAtMillis < a.heldSince(r.Host).UnixMilli() {
+		return Principal{}, false
 	}
 	if provider == ProviderSIWE {
 		address, err := identity.NormalizeEVMAddress(claims.Subject)
@@ -1401,8 +1449,8 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	return false
 }
 
-func (a *applicationAuth) issueSession(principal Principal, host string, expiresAt time.Time) (string, error) {
-	claims := applicationAuthClaims{Subject: principal.Subject, Provider: principal.Provider, Email: principal.Email, Host: host, ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
+func (a *applicationAuth) issueSession(principal Principal, host string, issuedAt, expiresAt time.Time) (string, error) {
+	claims := applicationAuthClaims{Subject: principal.Subject, Provider: principal.Provider, Email: principal.Email, Host: host, IssuedAtMillis: issuedAt.UnixMilli(), ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
 	return encodeSignedApplicationAuthJSON(a.signingKey, claims)
 }
 
@@ -1423,7 +1471,7 @@ func (a *applicationAuth) binding() string {
 }
 
 func (a *applicationAuth) setSession(w http.ResponseWriter, principal Principal, host string, now, expiresAt time.Time) error {
-	token, err := a.issueSession(principal, host, expiresAt)
+	token, err := a.issueSession(principal, host, now, expiresAt)
 	if err != nil {
 		return err
 	}
@@ -1437,6 +1485,11 @@ func encodeSignedApplicationAuthJSON(key []byte, value any) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signApplicationAuthPayload(key, payload)), nil
+}
+
+// loginStateIssuedAt dates the state of an OIDC or SAML login from its expiry.
+func loginStateIssuedAt(expiresAt int64) time.Time {
+	return time.Unix(expiresAt, 0).Add(-applicationAuthLoginStateTTL)
 }
 
 // encodeApplicationAuthLoginState signs the state of an OIDC or SAML login in

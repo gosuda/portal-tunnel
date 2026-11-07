@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	})
 	handler := newApplicationAuthTestHandler(t, nil, false, next)
 	gate := handler.(*applicationAuth)
-	token, err := gate.issueSession(Principal{Provider: ProviderSIWE, Subject: applicationAuthTestWallet(t, "2").Identity().Address}, "app.example", applicationAuthTestTime().Add(applicationAuthSessionTTL))
+	token, err := gate.issueSession(Principal{Provider: ProviderSIWE, Subject: applicationAuthTestWallet(t, "2").Identity().Address}, "app.example", time.Now(), applicationAuthTestTime().Add(applicationAuthSessionTTL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,6 +323,194 @@ func TestApplicationSessionRefusesOtherOrigins(t *testing.T) {
 				t.Fatalf("upstream reached = %v with status %d", reached, rec.Code)
 			}
 		})
+	}
+}
+
+// The gate answers only for a host the application holds now, for every provider.
+// The next owner of an alias reads what a browser sends there, so a session from
+// an earlier hold of the alias ends too, and a host that cannot change hands keeps
+// its sessions.
+func TestGateAnswersOnlyForHostsItHolds(t *testing.T) {
+	t.Parallel()
+
+	const canonical, alias = "app.example", "alias.example"
+	now := time.Now().UTC()
+	hostsWithAlias := []PublicHost{{URL: "https://" + canonical}, {URL: "https://" + alias, Since: now.Add(-time.Hour)}}
+	var hosts atomic.Value
+	hosts.Store(hostsWithAlias)
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, Config{Provider: ProviderCredential, PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := handler.(*applicationAuth)
+	session := func(host string, issuedAt time.Time) func(*http.Request) {
+		t.Helper()
+		value, err := gate.issueSession(Principal{Provider: ProviderCredential, Subject: "alice"}, host, issuedAt, now.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: value}) }
+	}
+	credential, err := IssueCredential(tunnelIdentity, alias, "alice", now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	presentCredential := func(r *http.Request) { r.Header.Set(types.HeaderAccessCredential, credential) }
+	open := func(host, path string, send func(*http.Request)) int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+host+path, nil)
+		send(req)
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	longAgo := now.Add(-23 * time.Hour)
+	held := hostsWithAlias[1].Since
+	for _, tt := range []struct {
+		name string
+		host string
+		send func(*http.Request)
+		want int
+	}{
+		{"a session from this hold of the alias", alias, session(alias, now), http.StatusNoContent},
+		{"a session from the start of this hold", alias, session(alias, held), http.StatusNoContent},
+		{"a session from just before this hold", alias, session(alias, held.Add(-time.Millisecond)), http.StatusSeeOther},
+		{"a session from an earlier hold of the alias", alias, session(alias, longAgo), http.StatusSeeOther},
+		{"a session too old to carry its date", alias, session(alias, time.Unix(0, 0)), http.StatusSeeOther},
+		{"an old session on a host that cannot change hands", canonical, session(canonical, longAgo), http.StatusNoContent},
+		{"a credential for the alias", alias, presentCredential, http.StatusNoContent},
+		{"a host the application never held", "attacker.example", session("attacker.example", now), http.StatusMisdirectedRequest},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := open(tt.host, "/private", tt.send); got != tt.want {
+				t.Fatalf("status = %d; want %d", got, tt.want)
+			}
+		})
+	}
+
+	hosts.Store(hostsWithAlias[:1])
+	for name, send := range map[string]func(*http.Request){
+		"session":    session(alias, now),
+		"credential": presentCredential,
+	} {
+		if got := open(alias, "/private", send); got != http.StatusMisdirectedRequest {
+			t.Fatalf("%s on a lost alias = %d; want 421", name, got)
+		}
+	}
+	if got := open(alias, applicationAuthLoginPath, func(*http.Request) {}); got != http.StatusMisdirectedRequest {
+		t.Fatalf("login page on a lost alias = %d; want 421", got)
+	}
+	if got := open(canonical, "/private", session(canonical, now)); got != http.StatusNoContent {
+		t.Fatalf("losing the alias touched the canonical host: %d", got)
+	}
+}
+
+// A login begun before the current hold of an alias does not finish after it,
+// because the next owner of the name may have read its state.
+func TestLoginStateFromAnEarlierHoldIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const alias = "alias.example"
+	now := time.Now().UTC()
+	expires := now.Add(applicationAuthLoginStateTTL).Unix()
+	finish := func(gate *applicationAuth, since time.Time, req *http.Request) string {
+		gate.publicHosts = func() []PublicHost { return []PublicHost{{URL: "https://" + alias, Since: since}} }
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+
+	oidcGate := newOIDCTestGate(t, newOIDCTestIdP(t, nil), "alice@example.com")
+	oidcState, err := encodeSignedApplicationAuthJSON(oidcGate.oidc.stateKey, oidcStateClaims{State: "state", Nonce: "nonce", CodeVerifier: "verifier", Host: alias, Next: "/", ExpiresAt: expires})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "https://"+alias+applicationAuthCallbackPath+"?state=state&code=code", nil)
+		req.AddCookie(&http.Cookie{Name: applicationAuthOIDCStateCookie, Value: oidcState})
+		return req
+	}
+	samlGate := newSAMLTestGate(t, newSAMLTestIdP(t), http.NotFoundHandler(), nil)
+	samlState, err := encodeSignedApplicationAuthJSON(samlGate.saml.stateKey, samlStateClaims{RequestID: "request", Host: alias, Next: "/", ExpiresAt: expires})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acs := func() *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "https://"+alias+applicationAuthSAMLACSPath, strings.NewReader("SAMLResponse=x"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: applicationAuthSAMLStateCookie, Value: samlState})
+		return req
+	}
+
+	for _, tt := range []struct {
+		name    string
+		gate    *applicationAuth
+		request func() *http.Request
+		refused string
+	}{
+		{"oidc", oidcGate, callback, "invalid or expired oidc login state"},
+		{"saml", samlGate, acs, "invalid or expired saml login state"},
+	} {
+		if body := finish(tt.gate, now.Add(time.Minute), tt.request()); !strings.Contains(body, tt.refused) {
+			t.Errorf("%s login from an earlier hold: %s", tt.name, body)
+		}
+		if body := finish(tt.gate, now.Add(-time.Minute), tt.request()); strings.Contains(body, tt.refused) {
+			t.Errorf("%s login from this hold was refused: %s", tt.name, body)
+		}
+	}
+}
+
+// A wallet signature for a challenge from an earlier hold of an alias does not
+// sign in, for the same reason as the login state above.
+func TestSIWEChallengeFromAnEarlierHoldIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const alias = "alias.example"
+	wallet := applicationAuthTestWallet(t, "1")
+	since := time.Now().UTC().Add(-time.Minute)
+	var hosts atomic.Value
+	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: since}})
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{
+		Provider:    ProviderSIWE,
+		Allow:       []string{wallet.Identity().Address},
+		PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "https://"+alias+path, bytes.NewReader(raw))
+		req.Header.Set("Origin", "https://"+alias)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	asked := post(applicationAuthChallengePath, applicationAuthChallengeRequest{Address: wallet.Identity().Address})
+	var challenge applicationAuthChallengeResponse
+	if err := json.NewDecoder(asked.Body).Decode(&challenge); err != nil {
+		t.Fatal(err)
+	}
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature}
+
+	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: time.Now().UTC().Add(time.Minute)}})
+	if rec := post(applicationAuthVerifyPath, verify); rec.Code == http.StatusOK {
+		t.Fatalf("a challenge from an earlier hold signed in: %s", rec.Body)
+	}
+	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: since}})
+	if rec := post(applicationAuthVerifyPath, verify); rec.Code != http.StatusOK {
+		t.Fatalf("a challenge from this hold = %d: %s", rec.Code, rec.Body)
 	}
 }
 
