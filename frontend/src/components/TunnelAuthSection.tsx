@@ -41,7 +41,6 @@ import {
   buildTunnelPreviewURL,
   classifyAuthAllow,
   isListedSubject,
-  needsAllowlist,
   type TunnelAuthField,
   type TunnelAuthIssue,
   type TunnelAuthMethod,
