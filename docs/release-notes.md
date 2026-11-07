@@ -46,6 +46,15 @@ The default stays `auto`, and any other value than `auto` or `manual` stops
 startup. A mode saved in `policy.json` wins. The relay saves the mode on any
 admin change, so a relay that has saved `auto` stays open under
 `APPROVAL_MODE=manual` and logs a warning.
+### Application auth: a session works from its own origin
+
+When a request carries a session cookie and an `Origin` of another origin, the
+sign-in gate now answers `403` to a protocol upgrade, such as a WebSocket, and
+to any method other than `GET`, `HEAD`, or `OPTIONS`. A request without `Origin`,
+a request that presents `X-Portal-Access-Credential`, and a form post with
+`Origin: null` that a browser marks with `Sec-Fetch-Site: same-origin`, which a
+page with `Referrer-Policy: no-referrer` sends, are not affected. A page on another
+origin that called a protected tunnel this way must move to the tunnel's origin.
 
 ### Application auth: email sign-in links
 
