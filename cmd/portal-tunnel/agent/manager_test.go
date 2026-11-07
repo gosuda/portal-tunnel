@@ -95,7 +95,7 @@ func tunnelStatus(t *testing.T, m *manager, id string) AgentTunnelStatus {
 func oidcTunnel(id, issuer, secret string) TunnelConfig {
 	cfg := testTunnel(id)
 	cfg.Provider = "oidc"
-	cfg.AllowedWallets = []string{"alice@example.com"}
+	cfg.Allow = []string{"alice@example.com"}
 	cfg.OIDCIssuerURL = issuer
 	cfg.OIDCClientID = "client-123"
 	cfg.OIDCClientSecret = secret
@@ -229,7 +229,7 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 			body: `{"metadata":{"description":"hello"}}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
 				if saved.Description != "hello" || saved.Provider != "oidc" || saved.OIDCClientSecret != oldSecret ||
-					!slices.Equal(saved.AllowedWallets, []string{"alice@example.com"}) {
+					!slices.Equal(saved.Allow, []string{"alice@example.com"}) {
 					t.Fatalf("saved = %+v", saved)
 				}
 			},
@@ -238,10 +238,10 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 			name: "allowlist replaces only the allowlist",
 			body: `{"auth_allowed_wallets":["Bob@Example.com","sub:42"]}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if !slices.Equal(saved.AllowedWallets, []string{"bob@example.com", "sub:42"}) ||
-					!slices.Equal(status.AllowedWallets, saved.AllowedWallets) ||
+				if !slices.Equal(saved.Allow, []string{"bob@example.com", "sub:42"}) ||
+					!slices.Equal(status.Allow, saved.Allow) ||
 					saved.OIDCIssuerURL != unreachableIssuer || saved.OIDCClientID != "client-123" || saved.OIDCClientSecret != oldSecret {
-					t.Fatalf("saved = %+v, status allowlist = %v", saved, status.AllowedWallets)
+					t.Fatalf("saved = %+v, status allowlist = %v", saved, status.Allow)
 				}
 			},
 		},
@@ -249,7 +249,7 @@ func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 			name: "null leaves a field as it is",
 			body: `{"metadata":{"description":"again"},"auth_allowed_wallets":null,"auth_oidc_issuer":null}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if !slices.Equal(saved.AllowedWallets, []string{"bob@example.com", "sub:42"}) || saved.OIDCIssuerURL != unreachableIssuer {
+				if !slices.Equal(saved.Allow, []string{"bob@example.com", "sub:42"}) || saved.OIDCIssuerURL != unreachableIssuer {
 					t.Fatalf("saved = %+v", saved)
 				}
 			},
@@ -300,7 +300,7 @@ func TestUpdateTunnelEmptyAuthTurnsSignInOff(t *testing.T) {
 	}
 	saved := savedTunnel(t, path, "app")
 	status := tunnelStatus(t, m, "app")
-	if auth := saved.ApplicationAuthConfig; !auth.IsZero() {
+	if auth := saved.AuthConfig; !auth.IsZero() {
 		t.Fatalf("saved auth = %+v", auth)
 	}
 	// Every sign-in field is omitted from the status when it is empty.
@@ -314,7 +314,7 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 	wallet := "0x0000000000000000000000000000000000000001"
 	signedIn := testTunnel("signedin")
 	signedIn.Provider = "siwe"
-	signedIn.AllowedWallets = []string{wallet}
+	signedIn.Allow = []string{wallet}
 	tcp := testTunnel("tcp")
 	tcp.TCPEnabled = true
 	udp := testTunnel("udp")
@@ -440,7 +440,7 @@ func TestAddTunnelWithAuth(t *testing.T) {
 		}
 
 		siwe := savedTunnel(t, path, "siwe")
-		if siwe.Provider != "siwe" || !slices.Equal(siwe.AllowedWallets, []string{wallet}) || !siwe.IdentityHeaders {
+		if siwe.Provider != "siwe" || !slices.Equal(siwe.Allow, []string{wallet}) || !siwe.IdentityHeaders {
 			t.Fatalf("saved siwe tunnel = %+v", siwe)
 		}
 		if oidc := savedTunnel(t, path, "oidc"); oidc.Provider != "oidc" || oidc.OIDCClientID != "client-123" || oidc.OIDCClientSecret != secret {

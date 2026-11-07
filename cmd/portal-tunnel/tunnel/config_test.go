@@ -34,32 +34,32 @@ func TestConfigSpecModes(t *testing.T) {
 		{name: "credential", edit: func(c *Config) { c.TargetAddr, c.Provider = "localhost:3000", "credential" }, valid: true},
 		{name: "unknown provider", edit: func(c *Config) { c.TargetAddr, c.Provider = "localhost:3000", "unknown" }},
 		{name: "credential allowlist", edit: func(c *Config) {
-			c.TargetAddr, c.Provider, c.AllowedWallets = "localhost:3000", "credential", []string{"alice"}
+			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "credential", []string{"alice"}
 		}, valid: true},
 		{name: "credential invalid allowlist", edit: func(c *Config) {
-			c.TargetAddr, c.Provider, c.AllowedWallets = "localhost:3000", "credential", []string{""}
+			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "credential", []string{""}
 		}},
 		{name: "siwe invalid allowlist", edit: func(c *Config) {
-			c.TargetAddr, c.Provider, c.AllowedWallets = "localhost:3000", "siwe", []string{"alice"}
+			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "siwe", []string{"alice"}
 		}},
-		{name: "static siwe", edit: func(c *Config) { c.Serve, c.Provider, c.AllowedWallets = "./dist", "siwe", []string{wallet} }, valid: true},
-		{name: "allowlist without provider", edit: func(c *Config) { c.TargetAddr, c.AllowedWallets = "localhost:3000", []string{wallet} }},
+		{name: "static siwe", edit: func(c *Config) { c.Serve, c.Provider, c.Allow = "./dist", "siwe", []string{wallet} }, valid: true},
+		{name: "allowlist without provider", edit: func(c *Config) { c.TargetAddr, c.Allow = "localhost:3000", []string{wallet} }},
 		{name: "headers without provider", edit: func(c *Config) { c.TargetAddr, c.IdentityHeaders = "localhost:3000", true }},
 		{name: "auth and tcp", edit: func(c *Config) { c.TargetAddr, c.Provider, c.TCPEnabled = "localhost:3000", "siwe", true }},
 		{name: "auth and udp", edit: func(c *Config) { c.TargetAddr, c.Provider, c.UDPEnabled = "localhost:3000", "siwe", true }},
 		{name: "oidc", edit: func(c *Config) {
-			c.TargetAddr, c.Provider, c.AllowedWallets = "localhost:3000", "oidc", []string{"alice@example.com"}
+			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "oidc", []string{"alice@example.com"}
 			c.OIDCIssuerURL, c.OIDCClientID = "https://accounts.google.com", "client-123"
 		}, valid: true},
 		{name: "oidc without issuer", edit: func(c *Config) {
-			c.TargetAddr, c.Provider, c.AllowedWallets, c.OIDCClientID = "localhost:3000", "oidc", []string{"alice@example.com"}, "client-123"
+			c.TargetAddr, c.Provider, c.Allow, c.OIDCClientID = "localhost:3000", "oidc", []string{"alice@example.com"}, "client-123"
 		}},
 		{name: "saml", edit: func(c *Config) {
-			c.TargetAddr, c.Provider, c.AllowedWallets = "localhost:3000", "saml", []string{"@example.com"}
+			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "saml", []string{"@example.com"}
 			c.SAMLMetadataURL = "https://idp.example/metadata"
 		}, valid: true},
 		{name: "saml with both metadata sources", edit: func(c *Config) {
-			c.TargetAddr, c.Provider, c.AllowedWallets = "localhost:3000", "saml", []string{"@example.com"}
+			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "saml", []string{"@example.com"}
 			c.SAMLMetadataURL, c.SAMLMetadataFile = "https://idp.example/metadata", "/idp.xml"
 		}},
 		// The settings of a provider that is not the active one are refused, so
@@ -68,7 +68,7 @@ func TestConfigSpecModes(t *testing.T) {
 			c.TargetAddr, c.Provider, c.OIDCIssuerURL = "localhost:3000", "siwe", "https://accounts.google.com"
 		}},
 		{name: "saml settings under oidc", edit: func(c *Config) {
-			c.TargetAddr, c.Provider, c.AllowedWallets = "localhost:3000", "oidc", []string{"alice@example.com"}
+			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "oidc", []string{"alice@example.com"}
 			c.OIDCIssuerURL, c.OIDCClientID, c.SAMLEntityID = "https://accounts.google.com", "client-123", "urn:portal"
 		}},
 		{name: "casper payment without asset", edit: func(c *Config) {
@@ -157,15 +157,15 @@ func TestConfigSpecResolvesComponents(t *testing.T) {
 			name: "oidc",
 			input: func() Config {
 				cfg := Config{TargetAddr: " localhost:3000 "}
-				cfg.Provider, cfg.AllowedWallets = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
+				cfg.Provider, cfg.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
 				cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
 				return cfg
 			},
 			check: func(t *testing.T, spec Spec) {
-				want := appauth.ApplicationAuthConfig{
-					Provider:       appauth.ApplicationAuthProviderOIDC,
-					AllowedWallets: []string{"bob@example.com"},
-					OIDCConfig:     appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
+				want := appauth.Config{
+					Provider:   appauth.ProviderOIDC,
+					Allow:      []string{"bob@example.com"},
+					OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
 				}
 				if spec.Transport.Target != "localhost:3000" || !reflect.DeepEqual(*spec.HTTP.Auth, want) {
 					t.Fatalf("target = %q, auth = %+v", spec.Transport.Target, *spec.HTTP.Auth)
@@ -176,14 +176,14 @@ func TestConfigSpecResolvesComponents(t *testing.T) {
 			name: "saml",
 			input: func() Config {
 				cfg := Config{TargetAddr: "localhost:3000"}
-				cfg.Provider, cfg.AllowedWallets, cfg.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
+				cfg.Provider, cfg.Allow, cfg.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
 				cfg.SAMLMetadataURL, cfg.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
 				return cfg
 			},
 			check: func(t *testing.T, spec Spec) {
-				want := appauth.ApplicationAuthConfig{
-					Provider:        appauth.ApplicationAuthProviderSAML,
-					AllowedWallets:  []string{"@example.com", "sub:G-7f3a"},
+				want := appauth.Config{
+					Provider:        appauth.ProviderSAML,
+					Allow:           []string{"@example.com", "sub:G-7f3a"},
 					IdentityHeaders: true,
 					SAMLConfig:      appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLSubjectAttribute: "email"},
 				}

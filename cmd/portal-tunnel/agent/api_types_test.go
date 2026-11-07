@@ -39,16 +39,16 @@ func TestAgentTunnelUpdateRequestJSON(t *testing.T) {
 // the desired ones, and applying it gives the desired settings. The write-only
 // client secret is never among the changes, so the stored one stays.
 func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
-	stored := appauth.ApplicationAuthConfig{
-		Provider:        appauth.ApplicationAuthProviderOIDC,
-		AllowedWallets:  []string{"alice@example.com"},
+	stored := appauth.Config{
+		Provider:        appauth.ProviderOIDC,
+		Allow:           []string{"alice@example.com"},
 		IdentityHeaders: true,
 		OIDCConfig:      appauth.OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: "client", OIDCClientSecret: "secret"},
 	}
-	desired := appauth.ApplicationAuthConfig{
-		Provider:       appauth.ApplicationAuthProviderSAML,
-		AllowedWallets: []string{"alice@example.com"},
-		SAMLConfig:     appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"},
+	desired := appauth.Config{
+		Provider:   appauth.ProviderSAML,
+		Allow:      []string{"alice@example.com"},
+		SAMLConfig: appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"},
 	}
 	changes := authChanges(stored, desired)
 	want := map[string]json.RawMessage{
@@ -79,7 +79,7 @@ func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
 func TestApplyAuthLeavesTheStoredListsAlone(t *testing.T) {
 	t.Parallel()
 
-	stored := appauth.ApplicationAuthConfig{Provider: "oidc", AllowedWallets: []string{"a@example.com"}, EmailList: []string{"b@example.com"}}
+	stored := appauth.Config{Provider: "oidc", Allow: []string{"a@example.com"}, EmailList: []string{"b@example.com"}}
 	applied := stored
 	request := AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{
 		"auth_allowed_wallets": json.RawMessage(`["c@example.com"]`),
@@ -88,7 +88,7 @@ func TestApplyAuthLeavesTheStoredListsAlone(t *testing.T) {
 	if err := request.applyAuth(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if stored.AllowedWallets[0] != "a@example.com" || stored.EmailList[0] != "b@example.com" {
-		t.Fatalf("stored lists changed: %v, %v", stored.AllowedWallets, stored.EmailList)
+	if stored.Allow[0] != "a@example.com" || stored.EmailList[0] != "b@example.com" {
+		t.Fatalf("stored lists changed: %v, %v", stored.Allow, stored.EmailList)
 	}
 }

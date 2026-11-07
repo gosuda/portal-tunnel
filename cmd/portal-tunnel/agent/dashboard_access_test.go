@@ -36,19 +36,19 @@ const fakeSecret = "not-a-real-secret-0123"
 func testAccessStatus() AgentStatusResponse {
 	status := testDashboardStatus()
 	web, api, paid, idle := &status.Tunnels[0], &status.Tunnels[1], &status.Tunnels[2], &status.Tunnels[4]
-	web.Provider = appauth.ApplicationAuthProviderOIDC
-	web.AllowedWallets = []string{"alice@example.com", "@corp.example.com", "sub:4f2a9c"}
+	web.Provider = appauth.ProviderOIDC
+	web.Allow = []string{"alice@example.com", "@corp.example.com", "sub:4f2a9c"}
 	web.IdentityHeaders = true
 	web.OIDCIssuerURL = "https://accounts.example.com"
 	web.OIDCClientID = "portal-web"
 	web.AuthOIDCClientSecretSet = true
 	web.AuthProviderChecked = true
 	web.AuthProviderError = "fetch oidc discovery: no such host"
-	api.Provider = appauth.ApplicationAuthProviderSIWE
-	api.AllowedWallets = []string{"0x52908400098527886E0F7030069857D2E4169EE7"}
-	paid.Provider = appauth.ApplicationAuthProviderCredential
-	idle.Provider = appauth.ApplicationAuthProviderOIDC
-	idle.AllowedWallets = []string{"bob@example.com"}
+	api.Provider = appauth.ProviderSIWE
+	api.Allow = []string{"0x52908400098527886E0F7030069857D2E4169EE7"}
+	paid.Provider = appauth.ProviderCredential
+	idle.Provider = appauth.ProviderOIDC
+	idle.Allow = []string{"bob@example.com"}
 	idle.OIDCIssuerURL = "https://login.example.org"
 	idle.OIDCClientID = "portal-idle"
 	return status
@@ -63,7 +63,7 @@ func TestDashboardAccessStoredEmailPassword(t *testing.T) {
 	typed := func(text string) tea.Msg { return keyRunes(text) }
 	status := testAccessStatus()
 	mail := &status.Tunnels[accessOpen]
-	mail.Provider = appauth.ApplicationAuthProviderEmail
+	mail.Provider = appauth.ProviderEmail
 	mail.EmailList = []string{"alice@example.com"}
 	mail.EmailConfig = appauth.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "portal", SMTPFrom: "login@example.com"}
 	mail.AuthSMTPPasswordSet = true
@@ -159,7 +159,7 @@ func TestDashboardSettingsListOnlyTheFirstEntriesOfALongAllowList(t *testing.T) 
 	for _, name := range []string{"a", "b", "c", "d", "e", "f"} {
 		entries = append(entries, name+"@example.com")
 	}
-	status.Tunnels[0].AllowedWallets = entries
+	status.Tunnels[0].Allow = entries
 	view := settingsOf(t, status, 0)
 	if !strings.Contains(view, "d@example.com") || strings.Contains(view, "e@example.com") || !strings.Contains(view, "+2 more") {
 		t.Fatalf("the allow list should list four entries and count the rest:\n%s", view)
@@ -189,12 +189,12 @@ func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 // The wording of an empty allow list repeats a rule of the gateway, so it is checked against the
 // gateway's own validator.
 func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
-	for _, provider := range []string{appauth.ApplicationAuthProviderCredential, appauth.ApplicationAuthProviderSIWE, appauth.ApplicationAuthProviderOIDC} {
-		cfg := appauth.ApplicationAuthConfig{Provider: provider}
-		if provider == appauth.ApplicationAuthProviderOIDC {
+	for _, provider := range []string{appauth.ProviderCredential, appauth.ProviderSIWE, appauth.ProviderOIDC} {
+		cfg := appauth.Config{Provider: provider}
+		if provider == appauth.ProviderOIDC {
 			cfg.OIDCIssuerURL, cfg.OIDCClientID = "https://accounts.example.com", "portal-web"
 		}
-		emptyAllowed := appauth.ValidateApplicationAuthConfig(cfg) == nil
+		emptyAllowed := appauth.Validate(cfg) == nil
 		hint := agentDashboardAllowedHint(provider)
 		switch {
 		case emptyAllowed && !strings.HasPrefix(hint, "any "):
@@ -204,8 +204,8 @@ func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
 		}
 		if !emptyAllowed {
 			// The refusal must be about the empty list and nothing else.
-			cfg.AllowedWallets = []string{"alice@example.com"}
-			if err := appauth.ValidateApplicationAuthConfig(cfg); err != nil {
+			cfg.Allow = []string{"alice@example.com"}
+			if err := appauth.Validate(cfg); err != nil {
 				t.Fatalf("%s with one entry: %v", provider, err)
 			}
 		}
@@ -500,7 +500,7 @@ func TestDashboardAccessApply(t *testing.T) {
 func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	added := testAccessStatus()
-	added.Tunnels[accessWeb].AllowedWallets = append(added.Tunnels[accessWeb].AllowedWallets, "carol@example.com")
+	added.Tunnels[accessWeb].Allow = append(added.Tunnels[accessWeb].Allow, "carol@example.com")
 
 	model := accessScreen(t, theme, testAccessStatus(), accessWeb, append(downs(4), keyRunes("carol@example.com"), keyEnter)...)
 	model = send(press1(model, keyF2), agentDashboardAccessMsg{tunnelID: "web"})
@@ -526,7 +526,7 @@ func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) 
 func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	elsewhere := testAccessStatus()
-	elsewhere.Tunnels[accessWeb].AllowedWallets = []string{"alice@example.com", "dave@example.com"}
+	elsewhere.Tunnels[accessWeb].Allow = []string{"alice@example.com", "dave@example.com"}
 	elsewhere.Tunnels[accessWeb].OIDCClientID = "portal-web-2"
 
 	for _, tt := range []struct {
@@ -602,7 +602,7 @@ func TestDashboardAccessAppliesOneAtATime(t *testing.T) {
 
 	t.Run("an edit made while it runs is dropped for the stored settings", func(t *testing.T) {
 		applied := testAccessStatus()
-		applied.Tunnels[accessWeb].AllowedWallets = append(applied.Tunnels[accessWeb].AllowedWallets, "carol@example.com")
+		applied.Tunnels[accessWeb].Allow = append(applied.Tunnels[accessWeb].Allow, "carol@example.com")
 		model := press1(accessScreen(t, theme, testAccessStatus(), accessWeb, typedEntry...), keyF2)
 		model = press1(model, keyRunes("erin@example.com"), keyEnter)
 		model = send(model, agentDashboardStatusMsg{status: applied})
@@ -833,7 +833,7 @@ func TestDashboardAccessFollowsTheFocusInALongList(t *testing.T) {
 	for i := range entries {
 		entries[i] = fmt.Sprintf("user%02d@example.com", i)
 	}
-	status.Tunnels[accessWeb].AllowedWallets = entries
+	status.Tunnels[accessWeb].Allow = entries
 
 	for _, size := range [][2]int{{80, 24}, {100, 30}} {
 		model := newTestDashboard(t, theme, size[0], size[1], agentDashboardStatusMsg{status: status}, keyF4)
@@ -874,7 +874,7 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 		// app has one entry, so its focus ring is mode, entry 1, add 2, headers 3, issuer 4, client ID 5, secret 6.
 		{"remove the stored secret and add an entry", 0, []tea.Msg{keyUp, keyF6, keyDown, keyDown, keyDown, typed("carol@example.com"), keyEnter},
 			func(t *testing.T, saved TunnelConfig) {
-				if !slices.Equal(saved.AllowedWallets, []string{"alice@example.com", "carol@example.com"}) || saved.OIDCClientSecret != "" {
+				if !slices.Equal(saved.Allow, []string{"alice@example.com", "carol@example.com"}) || saved.OIDCClientSecret != "" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
@@ -898,19 +898,19 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 			}},
 		{"OIDC to wallet", 0, []tea.Msg{keyLeft, keyDown, typed(wallet), keyEnter},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.Provider != "siwe" || len(saved.AllowedWallets) != 1 || saved.OIDCIssuerURL != "" || saved.OIDCClientID != "" || saved.OIDCClientSecret != "" {
+				if saved.Provider != "siwe" || len(saved.Allow) != 1 || saved.OIDCIssuerURL != "" || saved.OIDCClientID != "" || saved.OIDCClientSecret != "" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"wallet to credential", 0, []tea.Msg{keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.Provider != "credential" || len(saved.AllowedWallets) != 0 {
+				if saved.Provider != "credential" || len(saved.Allow) != 0 {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"credential to open", 0, []tea.Msg{keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if auth := saved.ApplicationAuthConfig; !auth.IsZero() {
+				if auth := saved.AuthConfig; !auth.IsZero() {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},

@@ -74,7 +74,7 @@ type UDPConfig struct {
 type HTTPConfig struct {
 	Routes  []HTTPRoute
 	Serve   string
-	Auth    *appauth.ApplicationAuthConfig
+	Auth    *appauth.Config
 	Payment gateway.X402Payment
 	Cache   *CacheConfig
 	// StripRequestHeaders lists client request headers removed before
@@ -164,7 +164,7 @@ func (spec Spec) Validate() error {
 		return errCasperPaymentsRequireAnAsset
 	}
 	if auth := httpConfig.Auth; auth != nil {
-		if err := appauth.ValidateApplicationAuthConfig(*auth); err != nil {
+		if err := appauth.Validate(*auth); err != nil {
 			return err
 		}
 	}
@@ -252,7 +252,9 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 
 	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
 	if err == nil && spec.HTTP.Auth != nil {
-		handler, err = appauth.NewApplicationAuth(handler, listenerIdentity, *spec.HTTP.Auth, runtime.publicURLs)
+		auth := *spec.HTTP.Auth
+		auth.PublicURLs = runtime.publicURLs
+		handler, err = appauth.New(handler, listenerIdentity, auth)
 	}
 	if err == nil && len(spec.HTTP.StripRequestHeaders) > 0 {
 		handler, err = gateway.NewStripRequestHeaders(handler, spec.HTTP.StripRequestHeaders)
@@ -266,7 +268,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 		// Only a warning: the provider may come back, and every login retries it.
 		// A tunnel stopped during the check cancels it, which is not an outage.
 		go func() {
-			err := appauth.CheckApplicationAuthProvider(ctx, *spec.HTTP.Auth)
+			err := appauth.Check(ctx, *spec.HTTP.Auth)
 			if ctx.Err() != nil {
 				return
 			}

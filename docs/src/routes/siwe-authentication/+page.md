@@ -474,6 +474,12 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 
 A `403` means that the tunnel is not published at that host now.
 
+## Go Programs
+
+A Go program that embeds the SDK can put the same gate in front of its own handler
+with package `sdk/appauth`. It takes the same providers and the same settings.
+See [Go Application Auth](/api-reference/sdk#go-application-auth).
+
 ## Agent Wallet Status Access
 
 Relay admin access uses `ADMIN_TOKEN`, not SIWE.

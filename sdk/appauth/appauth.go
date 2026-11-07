@@ -40,6 +40,7 @@ var (
 	errProviderRedirectedTooManyTimes   = errors.New("identity provider redirected too many times")
 	errEmailPrincipalsMustASCII         = errors.New("email principals must be ASCII; write internationalized domains in punycode")
 	errApplicationAuthHandlerIsRequired = errors.New("application auth handler is required")
+	errEmailRequiresPublicURLs          = errors.New("email requires PublicURLs: without them no host qualifies for a login link")
 	errMissingIDTokenTokenResponse      = errors.New("missing id_token in token response")
 	errIDTokenExpiryIsRequired          = errors.New("id_token expiry is required")
 	errIDTokenNonceMismatch             = errors.New("id_token nonce mismatch")
@@ -52,13 +53,18 @@ var (
 	errRequestMustContainOneJSONValue   = errors.New("request must contain one JSON value")
 )
 
+// ReservedPathPrefix is the path prefix the gate keeps for itself. A request for
+// one of its endpoints never reaches the application, so an application must not
+// serve its own routes under this prefix: a later release may add an endpoint.
+const ReservedPathPrefix = "/_portal/auth/"
+
 const (
-	applicationAuthLoginPath       = "/_portal/auth/login"
-	applicationAuthChallengePath   = "/_portal/auth/challenge"
-	applicationAuthVerifyPath      = "/_portal/auth/verify"
-	applicationAuthRedeemPath      = "/_portal/auth/redeem"
-	applicationAuthCallbackPath    = "/_portal/auth/callback"
-	applicationAuthLogoutPath      = "/_portal/auth/logout"
+	applicationAuthLoginPath       = ReservedPathPrefix + "login"
+	applicationAuthChallengePath   = ReservedPathPrefix + "challenge"
+	applicationAuthVerifyPath      = ReservedPathPrefix + "verify"
+	applicationAuthRedeemPath      = ReservedPathPrefix + "redeem"
+	applicationAuthCallbackPath    = ReservedPathPrefix + "callback"
+	applicationAuthLogoutPath      = ReservedPathPrefix + "logout"
 	applicationAuthCookieName      = "__Host-portal_access"
 	applicationAuthOIDCStateCookie = "__Host-portal_oidc_state"
 	applicationAuthSessionTTL      = 24 * time.Hour
@@ -96,43 +102,60 @@ var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
 
 type principalContextKey struct{}
 
-// Principal is the visitor the gate signed in: the provider that vouched for
-// them and the subject it named.
+// Principal is the visitor the gate signed in.
 type Principal struct {
+	// Provider is the method that signed the visitor in, such as ProviderOIDC.
 	Provider string
-	Subject  string
+	// Subject is the principal the allowlist checks: a wallet address, a
+	// credential subject, an email, or a sub:<subject> entry.
+	Subject string
+	// Email is the address oidc, saml or email vouches for, also when Subject
+	// is a sub: entry, and empty when there is none. An OIDC email counts only
+	// with email_verified. It is the value from the sign-in: the allowlist checks
+	// Subject on each request, not this. A session from before this field reads
+	// as no email until the visitor signs in again.
+	Email string
 }
 
-// PrincipalFromContext returns the visitor of a request that passed the gate.
-// Without a gate in front of the handler there is none.
+// PrincipalFromContext returns the visitor of a request that passed the gate,
+// with or without Config.IdentityHeaders. Without a gate in front of the handler
+// there is none.
 func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 	principal, ok := ctx.Value(principalContextKey{}).(Principal)
 	return principal, ok
 }
 
-// ApplicationAuthConfig configures the tunnel-local application access gate.
-// It is the auth component of a tunnel config: the agent config, the Agent API
-// and the runtime carry it as it is, under its auth and auth_* keys, so a new
-// provider setting is added here and in resolveApplicationAuthConfig only.
-// AllowedWallets holds the provider-scoped principal allowlist: Ethereum wallet
-// addresses for siwe, credential subjects for credential. EmailList is the same
-// list for the providers that name a visitor by email: verified emails, @domain
-// entries, or sub: subjects for oidc and saml, and emails or @domain entries for
-// email. A tunnel runs one provider, so the one list can mean either. oidc and
-// saml also read AllowedWallets, where released configs keep it; use Allowed to
-// read the list. IdentityProof is a secret, like OIDCClientSecret and
-// SMTPPassword: it is sent upstream with the identity headers and must not be
-// logged. Only portal expose sets it; the agent config and the Agent API have no
-// key for it.
-type ApplicationAuthConfig struct {
+// Config configures the application sign-in gate. It is the auth component of a
+// tunnel config: the agent config, the Agent API and the runtime carry it as it
+// is, under its auth and auth_* keys.
+//
+// Allow holds the provider-scoped principal allowlist: Ethereum wallet addresses
+// for siwe, credential subjects for credential. EmailList is the same list for
+// the providers that name a visitor by email: verified emails, @domain entries,
+// or sub: subjects for oidc and saml, and emails or @domain entries for email. A
+// gate runs one provider, so the one list can mean either. oidc and saml also
+// read Allow, where released configs keep it; use Allowed to read the list. oidc,
+// saml and email refuse an empty list. An empty list opens siwe to any wallet and
+// credential to any credential issued from the gate's identity.
+//
+// IdentityProof is a secret, like OIDCClientSecret and SMTPPassword: it is sent
+// upstream with the identity headers and must not be logged. Only portal expose
+// sets it; the agent config and the Agent API have no key for it.
+//
+// PublicURLs lists the URLs the application is reachable at now, and the email
+// provider requires it: a request names its own Host, so a login link is mailed
+// only for a host on that list. It is called on each request and is no setting,
+// so no config format carries it.
+type Config struct {
 	Provider        string   `json:"auth,omitempty" toml:"auth,omitempty"`
-	AllowedWallets  []string `json:"auth_allowed_wallets,omitempty" toml:"auth_allowed_wallets,omitempty"`
+	Allow           []string `json:"auth_allowed_wallets,omitempty" toml:"auth_allowed_wallets,omitempty"`
 	EmailList       []string `json:"auth_email_list,omitempty" toml:"auth_email_list,omitempty"`
 	IdentityHeaders bool     `json:"auth_identity_headers,omitempty" toml:"auth_identity_headers,omitempty"`
 	IdentityProof   string   `json:"-" toml:"-"`
 	OIDCConfig
 	SAMLConfig
 	EmailConfig
+	PublicURLs func() []string `json:"-" toml:"-"`
 }
 
 // OIDCConfig holds the settings of the oidc provider; any other provider
@@ -166,17 +189,17 @@ type EmailConfig struct {
 
 // Allowed returns the allowlist from the key that holds it. Validation refuses a
 // config that sets both.
-func (c ApplicationAuthConfig) Allowed() []string {
+func (c Config) Allowed() []string {
 	if len(c.EmailList) > 0 {
 		return c.EmailList
 	}
-	return c.AllowedWallets
+	return c.Allow
 }
 
 // IsZero reports whether no auth setting is given. Any setting asks for the
 // sign-in gate, so an incomplete one fails validation instead of leaving the
 // application open.
-func (c ApplicationAuthConfig) IsZero() bool {
+func (c Config) IsZero() bool {
 	return c.Provider == "" && len(c.Allowed()) == 0 && !c.IdentityHeaders && c.IdentityProof == "" &&
 		c.OIDCConfig == (OIDCConfig{}) && c.SAMLConfig == (SAMLConfig{}) && c.EmailConfig == (EmailConfig{})
 }
@@ -184,9 +207,9 @@ func (c ApplicationAuthConfig) IsZero() bool {
 // Normalize returns c in the form a config stores: the provider in lower case,
 // the allowlist normalized for that provider, and the provider settings without
 // surrounding spaces. The identity proof is kept byte for byte. Validation stays
-// with resolveApplicationAuthConfig, except that an allowlist next to an
-// unknown provider is refused here already.
-func (c ApplicationAuthConfig) Normalize() (ApplicationAuthConfig, error) {
+// with Validate, except that an allowlist next to an unknown provider is refused
+// here already.
+func (c Config) Normalize() (Config, error) {
 	c.Provider = strings.ToLower(strings.TrimSpace(c.Provider))
 	c.OIDCIssuerURL = strings.TrimSpace(c.OIDCIssuerURL)
 	c.OIDCClientID = strings.TrimSpace(c.OIDCClientID)
@@ -199,20 +222,20 @@ func (c ApplicationAuthConfig) Normalize() (ApplicationAuthConfig, error) {
 	c.SMTPUsername = strings.TrimSpace(c.SMTPUsername)
 	c.SMTPPassword = strings.TrimSpace(c.SMTPPassword)
 	c.SMTPFrom = strings.TrimSpace(c.SMTPFrom)
-	c.AllowedWallets, c.EmailList = slices.Clone(c.AllowedWallets), slices.Clone(c.EmailList)
+	c.Allow, c.EmailList = slices.Clone(c.Allow), slices.Clone(c.EmailList)
 	if c.Provider == "" {
 		return c, nil
 	}
 	var err error
-	if len(c.AllowedWallets) > 0 {
-		if c.AllowedWallets, err = NormalizeApplicationAuthAllowed(c.Provider, c.AllowedWallets); err != nil {
+	if len(c.Allow) > 0 {
+		if c.Allow, err = normalizeAllowed(c.Provider, c.Allow); err != nil {
 			return c, err
 		}
 	}
 	// A provider that does not take the list reads it as what it is not, so
 	// resolveApplicationAuthConfig names the mistake instead.
-	if len(c.EmailList) > 0 && ApplicationAuthProviderTakesEmailList(c.Provider) {
-		if c.EmailList, err = NormalizeApplicationAuthAllowed(c.Provider, c.EmailList); err != nil {
+	if len(c.EmailList) > 0 && ProviderTakesEmailList(c.Provider) {
+		if c.EmailList, err = normalizeAllowed(c.Provider, c.EmailList); err != nil {
 			return c, err
 		}
 	}
@@ -221,8 +244,8 @@ func (c ApplicationAuthConfig) Normalize() (ApplicationAuthConfig, error) {
 
 // Public returns c without its secrets, the identity proof, the OIDC client
 // secret and the SMTP password, for a status that must not reveal them.
-func (c ApplicationAuthConfig) Public() ApplicationAuthConfig {
-	c.AllowedWallets, c.EmailList = slices.Clone(c.AllowedWallets), slices.Clone(c.EmailList)
+func (c Config) Public() Config {
+	c.Allow, c.EmailList = slices.Clone(c.Allow), slices.Clone(c.EmailList)
 	c.IdentityProof = ""
 	c.OIDCClientSecret = ""
 	c.SMTPPassword = ""
@@ -248,6 +271,7 @@ type applicationAuth struct {
 type applicationAuthClaims struct {
 	Subject   string `json:"sub"`
 	Provider  string `json:"auth,omitempty"`
+	Email     string `json:"email,omitempty"`
 	Host      string `json:"host"`
 	ExpiresAt int64  `json:"exp"`
 	// Binding names the OIDC issuer and client, the SAML identity provider
@@ -418,14 +442,14 @@ func checkProviderRedirect(req *http.Request, via []*http.Request) error {
 	return fmt.Errorf("identity provider redirected to a non-https url: %s", req.URL.Redacted())
 }
 
-// NormalizeApplicationAuthProviderPrincipals canonicalizes the allowed
+// normalizeProviderPrincipals canonicalizes the allowed
 // principals of an identity provider, oidc or saml (`--auth-email-list` /
 // `auth_email_list`). Email addresses (containing '@') are lowercased and
 // match an email the provider vouches for only, '@example.com' domain entries
 // match that exact email domain, and `sub:<subject>` entries match the opaque
 // provider subject exactly, including case. Subject entries must carry the
 // sub: prefix so an email-shaped subject cannot impersonate an email entry.
-func NormalizeApplicationAuthProviderPrincipals(values []string) ([]string, error) {
+func normalizeProviderPrincipals(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -530,12 +554,14 @@ func isUnsafeRedirectRune(r rune) bool {
 	return r < 0x20 || r == 0x7f || r == '\\'
 }
 
-// NewApplicationAuth protects the complete HTTP gateway with tunnel-local
-// authentication. Its reserved login endpoints are the only bypass paths.
-// publicURLs lists the URLs the tunnel is reachable at now. Only the email
-// provider uses it: a request names its own Host, so a login link is mailed
-// only for a host on that list, and a nil publicURLs mails none.
-func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg ApplicationAuthConfig, publicURLs func() []string) (http.Handler, error) {
+// New wraps next in the sign-in gate. A request reaches next only when it carries
+// a valid session or credential, and the gate's endpoints under
+// ReservedPathPrefix are the only other paths it answers. New reads no network,
+// so a provider outage cannot keep it from building a gate: use Check to test the
+// provider. A gate built from the same id, including its TokenSecret, and the same
+// provider settings accepts the sessions of an earlier gate; the allowlist is
+// checked again on every request.
+func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error) {
 	if next == nil {
 		return nil, errApplicationAuthHandlerIsRequired
 	}
@@ -543,7 +569,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	if err != nil {
 		return nil, err
 	}
-	signingKey, err := identity.DeriveToken(tunnelIdentity, "application-access-auth")
+	signingKey, err := identity.DeriveToken(id, "application-access-auth")
 	if err != nil {
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
@@ -556,7 +582,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		allowAnySubject = true
 	)
 	switch settings.provider {
-	case ApplicationAuthProviderSIWE:
+	case ProviderSIWE:
 		siwe, err = siweauth.New(siweauth.Config{
 			AllowedAddresses: settings.allowed,
 			AllowAnyAddress:  len(settings.allowed) == 0,
@@ -566,7 +592,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		if err != nil {
 			return nil, err
 		}
-	case ApplicationAuthProviderCredential:
+	case ProviderCredential:
 		if len(settings.allowed) > 0 {
 			allowAnySubject = false
 			allowedSubjects = make(map[string]struct{}, len(settings.allowed))
@@ -574,7 +600,7 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 				allowedSubjects[subject] = struct{}{}
 			}
 		}
-	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML:
+	case ProviderOIDC, ProviderSAML:
 		// An identity provider never runs open: resolveApplicationAuthConfig
 		// rejects an empty allowlist, because any account at the provider would pass.
 		allowAnySubject = false
@@ -582,16 +608,19 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		for _, principal := range settings.allowed {
 			allowedSubjects[principal] = struct{}{}
 		}
-		stateKey, err := identity.DeriveToken(tunnelIdentity, "application-access-"+settings.provider+"-state")
+		stateKey, err := identity.DeriveToken(id, "application-access-"+settings.provider+"-state")
 		if err != nil {
 			return nil, fmt.Errorf("derive %s state signing key: %w", settings.provider, err)
 		}
-		if settings.provider == ApplicationAuthProviderOIDC {
+		if settings.provider == ProviderOIDC {
 			oidc = newOIDCAuthenticator(settings, []byte(stateKey))
 		} else {
 			saml = newSAMLAuthenticator(settings, []byte(stateKey))
 		}
-	case ApplicationAuthProviderEmail:
+	case ProviderEmail:
+		if cfg.PublicURLs == nil {
+			return nil, errEmailRequiresPublicURLs
+		}
 		// Like an identity provider, email never runs open: resolveApplicationAuthConfig
 		// rejects an empty allowlist.
 		allowAnySubject = false
@@ -599,16 +628,16 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 		for _, principal := range settings.allowed {
 			allowedSubjects[principal] = struct{}{}
 		}
-		email = newEmailAuthenticator(settings, publicURLs)
+		email = newEmailAuthenticator(settings, cfg.PublicURLs)
 	}
-	credentialKey, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
+	credentialKey, err := identity.DeriveToken(id, applicationCredentialKeyUse)
 	if err != nil {
 		return nil, fmt.Errorf("derive application credential key: %w", err)
 	}
 	return &applicationAuth{
 		next:            next,
 		provider:        settings.provider,
-		tunnelIdentity:  tunnelIdentity,
+		tunnelIdentity:  id,
 		signingKey:      []byte(signingKey),
 		credentialKey:   []byte(credentialKey),
 		siwe:            siwe,
@@ -622,26 +651,25 @@ func NewApplicationAuth(next http.Handler, tunnelIdentity types.Identity, cfg Ap
 	}, nil
 }
 
-// CheckApplicationAuthProvider fetches what the first login needs, the OIDC
-// discovery document and signing keys or the SAML metadata, or signs in to the
-// SMTP server without sending, so that a wrong issuer, metadata source, SMTP
-// setting or an unreachable provider shows when the tunnel starts instead of to
-// the first visitor who tries to sign in. The email check matters most, because
-// a visitor is never told that a mail could not be sent. Other providers depend
-// on nothing outside the tunnel.
-func CheckApplicationAuthProvider(ctx context.Context, cfg ApplicationAuthConfig) error {
+// Check fetches what the first login needs, the OIDC discovery document and
+// signing keys or the SAML metadata, or signs in to the SMTP server without
+// sending, so that a wrong issuer, metadata source, SMTP setting or an unreachable
+// provider shows at startup instead of to the first visitor who tries to sign in.
+// The email check matters most, because a visitor is never told that a mail could
+// not be sent. Other providers depend on nothing outside the gate.
+func Check(ctx context.Context, cfg Config) error {
 	settings, err := resolveApplicationAuthConfig(cfg)
 	if err != nil {
 		return err
 	}
 	switch settings.provider {
-	case ApplicationAuthProviderOIDC:
+	case ProviderOIDC:
 		o := newOIDCAuthenticator(settings, nil)
 		// The keys are fetched through the discovery document.
 		_, err = o.jwks.get(ctx, providerMetadataCacheTTL, o.fetchJWKS)
-	case ApplicationAuthProviderSAML:
+	case ProviderSAML:
 		_, err = newSAMLAuthenticator(settings, nil).identityProvider(ctx)
-	case ApplicationAuthProviderEmail:
+	case ProviderEmail:
 		err = newEmailAuthenticator(settings, nil).check(ctx)
 	}
 	return err
@@ -674,7 +702,7 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case applicationAuthLogoutPath:
 		a.serveLogout(w, r)
 	default:
-		subject, provider, ok := a.authenticate(r, credential)
+		principal, ok := a.authenticate(r, credential)
 		if !ok {
 			a.requireLogin(w, r)
 			return
@@ -685,13 +713,13 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		stripApplicationAuthCookie(r)
 		if a.identityHeaders {
-			r.Header.Set(types.HeaderPortalUser, subject)
-			r.Header.Set(types.HeaderPortalAuth, provider)
+			r.Header.Set(types.HeaderPortalUser, principal.Subject)
+			r.Header.Set(types.HeaderPortalAuth, principal.Provider)
 			if a.identityProof != "" {
 				r.Header.Set(types.HeaderPortalProof, a.identityProof)
 			}
 		}
-		a.next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, Principal{Provider: provider, Subject: subject})))
+		a.next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)))
 	}
 }
 
@@ -706,11 +734,11 @@ func stripApplicationAuthCookie(r *http.Request) {
 }
 
 func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
-	if a.provider == ApplicationAuthProviderOIDC && a.oidc != nil {
+	if a.provider == ProviderOIDC && a.oidc != nil {
 		a.oidc.serveLogin(w, r)
 		return
 	}
-	if a.provider == ApplicationAuthProviderSAML && a.saml != nil {
+	if a.provider == ProviderSAML && a.saml != nil {
 		a.saml.serveLogin(w, r)
 		return
 	}
@@ -725,9 +753,9 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	page := signinWalletPage
 	switch a.provider {
-	case ApplicationAuthProviderCredential:
+	case ProviderCredential:
 		page = signinCredentialPage
-	case ApplicationAuthProviderEmail:
+	case ProviderEmail:
 		page = signinEmailPage
 	}
 	writeSigninPage(w, page, r.Host)
@@ -754,7 +782,7 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "oidc discovery failed", http.StatusBadGateway)
 		return
 	}
-	host, err := NormalizeApplicationAuthHost(r.Host)
+	host, err := normalizeHost(r.Host)
 	if err != nil {
 		http.Error(w, "invalid request host", http.StatusBadRequest)
 		return
@@ -806,7 +834,7 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderOIDC || a.oidc == nil {
+	if a.provider != ProviderOIDC || a.oidc == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -840,7 +868,7 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	}
 
 	now := time.Now().UTC()
-	host, err := NormalizeApplicationAuthHost(r.Host)
+	host, err := normalizeHost(r.Host)
 	if err != nil {
 		a.writeJSONError(w, http.StatusBadRequest, "invalid request host")
 		return
@@ -893,7 +921,7 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	// would loop through the provider. The allowlist is checked on every request,
 	// so revoking a principal does not wait for the session to end.
 	lifetime := min(max(claims.Expiry.Time().Sub(now), providerMinSessionTTL), applicationAuthSessionTTL)
-	if err := a.setSession(w, subject, ApplicationAuthProviderOIDC, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderOIDC, Subject: subject, Email: providerEmail(email)}, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -1190,7 +1218,7 @@ func fetchOIDCJSON(ctx context.Context, client *http.Client, targetURL string, d
 }
 
 func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderSIWE {
+	if a.provider != ProviderSIWE {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -1221,7 +1249,7 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderSIWE {
+	if a.provider != ProviderSIWE {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -1245,7 +1273,7 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
 		return
 	}
-	if err := a.setSession(w, address, ApplicationAuthProviderSIWE, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderSIWE, Subject: address}, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -1253,7 +1281,7 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderCredential {
+	if a.provider != ProviderCredential {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -1281,7 +1309,7 @@ func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
 	if sessionExpiry := now.Add(applicationAuthSessionTTL); sessionExpiry.Before(expiresAt) {
 		expiresAt = sessionExpiry
 	}
-	if err := a.setSession(w, claims.Subject, ApplicationAuthProviderCredential, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderCredential, Subject: claims.Subject}, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -1297,54 +1325,54 @@ func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *applicationAuth) authenticate(r *http.Request, credential string) (string, string, bool) {
+func (a *applicationAuth) authenticate(r *http.Request, credential string) (Principal, bool) {
 	if credential != "" {
-		if a.provider != ApplicationAuthProviderCredential {
-			return "", "", false
+		if a.provider != ProviderCredential {
+			return Principal{}, false
 		}
 		claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
 		if err == nil && a.subjectAllowed(claims.Subject) {
-			return claims.Subject, ApplicationAuthProviderCredential, true
+			return Principal{Provider: ProviderCredential, Subject: claims.Subject}, true
 		}
-		return "", "", false
+		return Principal{}, false
 	}
 	return a.authenticateSession(r)
 }
 
-func (a *applicationAuth) authenticateSession(r *http.Request) (string, string, bool) {
+func (a *applicationAuth) authenticateSession(r *http.Request) (Principal, bool) {
 	cookie, err := r.Cookie(applicationAuthCookieName)
 	if err != nil {
-		return "", "", false
+		return Principal{}, false
 	}
 	var claims applicationAuthClaims
 	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !sameApplicationHost(claims.Host, r.Host) || time.Now().UTC().Unix() >= claims.ExpiresAt {
-		return "", "", false
+		return Principal{}, false
 	}
 	provider := claims.Provider
 	if provider != a.provider {
-		return "", "", false
+		return Principal{}, false
 	}
-	if provider == ApplicationAuthProviderSIWE {
+	if provider == ProviderSIWE {
 		address, err := identity.NormalizeEVMAddress(claims.Subject)
 		if err != nil || a.siwe == nil || !a.siwe.AddressAllowed(address) {
-			return "", "", false
+			return Principal{}, false
 		}
-		return address, provider, true
+		return Principal{Provider: provider, Subject: address}, true
 	}
 	var subject string
 	switch provider {
-	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML, ApplicationAuthProviderEmail:
+	case ProviderOIDC, ProviderSAML, ProviderEmail:
 		if binding := a.binding(); binding == "" || claims.Binding != binding {
-			return "", "", false
+			return Principal{}, false
 		}
 		subject, err = normalizeProviderPrincipal(claims.Subject)
 	default:
 		subject, err = normalizeApplicationAuthSubject(claims.Subject)
 	}
 	if err != nil || !a.subjectAllowed(subject) {
-		return "", "", false
+		return Principal{}, false
 	}
-	return subject, provider, true
+	return Principal{Provider: provider, Subject: subject, Email: claims.Email}, true
 }
 
 func (a *applicationAuth) subjectAllowed(subject string) bool {
@@ -1357,7 +1385,7 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	if _, ok := a.allowedSubjects[subject]; ok {
 		return true
 	}
-	if a.provider != ApplicationAuthProviderOIDC && a.provider != ApplicationAuthProviderSAML && a.provider != ApplicationAuthProviderEmail {
+	if a.provider != ProviderOIDC && a.provider != ProviderSAML && a.provider != ProviderEmail {
 		return false
 	}
 	// A `sub:` session subject is an opaque subject principal: it matches only
@@ -1377,8 +1405,8 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	return false
 }
 
-func (a *applicationAuth) issueSession(subject, provider, host string, expiresAt time.Time) (string, error) {
-	claims := applicationAuthClaims{Subject: subject, Provider: provider, Host: host, ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
+func (a *applicationAuth) issueSession(principal Principal, host string, expiresAt time.Time) (string, error) {
+	claims := applicationAuthClaims{Subject: principal.Subject, Provider: principal.Provider, Email: principal.Email, Host: host, ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
 	return encodeSignedApplicationAuthJSON(a.signingKey, claims)
 }
 
@@ -1398,8 +1426,8 @@ func (a *applicationAuth) binding() string {
 	}
 }
 
-func (a *applicationAuth) setSession(w http.ResponseWriter, subject, provider, host string, now, expiresAt time.Time) error {
-	token, err := a.issueSession(subject, provider, host, expiresAt)
+func (a *applicationAuth) setSession(w http.ResponseWriter, principal Principal, host string, now, expiresAt time.Time) error {
+	token, err := a.issueSession(principal, host, expiresAt)
 	if err != nil {
 		return err
 	}

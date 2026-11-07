@@ -41,10 +41,10 @@ type AgentTunnelStatus struct {
 	MaxActiveRelays int                 `json:"max_active_relays,omitempty"`
 	Metadata        types.LeaseMetadata `json:"metadata"`
 	// The auth settings come without their secrets (see
-	// appauth.ApplicationAuthConfig.Public). The OIDC client secret and the
+	// appauth.Config.Public). The OIDC client secret and the
 	// SMTP password are write-only: AuthOIDCClientSecretSet and
 	// AuthSMTPPasswordSet say whether one is configured.
-	appauth.ApplicationAuthConfig
+	tunnel.AuthConfig
 	AuthOIDCClientSecretSet bool `json:"auth_oidc_client_secret_set,omitempty"`
 	AuthSMTPPasswordSet     bool `json:"auth_smtp_password_set,omitempty"`
 	// The provider fields report the startup check of the OIDC or SAML
@@ -88,7 +88,7 @@ type AgentTunnelRequest struct {
 	Discovery           *bool              `json:"discovery,omitempty"`
 	Overlay             bool               `json:"overlay,omitempty"`
 	MaxActiveRelays     int                `json:"max_active_relays,omitempty"`
-	appauth.ApplicationAuthConfig
+	tunnel.AuthConfig
 	gateway.X402Config
 }
 
@@ -99,7 +99,7 @@ type AgentRelayRequest struct {
 // AgentTunnelUpdateRequest changes the fields it names; an omitted field, or one
 // sent as null, stays as it is. Auth holds the auth and auth_* fields as sent,
 // and they are decoded over the stored auth settings, so a setting added to
-// appauth.ApplicationAuthConfig can be updated without a field of its own here.
+// appauth.Config can be updated without a field of its own here.
 // An empty auth turns application sign-in off and clears the other auth
 // settings. The OIDC client secret and the SMTP password are write-only: an
 // empty value clears one.
@@ -163,7 +163,7 @@ func (r AgentTunnelUpdateRequest) Empty() bool {
 // applyAuth decodes the auth fields of the request over auth, the stored
 // settings, and refuses a field the settings do not have. An empty auth clears
 // the settings and refuses any other auth field next to it.
-func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.ApplicationAuthConfig) error {
+func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.Config) error {
 	if len(r.Auth) == 0 {
 		return nil
 	}
@@ -173,7 +173,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.ApplicationAuthConfig)
 			if len(r.Auth) > 1 {
 				return errAuthEmptyWhichTurnsSignOff
 			}
-			*auth = appauth.ApplicationAuthConfig{}
+			*auth = appauth.Config{}
 			return nil
 		}
 	}
@@ -184,7 +184,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.ApplicationAuthConfig)
 	// Decoding reuses the backing array of a slice, which the stored settings
 	// may share.
 	next := *auth
-	next.AllowedWallets, next.EmailList = slices.Clone(next.AllowedWallets), slices.Clone(next.EmailList)
+	next.Allow, next.EmailList = slices.Clone(next.Allow), slices.Clone(next.EmailList)
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&next); err != nil {
@@ -200,8 +200,8 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.ApplicationAuthConfig)
 // among the changes; a client that changes one names it itself. An update
 // decodes over the stored settings, so it can empty a string, a number, a
 // boolean or a list, and a setting must be one of these.
-func authChanges(stored, desired appauth.ApplicationAuthConfig) map[string]json.RawMessage {
-	fields := func(auth appauth.ApplicationAuthConfig) map[string]json.RawMessage {
+func authChanges(stored, desired appauth.Config) map[string]json.RawMessage {
+	fields := func(auth appauth.Config) map[string]json.RawMessage {
 		data, _ := json.Marshal(auth.Public())
 		var out map[string]json.RawMessage
 		_ = json.Unmarshal(data, &out)

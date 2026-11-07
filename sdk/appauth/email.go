@@ -35,8 +35,8 @@ var (
 )
 
 const (
-	applicationAuthEmailRequestPath = "/_portal/auth/email/request"
-	applicationAuthEmailRedeemPath  = "/_portal/auth/email/redeem"
+	applicationAuthEmailRequestPath = ReservedPathPrefix + "email/request"
+	applicationAuthEmailRedeemPath  = ReservedPathPrefix + "email/redeem"
 	// emailLinkTTL is how long a login link works.
 	emailLinkTTL = 10 * time.Minute
 	// emailSendTimeout bounds one SMTP conversation, from the dial to QUIT.
@@ -194,12 +194,12 @@ func normalizeVisitorEmail(raw string) (string, error) {
 // send its token to whoever answers there, so the mail takes its host from this
 // list and never from the request.
 func (e *emailAuthenticator) publicHost(rawHost string) (string, bool) {
-	requestHost, err := NormalizeApplicationAuthHost(rawHost)
+	requestHost, err := normalizeHost(rawHost)
 	if err != nil || e.publicURLs == nil {
 		return "", false
 	}
 	for _, raw := range e.publicURLs() {
-		if public, err := NormalizeApplicationAuthHost(raw); err == nil && public == requestHost {
+		if public, err := normalizeHost(raw); err == nil && public == requestHost {
 			return public, true
 		}
 	}
@@ -460,7 +460,7 @@ func emailLoginMessage(from mail.Address, host, token string, now time.Time) ([]
 // a limit or mailed, and the mail goes out after the answer, so neither the
 // answer nor its timing tells who may sign in.
 func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderEmail || a.email == nil {
+	if a.provider != ProviderEmail || a.email == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -501,7 +501,7 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 // owner, who reads the link of whoever opens it there, and must not be able to
 // replay it here.
 func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ApplicationAuthProviderEmail || a.email == nil {
+	if a.provider != ProviderEmail || a.email == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -529,7 +529,7 @@ func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Reques
 		a.writeJSONError(w, http.StatusUnauthorized, errEmailLinkInvalidOrExpired.Error())
 		return
 	}
-	if err := a.setSession(w, email, ApplicationAuthProviderEmail, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderEmail, Subject: email, Email: email}, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}

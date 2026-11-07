@@ -43,11 +43,11 @@ var (
 )
 
 const (
-	ApplicationAuthProviderSIWE       = "siwe"
-	ApplicationAuthProviderCredential = "credential"
-	ApplicationAuthProviderOIDC       = "oidc"
-	ApplicationAuthProviderSAML       = "saml"
-	ApplicationAuthProviderEmail      = "email"
+	ProviderSIWE       = "siwe"
+	ProviderCredential = "credential"
+	ProviderOIDC       = "oidc"
+	ProviderSAML       = "saml"
+	ProviderEmail      = "email"
 
 	applicationCredentialPrefix  = "pcred_"
 	applicationCredentialVersion = 1
@@ -62,26 +62,26 @@ type applicationCredentialClaims struct {
 	ExpiresAt int64  `json:"exp"`
 }
 
-func NormalizeApplicationAuthProvider(provider string) (string, error) {
+func normalizeProvider(provider string) (string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	switch provider {
-	case ApplicationAuthProviderSIWE:
-		return ApplicationAuthProviderSIWE, nil
-	case ApplicationAuthProviderCredential:
-		return ApplicationAuthProviderCredential, nil
-	case ApplicationAuthProviderOIDC:
-		return ApplicationAuthProviderOIDC, nil
-	case ApplicationAuthProviderSAML:
-		return ApplicationAuthProviderSAML, nil
-	case ApplicationAuthProviderEmail:
-		return ApplicationAuthProviderEmail, nil
+	case ProviderSIWE:
+		return ProviderSIWE, nil
+	case ProviderCredential:
+		return ProviderCredential, nil
+	case ProviderOIDC:
+		return ProviderOIDC, nil
+	case ProviderSAML:
+		return ProviderSAML, nil
+	case ProviderEmail:
+		return ProviderEmail, nil
 	default:
 		return "", fmt.Errorf("unsupported application auth provider %q", provider)
 	}
 }
 
-// applicationAuthSettings is an ApplicationAuthConfig after validation and
-// normalization. ValidateApplicationAuthConfig and NewApplicationAuth both get
+// applicationAuthSettings is a Config after validation and
+// normalization. Validate and New both get
 // it from resolveApplicationAuthConfig, so what validation accepts is exactly
 // what the gate is built from. It holds the identity proof, the OIDC client
 // secret and the SMTP password, so it must not be formatted or logged.
@@ -110,10 +110,11 @@ type applicationAuthSettings struct {
 	emailFrom         mail.Address
 }
 
-// ValidateApplicationAuthConfig validates the complete tunnel-local
-// application authentication configuration, including provider-specific OIDC,
-// SAML and email fields and principal allowlists.
-func ValidateApplicationAuthConfig(cfg ApplicationAuthConfig) error {
+// Validate checks the complete configuration of a gate, including the
+// provider-specific OIDC, SAML and email settings and the allowlist. New runs the
+// same checks and also needs what a config file does not hold: the identity and,
+// for email, PublicURLs.
+func Validate(cfg Config) error {
 	_, err := resolveApplicationAuthConfig(cfg)
 	return err
 }
@@ -124,8 +125,8 @@ const minIdentityProofLength = 16
 // resolveApplicationAuthConfig is the one place that validates and normalizes
 // the provider, the allowlist, the identity proof and the OIDC, SAML and email
 // settings.
-func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSettings, error) {
-	provider, err := NormalizeApplicationAuthProvider(cfg.Provider)
+func resolveApplicationAuthConfig(cfg Config) (applicationAuthSettings, error) {
+	provider, err := normalizeProvider(cfg.Provider)
 	if err != nil {
 		return applicationAuthSettings{}, err
 	}
@@ -161,18 +162,18 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	hasOIDCSettings := issuer != "" || clientID != "" || clientSecret != ""
 	hasSAMLSettings := metadataURL != "" || metadataFile != "" || entityID != "" || subjectAttribute != ""
 	hasEmailSettings := smtpAddr != "" || smtpUsername != "" || smtpPassword != "" || from != ""
-	if hasOIDCSettings && provider != ApplicationAuthProviderOIDC {
+	if hasOIDCSettings && provider != ProviderOIDC {
 		return applicationAuthSettings{}, errOIDCSettingsRequireOIDCApplicationAuth
 	}
-	if hasSAMLSettings && provider != ApplicationAuthProviderSAML {
+	if hasSAMLSettings && provider != ProviderSAML {
 		return applicationAuthSettings{}, errSAMLSettingsRequireSAMLApplicationAuth
 	}
-	if hasEmailSettings && provider != ApplicationAuthProviderEmail {
+	if hasEmailSettings && provider != ProviderEmail {
 		return applicationAuthSettings{}, errEmailSettingsRequireEmailApplicationAuth
 	}
 	settings := applicationAuthSettings{provider: provider, allowed: allowed, identityProof: proof}
 	switch provider {
-	case ApplicationAuthProviderOIDC:
+	case ProviderOIDC:
 		// An identity provider authenticates accounts it does not restrict to
 		// this application, so without an allowlist every one of them would pass.
 		if len(allowed) == 0 {
@@ -186,7 +187,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 			return applicationAuthSettings{}, errOIDCClientIDIsRequired
 		}
 		settings.clientID, settings.clientSecret = clientID, clientSecret
-	case ApplicationAuthProviderSAML:
+	case ProviderSAML:
 		if len(allowed) == 0 {
 			return applicationAuthSettings{}, errSAMLRequiresEmailList
 		}
@@ -209,7 +210,7 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 			return applicationAuthSettings{}, err
 		}
 		settings.samlEntityID, settings.samlSubjectAttribute = entityID, subjectAttribute
-	case ApplicationAuthProviderEmail:
+	case ProviderEmail:
 		// Without an allowlist, anyone could make the tunnel mail any address.
 		if len(allowed) == 0 {
 			return applicationAuthSettings{}, errEmailRequiresEmailList
@@ -234,11 +235,11 @@ func resolveApplicationAuthConfig(cfg ApplicationAuthConfig) (applicationAuthSet
 	return settings, nil
 }
 
-// ApplicationAuthProviderTakesEmailList reports whether provider names a visitor
+// ProviderTakesEmailList reports whether provider names a visitor
 // by email, so that it reads `--auth-email-list` / `auth_email_list`.
-func ApplicationAuthProviderTakesEmailList(provider string) bool {
+func ProviderTakesEmailList(provider string) bool {
 	switch provider {
-	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML, ApplicationAuthProviderEmail:
+	case ProviderOIDC, ProviderSAML, ProviderEmail:
 		return true
 	default:
 		return false
@@ -248,38 +249,38 @@ func ApplicationAuthProviderTakesEmailList(provider string) bool {
 // resolveAllowlist reads the allowlist of provider from the key that may hold
 // it. oidc and saml take both keys, because released configs hold the list under
 // `--auth-allow`; email was never released with it, so it takes only the one.
-func resolveAllowlist(provider string, cfg ApplicationAuthConfig) ([]string, error) {
+func resolveAllowlist(provider string, cfg Config) ([]string, error) {
 	switch {
-	case len(cfg.EmailList) > 0 && len(cfg.AllowedWallets) > 0:
+	case len(cfg.EmailList) > 0 && len(cfg.Allow) > 0:
 		return nil, errAllowlistIsSetTwice
-	case len(cfg.EmailList) > 0 && !ApplicationAuthProviderTakesEmailList(provider):
+	case len(cfg.EmailList) > 0 && !ProviderTakesEmailList(provider):
 		return nil, errEmailListRequiresEmailProvider
-	case len(cfg.AllowedWallets) > 0 && provider == ApplicationAuthProviderEmail:
+	case len(cfg.Allow) > 0 && provider == ProviderEmail:
 		return nil, errEmailProviderTakesEmailList
 	}
-	return NormalizeApplicationAuthAllowed(provider, cfg.Allowed())
+	return normalizeAllowed(provider, cfg.Allowed())
 }
 
-// NormalizeApplicationAuthAllowed validates and normalizes the provider-scoped
+// normalizeAllowed validates and normalizes the provider-scoped
 // principal allowlist (`--auth-allow` / `auth_allowed_wallets`, or
 // `--auth-email-list` / `auth_email_list`): Ethereum
 // addresses for `siwe`, credential subjects for `credential`, emails or
 // subjects for `oidc` and `saml`, and emails for `email`. The email provider
 // knows no subject but the address, so it refuses `sub:` entries.
-func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string, error) {
-	provider, err := NormalizeApplicationAuthProvider(provider)
+func normalizeAllowed(provider string, values []string) ([]string, error) {
+	provider, err := normalizeProvider(provider)
 	if err != nil {
 		return nil, err
 	}
 	switch provider {
-	case ApplicationAuthProviderSIWE:
+	case ProviderSIWE:
 		return siweauth.NormalizeAddresses(values)
-	case ApplicationAuthProviderCredential:
-		return NormalizeApplicationAuthSubjects(values)
-	case ApplicationAuthProviderOIDC, ApplicationAuthProviderSAML:
-		return NormalizeApplicationAuthProviderPrincipals(values)
-	case ApplicationAuthProviderEmail:
-		allowed, err := NormalizeApplicationAuthProviderPrincipals(values)
+	case ProviderCredential:
+		return normalizeSubjects(values)
+	case ProviderOIDC, ProviderSAML:
+		return normalizeProviderPrincipals(values)
+	case ProviderEmail:
+		allowed, err := normalizeProviderPrincipals(values)
 		if err != nil {
 			return nil, err
 		}
@@ -301,9 +302,9 @@ func NormalizeApplicationAuthAllowed(provider string, values []string) ([]string
 	}
 }
 
-// NormalizeApplicationAuthSubjects canonicalizes configured credential subjects
+// normalizeSubjects canonicalizes configured credential subjects
 // and de-duplicates them while preserving declaration order.
-func NormalizeApplicationAuthSubjects(values []string) ([]string, error) {
+func normalizeSubjects(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -323,13 +324,14 @@ func NormalizeApplicationAuthSubjects(values []string) ([]string, error) {
 	return normalized, nil
 }
 
-// IssueApplicationCredential creates a host- and tunnel-scoped credential that
-// can be exchanged for the tunnel-local application session cookie.
-func IssueApplicationCredential(tunnelIdentity types.Identity, host, subject string, expiresAt time.Time) (string, error) {
-	if tunnelIdentity.Key() == "" {
+// IssueCredential creates a credential for one host and one identity. A gate
+// built from that identity accepts it in a request header and exchanges it for a
+// session.
+func IssueCredential(id types.Identity, host, subject string, expiresAt time.Time) (string, error) {
+	if id.Key() == "" {
 		return "", errTunnelIdentityIsRequired
 	}
-	host, err := NormalizeApplicationAuthHost(host)
+	host, err := normalizeHost(host)
 	if err != nil {
 		return "", err
 	}
@@ -340,14 +342,14 @@ func IssueApplicationCredential(tunnelIdentity types.Identity, host, subject str
 	if expiresAt.UTC().Unix() <= time.Now().UTC().Unix() {
 		return "", errApplicationCredentialExpiryMustFuture
 	}
-	key, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
+	key, err := identity.DeriveToken(id, applicationCredentialKeyUse)
 	if err != nil {
 		return "", fmt.Errorf("derive application credential key: %w", err)
 	}
 	token, err := encodeSignedApplicationAuthJSON([]byte(key), applicationCredentialClaims{
 		Version:   applicationCredentialVersion,
 		Subject:   subject,
-		Tunnel:    tunnelIdentity.Key(),
+		Tunnel:    id.Key(),
 		Host:      host,
 		ExpiresAt: expiresAt.UTC().Unix(),
 	})
@@ -357,8 +359,10 @@ func IssueApplicationCredential(tunnelIdentity types.Identity, host, subject str
 	return applicationCredentialPrefix + token, nil
 }
 
-func ApplicationCredentialRedeemURL(host, credential string) (string, error) {
-	host, err := NormalizeApplicationAuthHost(host)
+// CredentialRedeemURL returns the sign-in link of a credential. The credential
+// travels in the fragment, so it reaches neither a relay nor a server log.
+func CredentialRedeemURL(host, credential string) (string, error) {
+	host, err := normalizeHost(host)
 	if err != nil {
 		return "", err
 	}
@@ -369,10 +373,10 @@ func ApplicationCredentialRedeemURL(host, credential string) (string, error) {
 	return "https://" + host + applicationAuthLoginPath + "#credential=" + url.QueryEscape(credential), nil
 }
 
-// NormalizeApplicationAuthHost returns the canonical name of an application: lower
+// normalizeHost returns the canonical name of an application: lower
 // case, without a trailing dot and without the default HTTPS port, which a browser
 // leaves out of Host while an operator or a Go client may write it.
-func NormalizeApplicationAuthHost(raw string) (string, error) {
+func normalizeHost(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", errApplicationAuthHostIsRequired
@@ -396,15 +400,15 @@ func NormalizeApplicationAuthHost(raw string) (string, error) {
 // sameApplicationHost reports whether two hosts name the same application: they
 // are equal once each is normalized, so letter case, a trailing dot and the
 // default port :443 do not tell applications apart. A host that does not
-// normalize names nothing, and neither does a URL: NormalizeApplicationAuthHost
+// normalize names nothing, and neither does a URL: normalizeHost
 // also reads https://host/, but a Host header or a stored host never has a slash
 // (net/http answers such a header with 400).
 func sameApplicationHost(a, b string) bool {
 	if strings.Contains(a, "/") || strings.Contains(b, "/") {
 		return false
 	}
-	normalizedA, errA := NormalizeApplicationAuthHost(a)
-	normalizedB, errB := NormalizeApplicationAuthHost(b)
+	normalizedA, errA := normalizeHost(a)
+	normalizedB, errB := normalizeHost(b)
 	return errA == nil && errB == nil && normalizedA == normalizedB
 }
 

@@ -82,9 +82,9 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// sends the links. The check error of that account can name it too.
 			for i := range status.Tunnels {
 				tunnel := &status.Tunnels[i]
-				tunnel.AllowedWallets, tunnel.EmailList = nil, nil
+				tunnel.Allow, tunnel.EmailList = nil, nil
 				tunnel.EmailConfig, tunnel.AuthSMTPPasswordSet = appauth.EmailConfig{}, false
-				if tunnel.Provider == appauth.ApplicationAuthProviderEmail && tunnel.AuthProviderError != "" {
+				if tunnel.Provider == appauth.ProviderEmail && tunnel.AuthProviderError != "" {
 					tunnel.AuthProviderError = "smtp server check failed"
 				}
 			}

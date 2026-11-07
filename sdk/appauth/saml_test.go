@@ -256,12 +256,12 @@ func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
 
 // newSAMLTestGate gates next behind idp. It admits only alice@example.com
 // unless configure changes the settings.
-func newSAMLTestGate(t *testing.T, idp *samlTestIdP, next http.Handler, configure func(*ApplicationAuthConfig)) *applicationAuth {
+func newSAMLTestGate(t *testing.T, idp *samlTestIdP, next http.Handler, configure func(*Config)) *applicationAuth {
 	t.Helper()
-	cfg := ApplicationAuthConfig{
-		Provider:       ApplicationAuthProviderSAML,
-		AllowedWallets: []string{"alice@example.com"},
-		SAMLConfig:     SAMLConfig{SAMLMetadataURL: idp.metadataURL()},
+	cfg := Config{
+		Provider:   ProviderSAML,
+		Allow:      []string{"alice@example.com"},
+		SAMLConfig: SAMLConfig{SAMLMetadataURL: idp.metadataURL()},
 	}
 	if configure != nil {
 		configure(&cfg)
@@ -269,7 +269,7 @@ func newSAMLTestGate(t *testing.T, idp *samlTestIdP, next http.Handler, configur
 	if next == nil {
 		next = http.NotFoundHandler()
 	}
-	handler, err := NewApplicationAuth(next, applicationAuthTestIdentity(), cfg, nil)
+	handler, err := New(next, applicationAuthTestIdentity(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestApplicationAuthSAMLLogin(t *testing.T) {
 	var upstream http.Header
 	gate := newSAMLTestGate(t, idp, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		upstream = r.Header.Clone()
-	}), func(cfg *ApplicationAuthConfig) { cfg.IdentityHeaders = true })
+	}), func(cfg *Config) { cfg.IdentityHeaders = true })
 
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/reports?year=2026", nil))
@@ -404,7 +404,7 @@ func TestApplicationAuthSAMLLogin(t *testing.T) {
 	if got := upstream.Get(types.HeaderPortalUser); got != "alice@example.com" {
 		t.Fatalf("%s = %q; want alice@example.com", types.HeaderPortalUser, got)
 	}
-	if got := upstream.Get(types.HeaderPortalAuth); got != ApplicationAuthProviderSAML {
+	if got := upstream.Get(types.HeaderPortalAuth); got != ProviderSAML {
 		t.Fatalf("%s = %q; want saml", types.HeaderPortalAuth, got)
 	}
 	if got := upstream.Values(types.HeaderPortalProof); len(got) != 0 {
@@ -648,8 +648,8 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			idp := newSAMLTestIdP(t)
-			gate := newSAMLTestGate(t, idp, nil, func(cfg *ApplicationAuthConfig) {
-				cfg.AllowedWallets, cfg.SAMLSubjectAttribute = tt.allow, tt.attribute
+			gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) {
+				cfg.Allow, cfg.SAMLSubjectAttribute = tt.allow, tt.attribute
 			})
 			login := startSAMLLogin(t, gate, applicationAuthLoginPath)
 			response := idp.validResponse(login)
@@ -664,8 +664,8 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 			session := assertSAMLACS(t, rec, http.StatusSeeOther)
 			req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
 			req.AddCookie(session)
-			if got, provider, ok := gate.authenticateSession(req); !ok || got != tt.want || provider != ApplicationAuthProviderSAML {
-				t.Fatalf("session = (%q, %q, %v); want %q from saml", got, provider, ok, tt.want)
+			if got, ok := gate.authenticateSession(req); !ok || got.Subject != tt.want || got.Provider != ProviderSAML {
+				t.Fatalf("session = (%+v, %v); want %q from saml", got, ok, tt.want)
 			}
 		})
 	}
@@ -673,23 +673,23 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 	t.Run("removing an entry ends its sessions", func(t *testing.T) {
 		t.Parallel()
 		idp := newSAMLTestIdP(t)
-		gate := newSAMLTestGate(t, idp, nil, func(cfg *ApplicationAuthConfig) {
-			cfg.AllowedWallets = []string{"alice@example.com", "bob@example.com"}
+		gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) {
+			cfg.Allow = []string{"alice@example.com", "bob@example.com"}
 		})
 		login := startSAMLLogin(t, gate, applicationAuthLoginPath)
 		session := assertSAMLACS(t, login.post(gate, idp.encode(t, idp.validResponse(login))), http.StatusSeeOther)
-		for name, configure := range map[string]func(*ApplicationAuthConfig){
-			"same settings": func(cfg *ApplicationAuthConfig) {
-				cfg.AllowedWallets = []string{"alice@example.com", "bob@example.com"}
+		for name, configure := range map[string]func(*Config){
+			"same settings": func(cfg *Config) {
+				cfg.Allow = []string{"alice@example.com", "bob@example.com"}
 			},
-			"entry removed":          func(cfg *ApplicationAuthConfig) { cfg.AllowedWallets = []string{"bob@example.com"} },
-			"another subject source": func(cfg *ApplicationAuthConfig) { cfg.SAMLSubjectAttribute = "email" },
-			"another SP entity ID":   func(cfg *ApplicationAuthConfig) { cfg.SAMLEntityID = "urn:portal:other" },
+			"entry removed":          func(cfg *Config) { cfg.Allow = []string{"bob@example.com"} },
+			"another subject source": func(cfg *Config) { cfg.SAMLSubjectAttribute = "email" },
+			"another SP entity ID":   func(cfg *Config) { cfg.SAMLEntityID = "urn:portal:other" },
 		} {
 			restarted := newSAMLTestGate(t, idp, nil, configure)
 			req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
 			req.AddCookie(session)
-			_, _, ok := restarted.authenticateSession(req)
+			_, ok := restarted.authenticateSession(req)
 			if ok != (name == "same settings") {
 				t.Errorf("%s: session accepted = %v", name, ok)
 			}
@@ -736,7 +736,7 @@ func TestApplicationAuthSAMLMetadata(t *testing.T) {
 
 	idp := newSAMLTestIdP(t)
 	for entityID, want := range map[string]string{"": samlTestAudience, "urn:portal:app": "urn:portal:app"} {
-		gate := newSAMLTestGate(t, idp, nil, func(cfg *ApplicationAuthConfig) { cfg.SAMLEntityID = entityID })
+		gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) { cfg.SAMLEntityID = entityID })
 		rec := httptest.NewRecorder()
 		gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, samlTestAudience, nil))
 		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/samlmetadata+xml" {
@@ -800,8 +800,8 @@ func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 	t.Parallel()
 
 	idp := newSAMLTestIdP(t)
-	samlConfig := func(configure func(*ApplicationAuthConfig)) ApplicationAuthConfig {
-		cfg := ApplicationAuthConfig{Provider: ApplicationAuthProviderSAML, AllowedWallets: []string{"alice@example.com"}}
+	samlConfig := func(configure func(*Config)) Config {
+		cfg := Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}}
 		configure(&cfg)
 		return cfg
 	}
@@ -821,20 +821,52 @@ func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, tt := range map[string]struct {
-		cfg    ApplicationAuthConfig
+		cfg    Config
 		usable bool
 	}{
-		"metadata URL":                 {samlConfig(func(cfg *ApplicationAuthConfig) { cfg.SAMLMetadataURL = idp.metadataURL() }), true},
-		"metadata file":                {samlConfig(func(cfg *ApplicationAuthConfig) { cfg.SAMLMetadataFile = file }), true},
-		"metadata URL that is missing": {samlConfig(func(cfg *ApplicationAuthConfig) { cfg.SAMLMetadataURL = idp.server.URL + "/missing" }), false},
-		"metadata file that is missing": {samlConfig(func(cfg *ApplicationAuthConfig) {
+		"metadata URL":                 {samlConfig(func(cfg *Config) { cfg.SAMLMetadataURL = idp.metadataURL() }), true},
+		"metadata file":                {samlConfig(func(cfg *Config) { cfg.SAMLMetadataFile = file }), true},
+		"metadata URL that is missing": {samlConfig(func(cfg *Config) { cfg.SAMLMetadataURL = idp.server.URL + "/missing" }), false},
+		"metadata file that is missing": {samlConfig(func(cfg *Config) {
 			cfg.SAMLMetadataFile = filepath.Join(t.TempDir(), "absent.xml")
 		}), false},
-		"metadata without a signing key":    {samlConfig(func(cfg *ApplicationAuthConfig) { cfg.SAMLMetadataFile = noKey }), false},
-		"metadata with only an expired key": {samlConfig(func(cfg *ApplicationAuthConfig) { cfg.SAMLMetadataFile = expired }), false},
+		"metadata without a signing key":    {samlConfig(func(cfg *Config) { cfg.SAMLMetadataFile = noKey }), false},
+		"metadata with only an expired key": {samlConfig(func(cfg *Config) { cfg.SAMLMetadataFile = expired }), false},
 	} {
-		if err := CheckApplicationAuthProvider(t.Context(), tt.cfg); (err == nil) != tt.usable {
-			t.Errorf("%s: CheckApplicationAuthProvider() = %v; want usable = %v", name, err, tt.usable)
+		if err := Check(t.Context(), tt.cfg); (err == nil) != tt.usable {
+			t.Errorf("%s: Check() = %v; want usable = %v", name, err, tt.usable)
 		}
+	}
+}
+
+// A sub: entry decides who may sign in, not who the visitor is: the application
+// still learns the address the identity provider signed, when it signed one.
+func TestSAMLPrincipalCarriesTheVouchedEmail(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		nameID string
+		allow  string
+		want   Principal
+	}{
+		{"email entry", "alice@example.com", "alice@example.com", Principal{ProviderSAML, "alice@example.com", "alice@example.com"}},
+		{"sub entry with an email NameID", "alice@example.com", "sub:alice@example.com", Principal{ProviderSAML, "sub:alice@example.com", "alice@example.com"}},
+		{"sub entry with an opaque NameID", "G-7f3a", "sub:G-7f3a", Principal{ProviderSAML, "sub:G-7f3a", ""}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			idp := newSAMLTestIdP(t)
+			gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) { cfg.Allow = []string{tt.allow} })
+			login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+			response := idp.validResponse(login)
+			response.nameID = tt.nameID
+			session := assertSAMLACS(t, login.post(gate, idp.encode(t, response)), http.StatusSeeOther)
+			req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
+			req.AddCookie(session)
+			if got, ok := gate.authenticateSession(req); !ok || got != tt.want {
+				t.Fatalf("principal = (%+v, %v); want %+v", got, ok, tt.want)
+			}
+		})
 	}
 }

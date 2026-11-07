@@ -149,11 +149,11 @@ func TestApplicationAuthIdentityProofReachesRoutedUpstream(t *testing.T) {
 	}
 	const proof = "test-proof-0123456789"
 	tunnelIdentity := types.Identity{Name: "application-auth-test", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat("k", 32)}
-	handler, err := appauth.NewApplicationAuth(routes, tunnelIdentity, appauth.ApplicationAuthConfig{Provider: appauth.ApplicationAuthProviderCredential, IdentityHeaders: true, IdentityProof: proof}, nil)
+	handler, err := appauth.New(routes, tunnelIdentity, appauth.Config{Provider: appauth.ProviderCredential, IdentityHeaders: true, IdentityProof: proof})
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := appauth.IssueApplicationCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	credential, err := appauth.IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}

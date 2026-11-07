@@ -215,16 +215,16 @@ func TestExistingConfigKeysFillComponents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	oidc := appauth.ApplicationAuthConfig{
-		Provider:        appauth.ApplicationAuthProviderOIDC,
-		AllowedWallets:  []string{"alice@example.com"},
+	oidc := appauth.Config{
+		Provider:        appauth.ProviderOIDC,
+		Allow:           []string{"alice@example.com"},
 		IdentityHeaders: true,
 		OIDCConfig:      appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-id", OIDCClientSecret: "client-secret"},
 	}
-	saml := appauth.ApplicationAuthConfig{
-		Provider:       appauth.ApplicationAuthProviderSAML,
-		AllowedWallets: []string{"@example.com"},
-		SAMLConfig:     appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLEntityID: "urn:portal:sso", SAMLSubjectAttribute: "email"},
+	saml := appauth.Config{
+		Provider:   appauth.ProviderSAML,
+		Allow:      []string{"@example.com"},
+		SAMLConfig: appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLEntityID: "urn:portal:sso", SAMLSubjectAttribute: "email"},
 	}
 	payment := gateway.X402Config{
 		Testnet: true, Network: "base", Asset: "usdc", PayTo: "0x1234567890abcdef1234567890abcdef12345678",
@@ -320,12 +320,12 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 		tunnel TunnelConfig
 		want   os.FileMode
 	}{
-		{"OIDC client secret in a world-readable file", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{ApplicationAuthConfig: appauth.ApplicationAuthConfig{Provider: "oidc", OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o600},
+		{"OIDC client secret in a world-readable file", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{AuthConfig: appauth.Config{Provider: "oidc", OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o600},
 		{"identity with a private key in a group-readable file", 0o640, TunnelConfig{ID: "web", Config: tunnel.Config{IdentityJSON: `{"private_key":"fake"}`}}, 0o600},
 		{"x402 facilitator token in a group-writable file", 0o660, TunnelConfig{ID: "web", Config: tunnel.Config{X402Config: gateway.X402Config{FacilitatorToken: "fake-token"}}}, 0o600},
-		{"a secret in a file that is already private", 0o600, TunnelConfig{ID: "web", Config: tunnel.Config{ApplicationAuthConfig: appauth.ApplicationAuthConfig{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o600},
-		{"the owner's other bits are kept", 0o755, TunnelConfig{ID: "web", Config: tunnel.Config{ApplicationAuthConfig: appauth.ApplicationAuthConfig{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o700},
-		{"a blank secret is not one", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{ApplicationAuthConfig: appauth.ApplicationAuthConfig{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "  "}}}}, 0o644},
+		{"a secret in a file that is already private", 0o600, TunnelConfig{ID: "web", Config: tunnel.Config{AuthConfig: appauth.Config{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o600},
+		{"the owner's other bits are kept", 0o755, TunnelConfig{ID: "web", Config: tunnel.Config{AuthConfig: appauth.Config{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o700},
+		{"a blank secret is not one", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{AuthConfig: appauth.Config{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "  "}}}}, 0o644},
 		{"no secret", 0o644, plain, 0o644},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
