@@ -78,17 +78,11 @@ const METHODS: MethodChoice[] = [
   {
     id: "saml",
     label: "Company single sign-on",
-    short: "SAML",
-    description:
-      "Visitors sign in at your organization's identity provider, such as Okta, Entra ID, ADFS or Keycloak. You add the app there first.",
     icon: Building2,
   },
   {
     id: "email",
     label: "Email link",
-    short: "Email",
-    description:
-      "Visitors get a one-time sign-in link by email. You need an SMTP account to send it from.",
     icon: Mail,
   },
 ];
@@ -220,11 +214,10 @@ export function TunnelAuthSection({
               relayUrls={relayUrls}
               discovery={discovery}
               name={name}
-              theme={theme}
             />
           )}
           {auth.method === "email" && (
-            <EmailSetup auth={auth} patch={patch} issues={issues} os={os} theme={theme} />
+            <EmailSetup auth={auth} patch={patch} issues={issues} os={os} />
           )}
           {auth.method === "credential" && (
             <InviteBlock
@@ -635,7 +628,6 @@ function SAMLSetup({
   relayUrls,
   discovery,
   name,
-  theme,
 }: {
   auth: TunnelAuthOptions;
   patch: (next: Partial<TunnelAuthOptions>) => void;
@@ -643,12 +635,11 @@ function SAMLSetup({
   relayUrls: string[];
   discovery: boolean;
   name: string;
-  theme: TunnelFormTheme;
 }) {
   const metadataId = useId();
   const entityId = useId();
   const subjectId = useId();
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const acsURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_SAML_ACS_PATH);
   const metadataURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_SAML_METADATA_PATH);
   const inputClass = cn(s.input, "h-9 font-mono text-[13px]");
@@ -671,7 +662,7 @@ function SAMLSetup({
             spellCheck={false}
             className={inputClass}
           />
-          <FieldIssues issues={issues} field="metadataURL" theme={theme} />
+          <FieldIssues issues={issues} field="metadataURL" />
           <p className={s.help}>
             The address where the provider publishes its SAML metadata, such
             as Keycloak's <code>/protocol/saml/descriptor</code>. For a
@@ -730,14 +721,13 @@ function SAMLSetup({
           app, not at the provider's app list.
         </p>
         {acsURLs.map((url) => (
-          <CopyLine key={url} value={url} label={`Copy ACS address ${url}`} theme={theme} />
+          <CopyLine key={url} value={url} label={`Copy ACS address ${url}`} />
         ))}
         {metadataURLs.map((url) => (
           <CopyLine
             key={url}
             value={url}
             label={`Copy metadata address ${url}`}
-            theme={theme}
           />
         ))}
         <p className={s.help}>
@@ -769,18 +759,16 @@ function EmailSetup({
   patch,
   issues,
   os,
-  theme,
 }: {
   auth: TunnelAuthOptions;
   patch: (next: Partial<TunnelAuthOptions>) => void;
   issues: TunnelAuthIssue[];
   os: TunnelCommandOS;
-  theme: TunnelFormTheme;
 }) {
   const serverId = useId();
   const fromId = useId();
   const usernameId = useId();
-  const s = TUNNEL_FORM_STYLES[theme];
+  const s = TUNNEL_FORM_STYLES;
   const inputClass = cn(s.input, "h-9 font-mono text-[13px]");
 
   return (
@@ -800,7 +788,7 @@ function EmailSetup({
             spellCheck={false}
             className={inputClass}
           />
-          <FieldIssues issues={issues} field="smtpAddr" theme={theme} />
+          <FieldIssues issues={issues} field="smtpAddr" />
           <p className={s.help}>
             The host and port of your mail provider's submission server, such
             as a mailbox with an app password or a transactional mail service.
@@ -823,7 +811,7 @@ function EmailSetup({
             spellCheck={false}
             className={inputClass}
           />
-          <FieldIssues issues={issues} field="from" theme={theme} />
+          <FieldIssues issues={issues} field="from" />
           <p className={s.help}>
             Every link comes from this one address. Use an address your SMTP
             account may send from.
@@ -864,7 +852,6 @@ function EmailSetup({
           <CopyLine
             value={buildSecretCommand("email", os)}
             label="Copy password prompt"
-            theme={theme}
           />
         </div>
       )}
