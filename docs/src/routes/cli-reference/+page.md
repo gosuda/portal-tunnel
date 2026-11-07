@@ -122,7 +122,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--auth-saml-subject-attribute` | string | NameID | SAML attribute that names the visitor for `--auth saml`, such as `email` (env: `AUTH_SAML_SUBJECT_ATTRIBUTE`) |
 | `--auth-smtp-addr` | string | | SMTP server `host:port` that sends the login links for `--auth email`; port 465 uses TLS from the start, any other port must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext (env: `AUTH_SMTP_ADDR`) |
 | `--auth-smtp-username` | string | | SMTP username for `--auth email`; set it together with the password, or leave both empty for a server that needs no login (env: `AUTH_SMTP_USERNAME`) |
-| `--auth-smtp-password` | string | | SMTP password for `--auth email`; pass it by environment variable, because process lists show arguments (env: `AUTH_SMTP_PASSWORD`) |
+| `--auth-smtp-password` | string | | SMTP password for `--auth email`, with spaces around it dropped; pass it by environment variable, because process lists show arguments (env: `AUTH_SMTP_PASSWORD`) |
 | `--auth-smtp-from` | string | | The one sender address of every login link for `--auth email`, with an optional display name (env: `AUTH_SMTP_FROM`) |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |

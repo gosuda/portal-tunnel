@@ -287,6 +287,8 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 // then give the name to another identity, so the alias itself is the signal. The
 // relay state is not: every visitor connection takes an idle reverse session, so
 // a relay reports connecting while it serves a burst of requests on that alias.
+// A lease refresh clears both URLs until the lease is back, so a request on a
+// connection that outlives the lease reads as signed out in that moment.
 func (runtime *Runtime) publicURLs() []string {
 	var urls []string
 	for _, relay := range runtime.Exposure.Relays() {

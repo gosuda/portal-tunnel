@@ -81,6 +81,10 @@ const (
 	// applicationAuthStateTokenLimit keeps a signed login state cookie well
 	// under the roughly 4 KB a browser accepts, since it silently drops a larger one.
 	applicationAuthStateTokenLimit = 3500
+	// applicationAuthNextLimit keeps a return path well inside the body limit,
+	// even doubled by JSON escaping, because the login page posts it back from
+	// its own URL.
+	applicationAuthNextLimit = 16 << 10
 	// providerMinSessionTTL is the shortest OIDC or SAML session, so a
 	// short-lived ID token or IdP session cannot produce a session that has
 	// already expired.
@@ -143,9 +147,10 @@ func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 // sets it; the agent config and the Agent API have no key for it.
 //
 // PublicURLs lists the URLs the application is reachable at now, and the email
-// provider requires it: a request names its own Host, so a login link is mailed
-// only for a host on that list. It is called on each request and is no setting,
-// so no config format carries it.
+// provider requires it: a request names its own Host, so a login link is mailed,
+// and an email session works, only for a host on that list. It is called on each
+// request and is no setting, so no config format carries it and a stored Config
+// leaves it nil.
 type Config struct {
 	Provider        string   `json:"auth,omitempty" toml:"auth,omitempty"`
 	Allow           []string `json:"auth_allowed_wallets,omitempty" toml:"auth_allowed_wallets,omitempty"`
@@ -574,13 +579,19 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
 	var (
-		siwe            *siweauth.Authenticator
-		oidc            *oidcAuthenticator
-		saml            *samlAuthenticator
-		email           *emailAuthenticator
-		allowedSubjects map[string]struct{}
-		allowAnySubject = true
+		siwe  *siweauth.Authenticator
+		oidc  *oidcAuthenticator
+		saml  *samlAuthenticator
+		email *emailAuthenticator
 	)
+	allowedSubjects := make(map[string]struct{}, len(settings.allowed))
+	for _, subject := range settings.allowed {
+		allowedSubjects[subject] = struct{}{}
+	}
+	// Only a credential gate may run without a list, and siwe keeps its own.
+	// resolveApplicationAuthConfig refuses an empty list for every identity
+	// provider and for email, because any account or address would pass.
+	allowAnySubject := settings.provider == ProviderSIWE || (settings.provider == ProviderCredential && len(settings.allowed) == 0)
 	switch settings.provider {
 	case ProviderSIWE:
 		siwe, err = siweauth.New(siweauth.Config{
@@ -592,22 +603,7 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 		if err != nil {
 			return nil, err
 		}
-	case ProviderCredential:
-		if len(settings.allowed) > 0 {
-			allowAnySubject = false
-			allowedSubjects = make(map[string]struct{}, len(settings.allowed))
-			for _, subject := range settings.allowed {
-				allowedSubjects[subject] = struct{}{}
-			}
-		}
 	case ProviderOIDC, ProviderSAML:
-		// An identity provider never runs open: resolveApplicationAuthConfig
-		// rejects an empty allowlist, because any account at the provider would pass.
-		allowAnySubject = false
-		allowedSubjects = make(map[string]struct{}, len(settings.allowed))
-		for _, principal := range settings.allowed {
-			allowedSubjects[principal] = struct{}{}
-		}
 		stateKey, err := identity.DeriveToken(id, "application-access-"+settings.provider+"-state")
 		if err != nil {
 			return nil, fmt.Errorf("derive %s state signing key: %w", settings.provider, err)
@@ -620,13 +616,6 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 	case ProviderEmail:
 		if cfg.PublicURLs == nil {
 			return nil, errEmailRequiresPublicURLs
-		}
-		// Like an identity provider, email never runs open: resolveApplicationAuthConfig
-		// rejects an empty allowlist.
-		allowAnySubject = false
-		allowedSubjects = make(map[string]struct{}, len(settings.allowed))
-		for _, principal := range settings.allowed {
-			allowedSubjects[principal] = struct{}{}
 		}
 		email = newEmailAuthenticator(settings, cfg.PublicURLs)
 	}
@@ -1352,6 +1341,13 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (Principal, bool)
 	if provider != a.provider {
 		return Principal{}, false
 	}
+	// An alias this tunnel lost may have a new owner, who reads the cookie of
+	// whoever opens it there and must not be able to replay it here.
+	if a.email != nil {
+		if _, public := a.email.publicHost(r.Host); !public {
+			return Principal{}, false
+		}
+	}
 	if provider == ProviderSIWE {
 		address, err := identity.NormalizeEVMAddress(claims.Subject)
 		if err != nil || a.siwe == nil || !a.siwe.AddressAllowed(address) {
@@ -1385,7 +1381,7 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	if _, ok := a.allowedSubjects[subject]; ok {
 		return true
 	}
-	if a.provider != ProviderOIDC && a.provider != ProviderSAML && a.provider != ProviderEmail {
+	if !ProviderTakesEmailList(a.provider) {
 		return false
 	}
 	// A `sub:` session subject is an opaque subject principal: it matches only
@@ -1480,7 +1476,7 @@ func signApplicationAuthPayload(key, payload []byte) []byte {
 func (a *applicationAuth) requireLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		next := r.URL.RequestURI()
-		if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+		if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || len(next) > applicationAuthNextLimit {
 			next = "/"
 		}
 		http.Redirect(w, r, applicationAuthLoginPath+"?next="+url.QueryEscape(next), http.StatusSeeOther)

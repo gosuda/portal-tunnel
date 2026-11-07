@@ -56,7 +56,7 @@ const (
 	// emailAddressLimit is the longest address SMTP delivers (RFC 5321 4.5.3.1.3).
 	emailAddressLimit = 254
 	// emailImplicitTLSPort is the submission port that starts with TLS (RFC 8314).
-	emailImplicitTLSPort = "465"
+	emailImplicitTLSPort = 465
 	// emailLinkTokenBytes is the size of the secret in a login link: 256 bits.
 	emailLinkTokenBytes = 32
 	// emailRoutingCharacters are ordinary address characters to net/mail, but a
@@ -120,12 +120,13 @@ type applicationAuthEmailRedeemRequest struct {
 
 func newEmailAuthenticator(settings applicationAuthSettings, publicURLs func() []string) *emailAuthenticator {
 	host, port, _ := net.SplitHostPort(settings.emailSMTPAddr)
+	portNumber, _ := strconv.Atoi(port)
 	// None of the settings can hold a NUL, so the separators keep them unambiguous.
 	binding := sha256.Sum256([]byte(settings.emailSMTPAddr + "\x00" + settings.emailSMTPUsername + "\x00" + settings.emailFrom.Address))
 	return &emailAuthenticator{
 		smtpAddr:    settings.emailSMTPAddr,
 		smtpHost:    host,
-		implicitTLS: port == emailImplicitTLSPort,
+		implicitTLS: portNumber == emailImplicitTLSPort,
 		username:    settings.emailSMTPUsername,
 		password:    settings.emailSMTPPassword,
 		from:        settings.emailFrom,
@@ -315,7 +316,9 @@ func (e *emailAuthenticator) check(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = client.Close() }()
-	return client.Quit()
+	// dial has signed in, which is all this asks, so a failed QUIT is not a failure.
+	_ = client.Quit()
+	return nil
 }
 
 // deliver hands one mail to the SMTP server. The replies from RCPT on are about
@@ -381,7 +384,7 @@ func (e *emailAuthenticator) dial(ctx context.Context) (*smtp.Client, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("smtp greeting: %w", err)
 	}
-	if err := e.secureAndSignIn(client); err != nil {
+	if err := e.secureAndSignIn(client, tlsConfig); err != nil {
 		_ = client.Close()
 		return nil, err
 	}
@@ -395,12 +398,16 @@ func emailPlaintextHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
-func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client) error {
+func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client, tlsConfig *tls.Config) error {
 	if !e.implicitTLS && !emailPlaintextHost(e.smtpHost) {
+		// Extension reports a failed hello as a missing extension.
+		if err := client.Hello("localhost"); err != nil {
+			return fmt.Errorf("smtp EHLO: %w", err)
+		}
 		if ok, _ := client.Extension("STARTTLS"); !ok {
 			return errEmailSMTPOffersNoSTARTTLS
 		}
-		if err := client.StartTLS(&tls.Config{ServerName: e.smtpHost, MinVersion: tls.VersionTLS12}); err != nil {
+		if err := client.StartTLS(tlsConfig); err != nil {
 			return fmt.Errorf("smtp STARTTLS: %w", err)
 		}
 	}
@@ -533,5 +540,5 @@ func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Reques
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
-	a.writeJSON(w, http.StatusOK, map[string]string{"subject": email, "next": sanitizeApplicationAuthNext(next)})
+	a.writeJSON(w, http.StatusOK, map[string]string{"subject": email, "next": next})
 }
