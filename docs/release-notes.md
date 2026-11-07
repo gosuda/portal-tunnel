@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Application auth: a tunnel answers only for hosts it holds
+
+The sign-in gate now answers `421` to a request for a host the tunnel does not hold
+now, for every provider. A session on an alias lasts as long as the tunnel keeps
+holding that alias: after a restart, or after the tunnel registers again, such as
+after a network drop or a laptop sleep, visitors on the alias sign in again. A
+sign-in that began before then does not finish. Sessions on the address-bound URL
+keep working through all of these. A credential outlives a restart on either host,
+so issue it for the address-bound URL. While the tunnel registers again, a request
+on a connection that outlives the lease gets `421`, so a client should retry it.
+
+In Go, `RelayStatus.AliasSince` says when the exposure came to hold its alias, and
+`Config.PublicHosts` gives the gate its hosts. It replaces `Config.PublicURLs` from
+v2.7.2, so an embedder must rename the field and return dated hosts, and it now
+applies to every provider. Set it whenever the gate serves an exposure: without it
+the gate believes the `Host` of a request.
+
+## v2.7.2
+
 ### Relay: a budget for unapproved leases
 
 An unapproved lease routes nothing, but it holds an alias, a port, and capacity.
@@ -46,20 +65,6 @@ The default stays `auto`, and any other value than `auto` or `manual` stops
 startup. A mode saved in `policy.json` wins. The relay saves the mode on any
 admin change, so a relay that has saved `auto` stays open under
 `APPROVAL_MODE=manual` and logs a warning.
-### Application auth: a tunnel answers only for hosts it holds
-
-The sign-in gate now answers `421` to a request for a host the tunnel does not hold
-now, for every provider. A session on an alias lasts as long as the tunnel keeps
-holding that alias: after a restart, or after the tunnel registers again, such as
-after a network drop or a laptop sleep, visitors on the alias sign in again. A
-sign-in that began before then does not finish. Sessions on the address-bound URL
-keep working through all of these. A credential outlives a restart on either host,
-so issue it for the address-bound URL. While the tunnel registers again, a request
-on a connection that outlives the lease gets `421`, so a client should retry it.
-
-In Go, `RelayStatus.AliasSince` says when the exposure came to hold its alias, and
-`Config.PublicHosts` gives the gate its hosts. Set it whenever the gate serves an
-exposure: without it the gate believes the `Host` of a request.
 
 ### Application auth for Go programs
 
