@@ -6,14 +6,27 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+func TestParseMode(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]Mode{"auto": ModeAuto, "manual": ModeManual, " manual ": ModeManual} {
+		if got, err := ParseMode(raw); err != nil || got != want {
+			t.Fatalf("ParseMode(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"", "  ", "Manual", "off"} {
+		if got, err := ParseMode(raw); err == nil {
+			t.Fatalf("ParseMode(%q) = %q, want an error", raw, got)
+		}
+	}
+}
+
 func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 
 	key := types.NewServiceIdentityKey("demo", "0x1234")
 	access := NewAccess().Snapshot()
-	if err := access.SetMode(ModeManual); err != nil {
-		t.Fatal(err)
-	}
+	access.SetMode(ModeManual)
 
 	access.Approve(key)
 	if !access.EffectiveApproval(key) || access.IsDenied(key) {
@@ -69,9 +82,7 @@ func TestAccessSetDecisionsIgnoresInvalidZeroKeys(t *testing.T) {
 	zeroKey := types.ServiceIdentityKey{}
 
 	access := NewAccess().Snapshot()
-	if err := access.SetMode(ModeManual); err != nil {
-		t.Fatal(err)
-	}
+	access.SetMode(ModeManual)
 	access.SetDecisions([]types.ServiceIdentityKey{validKey, zeroKey}, []types.ServiceIdentityKey{zeroKey})
 
 	if !access.EffectiveApproval(validKey) {
@@ -95,9 +106,7 @@ func TestAccessUnnamedIdentityKeyDecisions(t *testing.T) {
 	namedKey := types.NewServiceIdentityKey("demo", "0x1234")
 
 	access := NewAccess().Snapshot()
-	if err := access.SetMode(ModeManual); err != nil {
-		t.Fatal(err)
-	}
+	access.SetMode(ModeManual)
 
 	access.Approve(unnamedKey)
 	if !access.EffectiveApproval(unnamedKey) || !access.Routable(unnamedKey) {

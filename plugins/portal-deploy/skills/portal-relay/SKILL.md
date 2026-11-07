@@ -68,7 +68,10 @@ PORTAL_URL=https://relay.example.com
 ADMIN_TOKEN=<long random value>
 DISCOVERY=true
 LANDING_PAGE_ENABLED=false  # default; set true to show the public directory page
+APPROVAL_MODE=auto          # default; set manual so only tunnels you approve receive traffic
 ```
+
+`APPROVAL_MODE` is only the initial value. A mode saved in `policy.json` wins, and any admin change saves the mode. If a relay that has saved `auto` starts with `APPROVAL_MODE=manual`, it stays open and logs a warning, so set the mode from the admin dashboard. In `manual` mode, an unapproved tunnel routes no traffic but still holds its alias and ports.
 
 Other settings, all optional: `CACHE_ENABLED` (default `true`), `CACHE_MAX_BYTES` (default `1073741824`, 1 GiB), and `CACHE_MAX_TTL` (default `24h`) bound the relay disk cache that `portal expose --cache` opts into. `X402_ENABLED`, `X402_TESTNET`, and `X402_PAY_TO` turn on relay-owned `/api/x402/*` endpoints. Relay x402 is Sui-only and control-plane only; it never configures tunnel paid routes.
 

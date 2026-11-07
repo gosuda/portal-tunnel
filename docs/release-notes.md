@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Relay: initial approval mode
+
+`--approval-mode` (`APPROVAL_MODE`) sets the lease approval mode on startup, so
+a private relay no longer has a window on `auto` before the first admin call.
+The default stays `auto`, and any other value than `auto` or `manual` stops
+startup. A mode saved in `policy.json` wins. The relay saves the mode on any
+admin change, so a relay that has saved `auto` stays open under
+`APPROVAL_MODE=manual` and logs a warning.
+
 ### Application auth: email sign-in links
 
 `--auth email` signs visitors in with a one-time link that the tunnel sends
