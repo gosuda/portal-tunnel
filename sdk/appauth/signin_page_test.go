@@ -12,8 +12,8 @@ func newSigninTestHandler(t *testing.T, provider string) http.Handler {
 	cfg := Config{Provider: provider}
 	if provider == ProviderEmail {
 		cfg = emailTestConfig("127.0.0.1:25", "alice@example.com")
+		cfg.PublicHosts = func() []PublicHost { return []PublicHost{{URL: "https://app.example"}} }
 	}
-	cfg.PublicURLs = func() []string { return nil }
 	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
 	if err != nil {
 		t.Fatal(err)

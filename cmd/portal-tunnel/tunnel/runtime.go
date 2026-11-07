@@ -253,7 +253,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
 	if err == nil && spec.HTTP.Auth != nil {
 		auth := *spec.HTTP.Auth
-		auth.PublicURLs = runtime.publicURLs
+		auth.PublicHosts = runtime.publicHosts
 		handler, err = appauth.New(handler, listenerIdentity, auth)
 	}
 	if err == nil && len(spec.HTTP.StripRequestHeaders) > 0 {
@@ -281,20 +281,21 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	return runtime, nil
 }
 
-// publicURLs lists the URLs the tunnel is reachable at now: the canonical URL of
-// each relay, which always routes to this tunnel, and the alias its lease holds.
-// The SDK clears an alias as soon as the lease may be gone, because the relay may
-// then give the name to another identity, so the alias itself is the signal. The
-// relay state is not: every visitor connection takes an idle reverse session, so
-// a relay reports connecting while it serves a burst of requests on that alias.
-// A lease refresh clears both URLs until the lease is back, so a request on a
-// connection that outlives the lease reads as signed out in that moment.
-func (runtime *Runtime) publicURLs() []string {
-	var urls []string
+// publicHosts lists the hosts the tunnel holds now: the canonical URL of each
+// relay, which only this identity can hold, and the alias its lease holds. The SDK
+// clears an alias as soon as the lease may be gone, because the relay may then give
+// the name to another identity, so the alias itself is the signal. The relay state
+// is not: every visitor connection takes an idle reverse session, so a relay
+// reports connecting while it serves a burst of requests on that alias. A lease
+// refresh clears both URLs until the lease is back, so a request on a connection
+// that outlives the lease is refused in that moment, and the alias comes back as a
+// new hold.
+func (runtime *Runtime) publicHosts() []appauth.PublicHost {
+	var hosts []appauth.PublicHost
 	for _, relay := range runtime.Exposure.Relays() {
-		urls = append(urls, relay.PublicURL, relay.AliasURL)
+		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
 	}
-	return urls
+	return hosts
 }
 
 // AuthProviderCheck reports whether the startup check of the application auth

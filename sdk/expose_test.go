@@ -43,6 +43,40 @@ func TestPublicURLForLeaseUsesRelayAuthority(t *testing.T) {
 	}
 }
 
+// AliasSince dates the current hold of an alias: a burst of connecting keeps it,
+// and an alias that came back is a new hold, because another identity may have
+// held the name in between.
+func TestAliasSinceDatesTheCurrentHold(t *testing.T) {
+	const relayURL, public, alias = "https://relay.example", "https://long.relay.example", "https://short.relay.example"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exposure := &Exposure{
+		cancel:         cancel,
+		done:           ctx.Done(),
+		accepted:       make(chan net.Conn, 1),
+		relayListeners: make(map[string]*listener),
+	}
+	status := func() RelayStatus { return exposure.statuses[relayURL] }
+
+	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: public, aliasURL: alias}, nil)
+	first := status().AliasSince
+	if first.IsZero() {
+		t.Fatal("a held alias has no date")
+	}
+	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting, publicURL: public, aliasURL: alias}, nil)
+	if got := status().AliasSince; !got.Equal(first) {
+		t.Fatalf("a burst moved the date from %v to %v", first, got)
+	}
+	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting}, nil)
+	if got := status(); got.AliasURL != "" || !got.AliasSince.IsZero() {
+		t.Fatalf("a lost alias kept %q since %v", got.AliasURL, got.AliasSince)
+	}
+	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: public, aliasURL: alias}, nil)
+	if got := status().AliasSince; got.IsZero() || got.Equal(first) {
+		t.Fatalf("an alias that came back has date %v, the old hold's was %v", got, first)
+	}
+}
+
 func TestProxyValidationDoesNotCloseExposure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	exposure := &Exposure{

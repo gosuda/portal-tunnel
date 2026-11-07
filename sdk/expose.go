@@ -94,12 +94,15 @@ type RelayStatus struct {
 	// origin. The RelayReady rule is for display only: show the alias only
 	// while State is RelayReady.
 	AliasURL string
-	UDPAddr  string
-	TCPAddr  string
-	Version  string
-	State    RelayState
-	Failure  RelayFailure
-	Err      error
+	// AliasSince is when this exposure came to hold AliasURL, zero without one.
+	// Another identity may have held the name before that.
+	AliasSince time.Time
+	UDPAddr    string
+	TCPAddr    string
+	Version    string
+	State      RelayState
+	Failure    RelayFailure
+	Err        error
 	// Approval is set while the relay refuses this lease's reverse connection.
 	// State stays RelayConnecting and no endpoint field is set, because nothing
 	// routes. Empty means no refusal was reported, and it never means approved:
@@ -676,6 +679,12 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	}
 	if update.tcpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
 		status.TCPAddr = update.tcpAddr
+	}
+	switch {
+	case status.AliasURL == "":
+		status.AliasSince = time.Time{}
+	case status.AliasURL != previous.AliasURL:
+		status.AliasSince = time.Now()
 	}
 	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
 	if !relayStatusEqual(previous, status) {

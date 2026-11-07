@@ -401,6 +401,7 @@ cfg := appauth.Config{
 		OIDCClientSecret: clientSecret,
 	},
 }
+cfg.PublicHosts = publicHosts(exposure) // see Hostnames below
 gate, err := appauth.New(app, id, cfg)
 if err != nil {
 	log.Fatal(err) // a mistake in cfg
@@ -424,7 +425,7 @@ principal, ok := appauth.PrincipalFromContext(r.Context())
 |------|---------|
 | `New(next, id, cfg)` | Builds the gate. It reads no network, so a provider outage cannot stop a rebuild. It returns an error for a mistake in `cfg` and for an `id` without its `TokenSecret`. |
 | `Check(ctx, cfg)` | Tests the provider: the OIDC discovery document and keys, the SAML metadata, or a login at the SMTP server. It sends no mail. Run it at startup and show the result. |
-| `Validate(cfg)` | Runs the config checks of `New` on a `Config` that is not being built yet. It needs no identity, and it does not ask for `PublicURLs`. |
+| `Validate(cfg)` | Runs the config checks of `New` on a `Config` that is not being built yet. It needs no identity, and it does not ask for `PublicHosts`. |
 | `Config` | The provider, the allowlist, and the provider settings. `oidc`, `saml`, and `email` refuse an empty list. **An empty list opens `siwe` to any wallet, and `credential` to any credential issued from `id`.** Secrets are plain values: read them from where your program keeps secrets. |
 | `Principal` | `Provider`, `Subject`, and `Email`. `Subject` is the principal the allowlist checks: a wallet address, a credential subject, an email, or a `sub:` entry. `Email` is the address `oidc`, `saml`, or `email` vouches for, or empty. An OIDC email counts only with `email_verified`. |
 | `IssueCredential`, `CredentialRedeemURL` | Create a credential and its sign-in link for the `credential` provider. |
@@ -452,6 +453,9 @@ These do not survive a rebuild:
 - A SIWE login in progress: the wallet signs again.
 - The list of SAML assertions already used. An assertion still valid could be presented once more.
 - Email links that were mailed and not used: the visitor asks for a new one.
+- Sessions on an alias, when `PublicHosts` gives its `Since`: a new exposure holds
+  the alias anew, and another identity may have held it in between. Sessions on
+  `PublicURL` are not affected.
 
 Store an identity with `identity.Marshal`, not `json.Marshal`. `json.Marshal`
 leaves out the `TokenSecret`. `New` refuses an identity without one, but
@@ -469,17 +473,25 @@ host on each relay, and the alias if you share it. Portal has no setting for one
 public base URL, because an exposure on several relays has several canonical
 hosts.
 
-The `email` provider needs `Config.PublicURLs`, and `New` refuses it without one. It
-lists the hosts that a login link may name, so a request with a forged `Host`
-gets no link. An email session works only while its host is on the list:
+`Config.PublicHosts` lists the hosts the application holds now. Set it whenever the
+gate serves an exposure. The `email` provider needs it, and `New` refuses `email`
+without one. With it, the gate answers `421` to a request for any other host. A
+session or a sign-in on a host with a `Since` must also be newer than `Since`, so
+neither carries over from an earlier hold of an alias. Credentials are not dated,
+because they have to outlive a restart, so issue them for `PublicURL`. Without
+`PublicHosts`, the gate believes the `Host` of a request:
 
 ```go
-cfg.PublicURLs = func() []string {
-	var urls []string
-	for _, relay := range exposure.Relays() {
-		urls = append(urls, relay.PublicURL, relay.AliasURL)
+func publicHosts(exposure *sdk.Exposure) func() []appauth.PublicHost {
+	return func() []appauth.PublicHost {
+		var hosts []appauth.PublicHost
+		for _, relay := range exposure.Relays() {
+			hosts = append(hosts,
+				appauth.PublicHost{URL: relay.PublicURL},
+				appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
+		}
+		return hosts
 	}
-	return urls
 }
 ```
 
