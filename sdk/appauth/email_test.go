@@ -194,7 +194,7 @@ func emailTestConfig(smtpAddr string, allowed ...string) Config {
 
 func newEmailTestGate(t *testing.T, cfg Config, next http.Handler) *applicationAuth {
 	t.Helper()
-	cfg.PublicURLs = func() []string { return []string{"https://" + emailTestHost, ""} }
+	cfg.PublicHosts = func() []PublicHost { return []PublicHost{{URL: "https://" + emailTestHost}, {}} }
 	handler, err := New(next, applicationAuthTestIdentity(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -395,8 +395,8 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
 	gate := newEmailTestGate(t, emailTestConfig(server.addr, "alice@example.com"), http.NotFoundHandler())
 	rec := postEmailJSON(gate, "attacker.example", applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"})
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d; want 403", rec.Code)
+	if rec.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("status = %d; want 421", rec.Code)
 	}
 
 	// The default port names the same host.
@@ -410,24 +410,24 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 
 	// While the application is reachable nowhere, no host qualifies.
 	offline := emailTestConfig(server.addr, "alice@example.com")
-	offline.PublicURLs = func() []string { return nil }
+	offline.PublicHosts = func() []PublicHost { return nil }
 	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), offline)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec := postEmailJSON(handler, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"}); rec.Code != http.StatusForbidden {
-		t.Fatalf("status without public URLs = %d; want 403", rec.Code)
+	if rec := postEmailJSON(handler, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"}); rec.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("status without public hosts = %d; want 421", rec.Code)
 	}
 	server.expectNoMore(t)
 }
 
 // A gate that could never mail a link fails where the embedder sees it, not at
 // the first visitor, who is told only that a link may be on its way.
-func TestEmailGateRequiresPublicURLs(t *testing.T) {
+func TestEmailGateRequiresPublicHosts(t *testing.T) {
 	t.Parallel()
 
-	if _, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), emailTestConfig("127.0.0.1:25", "alice@example.com")); !errors.Is(err, errEmailRequiresPublicURLs) {
-		t.Fatalf("New without PublicURLs = %v; want %v", err, errEmailRequiresPublicURLs)
+	if _, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), emailTestConfig("127.0.0.1:25", "alice@example.com")); !errors.Is(err, errEmailRequiresPublicHosts) {
+		t.Fatalf("New without PublicHosts = %v; want %v", err, errEmailRequiresPublicHosts)
 	}
 }
 
@@ -453,30 +453,30 @@ func TestEmailMailHoldsOneLink(t *testing.T) {
 func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 	t.Parallel()
 
-	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
+	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"})
 	now := time.Now().UTC()
 
 	token := e.issue("alice@example.com", true, emailTestHost, "/next", now)
-	if email, next, ok := e.redeem(token, emailTestHost, now.Add(emailLinkTTL-time.Second)); !ok || email != "alice@example.com" || next != "/next" {
+	if email, next, ok := e.redeem(token, emailTestHost, time.Time{}, now.Add(emailLinkTTL-time.Second)); !ok || email != "alice@example.com" || next != "/next" {
 		t.Fatalf("redeem = %q, %q, %v", email, next, ok)
 	}
-	if _, _, ok := e.redeem(token, emailTestHost, now); ok {
+	if _, _, ok := e.redeem(token, emailTestHost, time.Time{}, now); ok {
 		t.Fatal("a used link worked again")
 	}
 
 	token = e.issue("bob@example.com", true, emailTestHost, "/", now)
-	if _, _, ok := e.redeem(token, emailTestHost, now.Add(emailLinkTTL)); ok {
+	if _, _, ok := e.redeem(token, emailTestHost, time.Time{}, now.Add(emailLinkTTL)); ok {
 		t.Fatal("an expired link worked")
 	}
 
 	token = e.issue("carol@example.com", true, emailTestHost, "/", now)
-	if _, _, ok := e.redeem(token, "other.example", now); ok {
+	if _, _, ok := e.redeem(token, "other.example", time.Time{}, now); ok {
 		t.Fatal("a link worked at another host")
 	}
-	if _, _, ok := e.redeem(token, emailTestHost, now); ok {
+	if _, _, ok := e.redeem(token, emailTestHost, time.Time{}, now); ok {
 		t.Fatal("a link tried at another host still worked")
 	}
-	if _, _, ok := e.redeem("not-a-token", emailTestHost, now); ok {
+	if _, _, ok := e.redeem("not-a-token", emailTestHost, time.Time{}, now); ok {
 		t.Fatal("an unknown token worked")
 	}
 }
@@ -487,7 +487,7 @@ func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 func TestEmailSendLimits(t *testing.T) {
 	t.Parallel()
 
-	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
+	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"})
 	start := time.Now().UTC()
 	issueAs := func(email string, listed bool, at time.Duration) bool {
 		if e.issue(email, listed, emailTestHost, "/", start.Add(at)) == "" {
@@ -515,7 +515,7 @@ func TestEmailSendLimits(t *testing.T) {
 		t.Fatal("a link an hour after the first was refused")
 	}
 
-	e = newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
+	e = newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"})
 	for i := range emailDomainHourlyLimit {
 		if !issueAs(fmt.Sprintf("user%d@team.example", i), false, time.Duration(i)*time.Second) {
 			t.Fatalf("domain link %d was refused", i+1)
@@ -537,7 +537,7 @@ func TestEmailSendLimits(t *testing.T) {
 func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
 	t.Parallel()
 
-	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
+	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"})
 	for range emailSendSlots {
 		e.sendSlots <- struct{}{}
 	}
@@ -563,7 +563,7 @@ func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
 func TestEmailRefusedSendsLeaveTheSlotsFree(t *testing.T) {
 	t.Parallel()
 
-	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"}, nil)
+	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"})
 	now := time.Now().UTC()
 	if e.issue("alice@example.com", true, emailTestHost, "/", now) == "" {
 		t.Fatal("the first link was refused")
@@ -668,32 +668,39 @@ func TestEmailLinkReturnsOnlyToLocalPaths(t *testing.T) {
 	}
 }
 
-// A link mailed for an alias stops working when the alias leaves the tunnel: the
-// next owner of the name reads the link of whoever opens it, and must not be able
-// to replay it here. A refused host does not use up the link.
+// A link mailed for an alias stops working when the alias leaves the tunnel, and
+// stays dead when the alias comes back: the next owner of the name reads the link
+// of whoever opens it, and must not be able to replay it here.
 func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 	t.Parallel()
 
 	const alias = "alias.example"
+	now := time.Now().UTC()
 	var public atomic.Value
-	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
+	public.Store([]PublicHost{{URL: "https://" + emailTestHost}, {URL: "https://" + alias, Since: now.Add(-time.Hour)}})
 	cfg := emailTestConfig("127.0.0.1:25", "alice@example.com")
-	cfg.PublicURLs = func() []string { return public.Load().([]string) }
+	cfg.PublicHosts = func() []PublicHost { return public.Load().([]PublicHost) }
 	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	gate := handler.(*applicationAuth)
-	token := gate.email.issue("alice@example.com", true, alias, "/", time.Now().UTC())
+	token := gate.email.issue("alice@example.com", true, alias, "/", now)
 	<-gate.email.sendSlots
 
-	public.Store([]string{"https://" + emailTestHost})
-	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusForbidden {
-		t.Fatalf("redeem at a lost alias = %d; want 403", rec.Code)
+	public.Store([]PublicHost{{URL: "https://" + emailTestHost}})
+	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("redeem at a lost alias = %d; want 421", rec.Code)
 	}
-	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
-	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusOK {
-		t.Fatalf("redeem after the alias came back = %d; want 200", rec.Code)
+	newHold := now.Add(time.Minute)
+	public.Store([]PublicHost{{URL: "https://" + emailTestHost}, {URL: "https://" + alias, Since: newHold}})
+	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("redeem of a link from the earlier hold = %d; want 401", rec.Code)
+	}
+	fresh := gate.email.issue("alice@example.com", true, alias, "/", newHold)
+	<-gate.email.sendSlots
+	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: fresh}); rec.Code != http.StatusOK {
+		t.Fatalf("redeem of a link from this hold = %d; want 200", rec.Code)
 	}
 }
 
@@ -722,15 +729,15 @@ func TestLoginRedirectDropsAPathTooLongToPostBack(t *testing.T) {
 
 // A session is worth no more than the link it came from: when its alias leaves
 // the tunnel, the next owner of the name gets the cookie of whoever opens it, and
-// must not be able to replay it here. The session works again if the alias returns.
+// must not be able to replay it here, even after the alias returns.
 func TestEmailSessionEndsWithItsPublicHost(t *testing.T) {
 	t.Parallel()
 
 	const alias = "alias.example"
 	var public atomic.Value
-	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
+	public.Store([]PublicHost{{URL: "https://" + emailTestHost}, {URL: "https://" + alias}})
 	cfg := emailTestConfig("127.0.0.1:25", "alice@example.com")
-	cfg.PublicURLs = func() []string { return public.Load().([]string) }
+	cfg.PublicHosts = func() []PublicHost { return public.Load().([]PublicHost) }
 	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}), applicationAuthTestIdentity(), cfg)
@@ -755,13 +762,13 @@ func TestEmailSessionEndsWithItsPublicHost(t *testing.T) {
 	if code := open(); code != http.StatusNoContent {
 		t.Fatalf("session on a public alias = %d; want 204", code)
 	}
-	public.Store([]string{"https://" + emailTestHost})
-	if code := open(); code != http.StatusSeeOther {
-		t.Fatalf("session on a lost alias = %d; want the login redirect", code)
+	public.Store([]PublicHost{{URL: "https://" + emailTestHost}})
+	if code := open(); code != http.StatusMisdirectedRequest {
+		t.Fatalf("session on a lost alias = %d; want 421", code)
 	}
-	public.Store([]string{"https://" + emailTestHost, "https://" + alias})
-	if code := open(); code != http.StatusNoContent {
-		t.Fatalf("session after the alias came back = %d; want 204", code)
+	public.Store([]PublicHost{{URL: "https://" + emailTestHost}, {URL: "https://" + alias, Since: time.Now().Add(time.Minute)}})
+	if code := open(); code != http.StatusSeeOther {
+		t.Fatalf("session after the alias came back = %d; want the login redirect", code)
 	}
 }
 
@@ -771,7 +778,7 @@ func newEmailTestAuthenticator(t *testing.T, addr string) *emailAuthenticator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newEmailAuthenticator(settings, nil)
+	return newEmailAuthenticator(settings)
 }
 
 // A server's reply about the recipient can quote the address. The send log must
@@ -816,7 +823,7 @@ func TestEmailPortNumberPicksTheTransport(t *testing.T) {
 		"smtp.example.com:+465": true,
 		"smtp.example.com:587":  false,
 	} {
-		if got := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: addr}, nil).implicitTLS; got != want {
+		if got := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: addr}).implicitTLS; got != want {
 			t.Errorf("%s: implicit TLS = %v; want %v", addr, got, want)
 		}
 	}
@@ -881,7 +888,7 @@ func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 	t.Parallel()
 
 	issued := newEmailTestGate(t, emailTestConfig("127.0.0.1:25", "alice@example.com"), http.NotFoundHandler())
-	session, err := issued.issueSession(Principal{Provider: ProviderEmail, Subject: "alice@example.com"}, emailTestHost, time.Now().Add(time.Hour))
+	session, err := issued.issueSession(Principal{Provider: ProviderEmail, Subject: "alice@example.com"}, emailTestHost, time.Now(), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1050,7 +1057,7 @@ func TestEmailRefusesPlaintextToARemoteServer(t *testing.T) {
 			emailSMTPAddr:     server.addr,
 			emailSMTPUsername: emailTestUsername,
 			emailSMTPPassword: emailTestPassword,
-		}, nil)
+		})
 		// The server listens on 127.0.0.1, but is named as another host.
 		e.smtpHost = name
 		if err := e.check(context.Background()); !errors.Is(err, errEmailSMTPOffersNoSTARTTLS) {

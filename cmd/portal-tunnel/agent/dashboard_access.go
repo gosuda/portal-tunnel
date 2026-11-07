@@ -772,7 +772,7 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 		}
 	}
 	// A changed sign-in gate restarts the tunnel from its saved settings.
-	for _, line := range agentDashboardWrap("Applying restarts this tunnel and drops the relays connected to it at runtime.", inner, 2) {
+	for _, line := range agentDashboardWrap("Applying restarts this tunnel, drops the relays connected to it at runtime, and signs out visitors on its alias.", inner, 3) {
 		body.addLine(th.muted.Render(line))
 	}
 

@@ -450,7 +450,8 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	var state samlStateClaims
 	if err := decodeSignedApplicationAuthJSON(a.saml.stateKey, stateCookie.Value, &state); err != nil ||
 		!sameApplicationHost(state.Host, host) ||
-		now.Unix() >= state.ExpiresAt {
+		now.Unix() >= state.ExpiresAt ||
+		loginStateIssuedAt(state.ExpiresAt).Before(a.heldSince(host)) {
 		// Only a state that verified carries a target worth keeping.
 		next := "/"
 		if err == nil {

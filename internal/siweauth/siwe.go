@@ -191,7 +191,7 @@ func (a *Authenticator) Issue(address, domain, uri string, now time.Time) (Chall
 // signature within its TTL re-authenticates the same wallet, so there is
 // no replay tracking. An unknown or blank token answers
 // ErrChallengeNotFound.
-func (a *Authenticator) Verify(challengeToken, message, signature, domain string, now time.Time) (string, error) {
+func (a *Authenticator) Verify(challengeToken, message, signature, domain string, notBefore, now time.Time) (string, error) {
 	if a == nil {
 		return "", ErrUnauthorized
 	}
@@ -205,7 +205,7 @@ func (a *Authenticator) Verify(challengeToken, message, signature, domain string
 	if err != nil {
 		return "", err
 	}
-	if now.After(payload.ExpiresAt) {
+	if now.After(payload.ExpiresAt) || payload.IssuedAt.Before(notBefore) {
 		return "", ErrChallengeExpired
 	}
 	// Rebuild the message from the HMAC-protected payload and require

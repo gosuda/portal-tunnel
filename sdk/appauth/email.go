@@ -29,7 +29,6 @@ var (
 	errEmailAddressIsInvalid     = errors.New("email address is invalid")
 	errEmailSMTPOffersNoSTARTTLS = errors.New("smtp server does not offer STARTTLS; only a server at localhost, 127.0.0.1 or ::1 may be reached without TLS")
 	errEmailHeaderHasLineBreak   = errors.New("email header value contains a line break")
-	errEmailRequestHostNotPublic = errors.New("request host is not a public address of this tunnel")
 	errEmailLinkInvalidOrExpired = errors.New("email link is invalid, used, or expired")
 	errEmailSendSlotsAreAllInUse = errors.New("every email send slot is in use")
 )
@@ -78,7 +77,6 @@ type emailAuthenticator struct {
 	username    string
 	password    string
 	from        mail.Address
-	publicURLs  func() []string
 	// binding digests the SMTP server, the username and the sender into every
 	// email session, so a change of the mail account ends the sessions of the
 	// links it mailed. The password stays out: a session cookie must not carry
@@ -118,7 +116,7 @@ type applicationAuthEmailRedeemRequest struct {
 	Token string `json:"token"`
 }
 
-func newEmailAuthenticator(settings applicationAuthSettings, publicURLs func() []string) *emailAuthenticator {
+func newEmailAuthenticator(settings applicationAuthSettings) *emailAuthenticator {
 	host, port, _ := net.SplitHostPort(settings.emailSMTPAddr)
 	portNumber, _ := strconv.Atoi(port)
 	// None of the settings can hold a NUL, so the separators keep them unambiguous.
@@ -130,7 +128,6 @@ func newEmailAuthenticator(settings applicationAuthSettings, publicURLs func() [
 		username:    settings.emailSMTPUsername,
 		password:    settings.emailSMTPPassword,
 		from:        settings.emailFrom,
-		publicURLs:  publicURLs,
 		binding:     base64.RawURLEncoding.EncodeToString(binding[:]),
 		sendSlots:   make(chan struct{}, emailSendSlots),
 		links:       make(map[[sha256.Size]byte]emailLink),
@@ -188,23 +185,6 @@ func normalizeVisitorEmail(raw string) (string, error) {
 		return "", errEmailAddressIsInvalid
 	}
 	return email, nil
-}
-
-// publicHost returns the host of the tunnel's current public URL that
-// requestHost, a request's Host, names. A link mailed for any other host would
-// send its token to whoever answers there, so the mail takes its host from this
-// list and never from the request.
-func (e *emailAuthenticator) publicHost(rawHost string) (string, bool) {
-	requestHost, err := normalizeHost(rawHost)
-	if err != nil || e.publicURLs == nil {
-		return "", false
-	}
-	for _, raw := range e.publicURLs() {
-		if public, err := normalizeHost(raw); err == nil && public == requestHost {
-			return public, true
-		}
-	}
-	return "", false
 }
 
 // admit records a send to email at now and takes a send slot for it, if the
@@ -268,13 +248,13 @@ func (e *emailAuthenticator) issue(email string, listed bool, host, next string,
 // redeem uses up the link of token. It returns the address and target of a
 // link that was mailed for host and has not expired. Any link it finds is
 // forgotten, so a link works at most once.
-func (e *emailAuthenticator) redeem(token, host string, now time.Time) (email, next string, ok bool) {
+func (e *emailAuthenticator) redeem(token, host string, heldSince, now time.Time) (email, next string, ok bool) {
 	key := sha256.Sum256([]byte(strings.TrimSpace(token)))
 	e.mu.Lock()
 	link, found := e.links[key]
 	delete(e.links, key)
 	e.mu.Unlock()
-	if !found || !now.Before(link.expiresAt) || !sameApplicationHost(link.host, host) {
+	if !found || !now.Before(link.expiresAt) || !sameApplicationHost(link.host, host) || link.expiresAt.Add(-emailLinkTTL).Before(heldSince) {
 		return "", "", false
 	}
 	return link.email, link.next, true
@@ -490,9 +470,11 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	host, public := a.email.publicHost(r.Host)
+	// A link mailed for any other host would send its token to whoever answers
+	// there, so the host comes from the public list and never from the request.
+	host, _, public := a.publicHost(r.Host)
 	if !public {
-		a.writeJSONError(w, http.StatusForbidden, errEmailRequestHostNotPublic.Error())
+		a.writeJSONError(w, http.StatusMisdirectedRequest, errRequestHostNotPublic.Error())
 		return
 	}
 	if a.subjectAllowed(email) {
@@ -504,9 +486,7 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 
 // serveEmailRedeem turns a login link into the session every provider
 // creates. The allowlist is checked again, so an entry removed after the link
-// was mailed refuses it. So is the host: an alias this tunnel lost may have a new
-// owner, who reads the link of whoever opens it there, and must not be able to
-// replay it here.
+// was mailed refuses it.
 func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Request) {
 	if a.provider != ProviderEmail || a.email == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
@@ -526,12 +506,8 @@ func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Reques
 		a.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, public := a.email.publicHost(r.Host); !public {
-		a.writeJSONError(w, http.StatusForbidden, errEmailRequestHostNotPublic.Error())
-		return
-	}
 	now := time.Now().UTC()
-	email, next, ok := a.email.redeem(req.Token, r.Host, now)
+	email, next, ok := a.email.redeem(req.Token, r.Host, a.heldSince(r.Host), now)
 	if !ok || !a.subjectAllowed(email) {
 		a.writeJSONError(w, http.StatusUnauthorized, errEmailLinkInvalidOrExpired.Error())
 		return

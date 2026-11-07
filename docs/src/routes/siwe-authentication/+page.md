@@ -116,6 +116,15 @@ credential in `X-Portal-Access-Credential`, and a form post with `Origin: null`
 that a browser marks with `Sec-Fetch-Site: same-origin`, which a page with
 `Referrer-Policy: no-referrer` sends, are not affected.
 
+A session also works only on a host the tunnel holds now. Portal answers `421` to a
+request for any other host. A session on an alias lasts as long as the tunnel keeps
+holding that alias: after a restart, or after the tunnel registers again, such as
+after a network drop or a laptop sleep, visitors on the alias sign in again, because
+another identity may have held the name in between. A sign-in that began before
+then does not finish either. Sessions on the address-bound URL keep working through
+all of these, because only this identity can hold that URL. A credential outlives a
+restart on either host, so issue it for the address-bound URL.
+
 Inbound `X-Portal-User`, `X-Portal-Auth`, and `X-Portal-Proof` headers are always removed. Add
 `--auth-identity-headers` to inject the verified subject and provider (`siwe`,
 `credential`, `oidc`, `saml`, or `email`) after login. Upstreams must only trust these headers when they cannot be
@@ -434,7 +443,7 @@ was not used. The visitor then asks for a new link.
 
 Portal sends a link only for a host where the tunnel is published now: the
 identity-bound URL of a relay, or the short URL while that relay holds the
-name. Portal refuses a request for any other host with `403`. This keeps a
+name. Portal refuses a request for any other host with `421`. This keeps a
 forged `Host` header from putting another host into the link.
 
 The link is not bound to the browser that asked for it. A visitor can ask on a
@@ -472,7 +481,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   https://myapp.example.com/_portal/auth/email/request     # 202
 ```
 
-A `403` means that the tunnel is not published at that host now.
+A `421` means that the tunnel is not published at that host now.
 
 ## Go Programs
 
