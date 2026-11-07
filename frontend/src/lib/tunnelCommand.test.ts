@@ -590,7 +590,7 @@ describe("tunnelCommand sign-in", () => {
 });
 
 // The builder repeats rules of the Go gateway, because the browser cannot call
-// it. cmd/portal-tunnel/gateway/frontend_rules_test.go runs the same rows
+// it. sdk/appauth/frontend_rules_test.go runs the same rows
 // against the Go functions, so a rule changed on one side alone fails a test.
 describe("rules shared with the Go gateway", () => {
   const methods = new Set(["credential", "siwe", "oidc", "saml", "email"]);

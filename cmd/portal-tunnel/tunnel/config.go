@@ -8,6 +8,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -46,7 +47,7 @@ type Config struct {
 	BanMITM         *bool    `toml:"ban_mitm,omitempty"`
 
 	types.LeaseMetadata
-	gateway.ApplicationAuthConfig
+	appauth.ApplicationAuthConfig
 	gateway.X402Config
 }
 

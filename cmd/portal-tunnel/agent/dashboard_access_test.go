@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -36,7 +36,7 @@ const fakeSecret = "not-a-real-secret-0123"
 func testAccessStatus() AgentStatusResponse {
 	status := testDashboardStatus()
 	web, api, paid, idle := &status.Tunnels[0], &status.Tunnels[1], &status.Tunnels[2], &status.Tunnels[4]
-	web.Provider = gateway.ApplicationAuthProviderOIDC
+	web.Provider = appauth.ApplicationAuthProviderOIDC
 	web.AllowedWallets = []string{"alice@example.com", "@corp.example.com", "sub:4f2a9c"}
 	web.IdentityHeaders = true
 	web.OIDCIssuerURL = "https://accounts.example.com"
@@ -44,10 +44,10 @@ func testAccessStatus() AgentStatusResponse {
 	web.AuthOIDCClientSecretSet = true
 	web.AuthProviderChecked = true
 	web.AuthProviderError = "fetch oidc discovery: no such host"
-	api.Provider = gateway.ApplicationAuthProviderSIWE
+	api.Provider = appauth.ApplicationAuthProviderSIWE
 	api.AllowedWallets = []string{"0x52908400098527886E0F7030069857D2E4169EE7"}
-	paid.Provider = gateway.ApplicationAuthProviderCredential
-	idle.Provider = gateway.ApplicationAuthProviderOIDC
+	paid.Provider = appauth.ApplicationAuthProviderCredential
+	idle.Provider = appauth.ApplicationAuthProviderOIDC
 	idle.AllowedWallets = []string{"bob@example.com"}
 	idle.OIDCIssuerURL = "https://login.example.org"
 	idle.OIDCClientID = "portal-idle"
@@ -63,9 +63,9 @@ func TestDashboardAccessStoredEmailPassword(t *testing.T) {
 	typed := func(text string) tea.Msg { return keyRunes(text) }
 	status := testAccessStatus()
 	mail := &status.Tunnels[accessOpen]
-	mail.Provider = gateway.ApplicationAuthProviderEmail
+	mail.Provider = appauth.ApplicationAuthProviderEmail
 	mail.EmailList = []string{"alice@example.com"}
-	mail.EmailConfig = gateway.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "portal", SMTPFrom: "login@example.com"}
+	mail.EmailConfig = appauth.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "portal", SMTPFrom: "login@example.com"}
 	mail.AuthSMTPPasswordSet = true
 
 	// The focus ring is mode, entry 1, add 2, headers 3, server 4, username 5, password 6, sender 7.
@@ -189,12 +189,12 @@ func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 // The wording of an empty allow list repeats a rule of the gateway, so it is checked against the
 // gateway's own validator.
 func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
-	for _, provider := range []string{gateway.ApplicationAuthProviderCredential, gateway.ApplicationAuthProviderSIWE, gateway.ApplicationAuthProviderOIDC} {
-		cfg := gateway.ApplicationAuthConfig{Provider: provider}
-		if provider == gateway.ApplicationAuthProviderOIDC {
+	for _, provider := range []string{appauth.ApplicationAuthProviderCredential, appauth.ApplicationAuthProviderSIWE, appauth.ApplicationAuthProviderOIDC} {
+		cfg := appauth.ApplicationAuthConfig{Provider: provider}
+		if provider == appauth.ApplicationAuthProviderOIDC {
 			cfg.OIDCIssuerURL, cfg.OIDCClientID = "https://accounts.example.com", "portal-web"
 		}
-		emptyAllowed := gateway.ValidateApplicationAuthConfig(cfg) == nil
+		emptyAllowed := appauth.ValidateApplicationAuthConfig(cfg) == nil
 		hint := agentDashboardAllowedHint(provider)
 		switch {
 		case emptyAllowed && !strings.HasPrefix(hint, "any "):
@@ -205,7 +205,7 @@ func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
 		if !emptyAllowed {
 			// The refusal must be about the empty list and nothing else.
 			cfg.AllowedWallets = []string{"alice@example.com"}
-			if err := gateway.ValidateApplicationAuthConfig(cfg); err != nil {
+			if err := appauth.ValidateApplicationAuthConfig(cfg); err != nil {
 				t.Fatalf("%s with one entry: %v", provider, err)
 			}
 		}

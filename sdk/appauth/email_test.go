@@ -1,4 +1,4 @@
-package gateway
+package appauth
 
 import (
 	"bytes"

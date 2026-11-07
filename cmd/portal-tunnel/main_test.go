@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -126,7 +126,7 @@ func TestExposeAuthEmailEnv(t *testing.T) {
 			t.Errorf("portal expose %v: %v", args, err)
 			continue
 		}
-		if spec.HTTP != nil && spec.HTTP.Auth != nil && spec.HTTP.Auth.EmailConfig != (gateway.EmailConfig{}) {
+		if spec.HTTP != nil && spec.HTTP.Auth != nil && spec.HTTP.Auth.EmailConfig != (appauth.EmailConfig{}) {
 			t.Errorf("portal expose %v carried AUTH_SMTP_* into the auth settings", args)
 		}
 	}
@@ -134,7 +134,7 @@ func TestExposeAuthEmailEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := gateway.EmailConfig{SMTPAddr: "smtp.example:587", SMTPUsername: "portal", SMTPPassword: "smtp-secret", SMTPFrom: "login@example.com"}
+	want := appauth.EmailConfig{SMTPAddr: "smtp.example:587", SMTPUsername: "portal", SMTPPassword: "smtp-secret", SMTPFrom: "login@example.com"}
 	if spec.HTTP.Auth.EmailConfig != want {
 		t.Fatal("--auth email did not take the AUTH_SMTP_* values")
 	}

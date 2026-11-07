@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
 // The auth fields of an update sit next to its other fields on the wire, as
@@ -39,16 +39,16 @@ func TestAgentTunnelUpdateRequestJSON(t *testing.T) {
 // the desired ones, and applying it gives the desired settings. The write-only
 // client secret is never among the changes, so the stored one stays.
 func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
-	stored := gateway.ApplicationAuthConfig{
-		Provider:        gateway.ApplicationAuthProviderOIDC,
+	stored := appauth.ApplicationAuthConfig{
+		Provider:        appauth.ApplicationAuthProviderOIDC,
 		AllowedWallets:  []string{"alice@example.com"},
 		IdentityHeaders: true,
-		OIDCConfig:      gateway.OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: "client", OIDCClientSecret: "secret"},
+		OIDCConfig:      appauth.OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: "client", OIDCClientSecret: "secret"},
 	}
-	desired := gateway.ApplicationAuthConfig{
-		Provider:       gateway.ApplicationAuthProviderSAML,
+	desired := appauth.ApplicationAuthConfig{
+		Provider:       appauth.ApplicationAuthProviderSAML,
 		AllowedWallets: []string{"alice@example.com"},
-		SAMLConfig:     gateway.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"},
+		SAMLConfig:     appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"},
 	}
 	changes := authChanges(stored, desired)
 	want := map[string]json.RawMessage{
@@ -79,7 +79,7 @@ func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
 func TestApplyAuthLeavesTheStoredListsAlone(t *testing.T) {
 	t.Parallel()
 
-	stored := gateway.ApplicationAuthConfig{Provider: "oidc", AllowedWallets: []string{"a@example.com"}, EmailList: []string{"b@example.com"}}
+	stored := appauth.ApplicationAuthConfig{Provider: "oidc", AllowedWallets: []string{"a@example.com"}, EmailList: []string{"b@example.com"}}
 	applied := stored
 	request := AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{
 		"auth_allowed_wallets": json.RawMessage(`["c@example.com"]`),

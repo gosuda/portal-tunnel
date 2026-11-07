@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -92,9 +92,9 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	tunnelCfg.Provider = "credential"
 	tunnelCfg.AllowedWallets = []string{"alice", "bob"}
 	mailCfg := testTunnel("mail")
-	mailCfg.Provider = gateway.ApplicationAuthProviderEmail
+	mailCfg.Provider = appauth.ApplicationAuthProviderEmail
 	mailCfg.EmailList = []string{"carol@example.com"}
-	mailCfg.EmailConfig = gateway.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "me@example.com", SMTPPassword: "not-a-real-secret-0123", SMTPFrom: "login@example.com"}
+	mailCfg.EmailConfig = appauth.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "me@example.com", SMTPPassword: "not-a-real-secret-0123", SMTPFrom: "login@example.com"}
 	m, _ := testManager(t, tunnelCfg, mailCfg)
 
 	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
@@ -163,7 +163,7 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	if got := signedIn["web"].AllowedWallets; len(got) != 0 {
 		t.Fatalf("wallet session sees allowlist %v, want none", got)
 	}
-	if got := signedIn["mail"]; len(got.EmailList) != 0 || got.EmailConfig != (gateway.EmailConfig{}) || got.AuthSMTPPasswordSet {
+	if got := signedIn["mail"]; len(got.EmailList) != 0 || got.EmailConfig != (appauth.EmailConfig{}) || got.AuthSMTPPasswordSet {
 		t.Fatalf("wallet session sees %+v, want no list and no mail account", got.ApplicationAuthConfig)
 	}
 }

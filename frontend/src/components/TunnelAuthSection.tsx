@@ -1118,7 +1118,7 @@ function VisitorPreview({
     // The address is still being typed.
   }
   // The credential, wallet and email texts are those of the sign-in pages; the
-  // gateway test (signin_page_test.go) fails when a page and signinCopy.json differ.
+  // gate test (sdk/appauth/signin_page_test.go) fails when a page and signinCopy.json differ.
   // OIDC and SAML leave for the provider at once and have no page of their own.
   const sentToProvider = {
     title: `You are sent to ${issuerHost}`,

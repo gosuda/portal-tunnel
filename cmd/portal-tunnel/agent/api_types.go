@@ -10,6 +10,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -40,10 +41,10 @@ type AgentTunnelStatus struct {
 	MaxActiveRelays int                 `json:"max_active_relays,omitempty"`
 	Metadata        types.LeaseMetadata `json:"metadata"`
 	// The auth settings come without their secrets (see
-	// gateway.ApplicationAuthConfig.Public). The OIDC client secret and the
+	// appauth.ApplicationAuthConfig.Public). The OIDC client secret and the
 	// SMTP password are write-only: AuthOIDCClientSecretSet and
 	// AuthSMTPPasswordSet say whether one is configured.
-	gateway.ApplicationAuthConfig
+	appauth.ApplicationAuthConfig
 	AuthOIDCClientSecretSet bool `json:"auth_oidc_client_secret_set,omitempty"`
 	AuthSMTPPasswordSet     bool `json:"auth_smtp_password_set,omitempty"`
 	// The provider fields report the startup check of the OIDC or SAML
@@ -87,7 +88,7 @@ type AgentTunnelRequest struct {
 	Discovery           *bool              `json:"discovery,omitempty"`
 	Overlay             bool               `json:"overlay,omitempty"`
 	MaxActiveRelays     int                `json:"max_active_relays,omitempty"`
-	gateway.ApplicationAuthConfig
+	appauth.ApplicationAuthConfig
 	gateway.X402Config
 }
 
@@ -98,7 +99,7 @@ type AgentRelayRequest struct {
 // AgentTunnelUpdateRequest changes the fields it names; an omitted field, or one
 // sent as null, stays as it is. Auth holds the auth and auth_* fields as sent,
 // and they are decoded over the stored auth settings, so a setting added to
-// gateway.ApplicationAuthConfig can be updated without a field of its own here.
+// appauth.ApplicationAuthConfig can be updated without a field of its own here.
 // An empty auth turns application sign-in off and clears the other auth
 // settings. The OIDC client secret and the SMTP password are write-only: an
 // empty value clears one.
@@ -162,7 +163,7 @@ func (r AgentTunnelUpdateRequest) Empty() bool {
 // applyAuth decodes the auth fields of the request over auth, the stored
 // settings, and refuses a field the settings do not have. An empty auth clears
 // the settings and refuses any other auth field next to it.
-func (r AgentTunnelUpdateRequest) applyAuth(auth *gateway.ApplicationAuthConfig) error {
+func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.ApplicationAuthConfig) error {
 	if len(r.Auth) == 0 {
 		return nil
 	}
@@ -172,7 +173,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *gateway.ApplicationAuthConfig)
 			if len(r.Auth) > 1 {
 				return errAuthEmptyWhichTurnsSignOff
 			}
-			*auth = gateway.ApplicationAuthConfig{}
+			*auth = appauth.ApplicationAuthConfig{}
 			return nil
 		}
 	}
@@ -199,8 +200,8 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *gateway.ApplicationAuthConfig)
 // among the changes; a client that changes one names it itself. An update
 // decodes over the stored settings, so it can empty a string, a number, a
 // boolean or a list, and a setting must be one of these.
-func authChanges(stored, desired gateway.ApplicationAuthConfig) map[string]json.RawMessage {
-	fields := func(auth gateway.ApplicationAuthConfig) map[string]json.RawMessage {
+func authChanges(stored, desired appauth.ApplicationAuthConfig) map[string]json.RawMessage {
+	fields := func(auth appauth.ApplicationAuthConfig) map[string]json.RawMessage {
 		data, _ := json.Marshal(auth.Public())
 		var out map[string]json.RawMessage
 		_ = json.Unmarshal(data, &out)

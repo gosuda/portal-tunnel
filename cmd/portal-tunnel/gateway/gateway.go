@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
 	"sort"
@@ -27,6 +26,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -554,7 +554,7 @@ func newCasperFacilitatorClient(contract X402Payment) (*facilitatorclient.Client
 		if err != nil {
 			return nil, fmt.Errorf("parse x402 facilitator endpoint %q: %w", endpoint, err)
 		}
-		if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		if u.Scheme == "http" && !utils.IsLoopbackHost(u.Hostname()) {
 			return nil, fmt.Errorf("x402 facilitator endpoint %q sends the authorization token over plaintext http; use https or a loopback endpoint", endpoint)
 		}
 	}
@@ -580,18 +580,6 @@ func firstEndpoint(endpoints []string) string {
 		}
 	}
 	return ""
-}
-
-// isLoopbackHost reports whether hostname is a loopback address: "localhost",
-// "::1", or a valid IP address that reports true from IsLoopback().
-func isLoopbackHost(hostname string) bool {
-	if hostname == "localhost" || hostname == "::1" {
-		return true
-	}
-	if addr, err := netip.ParseAddr(hostname); err == nil && addr.IsLoopback() {
-		return true
-	}
-	return false
 }
 
 func orDefaultMaxTimeout(contract X402Payment) int {
@@ -649,11 +637,11 @@ type httpGateway struct {
 }
 
 func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Always remove Portal-owned credential and identity headers unless the
-	// local application auth gate explicitly verified and attached them for
-	// this request.
+	// Always remove Portal-owned credential and identity headers. Behind the
+	// application auth gate the identity headers are its own: it removes a
+	// visitor's copies before it sets them.
 	utils.DelHeaderSpellings(r.Header, types.HeaderAccessCredential)
-	if !hasVerifiedIdentityHeaders(r) {
+	if _, ok := appauth.PrincipalFromContext(r.Context()); !ok {
 		utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
 	}
 

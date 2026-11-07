@@ -14,7 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -27,15 +27,15 @@ func agentDashboardAccessMode(provider string) string {
 	switch provider {
 	case "":
 		return "open to anyone"
-	case gateway.ApplicationAuthProviderCredential:
+	case appauth.ApplicationAuthProviderCredential:
 		return "credential"
-	case gateway.ApplicationAuthProviderSIWE:
+	case appauth.ApplicationAuthProviderSIWE:
 		return "wallet (siwe)"
-	case gateway.ApplicationAuthProviderOIDC:
+	case appauth.ApplicationAuthProviderOIDC:
 		return "OIDC"
-	case gateway.ApplicationAuthProviderSAML:
+	case appauth.ApplicationAuthProviderSAML:
 		return "SAML"
-	case gateway.ApplicationAuthProviderEmail:
+	case appauth.ApplicationAuthProviderEmail:
 		return "email link"
 	default:
 		return provider
@@ -47,11 +47,11 @@ func agentDashboardAccessMode(provider string) string {
 // principal, while OIDC, SAML and email refuse to run without at least one entry.
 func agentDashboardAllowedHint(provider string) string {
 	switch provider {
-	case gateway.ApplicationAuthProviderCredential:
+	case appauth.ApplicationAuthProviderCredential:
 		return "any valid credential"
-	case gateway.ApplicationAuthProviderSIWE:
+	case appauth.ApplicationAuthProviderSIWE:
 		return "any wallet"
-	case gateway.ApplicationAuthProviderOIDC, gateway.ApplicationAuthProviderSAML, gateway.ApplicationAuthProviderEmail:
+	case appauth.ApplicationAuthProviderOIDC, appauth.ApplicationAuthProviderSAML, appauth.ApplicationAuthProviderEmail:
 		return "needs one entry"
 	default:
 		return ""
@@ -79,9 +79,9 @@ func agentDashboardSecretState(set bool) string {
 // provider: the OIDC client secret or the SMTP password of email.
 func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
 	switch provider {
-	case gateway.ApplicationAuthProviderOIDC:
+	case appauth.ApplicationAuthProviderOIDC:
 		return tunnel.AuthOIDCClientSecretSet
-	case gateway.ApplicationAuthProviderEmail:
+	case appauth.ApplicationAuthProviderEmail:
 		return tunnel.AuthSMTPPasswordSet
 	default:
 		return false
@@ -143,15 +143,15 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 	}
 	v.addAccessValue(th, width, "Headers", agentDashboardIdentityHeaders(tunnel.IdentityHeaders), th.text)
 	switch tunnel.Provider {
-	case gateway.ApplicationAuthProviderOIDC:
+	case appauth.ApplicationAuthProviderOIDC:
 		v.addAccessValue(th, width, "Issuer", tunnel.OIDCIssuerURL, th.text)
 		v.addAccessValue(th, width, "Client ID", tunnel.OIDCClientID, th.text)
 		v.addAccessValue(th, width, "Client secret", agentDashboardSecretState(tunnel.AuthOIDCClientSecretSet), th.text)
-	case gateway.ApplicationAuthProviderSAML:
+	case appauth.ApplicationAuthProviderSAML:
 		v.addAccessValue(th, width, "Metadata", cmp.Or(tunnel.SAMLMetadataURL, tunnel.SAMLMetadataFile), th.text)
 		v.addAccessValue(th, width, "Entity ID", cmp.Or(tunnel.SAMLEntityID, agentDashboardSAMLEntityIDDefault), th.text)
 		v.addAccessValue(th, width, "Subject", cmp.Or(tunnel.SAMLSubjectAttribute, agentDashboardSAMLSubjectDefault), th.text)
-	case gateway.ApplicationAuthProviderEmail:
+	case appauth.ApplicationAuthProviderEmail:
 		v.addAccessValue(th, width, "SMTP server", tunnel.SMTPAddr, th.text)
 		v.addAccessValue(th, width, "SMTP user", cmp.Or(tunnel.SMTPUsername, agentDashboardSMTPUsernameDefault), th.text)
 		v.addAccessValue(th, width, "SMTP password", agentDashboardSecretState(tunnel.AuthSMTPPasswordSet), th.text)
@@ -170,11 +170,11 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 // right step through them.
 var agentDashboardAccessProviders = []string{
 	"",
-	gateway.ApplicationAuthProviderCredential,
-	gateway.ApplicationAuthProviderSIWE,
-	gateway.ApplicationAuthProviderOIDC,
-	gateway.ApplicationAuthProviderSAML,
-	gateway.ApplicationAuthProviderEmail,
+	appauth.ApplicationAuthProviderCredential,
+	appauth.ApplicationAuthProviderSIWE,
+	appauth.ApplicationAuthProviderOIDC,
+	appauth.ApplicationAuthProviderSAML,
+	appauth.ApplicationAuthProviderEmail,
 }
 
 // What an empty SAML entity ID, subject attribute or SMTP username stands for.
@@ -412,20 +412,20 @@ func (a agentDashboardAccess) fields() []agentDashboardAccessField {
 	}
 	fields = append(fields, agentDashboardAccessField{row: agentDashboardAccessRowAdd}, agentDashboardAccessField{row: agentDashboardAccessRowHeaders})
 	switch a.provider {
-	case gateway.ApplicationAuthProviderOIDC:
+	case appauth.ApplicationAuthProviderOIDC:
 		fields = append(fields,
 			agentDashboardAccessField{row: agentDashboardAccessRowIssuer},
 			agentDashboardAccessField{row: agentDashboardAccessRowClientID},
 			agentDashboardAccessField{row: agentDashboardAccessRowSecret},
 		)
-	case gateway.ApplicationAuthProviderSAML:
+	case appauth.ApplicationAuthProviderSAML:
 		fields = append(fields,
 			agentDashboardAccessField{row: agentDashboardAccessRowMetadataURL},
 			agentDashboardAccessField{row: agentDashboardAccessRowMetadataFile},
 			agentDashboardAccessField{row: agentDashboardAccessRowEntityID},
 			agentDashboardAccessField{row: agentDashboardAccessRowSubjectAttribute},
 		)
-	case gateway.ApplicationAuthProviderEmail:
+	case appauth.ApplicationAuthProviderEmail:
 		fields = append(fields,
 			agentDashboardAccessField{row: agentDashboardAccessRowSMTPAddr},
 			agentDashboardAccessField{row: agentDashboardAccessRowSMTPUsername},
@@ -505,29 +505,29 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	// The draft holds the settings of its own provider only, so leaving OIDC,
 	// SAML or email clears the settings of the provider left, which the
 	// validators refuse for another provider.
-	draft := gateway.ApplicationAuthConfig{Provider: a.provider, IdentityHeaders: a.headers}
+	draft := appauth.ApplicationAuthConfig{Provider: a.provider, IdentityHeaders: a.headers}
 	// A tunnel that stays on its provider keeps the key its list is stored under,
 	// so that opening the screen of a released config changes nothing.
-	if gateway.ApplicationAuthProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.AllowedWallets) == 0) {
+	if appauth.ApplicationAuthProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.AllowedWallets) == 0) {
 		draft.EmailList = a.allowed
 	} else {
 		draft.AllowedWallets = a.allowed
 	}
 	switch a.provider {
-	case gateway.ApplicationAuthProviderOIDC:
-		draft.OIDCConfig = gateway.OIDCConfig{
+	case appauth.ApplicationAuthProviderOIDC:
+		draft.OIDCConfig = appauth.OIDCConfig{
 			OIDCIssuerURL: strings.TrimSpace(a.issuer.Value()),
 			OIDCClientID:  strings.TrimSpace(a.clientID.Value()),
 		}
-	case gateway.ApplicationAuthProviderSAML:
-		draft.SAMLConfig = gateway.SAMLConfig{
+	case appauth.ApplicationAuthProviderSAML:
+		draft.SAMLConfig = appauth.SAMLConfig{
 			SAMLMetadataURL:      strings.TrimSpace(a.metadataURL.Value()),
 			SAMLMetadataFile:     strings.TrimSpace(a.metadataFile.Value()),
 			SAMLEntityID:         strings.TrimSpace(a.entityID.Value()),
 			SAMLSubjectAttribute: strings.TrimSpace(a.subjectAttribute.Value()),
 		}
-	case gateway.ApplicationAuthProviderEmail:
-		draft.EmailConfig = gateway.EmailConfig{
+	case appauth.ApplicationAuthProviderEmail:
+		draft.EmailConfig = appauth.EmailConfig{
 			SMTPAddr:     strings.TrimSpace(a.smtpAddr.Value()),
 			SMTPUsername: strings.TrimSpace(a.smtpUsername.Value()),
 			SMTPFrom:     strings.TrimSpace(a.from.Value()),
@@ -539,8 +539,8 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	// provider's, and a stored one is removed when the draft leaves its provider
 	// or clearSecret marks it.
 	for _, owned := range []struct{ provider, key string }{
-		{gateway.ApplicationAuthProviderOIDC, "auth_oidc_client_secret"},
-		{gateway.ApplicationAuthProviderEmail, "auth_smtp_password"},
+		{appauth.ApplicationAuthProviderOIDC, "auth_oidc_client_secret"},
+		{appauth.ApplicationAuthProviderEmail, "auth_smtp_password"},
 	} {
 		var secret string
 		if a.provider == owned.provider {
@@ -609,7 +609,7 @@ func (m *agentDashboardModel) addAccessEntry() {
 	if entry == "" {
 		return
 	}
-	normalized, err := gateway.NormalizeApplicationAuthAllowed(a.provider, []string{entry})
+	normalized, err := appauth.NormalizeApplicationAuthAllowed(a.provider, []string{entry})
 	if err != nil {
 		a.err = err
 		return
@@ -720,7 +720,7 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 			body.addInputRow(th, inner, "Client ID", a.clientID, agentDashboardActionFocusAccessField, index, focused)
 		case agentDashboardAccessRowSecret:
 			input, label := a.secret, "Client secret"
-			if a.provider == gateway.ApplicationAuthProviderEmail {
+			if a.provider == appauth.ApplicationAuthProviderEmail {
 				label = "SMTP password"
 			}
 			input.Placeholder = agentDashboardSecretPlaceholder(a, tunnel)
@@ -745,7 +745,7 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 		}
 	}
 	body.addLine("")
-	if tunnel.Provider == gateway.ApplicationAuthProviderOIDC || tunnel.Provider == gateway.ApplicationAuthProviderSAML || tunnel.Provider == gateway.ApplicationAuthProviderEmail {
+	if tunnel.Provider == appauth.ApplicationAuthProviderOIDC || tunnel.Provider == appauth.ApplicationAuthProviderSAML || tunnel.Provider == appauth.ApplicationAuthProviderEmail {
 		check, style := agentDashboardProviderCheck(th, tunnel)
 		body.addAccessValue(th, inner, "Provider check", check, style)
 		for _, line := range agentDashboardWrap(tunnel.AuthProviderError, inner, agentDashboardAccessMessageLines) {
@@ -770,11 +770,11 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 
 func agentDashboardAccessEntryPlaceholder(provider string) string {
 	switch provider {
-	case gateway.ApplicationAuthProviderSIWE:
+	case appauth.ApplicationAuthProviderSIWE:
 		return "0x... wallet address"
-	case gateway.ApplicationAuthProviderOIDC, gateway.ApplicationAuthProviderSAML:
+	case appauth.ApplicationAuthProviderOIDC, appauth.ApplicationAuthProviderSAML:
 		return "email, @domain, sub:id"
-	case gateway.ApplicationAuthProviderEmail:
+	case appauth.ApplicationAuthProviderEmail:
 		return "email, @domain"
 	default:
 		return "subject"

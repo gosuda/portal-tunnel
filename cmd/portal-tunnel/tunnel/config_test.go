@@ -6,6 +6,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
 func TestConfigSpecModes(t *testing.T) {
@@ -161,10 +162,10 @@ func TestConfigSpecResolvesComponents(t *testing.T) {
 				return cfg
 			},
 			check: func(t *testing.T, spec Spec) {
-				want := gateway.ApplicationAuthConfig{
-					Provider:       gateway.ApplicationAuthProviderOIDC,
+				want := appauth.ApplicationAuthConfig{
+					Provider:       appauth.ApplicationAuthProviderOIDC,
 					AllowedWallets: []string{"bob@example.com"},
-					OIDCConfig:     gateway.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
+					OIDCConfig:     appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
 				}
 				if spec.Transport.Target != "localhost:3000" || !reflect.DeepEqual(*spec.HTTP.Auth, want) {
 					t.Fatalf("target = %q, auth = %+v", spec.Transport.Target, *spec.HTTP.Auth)
@@ -180,11 +181,11 @@ func TestConfigSpecResolvesComponents(t *testing.T) {
 				return cfg
 			},
 			check: func(t *testing.T, spec Spec) {
-				want := gateway.ApplicationAuthConfig{
-					Provider:        gateway.ApplicationAuthProviderSAML,
+				want := appauth.ApplicationAuthConfig{
+					Provider:        appauth.ApplicationAuthProviderSAML,
 					AllowedWallets:  []string{"@example.com", "sub:G-7f3a"},
 					IdentityHeaders: true,
-					SAMLConfig:      gateway.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLSubjectAttribute: "email"},
+					SAMLConfig:      appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLSubjectAttribute: "email"},
 				}
 				if !reflect.DeepEqual(*spec.HTTP.Auth, want) {
 					t.Fatalf("auth = %+v", *spec.HTTP.Auth)
