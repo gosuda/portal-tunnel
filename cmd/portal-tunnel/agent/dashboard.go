@@ -524,6 +524,13 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 		&m.access.issuer,
 		&m.access.clientID,
 		&m.access.secret,
+		&m.access.metadataURL,
+		&m.access.metadataFile,
+		&m.access.entityID,
+		&m.access.subjectAttribute,
+		&m.access.smtpAddr,
+		&m.access.smtpUsername,
+		&m.access.from,
 	} {
 		input.Width = settingsWidth
 		// The input keeps its visible window while the cursor stays inside it, so move the

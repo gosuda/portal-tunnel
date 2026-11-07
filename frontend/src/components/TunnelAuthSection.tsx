@@ -1,9 +1,11 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
+  Building2,
   Check,
   Copy,
   Globe,
   Link2,
+  Mail,
   ShieldCheck,
   Wallet,
   type LucideIcon,
@@ -26,16 +28,20 @@ import { useCopy } from "@/hooks/useCopy";
 import signinCopy from "@/lib/signinCopy.json";
 import { cn } from "@/lib/utils";
 import {
+  AUTH_CALLBACK_PATH,
+  AUTH_SAML_ACS_PATH,
+  AUTH_SAML_METADATA_PATH,
   GOOGLE_OIDC_ISSUER,
   addAuthAllow,
   applicationAuthHost,
   buildAuthIssueCommand,
   buildAuthRedirectURLs,
-  buildOIDCSecretCommand,
+  buildSecretCommand,
   buildServiceStatusHostname,
   buildTunnelPreviewURL,
   classifyAuthAllow,
   isListedSubject,
+  needsAllowlist,
   type TunnelAuthField,
   type TunnelAuthIssue,
   type TunnelAuthMethod,
@@ -69,6 +75,22 @@ const METHODS: MethodChoice[] = [
     id: "oidc",
     label: "Google or company login",
     icon: ShieldCheck,
+  },
+  {
+    id: "saml",
+    label: "Company single sign-on",
+    short: "SAML",
+    description:
+      "Visitors sign in at your organization's identity provider, such as Okta, Entra ID, ADFS or Keycloak. You add the app there first.",
+    icon: Building2,
+  },
+  {
+    id: "email",
+    label: "Email link",
+    short: "Email",
+    description:
+      "Visitors get a one-time sign-in link by email. You need an SMTP account to send it from.",
+    icon: Mail,
   },
 ];
 
@@ -107,6 +129,18 @@ const ALLOW_COPY: Record<
     requirement: "required",
     placeholder: "email, @domain or sub:id",
     help: "Separate several with commas. An email is one person. @example.com is everyone at exactly that domain, not its subdomains. sub:<id> is the provider's own account id. Portal refuses to start without a list, because the provider signs in people who have nothing to do with your app.",
+  },
+  saml: {
+    label: "Who may sign in",
+    requirement: "required",
+    placeholder: "email, @domain or sub:id",
+    help: "Separate several with commas. Each entry is matched against the subject the provider signs: the NameID, or the attribute you name below. An email is one person and @example.com everyone at exactly that domain, when the subject is an email. sub:<id> is the subject exactly as the provider sends it. Portal refuses to start without a list, because the provider signs in people who have nothing to do with your app.",
+  },
+  email: {
+    label: "Who may sign in",
+    requirement: "required",
+    placeholder: "email or @domain",
+    help: "Separate several with commas. An email is one person. @example.com is everyone at exactly that domain, not its subdomains. Only these addresses get a link. Portal refuses to start without a list, because anyone could otherwise make the tunnel send mail to any address.",
   },
 };
 
@@ -178,6 +212,20 @@ export function TunnelAuthSection({
               name={name}
               os={os}
             />
+          )}
+          {auth.method === "saml" && (
+            <SAMLSetup
+              auth={auth}
+              patch={patch}
+              issues={issues}
+              relayUrls={relayUrls}
+              discovery={discovery}
+              name={name}
+              theme={theme}
+            />
+          )}
+          {auth.method === "email" && (
+            <EmailSetup auth={auth} patch={patch} issues={issues} os={os} theme={theme} />
           )}
           {auth.method === "credential" && (
             <InviteBlock
@@ -450,7 +498,7 @@ function OIDCSetup({
     (provider) =>
       patch({ oidcIssuer: provider === "google" ? GOOGLE_OIDC_ISSUER : "" })
   );
-  const redirectURLs = buildAuthRedirectURLs(relayUrls, name);
+  const redirectURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_CALLBACK_PATH);
   const inputClass = cn(s.input, "h-9 font-mono text-[13px] read-only:opacity-70");
 
   return (
@@ -573,10 +621,267 @@ function OIDCSetup({
           )}
         </p>
         <CopyLine
-          value={buildOIDCSecretCommand(os)}
+          value={buildSecretCommand("oidc", os)}
           label="Copy secret prompt"
         />
       </div>
+    </div>
+  );
+}
+
+function SAMLSetup({
+  auth,
+  patch,
+  issues,
+  relayUrls,
+  discovery,
+  name,
+  theme,
+}: {
+  auth: TunnelAuthOptions;
+  patch: (next: Partial<TunnelAuthOptions>) => void;
+  issues: TunnelAuthIssue[];
+  relayUrls: string[];
+  discovery: boolean;
+  name: string;
+  theme: TunnelFormTheme;
+}) {
+  const metadataId = useId();
+  const entityId = useId();
+  const subjectId = useId();
+  const s = TUNNEL_FORM_STYLES[theme];
+  const acsURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_SAML_ACS_PATH);
+  const metadataURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_SAML_METADATA_PATH);
+  const inputClass = cn(s.input, "h-9 font-mono text-[13px]");
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <label htmlFor={metadataId} className={s.label}>
+            Identity provider metadata
+          </label>
+          <Input
+            id={metadataId}
+            type="text"
+            inputMode="url"
+            value={auth.samlMetadataURL}
+            onChange={(event) => patch({ samlMetadataURL: event.target.value })}
+            placeholder="https://idp.example.com/metadata"
+            autoComplete="off"
+            spellCheck={false}
+            className={inputClass}
+          />
+          <FieldIssues issues={issues} field="metadataURL" theme={theme} />
+          <p className={s.help}>
+            The address where the provider publishes its SAML metadata, such
+            as Keycloak's <code>/protocol/saml/descriptor</code>. For a
+            provider that only gives you a file, replace this flag with{" "}
+            <code>--auth-saml-metadata-file</code> and the file's path.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <label htmlFor={entityId} className={s.label}>
+              Entity ID <span className="font-normal opacity-70">(optional)</span>
+            </label>
+            <Input
+              id={entityId}
+              type="text"
+              value={auth.samlEntityId}
+              onChange={(event) => patch({ samlEntityId: event.target.value })}
+              placeholder="metadata address of each host"
+              autoComplete="off"
+              spellCheck={false}
+              className={inputClass}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor={subjectId} className={s.label}>
+              Subject attribute <span className="font-normal opacity-70">(optional)</span>
+            </label>
+            <Input
+              id={subjectId}
+              type="text"
+              value={auth.samlSubjectAttribute}
+              onChange={(event) => patch({ samlSubjectAttribute: event.target.value })}
+              placeholder="NameID"
+              autoComplete="off"
+              spellCheck={false}
+              className={inputClass}
+            />
+          </div>
+        </div>
+        <p className={s.help}>
+          The subject is the NameID unless you name an attribute, such as{" "}
+          <code>email</code>. SAML does not say whether an email was verified,
+          so Portal trusts the address the provider signs: let the provider
+          send only addresses its users cannot change.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <p className={s.label}>At your identity provider</p>
+        <p className={s.help}>
+          Add a SAML application. Import its metadata from the metadata
+          address, or enter the ACS address with the HTTP-POST binding and the
+          entity ID by hand. Have the provider sign the response or the
+          assertion. Portal sends unsigned requests and does not accept
+          encrypted assertions, and it accepts only sign-ins that start at the
+          app, not at the provider's app list.
+        </p>
+        {acsURLs.map((url) => (
+          <CopyLine key={url} value={url} label={`Copy ACS address ${url}`} theme={theme} />
+        ))}
+        {metadataURLs.map((url) => (
+          <CopyLine
+            key={url}
+            value={url}
+            label={`Copy metadata address ${url}`}
+            theme={theme}
+          />
+        ))}
+        <p className={s.help}>
+          {acsURLs.length > 0
+            ? "These are for the short URL on each relay in the command. "
+            : name === "" &&
+              "A Name gives each relay a short URL you can register now. "}
+          Every address a visitor opens the app on has its own ACS address:
+          the address followed by <code>{AUTH_SAML_ACS_PATH}</code>, without{" "}
+          <code>:443</code>. When the tunnel is ready, Portal prints each
+          relay's address-bound URL after <code>service ready at</code>. With
+          more than one address, set an Entity ID so the provider sees one
+          application, and register every ACS address with it.
+          {discovery && (
+            <>
+              {" "}Relay discovery, on by default, can publish on more relays,
+              each with its own addresses; to keep to the relays in the command,
+              add <code>--discovery=false</code>.
+            </>
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function EmailSetup({
+  auth,
+  patch,
+  issues,
+  os,
+  theme,
+}: {
+  auth: TunnelAuthOptions;
+  patch: (next: Partial<TunnelAuthOptions>) => void;
+  issues: TunnelAuthIssue[];
+  os: TunnelCommandOS;
+  theme: TunnelFormTheme;
+}) {
+  const serverId = useId();
+  const fromId = useId();
+  const usernameId = useId();
+  const s = TUNNEL_FORM_STYLES[theme];
+  const inputClass = cn(s.input, "h-9 font-mono text-[13px]");
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <label htmlFor={serverId} className={s.label}>
+            SMTP server
+          </label>
+          <Input
+            id={serverId}
+            type="text"
+            value={auth.emailSMTPAddr}
+            onChange={(event) => patch({ emailSMTPAddr: event.target.value })}
+            placeholder="smtp.example.com:587"
+            autoComplete="off"
+            spellCheck={false}
+            className={inputClass}
+          />
+          <FieldIssues issues={issues} field="smtpAddr" theme={theme} />
+          <p className={s.help}>
+            The host and port of your mail provider's submission server, such
+            as a mailbox with an app password or a transactional mail service.
+            Port 465 starts with TLS. Any other port must offer STARTTLS, and
+            only a server on this computer at localhost, 127.0.0.1 or ::1 may
+            run without TLS.
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <label htmlFor={fromId} className={s.label}>
+            Sender
+          </label>
+          <Input
+            id={fromId}
+            type="text"
+            value={auth.emailFrom}
+            onChange={(event) => patch({ emailFrom: event.target.value })}
+            placeholder="Portal <login@example.com>"
+            autoComplete="off"
+            spellCheck={false}
+            className={inputClass}
+          />
+          <FieldIssues issues={issues} field="from" theme={theme} />
+          <p className={s.help}>
+            Every link comes from this one address. Use an address your SMTP
+            account may send from.
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <label htmlFor={usernameId} className={s.label}>
+            SMTP username <span className="font-normal opacity-70">(optional)</span>
+          </label>
+          <Input
+            id={usernameId}
+            type="text"
+            value={auth.emailSMTPUsername}
+            onChange={(event) => patch({ emailSMTPUsername: event.target.value })}
+            placeholder="login@example.com"
+            autoComplete="off"
+            spellCheck={false}
+            className={inputClass}
+          />
+          <p className={s.help}>
+            Leave it empty only for a server that needs no login.
+          </p>
+        </div>
+      </div>
+
+      {auth.emailSMTPUsername.trim() !== "" && (
+        <div className="space-y-1.5">
+          <p className={s.label}>In your terminal, before the command below</p>
+          <p className={s.help}>
+            Run this in the shell you will start the tunnel from. It asks for
+            the SMTP password without showing it, so the password stays out of
+            the process list, your shell history and the command you copy.
+            {os === "unix" && (
+              <> If you press Ctrl-C at the prompt, run <code>stty echo</code> to
+              see what you type again.</>
+            )}
+          </p>
+          <CopyLine
+            value={buildSecretCommand("email", os)}
+            label="Copy password prompt"
+            theme={theme}
+          />
+        </div>
+      )}
+
+      <p className={s.help}>
+        The sign-in page answers every well-formed address the same way, so it
+        does not show who is on the list. One address gets at most one link per
+        minute and five per hour. The addresses that only an @domain entry
+        allows share fifty links per hour across all @domain entries, so
+        made-up addresses can use that budget up while the flood lasts and for
+        up to an hour after; list addresses exactly where that matters. A link
+        works once, for 10 minutes; restarting the tunnel cancels the links
+        not used yet. A visitor is not told when a mail fails: a failed send
+        shows in the tunnel log, and a refusal by a limit or by the list logs
+        nothing.
+      </p>
     </div>
   );
 }
@@ -715,21 +1020,25 @@ function VisitorPreview({
     buildServiceStatusHostname(relayURL, name) || "your-name.relay";
   let issuerHost = "your provider";
   try {
-    issuerHost = new URL(auth.oidcIssuer.trim()).hostname || issuerHost;
+    const provider = auth.method === "saml" ? auth.samlMetadataURL : auth.oidcIssuer;
+    issuerHost = new URL(provider.trim()).hostname || issuerHost;
   } catch {
-    // The issuer is still being typed.
+    // The address is still being typed.
   }
-  // The credential and wallet texts are those of the sign-in pages; the gateway
-  // test (frontend_rules_test.go) fails when a page and signinCopy.json differ.
-  // OIDC leaves for the provider at once and has no page of its own.
+  // The credential, wallet and email texts are those of the sign-in pages; the
+  // gate test (sdk/appauth/signin_page_test.go) fails when a page and signinCopy.json differ.
+  // OIDC and SAML leave for the provider at once and have no page of their own.
+  const sentToProvider = {
+    title: `You are sent to ${issuerHost}`,
+    body: "They sign in there and come back to the app.",
+    action: "",
+  };
   const page = {
     credential: signinCopy.credential,
     siwe: signinCopy.siwe,
-    oidc: {
-      title: `You are sent to ${issuerHost}`,
-      body: "They sign in there and come back to the app.",
-      action: "",
-    },
+    email: signinCopy.email,
+    oidc: sentToProvider,
+    saml: sentToProvider,
     none: { title: "", body: "", action: "" },
   }[auth.method];
 

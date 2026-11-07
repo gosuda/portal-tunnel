@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
 	portaltunnel "github.com/gosuda/portal-tunnel/v2"
@@ -53,6 +52,7 @@ const (
 
 type RelayAPI struct {
 	server               *portal.Server
+	metrics              *relayMetrics
 	access               *policy.Access
 	ingress              *policy.Ingress
 	adminToken           string
@@ -99,6 +99,7 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 
 	api := &RelayAPI{
 		server:               server,
+		metrics:              newRelayMetrics(server),
 		access:               access,
 		ingress:              ingress,
 		adminToken:           strings.TrimSpace(adminToken),
@@ -110,11 +111,13 @@ func NewRelayAPI(server *portal.Server, access *policy.Access, ingress *policy.I
 		udpPolicy:            initialSettings.UDP,
 		tcpPortPolicy:        initialSettings.TCPPort,
 	}
-	if mode := strings.TrimSpace(initialSettings.ApprovalMode); mode != "" {
-		initialAccess := api.access.Snapshot()
-		if err := initialAccess.SetMode(policy.Mode(mode)); err != nil {
+	if strings.TrimSpace(initialSettings.ApprovalMode) != "" {
+		mode, err := policy.ParseMode(initialSettings.ApprovalMode)
+		if err != nil {
 			return nil, err
 		}
+		initialAccess := api.access.Snapshot()
+		initialAccess.SetMode(mode)
 		api.commitAccess(initialAccess)
 	}
 	if err := api.server.SetTransportPolicy(api.udpPolicy.Enabled, api.udpPolicy.MaxLeases, api.tcpPortPolicy.Enabled, api.tcpPortPolicy.MaxLeases); err != nil {
@@ -235,7 +238,7 @@ func (api *RelayAPI) serveAdmin(w http.ResponseWriter, r *http.Request) {
 
 	switch path {
 	case types.PathAdmin + "/metrics":
-		promhttp.Handler().ServeHTTP(w, r)
+		api.metrics.handler.ServeHTTP(w, r)
 		return
 	default:
 		http.NotFound(w, r)
@@ -373,7 +376,7 @@ func (api *RelayAPI) commitAccess(next policy.AccessState) {
 		keys[key] = struct{}{}
 	}
 	for key := range keys {
-		api.server.SetServiceIdentityRoutable(key, committed.Routable(key), committed.Revision())
+		api.server.SetServiceIdentityAccess(key, committed.Access(key), committed.Revision())
 	}
 }
 
@@ -390,8 +393,8 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.Policy
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
 		return false
 	}
-	mode := policy.Mode(strings.TrimSpace(req.ApprovalMode))
-	if mode != policy.ModeAuto && mode != policy.ModeManual {
+	mode, err := policy.ParseMode(req.ApprovalMode)
+	if err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto' or 'manual'")
 		return false
 	}
@@ -399,7 +402,7 @@ func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.Policy
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return false
 	}
-	_ = access.SetMode(mode)
+	access.SetMode(mode)
 	api.udpPolicy = req.UDP
 	api.tcpPortPolicy = req.TCPPort
 	return true
@@ -573,10 +576,10 @@ func applyOptionalPolicy(enabled *bool, maxLeases *int, current types.PolicyPort
 func (s persistedPolicyState) apply(api *RelayAPI) error {
 	access := api.access.Snapshot()
 	mode := access.Mode()
-	if rawMode := strings.TrimSpace(s.ApprovalMode); rawMode != "" {
-		parsed := policy.Mode(rawMode)
-		if parsed != policy.ModeAuto && parsed != policy.ModeManual {
-			return fmt.Errorf("invalid approval mode: %q", rawMode)
+	if strings.TrimSpace(s.ApprovalMode) != "" {
+		parsed, err := policy.ParseMode(s.ApprovalMode)
+		if err != nil {
+			return err
 		}
 		mode = parsed
 	}
@@ -601,7 +604,7 @@ func (s persistedPolicyState) apply(api *RelayAPI) error {
 	if err := api.server.SetTransportPolicy(udpPolicy.Enabled, udpPolicy.MaxLeases, tcpPortPolicy.Enabled, tcpPortPolicy.MaxLeases); err != nil {
 		return err
 	}
-	_ = access.SetMode(mode)
+	access.SetMode(mode)
 	access.SetDecisions(approvedKeys, deniedKeys)
 	access.SetBannedKeys(bannedKeys)
 	api.server.BPSManager().SetServiceIdentityBPSLimits(identityBPS)

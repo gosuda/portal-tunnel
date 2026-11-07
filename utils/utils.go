@@ -51,13 +51,16 @@ func SplitCSV(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
+	return CompactStrings(strings.Split(raw, ","))
+}
 
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
+// CompactStrings returns values without surrounding spaces and without the
+// empty ones, in a new slice; nil when none is left.
+func CompactStrings(values []string) []string {
+	var out []string
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
 		}
 	}
 	return out
@@ -476,6 +479,18 @@ func NormalizeTargetAddr(raw string) (string, error) {
 		return net.JoinHostPort(host, "80"), nil
 	}
 	return "", fmt.Errorf("invalid target address %q", raw)
+}
+
+// IsLoopbackHost reports whether hostname is a loopback address: "localhost",
+// "::1", or a valid IP address that reports true from IsLoopback().
+func IsLoopbackHost(hostname string) bool {
+	if hostname == "localhost" || hostname == "::1" {
+		return true
+	}
+	if addr, err := netip.ParseAddr(hostname); err == nil && addr.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 func HostPortOrLoopback(addr string) string {

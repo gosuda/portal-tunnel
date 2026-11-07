@@ -164,6 +164,8 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
 | `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the IVNP overlay and requires `DISCOVERY=true`; empty disables the overlay |
+| APPROVAL_MODE | uto | string | Initial lease approval mode (uto \| manual). A mode saved in policy.json wins; see [Private relay](/self-hosting#private-relay) |
+| UNAPPROVED_LEASES_PER_SOURCE | 64 | int | Leases one source IP can hold while they are not routable;   is unlimited; see [Private relay](/self-hosting#private-relay) |
 
 ### IVNP overlay
 
@@ -380,11 +382,20 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 | `--owner` | | string | | Service owner metadata |
 | `--thumbnail` | | string | | Service thumbnail URL metadata |
 | `--hide` | | bool | `false` | Hide service from relay listing screens |
-| `--auth` | | string | | Protect the complete HTTP application with `siwe`, `credential`, or `oidc`; excludes cache, TCP, and UDP |
-| `--auth-allow` | | string | | Allowed principal (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc`); repeatable; empty allows any valid principal, except for `oidc`, which requires at least one entry; requires `--auth` |
+| `--auth` | | string | | Protect the complete HTTP application with `siwe`, `credential`, `oidc`, `saml`, or `email`; excludes cache, TCP, and UDP |
+| `--auth-allow` | | string | | Allowed principal for `siwe` (Ethereum wallet) or `credential` (subject); repeatable; empty allows any valid principal; `oidc` and `saml` also read it, as `--auth-email-list`; requires `--auth` |
+| `--auth-email-list` | | string | | Who may sign in with `oidc` or `saml` (verified email, `@example.com` domain, or `sub:<subject>`) or `email` (email or `@example.com` domain); repeatable; at least one entry is required; requires `--auth` |
 | `--auth-oidc-issuer` | `AUTH_OIDC_ISSUER` | string | | OIDC issuer URL for `--auth oidc` |
 | `--auth-oidc-client-id` | `AUTH_OIDC_CLIENT_ID` | string | | OIDC client ID for `--auth oidc` |
 | `--auth-oidc-client-secret` | `AUTH_OIDC_CLIENT_SECRET` | string | | Optional OIDC client secret for `--auth oidc` |
+| `--auth-saml-metadata-url` | `AUTH_SAML_METADATA_URL` | string | | SAML identity provider metadata URL for `--auth saml` |
+| `--auth-saml-metadata-file` | `AUTH_SAML_METADATA_FILE` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` |
+| `--auth-saml-entity-id` | `AUTH_SAML_ENTITY_ID` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` |
+| `--auth-saml-subject-attribute` | `AUTH_SAML_SUBJECT_ATTRIBUTE` | string | NameID | SAML attribute that names the visitor for `--auth saml` |
+| `--auth-smtp-addr` | `AUTH_SMTP_ADDR` | string | | SMTP server `host:port` for `--auth email`; port 465 uses TLS from the start, other ports must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext |
+| `--auth-smtp-username` | `AUTH_SMTP_USERNAME` | string | | SMTP username for `--auth email`; set together with the password |
+| `--auth-smtp-password` | `AUTH_SMTP_PASSWORD` | string | | SMTP password for `--auth email`, with spaces around it dropped; pass it by environment variable |
+| `--auth-smtp-from` | `AUTH_SMTP_FROM` | string | | Fixed sender address of every login link for `--auth email` |
 | `--auth-identity-headers` | | bool | `false` | Inject verified `X-Portal-User` and `X-Portal-Auth` upstream headers; requires `--auth` |
 | `--auth-identity-proof` | `AUTH_IDENTITY_PROOF` | string | | Secret sent as `X-Portal-Proof` with the identity headers; at least 16 visible ASCII characters; requires `--auth-identity-headers`; set it by environment variable, not on the command line, because process lists show arguments |
 | `--strip-request-header` | | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive, and the underscore spelling of a name (`X_Custom` for `X-Custom`) goes with it; applies to HTTP and WebSocket upgrades; `Host` and `X-Forwarded-Proto` cannot be stripped (always regenerated before this middleware runs); `X-Forwarded-Prefix` and `X-Portal-User`/`Auth`/`Proof` are allowed; requires `--http-route`, `--target`, or `--auth` |
@@ -500,6 +511,13 @@ auth_allowed_wallets = ["alice"]
 auth_identity_headers = true
 ```
 
+`--auth-allow` / `auth_allowed_wallets` is the list for `siwe` and `credential`.
+`--auth-email-list` / `auth_email_list` is the list for `oidc`, `saml`, and
+`email`: a tunnel runs one provider, so the one list serves all three. `oidc` and
+`saml` still read `--auth-allow` / `auth_allowed_wallets`, so existing configs
+keep working. Setting both keys is refused. `email` takes only
+`--auth-email-list`.
+
 Agent fields:
 
 | Field | Default | Description |
@@ -526,17 +544,26 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `http_routes` | table array | HTTP route mappings; cannot be combined with `target`, `serve`, `tcp`, or `udp` |
 | `serve` | string | Static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`. Directories use `index.html`; unknown paths fall back to the entry file, which must exist when the tunnel starts |
 | `relays` | string array | Explicit relay API URLs |
-| `discovery` | bool | Include registry and relay discovery expansion |
+| `discovery` | bool | Include registry and relay discovery expansion; defaults to `true` |
 | `overlay` | bool | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
-| `auth` | string | Application login provider: `siwe`, `credential`, or `oidc`; cannot be combined with TCP or UDP |
-| `auth_allowed_wallets` | string array | Principals allowed to sign in (Ethereum wallets for `siwe`, subjects for `credential`, or verified emails, `@example.com` domains, or `sub:` subjects for `oidc`); empty allows any valid principal, except for `oidc`, which requires at least one entry; requires `auth` when set |
+| `auth` | string | Application login provider: `siwe`, `credential`, `oidc`, `saml`, or `email`; cannot be combined with TCP or UDP |
+| `auth_allowed_wallets` | string array | Principals allowed to sign in with `siwe` (Ethereum wallets) or `credential` (subjects); empty allows any valid principal; `oidc` and `saml` also read it, as `auth_email_list`; requires `auth` when set |
+| `auth_email_list` | string array | Who may sign in with `oidc` or `saml` (verified emails, `@example.com` domains, or `sub:` subjects) or `email` (emails and `@example.com` domains); at least one entry is required; requires `auth` when set |
 | `auth_oidc_issuer` | string | OIDC issuer URL; required when `auth = "oidc"` |
 | `auth_oidc_client_id` | string | OIDC client ID; required when `auth = "oidc"` |
 | `auth_oidc_client_secret` | string | Optional OIDC client secret for `auth = "oidc"` |
+| `auth_saml_metadata_url` | string | SAML identity provider metadata URL; `auth = "saml"` needs it or `auth_saml_metadata_file` |
+| `auth_saml_metadata_file` | string | SAML identity provider metadata file, relative to the config file |
+| `auth_saml_entity_id` | string | SAML service provider entity ID; defaults to the metadata URL of each host |
+| `auth_saml_subject_attribute` | string | SAML attribute that names the visitor; defaults to the NameID |
+| `auth_smtp_addr` | string | SMTP server `host:port`; required when `auth = "email"` |
+| `auth_smtp_username` | string | SMTP username for `auth = "email"`; set together with the password |
+| `auth_smtp_password` | string | SMTP password for `auth = "email"` |
+| `auth_smtp_from` | string | Fixed sender address of every login link; required when `auth = "email"` |
 | `auth_identity_headers` | bool | Inject verified Portal identity headers upstream; requires `auth` |
 | `strip_request_headers` | string array | Client request headers removed before routed HTTP forwards them upstream; case-insensitive; `Host` and `X-Forwarded-Proto` cannot be listed (always regenerated); `X-Portal-User`/`Auth` conflict with `auth_identity_headers`; requires `http_routes` or a `target` |
 | `x402_pay_to` | string | Payment recipient for paid HTTP routes |
@@ -547,6 +574,13 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `x402_facilitator_token` | string | Casper facilitator authorization token; when omitted, the agent uses `CSPR_CLOUD_API_KEY` |
 | `http_routes[].amount` | string | Optional human payment amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
 | `http_routes[].methods` | string array | Optional HTTP methods that require payment on that route; empty means every method |
+
+When the agent saves `config.toml`, it writes the values that were set and
+leaves out the defaults that were not. For example, an omitted `discovery`,
+`ban_mitm`, or `max_active_relays` stays out of the file, and an explicit
+`discovery = false` stays in it. The agent always writes `id` and
+`identity_path`, because they name the tunnel and its identity. Each value must
+have the type that the table gives: the agent refuses `max_active_relays = "3"`.
 
 When any routed HTTP entry has `amount`, the tunnel also serves
 `/x402/client.js` and `/x402/prepare` on the public tunnel origin. Browser
@@ -698,7 +732,7 @@ IP addresses are never durable moderation identities.
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `PREAUTH_SOURCE_PER_MINUTE` | `10` | Source-IP units refilled per minute |
-| `PREAUTH_SOURCE_BURST` | `20` | Source-IP burst capacity |
+| `PREAUTH_SOURCE_BURST` | `100` | Source-IP burst capacity |
 | `PREAUTH_GLOBAL_PER_MINUTE` | `600` | Relay-wide units refilled per minute |
 | `PREAUTH_GLOBAL_BURST` | `200` | Relay-wide burst capacity |
 | `PREAUTH_CHALLENGE_COST` | `1` | Units per registration challenge |
@@ -706,7 +740,11 @@ IP addresses are never durable moderation identities.
 | `PREAUTH_REGISTER_COST` | `5` | Units per registration attempt |
 
 Positive values are required; zero selects the default. Both burst capacities
-must cover the largest endpoint cost. The global default allows approximately
+must cover the largest endpoint cost. The source burst allows 16 complete
+challenge-plus-registration flows from one IP, accommodating concurrent startups
+behind a shared NAT or TCP proxy. Those clients still share a source bucket,
+refilled at 10 units per minute by default; this does not restore original client IPs.
+The global default allows approximately
 100 complete challenge-plus-registration flows per minute, with a burst of 33.
 This is an initial operational budget, not a measured capacity guarantee: tune
 it to relay resources and observed rejection rates.

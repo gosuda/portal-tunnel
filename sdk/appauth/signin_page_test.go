@@ -1,4 +1,4 @@
-package gateway
+package appauth
 
 import (
 	"net/http"
@@ -9,7 +9,12 @@ import (
 
 func newSigninTestHandler(t *testing.T, provider string) http.Handler {
 	t.Helper()
-	handler, err := NewApplicationAuth(http.NotFoundHandler(), applicationAuthTestIdentity(), ApplicationAuthConfig{Provider: provider})
+	cfg := Config{Provider: provider}
+	if provider == ProviderEmail {
+		cfg = emailTestConfig("127.0.0.1:25", "alice@example.com")
+	}
+	cfg.PublicURLs = func() []string { return nil }
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +29,7 @@ func getSigninPage(handler http.Handler, host string) *httptest.ResponseRecorder
 	return rec
 }
 
-// Both providers answer with the shared Portal shell and their own controls,
+// Every provider with a page of its own answers with the shared Portal shell and their own controls,
 // under a content policy that admits scripts and styles from the page itself and
 // fonts from one host only.
 func TestSigninPagesShareOneShell(t *testing.T) {
@@ -34,8 +39,9 @@ func TestSigninPagesShareOneShell(t *testing.T) {
 		provider string
 		control  string
 	}{
-		{ApplicationAuthProviderCredential, `id="credential"`},
-		{ApplicationAuthProviderSIWE, `data-connect`},
+		{ProviderCredential, `id="credential"`},
+		{ProviderSIWE, `data-connect`},
+		{ProviderEmail, `id="email"`},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			t.Parallel()
@@ -68,7 +74,7 @@ func TestSigninPagesShareOneShell(t *testing.T) {
 func TestSigninPageHeadCarriesNoBody(t *testing.T) {
 	t.Parallel()
 
-	handler := newSigninTestHandler(t, ApplicationAuthProviderCredential)
+	handler := newSigninTestHandler(t, ProviderCredential)
 	req := httptest.NewRequest(http.MethodHead, "https://app.example"+applicationAuthLoginPath, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -82,7 +88,7 @@ func TestSigninPageHeadCarriesNoBody(t *testing.T) {
 func TestSigninPageEscapesAndShortensHost(t *testing.T) {
 	t.Parallel()
 
-	handler := newSigninTestHandler(t, ApplicationAuthProviderCredential)
+	handler := newSigninTestHandler(t, ProviderCredential)
 
 	hostile := `x"><script>alert(1)</script>.example`
 	body := getSigninPage(handler, hostile).Body.String()
@@ -105,7 +111,7 @@ func TestSigninPageEscapesAndShortensHost(t *testing.T) {
 func TestSigninPagesRefuseControlCharactersInNext(t *testing.T) {
 	t.Parallel()
 
-	for _, page := range []string{signinCredentialPage, signinWalletPage} {
+	for _, page := range []string{signinCredentialPage, signinWalletPage, signinEmailPage} {
 		if got := strings.Count(page, `/[\u0000-\u001f\u007f]/.test(value)`); got != 1 {
 			t.Fatalf("control-character check appears %d times in a page; want once", got)
 		}
@@ -124,7 +130,7 @@ func TestFrontendSigninPreviewMatchesThePages(t *testing.T) {
 	}
 	loadFrontendFile(t, "signinCopy.json", &previewCopy)
 
-	for _, provider := range []string{ApplicationAuthProviderCredential, ApplicationAuthProviderSIWE} {
+	for _, provider := range []string{ProviderCredential, ProviderSIWE, ProviderEmail} {
 		want, ok := previewCopy[provider]
 		if !ok {
 			t.Errorf("signinCopy.json has no %s entry", provider)

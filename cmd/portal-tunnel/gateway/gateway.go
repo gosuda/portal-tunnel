@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
 	"sort"
@@ -27,6 +26,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -53,19 +53,26 @@ const (
 	defaultMaxTimeoutSeconds = 60
 )
 
-// X402Config is the gateway-owned x402 configuration shared by frontends and
-// tunnel runtime assembly.
+// X402Config is the payment component of a tunnel config: the agent config,
+// the Agent API and the runtime carry it as it is, under its x402_* keys. The
+// facilitator token is a secret, so the Agent API neither takes nor returns it.
 type X402Config struct {
-	Testnet          bool     `json:"x402_testnet,omitempty" koanf:"x402_testnet"`
-	Network          string   `json:"x402_network,omitempty" koanf:"x402_network"`
-	Asset            string   `json:"x402_asset,omitempty" koanf:"x402_asset"`
-	PayTo            string   `json:"x402_pay_to,omitempty" koanf:"x402_pay_to"`
-	Endpoints        []string `json:"x402_endpoints,omitempty" koanf:"x402_endpoints"`
-	FacilitatorToken string   `json:"-" koanf:"x402_facilitator_token"`
+	Testnet          bool     `json:"x402_testnet,omitempty" toml:"x402_testnet,omitempty"`
+	Network          string   `json:"x402_network,omitempty" toml:"x402_network,omitempty"`
+	Asset            string   `json:"x402_asset,omitempty" toml:"x402_asset,omitempty"`
+	PayTo            string   `json:"x402_pay_to,omitempty" toml:"x402_pay_to,omitempty"`
+	Endpoints        []string `json:"x402_endpoints,omitempty" toml:"x402_endpoints,omitempty"`
+	FacilitatorToken string   `json:"-" toml:"x402_facilitator_token,omitempty"`
 }
 
-func (c X402Config) Copy() X402Config {
-	c.Endpoints = append([]string(nil), c.Endpoints...)
+// Normalize returns c in the form a config stores: values without surrounding
+// spaces, the network in lower case, and no empty endpoint.
+func (c X402Config) Normalize() X402Config {
+	c.Network = strings.ToLower(strings.TrimSpace(c.Network))
+	c.Asset = strings.TrimSpace(c.Asset)
+	c.PayTo = strings.TrimSpace(c.PayTo)
+	c.Endpoints = utils.CompactStrings(c.Endpoints)
+	c.FacilitatorToken = strings.TrimSpace(c.FacilitatorToken)
 	return c
 }
 
@@ -547,7 +554,7 @@ func newCasperFacilitatorClient(contract X402Payment) (*facilitatorclient.Client
 		if err != nil {
 			return nil, fmt.Errorf("parse x402 facilitator endpoint %q: %w", endpoint, err)
 		}
-		if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		if u.Scheme == "http" && !utils.IsLoopbackHost(u.Hostname()) {
 			return nil, fmt.Errorf("x402 facilitator endpoint %q sends the authorization token over plaintext http; use https or a loopback endpoint", endpoint)
 		}
 	}
@@ -573,18 +580,6 @@ func firstEndpoint(endpoints []string) string {
 		}
 	}
 	return ""
-}
-
-// isLoopbackHost reports whether hostname is a loopback address: "localhost",
-// "::1", or a valid IP address that reports true from IsLoopback().
-func isLoopbackHost(hostname string) bool {
-	if hostname == "localhost" || hostname == "::1" {
-		return true
-	}
-	if addr, err := netip.ParseAddr(hostname); err == nil && addr.IsLoopback() {
-		return true
-	}
-	return false
 }
 
 func orDefaultMaxTimeout(contract X402Payment) int {
@@ -642,11 +637,11 @@ type httpGateway struct {
 }
 
 func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Always remove Portal-owned credential and identity headers unless the
-	// local application auth gate explicitly verified and attached them for
-	// this request.
+	// Always remove Portal-owned credential and identity headers. Behind the
+	// application auth gate the identity headers are its own: it removes a
+	// visitor's copies before it sets them.
 	utils.DelHeaderSpellings(r.Header, types.HeaderAccessCredential)
-	if !hasVerifiedIdentityHeaders(r) {
+	if _, ok := appauth.PrincipalFromContext(r.Context()); !ok {
 		utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
 	}
 

@@ -42,11 +42,11 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			return true
 		}
 		if access == nil {
-			return s.SetServiceIdentityRoutable(key, true, 1)
+			return s.SetServiceIdentityAccess(key, types.LeaseRoutable, 1)
 		}
 		for range accessPublishAttempts {
 			state := access.Snapshot()
-			if s.SetServiceIdentityRoutable(key, state.Routable(key), state.Revision()) {
+			if s.SetServiceIdentityAccess(key, state.Access(key), state.Revision()) {
 				return true
 			}
 		}
@@ -103,12 +103,12 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			}
 			return
 		}
-		if ok {
+		if ok && !s.RefuseChallengeOverBudget(w, key, response.ChallengeID, source) {
 			utils.WriteAPIData(w, http.StatusCreated, response)
 		}
 	})))
-	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request, source netip.Addr) {
-		key, response, ok := s.HandleRegister(w, r, source)
+	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request, _ netip.Addr) {
+		key, response, ok := s.HandleRegister(w, r)
 		if !publishAccess(key) {
 			if ok {
 				utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")

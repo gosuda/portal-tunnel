@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import ruleVectors from "@/lib/authRuleVectors.json";
 import {
+  AUTH_CALLBACK_PATH,
+  AUTH_SAML_ACS_PATH,
+  DEFAULT_TUNNEL_AUTH,
   addAuthAllow,
   applicationAuthHost,
   authBlocksUDP,
   buildAuthIssueCommand,
   buildAuthRedirectURLs,
-  buildOIDCSecretCommand,
+  buildSecretCommand,
   buildTunnelCommand,
   buildTunnelPreviewURL,
   classifyAuthAllow,
@@ -166,6 +169,12 @@ describe("tunnelCommand sign-in", () => {
     identityHeaders: false,
     oidcIssuer: "",
     oidcClientId: "",
+    samlMetadataURL: "",
+    samlEntityId: "",
+    samlSubjectAttribute: "",
+    emailSMTPAddr: "",
+    emailSMTPUsername: "",
+    emailFrom: "",
   };
   const runLine = (command: string) => command.split("\n").slice(1).join("\n");
 
@@ -225,22 +234,111 @@ describe("tunnelCommand sign-in", () => {
 
     expect(unix).toHaveLength(2);
     expect(unix[1]).toBe(
-      "portal expose 3000 --name my-app --relays https://relay.example.com --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id abc.apps.googleusercontent.com --auth-allow 'alice@example.com' --auth-allow '@example.com'"
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth oidc --auth-oidc-issuer https://accounts.google.com --auth-oidc-client-id abc.apps.googleusercontent.com --auth-email-list 'alice@example.com' --auth-email-list '@example.com'"
     );
     expect(windows).toHaveLength(3);
-    expect(windows[2]).toContain("--auth-allow 'alice@example.com'");
+    expect(windows[2]).toContain("--auth-email-list 'alice@example.com'");
     expect(unix.join("\n")).not.toMatch(/SECRET|secret/);
     expect(windows.join("\n")).not.toMatch(/SECRET|secret/);
   });
 
-  it("reads the OIDC client secret at a prompt instead of through a placeholder", () => {
-    expect(buildOIDCSecretCommand("unix")).toBe(
+  it("prints the SAML flags, and the optional ones only when set", () => {
+    const auth: TunnelAuthOptions = {
+      ...none,
+      method: "saml",
+      allow: ["@example.com"],
+      samlMetadataURL: "https://idp.example/realms/main/protocol/saml/descriptor",
+    };
+    expect(runLine(buildTunnelCommand({ ...base, auth }))).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-email-list '@example.com'"
+    );
+    expect(
+      runLine(
+        buildTunnelCommand({
+          ...base,
+          auth: { ...auth, allow: [], samlEntityId: " urn:portal:app ", samlSubjectAttribute: "email" },
+        })
+      )
+    ).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth saml --auth-saml-metadata-url https://idp.example/realms/main/protocol/saml/descriptor --auth-saml-entity-id urn:portal:app --auth-saml-subject-attribute email --auth-email-list <email, @domain or sub:id>"
+    );
+  });
+
+  it("lists what keeps a SAML command from running as shown", () => {
+    const saml: TunnelAuthOptions = { ...none, method: "saml" };
+    const blocking = (auth: TunnelAuthOptions) =>
+      validateTunnelAuth(auth).map((issue) => issue.field);
+
+    expect(blocking(saml)).toEqual(["allow", "metadataURL"]);
+    expect(
+      blocking({ ...saml, allow: ["alice@example.com"], samlMetadataURL: "https://idp.example/metadata" })
+    ).toEqual([]);
+  });
+
+  it("prints the email flags without the SMTP password, which is never in the copied command", () => {
+    const auth: TunnelAuthOptions = {
+      ...none,
+      method: "email",
+      allow: ["alice@example.com", "@example.com"],
+      emailSMTPAddr: "smtp.example.com:587",
+      emailFrom: "Portal <login@example.com>",
+      emailSMTPUsername: "login@example.com",
+    };
+    const command = runLine(buildTunnelCommand({ ...base, auth }));
+    expect(command).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-smtp-addr smtp.example.com:587 --auth-smtp-from 'Portal <login@example.com>' --auth-smtp-username 'login@example.com' --auth-email-list 'alice@example.com' --auth-email-list '@example.com'"
+    );
+    expect(command).not.toMatch(/PASSWORD|password/);
+    expect(
+      runLine(
+        buildTunnelCommand({
+          ...base,
+          auth: { ...none, method: "email" },
+        })
+      )
+    ).toBe(
+      "portal expose 3000 --name my-app --relays https://relay.example.com --auth email --auth-smtp-addr <host:port> --auth-smtp-from <sender> --auth-email-list <email or @domain>"
+    );
+  });
+
+  it("lists what keeps an email command from running as shown", () => {
+    const email: TunnelAuthOptions = { ...none, method: "email" };
+    const blocking = (auth: TunnelAuthOptions) =>
+      validateTunnelAuth(auth).map((issue) => issue.field);
+
+    expect(blocking(email)).toEqual(["allow", "smtpAddr", "from"]);
+    expect(
+      blocking({
+        ...email,
+        allow: ["alice@example.com"],
+        emailSMTPAddr: "smtp.example.com:465",
+        emailFrom: "login@example.com",
+      })
+    ).toEqual([]);
+    expect(
+      blocking({
+        ...email,
+        allow: ["sub:alice"],
+        emailSMTPAddr: "smtp.example.com",
+        emailFrom: "login@example.com",
+      })
+    ).toEqual(["smtpAddr", "entries"]);
+  });
+
+  it("reads a secret at a prompt instead of through a placeholder", () => {
+    expect(buildSecretCommand("oidc", "unix")).toBe(
       "printf 'OIDC client secret: '; stty -echo; read -r AUTH_OIDC_CLIENT_SECRET; stty echo; echo; export AUTH_OIDC_CLIENT_SECRET"
     );
-    expect(buildOIDCSecretCommand("windows")).toBe(
+    expect(buildSecretCommand("oidc", "windows")).toBe(
       "$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password"
     );
-    expect(buildOIDCSecretCommand("unix")).not.toContain("<");
+    expect(buildSecretCommand("email", "unix")).toBe(
+      "printf 'SMTP password: '; stty -echo; read -r AUTH_SMTP_PASSWORD; stty echo; echo; export AUTH_SMTP_PASSWORD"
+    );
+    expect(buildSecretCommand("email", "windows")).toBe(
+      "$secret = Read-Host 'SMTP password' -AsSecureString; $env:AUTH_SMTP_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password"
+    );
+    expect(buildSecretCommand("oidc", "unix")).not.toContain("<");
   });
 
   it("quotes free-text entries so PowerShell reads every quote literally", () => {
@@ -433,7 +531,8 @@ describe("tunnelCommand sign-in", () => {
           "https://relay.example.org/",
           "https://portal.example.com/",
         ],
-        "my-app"
+        "my-app",
+        AUTH_CALLBACK_PATH
       )
     ).toEqual([
       "https://my-app.portal.example.com/_portal/auth/callback",
@@ -443,14 +542,18 @@ describe("tunnelCommand sign-in", () => {
     expect(
       buildAuthRedirectURLs(
         ["https://relay.example.net:8443", "http://other.example.net:443"],
-        "my-app"
+        "my-app",
+        AUTH_CALLBACK_PATH
       )
     ).toEqual([
       "https://my-app.relay.example.net:8443/_portal/auth/callback",
       "https://my-app.other.example.net/_portal/auth/callback",
     ]);
-    expect(buildAuthRedirectURLs(["https://portal.example.com"], "")).toEqual([]);
-    expect(buildAuthRedirectURLs([], "my-app")).toEqual([]);
+    expect(
+      buildAuthRedirectURLs(["https://portal.example.com"], "my-app", AUTH_SAML_ACS_PATH)
+    ).toEqual(["https://my-app.portal.example.com/_portal/auth/saml/acs"]);
+    expect(buildAuthRedirectURLs(["https://portal.example.com"], "", AUTH_CALLBACK_PATH)).toEqual([]);
+    expect(buildAuthRedirectURLs([], "my-app", AUTH_CALLBACK_PATH)).toEqual([]);
   });
 
   it("binds an invite to the host of the URL the visitor is sent", () => {
@@ -487,15 +590,15 @@ describe("tunnelCommand sign-in", () => {
 });
 
 // The builder repeats rules of the Go gateway, because the browser cannot call
-// it. cmd/portal-tunnel/gateway/frontend_rules_test.go runs the same rows
+// it. sdk/appauth/frontend_rules_test.go runs the same rows
 // against the Go functions, so a rule changed on one side alone fails a test.
 describe("rules shared with the Go gateway", () => {
-  const methods = new Set(["credential", "siwe", "oidc"]);
+  const methods = new Set(["credential", "siwe", "oidc", "saml", "email"]);
 
   it("reads every allowlist entry as the gateway does", () => {
     for (const row of ruleVectors.allow) {
       expect(methods.has(row.method)).toBe(true);
-      const method = row.method as "credential" | "siwe" | "oidc";
+      const method = row.method as "credential" | "siwe" | "oidc" | "saml" | "email";
       const [entry] = addAuthAllow(method, [], row.typed);
       const valid = entry !== undefined && classifyAuthAllow(method, entry).ok;
       expect(valid, `${method} entry ${JSON.stringify(row.typed)}`).toBe(row.valid);
@@ -508,15 +611,62 @@ describe("rules shared with the Go gateway", () => {
   it("accepts the OIDC issuers the gateway accepts", () => {
     for (const row of ruleVectors.issuer) {
       const issues = validateTunnelAuth({
+        ...DEFAULT_TUNNEL_AUTH,
         method: "oidc",
         allow: ["alice@example.com"],
-        identityHeaders: false,
         oidcIssuer: row.value,
         oidcClientId: "client",
       });
       expect(
         issues.some((issue) => issue.field === "issuer"),
         `issuer ${JSON.stringify(row.value)}`
+      ).toBe(!row.valid);
+    }
+  });
+
+  it("accepts the SAML metadata URLs the gateway accepts", () => {
+    for (const row of ruleVectors.samlMetadata) {
+      const issues = validateTunnelAuth({
+        ...DEFAULT_TUNNEL_AUTH,
+        method: "saml",
+        allow: ["alice@example.com"],
+        samlMetadataURL: row.value,
+      });
+      expect(
+        issues.some((issue) => issue.field === "metadataURL"),
+        `metadata ${JSON.stringify(row.value)}`
+      ).toBe(!row.valid);
+    }
+  });
+
+  it("accepts the SMTP server addresses the gateway accepts", () => {
+    for (const row of ruleVectors.emailSMTPAddr) {
+      const issues = validateTunnelAuth({
+        ...DEFAULT_TUNNEL_AUTH,
+        method: "email",
+        allow: ["alice@example.com"],
+        emailSMTPAddr: row.value,
+        emailFrom: "login@example.com",
+      });
+      expect(
+        issues.some((issue) => issue.field === "smtpAddr"),
+        `smtp address ${JSON.stringify(row.value)}`
+      ).toBe(!row.valid);
+    }
+  });
+
+  it("accepts the email senders the gateway accepts", () => {
+    for (const row of ruleVectors.emailFrom) {
+      const issues = validateTunnelAuth({
+        ...DEFAULT_TUNNEL_AUTH,
+        method: "email",
+        allow: ["alice@example.com"],
+        emailSMTPAddr: "smtp.example.com:587",
+        emailFrom: row.value,
+      });
+      expect(
+        issues.some((issue) => issue.field === "from"),
+        `sender ${JSON.stringify(row.value)}`
       ).toBe(!row.valid);
     }
   });

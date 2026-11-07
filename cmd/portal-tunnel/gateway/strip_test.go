@@ -6,7 +6,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -127,5 +129,44 @@ func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	}
 	if len(gotPortalNames) != 0 {
 		t.Fatalf("spoofed portal headers reached upstream under other spellings: %q", gotPortalNames)
+	}
+}
+
+// The router in front of the upstream removes Portal identity headers the gate
+// did not verify, so the proof set by the gate must survive it.
+func TestApplicationAuthIdentityProofReachesRoutedUpstream(t *testing.T) {
+	t.Parallel()
+
+	gotProof := make(chan []string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotProof <- r.Header.Values(types.HeaderPortalProof)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	routes, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Payment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const proof = "test-proof-0123456789"
+	tunnelIdentity := types.Identity{Name: "application-auth-test", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat("k", 32)}
+	handler, err := appauth.New(routes, tunnelIdentity, appauth.Config{Provider: appauth.ProviderCredential, IdentityHeaders: true, IdentityProof: proof})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := appauth.IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	req.Header.Set(types.HeaderAccessCredential, credential)
+	req.Header.Set(types.HeaderPortalProof, "forged-proof-value")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d; want %d", rec.Code, http.StatusNoContent)
+	}
+	if got := <-gotProof; !slices.Equal(got, []string{proof}) {
+		t.Fatalf("upstream %s = %q; want the configured proof only", types.HeaderPortalProof, got)
 	}
 }

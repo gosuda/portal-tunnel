@@ -4,17 +4,34 @@ import type { ShareKind } from "@/lib/shareLink";
 
 export type TunnelCommandOS = "unix" | "windows";
 
-export type TunnelAuthMethod = "none" | "credential" | "siwe" | "oidc";
+export type TunnelAuthMethod =
+  | "none"
+  | "credential"
+  | "siwe"
+  | "oidc"
+  | "saml"
+  | "email";
 
 export const GOOGLE_OIDC_ISSUER = "https://accounts.google.com";
 
 export interface TunnelAuthOptions {
   method: TunnelAuthMethod;
-  /** `--auth-allow` entries as typed; classifyAuthAllow says what each one is. */
+  /** Allowlist entries as typed; classifyAuthAllow says what each one is. */
   allow: string[];
   identityHeaders: boolean;
   oidcIssuer: string;
   oidcClientId: string;
+  samlMetadataURL: string;
+  /** Empty means the default, the metadata URL of each host. */
+  samlEntityId: string;
+  /** Empty means the NameID. */
+  samlSubjectAttribute: string;
+  /** host:port of the SMTP server that sends the email links. */
+  emailSMTPAddr: string;
+  /** Empty for a server that needs no login; the password is never here. */
+  emailSMTPUsername: string;
+  /** The fixed sender of every link. */
+  emailFrom: string;
 }
 
 export const DEFAULT_TUNNEL_AUTH: TunnelAuthOptions = {
@@ -23,7 +40,20 @@ export const DEFAULT_TUNNEL_AUTH: TunnelAuthOptions = {
   identityHeaders: false,
   oidcIssuer: GOOGLE_OIDC_ISSUER,
   oidcClientId: "",
+  samlMetadataURL: "",
+  samlEntityId: "",
+  samlSubjectAttribute: "",
+  emailSMTPAddr: "",
+  emailSMTPUsername: "",
+  emailFrom: "",
 };
+
+// The reserved paths a provider sends visitors back to, from
+// sdk/appauth (applicationAuthCallbackPath and the
+// applicationAuthSAML*Path constants).
+export const AUTH_CALLBACK_PATH = "/_portal/auth/callback";
+export const AUTH_SAML_ACS_PATH = "/_portal/auth/saml/acs";
+export const AUTH_SAML_METADATA_PATH = "/_portal/auth/saml/metadata";
 
 /** Sign-in covers HTTP only, so the tunnel refuses to combine it with UDP. */
 export function authBlocksUDP(auth: TunnelAuthOptions): boolean {
@@ -179,12 +209,41 @@ function buildAuthArgs(auth: TunnelAuthOptions, os: TunnelCommandOS): string[] {
       `--auth-oidc-issuer ${valueOrPlaceholder(auth.oidcIssuer, "<issuer>", os)}`,
       `--auth-oidc-client-id ${valueOrPlaceholder(auth.oidcClientId, "<client-id>", os)}`
     );
-    if (auth.allow.length === 0) {
-      args.push("--auth-allow <email, @domain or sub:id>");
+  }
+  if (auth.method === "saml") {
+    args.push(
+      `--auth-saml-metadata-url ${valueOrPlaceholder(auth.samlMetadataURL, "<metadata-url>", os)}`
+    );
+    if (auth.samlEntityId.trim() !== "") {
+      args.push(`--auth-saml-entity-id ${formatToken(auth.samlEntityId.trim(), os)}`);
+    }
+    if (auth.samlSubjectAttribute.trim() !== "") {
+      args.push(
+        `--auth-saml-subject-attribute ${formatToken(auth.samlSubjectAttribute.trim(), os)}`
+      );
     }
   }
+  if (auth.method === "email") {
+    args.push(
+      `--auth-smtp-addr ${valueOrPlaceholder(auth.emailSMTPAddr, "<host:port>", os)}`,
+      `--auth-smtp-from ${valueOrPlaceholder(auth.emailFrom, "<sender>", os)}`
+    );
+    if (auth.emailSMTPUsername.trim() !== "") {
+      args.push(
+        `--auth-smtp-username ${formatToken(auth.emailSMTPUsername.trim(), os)}`
+      );
+    }
+  }
+  const allowFlag = needsAllowlist(auth.method) ? "--auth-email-list" : "--auth-allow";
+  if (needsAllowlist(auth.method) && auth.allow.length === 0) {
+    args.push(
+      auth.method === "email"
+        ? `${allowFlag} <email or @domain>`
+        : `${allowFlag} <email, @domain or sub:id>`
+    );
+  }
   for (const entry of auth.allow) {
-    args.push(`--auth-allow ${formatToken(entry, os)}`);
+    args.push(`${allowFlag} ${formatToken(entry, os)}`);
   }
   if (auth.identityHeaders) {
     args.push("--auth-identity-headers");
@@ -192,16 +251,28 @@ function buildAuthArgs(auth: TunnelAuthOptions, os: TunnelCommandOS): string[] {
   return args;
 }
 
+// The secrets a sign-in method reads from the environment, and the prompt
+// that asks for each.
+const SECRETS = {
+  oidc: { prompt: "OIDC client secret", variable: "AUTH_OIDC_CLIENT_SECRET" },
+  email: { prompt: "SMTP password", variable: "AUTH_SMTP_PASSWORD" },
+} as const;
+
 /**
- * Reads the OIDC client secret at a prompt and exports it for the next
- * `portal expose` in the same shell. The secret never appears in the command
- * line (`ps`), in shell history (typed at a prompt, not after `export`) or in
- * the text that gets copied, so there is no placeholder to forget.
+ * Reads the OIDC client secret or the SMTP password at a prompt and exports it
+ * for the next `portal expose` in the same shell. The secret never appears in
+ * the command line (`ps`), in shell history (typed at a prompt, not after
+ * `export`) or in the text that gets copied, so there is no placeholder to
+ * forget.
  */
-export function buildOIDCSecretCommand(os: TunnelCommandOS): string {
+export function buildSecretCommand(
+  secret: keyof typeof SECRETS,
+  os: TunnelCommandOS
+): string {
+  const { prompt, variable } = SECRETS[secret];
   return os === "windows"
-    ? "$secret = Read-Host 'OIDC client secret' -AsSecureString; $env:AUTH_OIDC_CLIENT_SECRET = [System.Net.NetworkCredential]::new('', $secret).Password"
-    : "printf 'OIDC client secret: '; stty -echo; read -r AUTH_OIDC_CLIENT_SECRET; stty echo; echo; export AUTH_OIDC_CLIENT_SECRET";
+    ? `$secret = Read-Host '${prompt}' -AsSecureString; $env:${variable} = [System.Net.NetworkCredential]::new('', $secret).Password`
+    : `printf '${prompt}: '; stty -echo; read -r ${variable}; stty echo; echo; export ${variable}`;
 }
 
 function valueOrPlaceholder(
@@ -225,9 +296,20 @@ type AuthAllowCheck =
   | { ok: false; error: string };
 
 /**
- * Mirrors what `portal expose --auth-allow` accepts for each method. The Go
- * owners are normalizeApplicationAuthSubject (access_credential.go),
- * normalizeOIDCPrincipal (access_auth.go) and identity.NormalizeEVMAddress.
+ * An identity provider signs in accounts it does not restrict to the app, and
+ * email would mail a link to any address, so the tunnel refuses to start oidc,
+ * saml or email without an allowlist.
+ */
+export function needsAllowlist(method: TunnelAuthMethod): boolean {
+  return method === "oidc" || method === "saml" || method === "email";
+}
+
+/**
+ * Mirrors what `portal expose --auth-allow` and `--auth-email-list` accept for each method. The Go
+ * owners are normalizeApplicationAuthSubject and normalizeAllowed
+ * (sdk/appauth/credential.go), normalizeProviderPrincipal (sdk/appauth/appauth.go) and
+ * identity.NormalizeEVMAddress. Email takes the email and @domain entries of
+ * oidc and saml, but no sub:<id>, because a mailbox has no other id.
  * The browser has no Keccak, so a mixed-case wallet address is not checked
  * against its EIP-55 checksum here; the tunnel rejects a bad one at start.
  */
@@ -249,6 +331,12 @@ export function classifyAuthAllow(
         };
   }
 
+  if (/^sub:/i.test(entry) && method === "email") {
+    return {
+      ok: false,
+      error: `${entry}: email sign-in takes an email or an @domain, not sub:<id>.`,
+    };
+  }
   if (/^sub:/i.test(entry)) {
     return isPrintableSubject(entry.slice("sub:".length))
       ? { ok: true, kind: "account id" }
@@ -274,7 +362,30 @@ export function classifyAuthAllow(
       error: `${entry} is not an email, an @domain or sub:<id>.`,
     };
   }
+  if (method === "email" && !isVisitorEmail(at === 0 ? `a${entry}` : entry)) {
+    return { ok: false, error: `${entry} is not an address a visitor can sign in with.` };
+  }
   return { ok: true, kind: at === 0 ? "domain" : "person" };
+}
+
+// normalizeVisitorEmail (sdk/appauth/email.go) takes a bare address that net/mail
+// reads back unchanged, without the % and ! that mail servers route on.
+const mailAtom = "[a-zA-Z0-9#$&'*+/=?^_`{|}~-]+";
+const mailAddress = `${mailAtom}(\\.${mailAtom})*@${mailAtom}(\\.${mailAtom})*`;
+const visitorEmail = new RegExp(`^${mailAddress}$`);
+
+// parseSMTPFrom (sdk/appauth/email.go) takes one address the way net/mail reads
+// it: bare, or in angle brackets after a display name.
+const senderName = `(?:"[^"\\\\]*"|[^"<>@,;:()\\[\\]\\\\]+)`;
+const emailSender = new RegExp(`^(?:${mailAddress}|(?:${senderName}\\s*)?<${mailAddress}>)$`);
+
+function isEmailSender(raw: string): boolean {
+  const sender = raw.trim();
+  return !/[\u0000-\u001f\u007f-\u009f]/.test(sender) && emailSender.test(sender);
+}
+
+function isVisitorEmail(entry: string): boolean {
+  return entry.length <= 254 && visitorEmail.test(entry);
 }
 
 function isASCII(value: string): boolean {
@@ -311,7 +422,50 @@ function isOIDCIssuer(raw: string): boolean {
   }
 }
 
-export type TunnelAuthField = "allow" | "entries" | "issuer" | "clientId";
+// normalizeSAMLMetadataURL (sdk/appauth/saml.go) also accepts http on a
+// loopback host, which the builder does not offer. Unlike an issuer, the
+// metadata URL may carry a query.
+function isSAMLMetadataURL(raw: string): boolean {
+  try {
+    const parsed = new URL(raw.trim());
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname !== "" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+// validateSMTPAddr (sdk/appauth/email.go) reads host:port the way
+// net.SplitHostPort and strconv.Atoi do: an IPv6 host in brackets, a host
+// without control characters, and a port from 1 to 65535.
+function isEmailSMTPAddr(raw: string): boolean {
+  const match = /^(?:\[([^[\]]*)\]|([^[\]:]*)):([+-]?\d+)$/.exec(raw.trim());
+  if (match === null) {
+    return false;
+  }
+  const host = match[1] ?? match[2] ?? "";
+  const port = Number(match[3]);
+  return (
+    host !== "" &&
+    !/[\u0000-\u001f\u007f-\u009f]/.test(host) &&
+    port >= 1 &&
+    port <= 65535
+  );
+}
+
+export type TunnelAuthField =
+  | "allow"
+  | "entries"
+  | "issuer"
+  | "clientId"
+  | "metadataURL"
+  | "smtpAddr"
+  | "from";
 
 export interface TunnelAuthIssue {
   field: TunnelAuthField;
@@ -328,10 +482,10 @@ export function validateTunnelAuth(auth: TunnelAuthOptions): TunnelAuthIssue[] {
     return [];
   }
   const issues: TunnelAuthIssue[] = [];
+  if (needsAllowlist(auth.method) && auth.allow.length === 0) {
+    issues.push({ field: "allow", message: "Add who may sign in" });
+  }
   if (auth.method === "oidc") {
-    if (auth.allow.length === 0) {
-      issues.push({ field: "allow", message: "Add who may sign in" });
-    }
     if (auth.oidcIssuer.trim() === "") {
       issues.push({ field: "issuer", message: "Add the issuer address" });
     } else if (!isOIDCIssuer(auth.oidcIssuer)) {
@@ -342,6 +496,34 @@ export function validateTunnelAuth(auth: TunnelAuthOptions): TunnelAuthIssue[] {
     }
     if (auth.oidcClientId.trim() === "") {
       issues.push({ field: "clientId", message: "Add the client ID" });
+    }
+  }
+  if (auth.method === "saml") {
+    if (auth.samlMetadataURL.trim() === "") {
+      issues.push({ field: "metadataURL", message: "Add the metadata address" });
+    } else if (!isSAMLMetadataURL(auth.samlMetadataURL)) {
+      issues.push({
+        field: "metadataURL",
+        message: "The metadata address must be an https:// address without a fragment",
+      });
+    }
+  }
+  if (auth.method === "email") {
+    if (auth.emailSMTPAddr.trim() === "") {
+      issues.push({ field: "smtpAddr", message: "Add the SMTP server" });
+    } else if (!isEmailSMTPAddr(auth.emailSMTPAddr)) {
+      issues.push({
+        field: "smtpAddr",
+        message: "The SMTP server must be host:port, with a port from 1 to 65535",
+      });
+    }
+    if (auth.emailFrom.trim() === "") {
+      issues.push({ field: "from", message: "Add the sender address" });
+    } else if (!isEmailSender(auth.emailFrom)) {
+      issues.push({
+        field: "from",
+        message: "The sender must be one address, such as Portal <login@example.com>",
+      });
     }
   }
   if (auth.allow.some((entry) => !classifyAuthAllow(auth.method, entry).ok)) {
@@ -363,7 +545,7 @@ export function addAuthAllow(
   const keyOf = (entry: string) => (method === "siwe" ? entry.toLowerCase() : entry);
   const next = [...current];
   const seen = new Set(next.map(keyOf));
-  // The tunnel takes each --auth-allow value whole, and a link name, a sub: id
+  // The tunnel takes each allowlist value whole, and a link name, a sub: id
   // or the local part of an email may contain spaces; a wallet address never does.
   const separator = method === "siwe" ? /[,\s]+/ : /,/;
   for (const typed of draft.split(separator).map((part) => part.trim())) {
@@ -380,7 +562,7 @@ export function addAuthAllow(
 }
 
 function canonicalAuthAllow(method: TunnelAuthMethod, entry: string): string {
-  if (method !== "oidc") {
+  if (!needsAllowlist(method)) {
     return entry;
   }
   if (/^sub:/i.test(entry)) {
@@ -398,26 +580,27 @@ export function isListedSubject(allow: string[], subject: string): boolean {
 }
 
 /**
- * The redirect address to register at an OIDC provider for the short URL on
- * each relay in the command; none until the name is known. The gateway builds
- * the redirect from the host the visitor arrived on, so the address-bound URL
- * Portal prints, and every relay discovery adds, need their own; those hosts
- * are known only once Portal prints them.
+ * The address at path to register at an identity provider for the short URL
+ * on each relay in the command: the OIDC redirect address, or the SAML ACS or
+ * metadata address. None until the name is known. The gateway builds these
+ * from the host the visitor arrived on, so the address-bound URL Portal
+ * prints, and every relay discovery adds, need their own; those hosts are
+ * known only once Portal prints them.
  */
 export function buildAuthRedirectURLs(
   relayUrls: string[],
-  name: string
+  name: string,
+  path: string
 ): string[] {
   const shortURLs = relayUrls
     .map((relayURL) => buildTunnelPreviewURL(relayURL, name))
     .filter((url) => url !== "");
-  // applicationAuthCallbackPath in cmd/portal-tunnel/gateway/access_auth.go
-  return [...new Set(shortURLs)].map((url) => `${url}/_portal/auth/callback`);
+  return [...new Set(shortURLs)].map((url) => `${url}${path}`);
 }
 
 /**
  * The host a private link is bound to, read from the URL handed to the
- * visitor the way NormalizeApplicationAuthHost (access_credential.go) reads
+ * visitor the way normalizeHost (sdk/appauth/credential.go) reads
  * it: an https URL or a bare host, without a path, query or fragment. The URL
  * parser also drops the `:443` Portal prints, as a browser leaves it out of
  * the Host it sends. Empty when the address is unusable.

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -11,18 +12,15 @@ import (
 // way runExposeCommand does before it starts the tunnel.
 func exposeSpec(t *testing.T, args ...string) (tunnel.Spec, error) {
 	t.Helper()
+	var cfg tunnel.Config
 	var flags exposeFlags
 	fs := utils.NewFlagSet("expose", printExposeUsage)
-	registerExposeFlags(fs, &flags)
+	registerExposeFlags(fs, &cfg, &flags)
 	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		t.Fatalf("parse portal expose %v: %v", args, err)
 	}
-	flags.targetAddr = fs.Arg(0)
-	spec, err := tunnelSpecFromExposeFlags(fs, flags)
-	if err != nil {
-		return spec, err
-	}
-	return spec, spec.Validate()
+	cfg.TargetAddr = fs.Arg(0)
+	return tunnelSpecFromExposeFlags(fs, cfg, flags)
 }
 
 func setOIDCEnv(t *testing.T) {
@@ -79,6 +77,75 @@ func TestExposeRefusesExplicitOIDCFlagWithoutAuthOIDC(t *testing.T) {
 		if _, err := exposeSpec(t, args...); err == nil {
 			t.Errorf("portal expose %v started without --auth oidc", args)
 		}
+	}
+}
+
+// AUTH_SAML_* follow the AUTH_OIDC_* rule: they count only with --auth saml,
+// and a typed --auth-saml-* flag without it is refused.
+func TestExposeAuthSAMLEnv(t *testing.T) {
+	t.Setenv("AUTH_SAML_METADATA_URL", "https://idp.example/metadata")
+	t.Setenv("AUTH_SAML_ENTITY_ID", "urn:portal:app")
+	t.Setenv("AUTH_SAML_SUBJECT_ATTRIBUTE", "email")
+
+	for _, args := range [][]string{{"3000"}, {"--auth", "siwe", "3000"}} {
+		spec, err := exposeSpec(t, args...)
+		if err != nil {
+			t.Errorf("portal expose %v: %v", args, err)
+			continue
+		}
+		if spec.HTTP == nil || spec.HTTP.Auth == nil {
+			continue
+		}
+		if auth := spec.HTTP.Auth; auth.SAMLMetadataURL != "" || auth.SAMLEntityID != "" {
+			t.Errorf("portal expose %v carried AUTH_SAML_* into %+v", args, auth)
+		}
+	}
+	spec, err := exposeSpec(t, "--auth", "saml", "--auth-email-list", "@example.com", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth := spec.HTTP.Auth; auth.SAMLMetadataURL != "https://idp.example/metadata" || auth.SAMLEntityID != "urn:portal:app" || auth.SAMLSubjectAttribute != "email" {
+		t.Fatalf("--auth saml config = %+v, want the AUTH_SAML_* values", auth)
+	}
+	if _, err := exposeSpec(t, "--auth", "siwe", "--auth-saml-entity-id", "urn:portal:app", "3000"); err == nil {
+		t.Error("portal expose started with --auth-saml-entity-id but without --auth saml")
+	}
+}
+
+// AUTH_SMTP_* follow the same rule, and --auth email refuses to start without
+// an allowlist, an SMTP server or a sender.
+func TestExposeAuthEmailEnv(t *testing.T) {
+	t.Setenv("AUTH_SMTP_ADDR", "smtp.example:587")
+	t.Setenv("AUTH_SMTP_USERNAME", "portal")
+	t.Setenv("AUTH_SMTP_PASSWORD", "smtp-secret")
+	t.Setenv("AUTH_SMTP_FROM", "login@example.com")
+
+	for _, args := range [][]string{{"3000"}, {"--auth", "siwe", "3000"}} {
+		spec, err := exposeSpec(t, args...)
+		if err != nil {
+			t.Errorf("portal expose %v: %v", args, err)
+			continue
+		}
+		if spec.HTTP != nil && spec.HTTP.Auth != nil && spec.HTTP.Auth.EmailConfig != (appauth.EmailConfig{}) {
+			t.Errorf("portal expose %v carried AUTH_SMTP_* into the auth settings", args)
+		}
+	}
+	spec, err := exposeSpec(t, "--auth", "email", "--auth-email-list", "alice@example.com", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := appauth.EmailConfig{SMTPAddr: "smtp.example:587", SMTPUsername: "portal", SMTPPassword: "smtp-secret", SMTPFrom: "login@example.com"}
+	if spec.HTTP.Auth.EmailConfig != want {
+		t.Fatal("--auth email did not take the AUTH_SMTP_* values")
+	}
+	if _, err := exposeSpec(t, "--auth", "siwe", "--auth-smtp-from", "login@example.com", "3000"); err == nil {
+		t.Error("portal expose started with --auth-smtp-from but without --auth email")
+	}
+	if _, err := exposeSpec(t, "--auth", "email", "3000"); err == nil {
+		t.Error("portal expose --auth email started without an allowlist")
+	}
+	if _, err := exposeSpec(t, "--auth", "email", "--auth-email-list", "alice@example.com", "--auth-smtp-addr", " ", "3000"); err == nil {
+		t.Error("portal expose --auth email started without an SMTP server")
 	}
 }
 

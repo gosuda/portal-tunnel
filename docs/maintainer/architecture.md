@@ -23,6 +23,25 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   integration owns authentication and reverse-stream fallback. SDK exposures own
   source lifecycle, and listeners supply current transport and lease credentials.
 
+- `sdk/appauth`: owns the application sign-in gate, its providers, and its
+  sessions. It is public API for programs that embed the SDK, and the CLI uses
+  the same package. It stays apart from `sdk` so that `sdk` and its WASM build do
+  not depend on OIDC and SAML libraries. `internal/siweauth` is the SIWE code it
+  shares with the agent.
+
+- `cmd/portal-tunnel/tunnel`: owns the tunnel configuration of the CLI and the
+  agent. `tunnel.Config` holds what the user set through `portal expose` flags, a
+  `[[tunnels]]` entry of the agent config, or an Agent API request.
+  `Config.Spec` is the one step from a `Config` to the runtime `Spec`: it
+  normalizes the values, fills in the defaults, and validates the result. A
+  component with settings of its own keeps its type and its keys with its owner:
+  `appauth.Config` with `OIDCConfig`, `SAMLConfig`, and `EmailConfig`,
+  `gateway.X402Config`, and `types.LeaseMetadata`. The agent config, the Agent
+  API requests, and the agent status embed these components, so a new provider
+  setting changes only its component and the validation of that component. The
+  agent saves a `Config` as the user set it, plus the tunnel ID and identity path
+  that it pins.
+
 - `portal/discovery`: provides blind collaborator relay selection for `sdk.Exposure`.
   Relay selection returns public relay priorities; Portal does not construct an
   ordered list of intermediate relays. Explicit relay URLs, transport eligibility,

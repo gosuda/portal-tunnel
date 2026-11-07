@@ -22,7 +22,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Context, *url.URL, *http.Client) {
+func buildRelayBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "relay-server.exe")
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", bin, "./cmd/relay-server")
@@ -30,6 +30,23 @@ func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Co
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build relay: %v\n%s", err, output)
 	}
+	return bin
+}
+
+// relayTenantClient reaches tenant hostnames through the local relay listener.
+func relayTenantClient(t *testing.T, client *http.Client, base *url.URL) *http.Client {
+	t.Helper()
+	transport := client.Transport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, base.Host)
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	return &http.Client{Transport: transport, Timeout: 5 * time.Second}
+}
+
+func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Context, *url.URL, *http.Client) {
+	t.Helper()
+	bin := buildRelayBinary(t)
 	frontend := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
 		t.Fatal(err)
@@ -167,6 +184,110 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	}
 }
 
+// The startup mode applies before any admin call, and a mode saved in
+// policy.json wins over it in both directions.
+func TestRelayInitialApprovalMode(t *testing.T) {
+	headers := http.Header{"Authorization": {"Bearer admin-test"}}
+	effectiveMode := func(t *testing.T, ctx context.Context, base *url.URL, client *http.Client) string {
+		t.Helper()
+		var settings types.PolicySettings
+		if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicy, nil, headers, &settings); err != nil {
+			t.Fatal(err)
+		}
+		return settings.ApprovalMode
+	}
+
+	t.Run("manual routes nothing before an admin call", func(t *testing.T) {
+		ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
+		leaseIdentity, err := identity.Generate("initial-manual")
+		if err != nil {
+			t.Fatal(err)
+		}
+		exposure, err := sdk.Expose(ctx, leaseIdentity, []string{"https://localhost:" + base.Port()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = exposure.Close() })
+		go func() {
+			_ = sdk.RunHTTP(ctx, exposure, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, "approved tenant")
+			}), "")
+		}()
+
+		// A pending lease has registered, so the admin can see and approve it.
+		pending := waitPolicyLease(t, ctx, client, base)
+		if pending.IsApproved {
+			t.Fatalf("manual relay approved a lease on its own: %+v", pending)
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+		if ready, err := exposure.WaitReady(waitCtx); err == nil {
+			t.Fatalf("unapproved lease became ready: %+v", ready)
+		}
+		tenantClient := relayTenantClient(t, client, base)
+		publicURL := "https://" + pending.CanonicalHostname + ":" + base.Port()
+		if response, err := tenantClient.Get(publicURL); err == nil {
+			body, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			if string(body) == "approved tenant" {
+				t.Fatal("an unapproved lease received a visitor request")
+			}
+		}
+
+		setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: leaseIdentity.Key(), IsApproved: ptr(true)})
+		readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if _, err := exposure.WaitReady(readyCtx); err != nil {
+			t.Fatalf("approved lease never became ready: %v", err)
+		}
+		response, err := tenantClient.Get(publicURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if body, _ := io.ReadAll(response.Body); string(body) != "approved tenant" {
+			t.Fatalf("approved lease answered %d %q", response.StatusCode, body)
+		}
+	})
+
+	for _, tc := range []struct {
+		name, saved, flag, want string
+	}{
+		{"saved auto wins over a manual flag", `{"approval_mode":"auto"}`, "manual", "auto"},
+		{"saved manual wins over an auto flag", `{"approval_mode":"manual"}`, "auto", "manual"},
+		{"a saved policy without a mode keeps the flag", `{}`, "manual", "manual"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(stateDir, types.RelayPolicyFilename), []byte(tc.saved), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, base, client := startPolicyRelay(t, stateDir, "--approval-mode", tc.flag)
+			if got := effectiveMode(t, ctx, base, client); got != tc.want {
+				t.Fatalf("effective mode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("invalid value stops startup", func(t *testing.T) {
+		bin := buildRelayBinary(t)
+		for _, value := range []string{"off", "Manual", ""} {
+			// The deadline turns a relay that wrongly starts into a failure.
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, bin, "--identity-path", t.TempDir(), "--approval-mode="+value)
+			command.Dir = t.TempDir()
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("relay started with --approval-mode=%q:\n%s", value, output)
+			}
+			if !bytes.Contains(output, []byte("invalid approval mode")) {
+				t.Fatalf("--approval-mode=%q did not name the setting:\n%s", value, output)
+			}
+		}
+	})
+}
+
 func TestManualModeRevokesOfflineCache(t *testing.T) {
 	stateDir, siteDir := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte("cached policy site"), 0o600); err != nil {
@@ -194,12 +315,7 @@ func TestManualModeRevokesOfflineCache(t *testing.T) {
 	if err != nil || len(ready) != 1 {
 		t.Fatalf("ready: %v, %v", ready, err)
 	}
-	tenantTransport := client.Transport.(*http.Transport).Clone()
-	tenantTransport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, network, base.Host)
-	}
-	defer tenantTransport.CloseIdleConnections()
-	tenantClient := &http.Client{Transport: tenantTransport, Timeout: 5 * time.Second}
+	tenantClient := relayTenantClient(t, client, base)
 	publicURL := ready[0].PublicURL
 	for {
 		response, err := tenantClient.Get(publicURL)

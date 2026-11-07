@@ -126,6 +126,9 @@ type ServerConfig struct {
 	MinPort          int
 	MaxPort          int
 	ACME             acme.Config
+	// UnapprovedLeasesPerSource bounds the leases one source can hold without
+	// being routable. Zero disables the bound.
+	UnapprovedLeasesPerSource int
 
 	// ApplicationOwnsDomainReport delegates types.PathSDKDomain to the
 	// application handler, which can compose Server.DomainReport() itself.
@@ -313,6 +316,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	registry.unapprovedPerSource = cfg.UnapprovedLeasesPerSource
 	var relaySet *discovery.RelaySet
 	if cfg.DiscoveryEnabled {
 		cfg.Bootstraps, err = discovery.ResolveRelayURLs(cfg.Bootstraps, true)
@@ -637,7 +641,14 @@ func (s *Server) Wait() error {
 func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
 	lease, err := s.registry.admitLeaseIdentity(offer.ServiceIdentity, offer.LeaseID, time.Now().UTC(), false)
 	if err != nil {
-		offer.RejectUnavailable()
+		switch {
+		case errors.Is(err, errLeaseRejected):
+			offer.RejectPending()
+		case errors.Is(err, errLeaseDenied):
+			offer.RejectDenied()
+		default:
+			offer.RejectUnavailable()
+		}
 		offer.Close()
 		return
 	}
@@ -709,29 +720,16 @@ func (s *Server) bridgeTCPConn(record *leaseRecord, bridge *leaseBridge, inbound
 	}
 }
 
-// SetIdentityRoutable applies the relay's current access decision for one
+// SetServiceIdentityAccess applies the relay's current access decision for one
 // identity to the portal data path. The relay owns the decision; this only
 // carries the result across the boundary, including revoking cached content.
 // False means a newer relay snapshot has already reached Portal: the caller
 // must reload the committed snapshot before retrying. Stale values never apply.
-func (s *Server) SetIdentityRoutable(key string, routable bool, revision uint64) bool {
-	if strings.TrimSpace(key) == "" {
-		return true
-	}
-	serviceKey, err := types.ParseServiceIdentityKey(key)
-	if err != nil {
-		return false
-	}
-	return s.SetServiceIdentityRoutable(serviceKey, routable, revision)
-}
-
-// SetServiceIdentityRoutable applies an access decision already parsed at the
-// relay boundary.
-func (s *Server) SetServiceIdentityRoutable(key types.ServiceIdentityKey, routable bool, revision uint64) bool {
+func (s *Server) SetServiceIdentityAccess(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64) bool {
 	if s == nil || s.registry == nil {
 		return true
 	}
-	return s.registry.setIdentityRoutable(key, routable, revision)
+	return s.registry.setIdentityAccess(key, access, revision)
 }
 
 // DiscoveryEnabled and ApplicationOwnsDomainReport report the routing flags
@@ -1194,7 +1192,8 @@ func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
 		switch {
 		case errors.Is(err, errLeaseNotFound):
 			code, reason = types.APIErrorCodeLeaseNotFound, "lease not found"
-		case errors.Is(err, errLeaseRejected):
+		case errors.Is(err, errLeaseRejected), errors.Is(err, errLeaseDenied):
+			// The SDK's QUIC loop reads no code here, so denied needs none of its own.
 			code, reason = types.APIErrorCodeLeaseRejected, "lease rejected"
 		case errors.Is(err, errUnauthorized):
 			code, reason = types.APIErrorCodeUnauthorized, "unauthorized"

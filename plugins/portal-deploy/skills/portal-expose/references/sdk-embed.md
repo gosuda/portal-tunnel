@@ -11,18 +11,20 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func main() {
-	ctx, stop := utils.SignalContext() // cancels on SIGINT/SIGTERM
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// name applies only when the identity file does not exist yet.
@@ -82,6 +84,7 @@ published.
 - Explicit relays are always kept. `sdk.WithDiscovery(n)` adds the bootstrap set from `registry.json` and keeps at most `n` auto-selected relays connected (default 3 when `n <= 0`). Without the option at least one explicit relay is required, and nothing else is ever contacted, which keeps tests hermetic.
 - `sdk.WithOverlay()` is the `--overlay` equivalent.
 - Read the public URL from `exposure.WaitReady(ctx)`, from `exposure.Relays()` (sorted snapshot), or from `exposure.Updates()` (buffered channel of size one; slow readers miss intermediate states and should re-read `Relays()`). The SDK also logs `service ready at <url>` with field `public_url`, exactly like the CLI.
+- `RelayStatus.Approval` is `pending` or `refused` while the relay refuses the lease, and `Message()` gives the wording to show. Empty never means approved. See the SDK API reference for old and new SDK and relay pairs.
 - `RelayStatus` carries `RelayURL`, `PublicURL`, `AliasURL`, `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
 - `PublicURL` is the identity-bound canonical URL; it always routes to this exposure. `AliasURL` is `<name>.<root host>` when the relay granted that alias to the lease, and empty when another identity owns the name or the exposure is unnamed. Both URLs stay set while the lease is held, including `connecting` while reverse sessions reconnect; a failed relay clears `AliasURL`. While `State` is `ready`, prefer `AliasURL` for user-facing links and sharing, falling back to `PublicURL` when empty. Never derive an alias by stripping the address suffix. The friendly alias always reaches the live origin; the opt-in relay cache serves only the canonical hostname.
 - Lease renewal, re-registration after a relay restart, and reverse-session pooling are handled inside the SDK. The app does nothing for them.
@@ -93,6 +96,33 @@ published.
 - `r.Host` is the real public hostname. `r.RemoteAddr` is the relay end of the SDK's own outbound connection, never the browser. `sdk.RunHTTP` sets `X-Forwarded-Proto: https` on tunneled requests, and Portal adds no `X-Forwarded-For` or `X-Real-IP`, so the real client IP is not available in-process.
 - WebSockets and other upgrades work; the tunnel is a byte-transparent `net.Conn`.
 - To proxy to local services instead of handling in-process: `sdk.NewHTTPRoutes([]sdk.HTTPRouteConfig{{Prefix: "/", Upstream: "127.0.0.1:3000"}})` returns an `http.Handler`; `StaticRoot` serves a directory as an SPA. `sdk.Proxy(ctx, exposure, "127.0.0.1:3000")` forwards raw streams and closes the exposure when it returns, so do not also `defer exposure.Close()` on that path.
+
+## Sign-in for visitors
+
+Use `github.com/gosuda/portal-tunnel/v2/sdk/appauth` when only chosen people should open the app. It is the gate of `portal expose --auth`, as an `http.Handler`, and takes the same providers: `credential`, `siwe`, `oidc`, `saml`, and `email`. Read `application-auth.md` to choose a provider and to set up the provider side; only the wiring differs.
+
+```go
+cfg := appauth.Config{
+	Provider: appauth.ProviderCredential,
+	Allow:    []string{"alice"},
+}
+gate, err := appauth.New(mux, id, cfg) // an error here is a mistake in cfg
+if err != nil {
+	log.Fatal(err)
+}
+if err := sdk.RunHTTP(ctx, exposure, gate, ""); err != nil {
+	log.Fatal(err)
+}
+```
+
+- `appauth.New` reads no network. Call `appauth.Check(ctx, cfg)` at startup and show the result: a provider that cannot be reached still serves existing sessions.
+- The handler reads the visitor with `appauth.PrincipalFromContext(r.Context())`, which returns `Provider`, `Subject` and `Email`. It works without identity headers. Set `Config.IdentityHeaders` only when the handler proxies to something else that needs the `X-Portal-*` headers.
+- List `Allow` for `siwe` and `credential`, and `EmailList` for `oidc`, `saml` and `email`. `oidc`, `saml` and `email` refuse an empty list, but an empty `Allow` opens `siwe` to any wallet and `credential` to any credential issued from the identity, so always list who may open the app. `email` also needs `Config.PublicURLs`; the SDK API page has the snippet.
+- A gate built with the same identity and provider settings keeps existing sessions. Prefer one gate with `next` swapped behind it: a rebuild ends a SIWE login in progress and unused email links.
+- Store the identity with `identity.Marshal`, never `json.Marshal`, which leaves out the `TokenSecret` that session keys derive from.
+- Serve no routes of your own under `appauth.ReservedPathPrefix` (`/_portal/auth/`).
+- The gate protects the handler it wraps and nothing else. Do not combine it with `sdk.WithStaticRelayCache`, `sdk.WithTCP` or `sdk.WithUDP`: their traffic never passes through the handler, and `appauth.New` cannot see them.
+- An identity provider needs one registered callback per host: `https://<host>/_portal/auth/callback` for the canonical host on each relay, and for the alias if you share it.
 
 ## Raw TCP and UDP
 

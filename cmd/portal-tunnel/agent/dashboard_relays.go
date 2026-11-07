@@ -11,6 +11,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
 // agentDashboardRelayLead is the width of the row marker and the space after it.
@@ -284,20 +286,22 @@ func relayDashboardRelayLabel(rawURL string) string {
 }
 
 func (m agentDashboardModel) relayDashboardMode(tunnel AgentTunnelStatus, relay AgentRelayStatus) string {
-	var modes []string
-	if relay.Banned {
-		modes = append(modes, "banned")
-	} else if relay.PublicURL != "" {
-		modes = append(modes, "direct")
-	} else if relay.Connecting || m.relayDashboardConnecting(tunnel, relay) {
-		modes = append(modes, "connecting...")
-	} else if m.relayDashboardFailed(tunnel, relay) {
-		modes = append(modes, "failed")
+	switch {
+	case relay.Banned:
+		return "banned"
+	case relay.Approval == string(sdk.RelayApprovalPending):
+		return "waiting"
+	case relay.Approval == string(sdk.RelayApprovalRefused):
+		return "refused"
+	case relay.PublicURL != "":
+		return "direct"
+	case relay.Connecting || m.relayDashboardConnecting(tunnel, relay):
+		return "connecting..."
+	case m.relayDashboardFailed(tunnel, relay):
+		return "failed"
+	default:
+		return "-"
 	}
-	if len(modes) > 0 {
-		return strings.Join(modes, ",")
-	}
-	return "-"
 }
 
 func agentDashboardRelayRow(width int, mode, version, features, displayURL string) string {

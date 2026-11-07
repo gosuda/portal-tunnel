@@ -187,6 +187,44 @@ environment:
 
 See the [Deployment Guide](/deployment) for full ACME configuration options, credential setup per provider, and managed DNS automation.
 
+## Private relay
+
+To serve only tunnels you approve, start the relay in `manual` mode:
+
+```yaml
+environment:
+  APPROVAL_MODE: "manual"
+```
+
+A new tunnel then registers and appears in the admin dashboard, but no traffic
+reaches it until you approve it. Meanwhile, `portal expose` logs
+`waiting for relay approval`. The tunnel does not need to restart after
+approval.
+
+The setting applies on startup, and a mode saved in `policy.json` wins. The
+relay saves the mode on any admin change, such as a ban or a bandwidth limit.
+So a relay that once ran on `auto` and saved that mode stays open after you set
+`APPROVAL_MODE=manual`. The relay logs a warning in that case. Set the mode from
+the admin dashboard instead.
+
+An unapproved tunnel routes no traffic, but it still holds its name alias and
+any UDP or TCP port it was given, and those ports count against the relay's
+capacity limits.
+
+`UNAPPROVED_LEASES_PER_SOURCE` (default `64`) bounds that hold. It is a budget,
+not a judgment about who is squatting. A lease that you have not approved, or
+have denied or banned, counts against the IP that asked to register it. Over the budget,
+a new registration gets `429 rate_limited` with `Retry-After`, and the SDK retries
+every 5 minutes, so a tunnel can take that long to register after a slot frees.
+This budget never refuses an approved identity, and a repeat registration of one
+identity does not count against itself. Concurrent registrations can pass the
+limit by a few. Waiting tunnels spend their IP's pre-auth budget, so at the default
+pre-auth settings about 50 of them on one IP keep an approved identity on that IP
+from registering until they stop. Behind one NAT with that many tunnels, raise the
+pre-auth budget or lower this limit. On an `auto` relay only denied and banned
+leases count. Each IPv6 address is its own source, so this budget stops one host,
+not a network.
+
 ## Optional: Enable TCP/UDP Tunneling
 
 To relay raw TCP or UDP traffic (game servers, databases, etc.), enable the transports and set a port range:

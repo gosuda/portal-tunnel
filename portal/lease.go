@@ -70,7 +70,7 @@ type leaseRegistry struct {
 	// blocked holds the relay-pushed access results for identities the relay
 	// does not route. Presence is the decision; the timestamp bounds stale
 	// entries for identities whose registration never completed.
-	blocked map[types.ServiceIdentityKey]time.Time
+	blocked map[types.ServiceIdentityKey]blockedIdentity
 	// Access revisions describe complete relay snapshots, so the newest
 	// observed revision fences older publications for every identity. Keep
 	// this watermark when idle blocked entries expire to prevent stale replay.
@@ -78,8 +78,17 @@ type leaseRegistry struct {
 
 	udpEnabled, tcpPortEnabled bool
 	udpMaxLeases, tcpMaxLeases int
+	// unapprovedPerSource bounds the leases one source can hold without being
+	// routable. Zero disables the bound.
+	unapprovedPerSource int
 
 	mu sync.RWMutex
+}
+
+// blockedIdentity keeps the answer a refused reverse connect gets.
+type blockedIdentity struct {
+	pushedAt time.Time
+	refusal  *apiError
 }
 
 func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
@@ -105,7 +114,7 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
 		bps:            NewBPSManager(),
-		blocked:        make(map[types.ServiceIdentityKey]time.Time),
+		blocked:        make(map[types.ServiceIdentityKey]blockedIdentity),
 		udpPorts:       newPortPool(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       newPortPool(minPort, maxPort, defaultPortReservationGrace),
 		bindings:       keyless.NewBindingRegistry(5 * time.Minute),
@@ -140,37 +149,60 @@ func (r *leaseRegistry) tcpPortPolicy() (bool, int) {
 	return r.tcpPortEnabled, r.tcpMaxLeases
 }
 
-// setIdentityRoutable applies the relay-pushed access result for one
+// setIdentityAccess applies the relay-pushed access result for one
 // identity. A non-routable identity also loses its cached content
 // immediately: cached sites must never outlive the relay's decision to route
-// their owner.
-func (r *leaseRegistry) setIdentityRoutable(key types.ServiceIdentityKey, routable bool, revision uint64) bool {
+// their owner. It loses its idle reverse streams too, so the SDK stops
+// reporting ready and learns the decision from its next reverse connect.
+func (r *leaseRegistry) setIdentityAccess(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64) bool {
 	if r == nil || !key.Valid() {
 		return true
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if revision < r.accessRevision {
+		r.mu.Unlock()
 		return false
 	}
 	r.accessRevision = revision
-	r.applyIdentityRoutableLocked(key, routable)
+	r.applyIdentityAccessLocked(key, access)
+	var closeIdle []func()
+	for _, record := range r.records {
+		if record == nil || record.reverse == nil || record.ServiceKey() != key {
+			continue
+		}
+		if access == types.LeaseRoutable {
+			record.reverse.Resume()
+		} else if closeStreams := record.reverse.Pause(); closeStreams != nil {
+			closeIdle = append(closeIdle, closeStreams)
+		}
+	}
+	r.mu.Unlock()
+	// A TLS close can wait on its peer, so it must not hold the registry lock.
+	for _, closeStreams := range closeIdle {
+		closeStreams()
+	}
 	return true
 }
 
 // suspendIdentity keeps registration fail-closed without inventing a relay
 // revision. Only a publication at the current or a newer revision can reopen it.
+// It leaves idle reverse streams alone: the suspension is not a decision, and a
+// failed re-registration must not cost the live lease its streams.
 func (r *leaseRegistry) suspendIdentity(key types.ServiceIdentityKey) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.applyIdentityRoutableLocked(key, false)
+	r.applyIdentityAccessLocked(key, types.LeasePending)
 }
 
-func (r *leaseRegistry) applyIdentityRoutableLocked(key types.ServiceIdentityKey, routable bool) {
-	if routable {
+func (r *leaseRegistry) applyIdentityAccessLocked(key types.ServiceIdentityKey, access types.LeaseAccess) {
+	routable := access == types.LeaseRoutable
+	switch access {
+	case types.LeaseRoutable:
 		delete(r.blocked, key)
-	} else {
-		r.blocked[key] = time.Now()
+	case types.LeaseDenied:
+		r.blocked[key] = blockedIdentity{pushedAt: time.Now(), refusal: errLeaseDenied}
+	default:
+		r.blocked[key] = blockedIdentity{pushedAt: time.Now(), refusal: errLeaseRejected}
 	}
 	for _, record := range r.records {
 		if record == nil || record.ServiceKey() != key {
@@ -345,6 +377,55 @@ func (r *leaseRegistry) recordForVerifiedLease(key types.ServiceIdentityKey, lea
 	return record, nil
 }
 
+// refuseChallengeOverBudget treats unapproved leases as a resource to bound, not
+// as an intent to judge: they hold aliases, ports and capacity, so one source
+// gets a fixed budget of them, and a challenge counts until it is used. A
+// routable identity is never refused, and an unknown source fails open.
+// Concurrent registrations can overshoot the limit by the few that pass between
+// a challenge being used and its lease being recorded.
+//
+// A refusal takes back the challenge just issued for key, so the client waits
+// holding nothing: no challenge to expire and no slot of the pending cap, which
+// the same source's approved identities also need.
+func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, challengeID string, source netip.Addr) error {
+	now := time.Now().UTC()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.unapprovedPerSource <= 0 || !source.IsValid() || r.isRoutableLocked(key) {
+		return nil
+	}
+	held := make(map[types.ServiceIdentityKey]struct{})
+	issued := -1
+	for i, record := range r.records {
+		if record == nil || record.isExpired(now) {
+			continue
+		}
+		var holder types.ServiceIdentityKey
+		switch {
+		case record.registerChallenge != nil && record.sourceAddr == source:
+			if record.registerChallenge.ChallengeID == challengeID {
+				issued = i
+			}
+			holder = record.registerChallenge.Request.Identity.ServiceKey()
+		case record.reverse != nil && record.registerSource == source:
+			holder = record.ServiceKey()
+		default:
+			continue
+		}
+		if holder != key && !r.isRoutableLocked(holder) {
+			held[holder] = struct{}{}
+		}
+	}
+	if len(held) < r.unapprovedPerSource {
+		return nil
+	}
+	if issued >= 0 {
+		r.deleteRecord(issued)
+	}
+	return errUnapprovedLeaseLimit
+}
+
 // Register admits a lease. served is the relay certificate served now, whose
 // chain the tenant is about to pin (nil when unknown).
 func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, types.RegisterResponse, error) {
@@ -402,6 +483,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		FirstSeenAt:       issuedAt,
 		LastSeenAt:        issuedAt,
 		sourceAddr:        sourceAddr,
+		registerSource:    sourceAddr,
 		ReportedIP:        utils.SanitizeReportedIP(reportedIP),
 		reverse:           transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
@@ -584,13 +666,13 @@ func (r *leaseRegistry) admitReverseCapability(token string) (*leaseRecord, erro
 
 func (r *leaseRegistry) admitLeaseIdentity(key types.ServiceIdentityKey, leaseID string, now time.Time, requireDatagram bool) (*leaseRecord, error) {
 	r.mu.RLock()
+	defer r.mu.RUnlock()
 	record, err := r.recordForVerifiedLease(key, leaseID, now)
-	r.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
-	if !r.isRoutable(record.ServiceKey()) {
-		return nil, errLeaseRejected
+	if blocked, ok := r.blocked[record.ServiceKey()]; ok {
+		return nil, blocked.refusal
 	}
 	if record.reverse == nil || (requireDatagram && record.datagram == nil) {
 		return nil, errTransportMismatch
@@ -848,10 +930,13 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	}, nil
 }
 
-func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*identity.RegisterChallenge, error) {
+// consumeVerifiedRegisterChallenge takes one verified challenge and the source
+// that asked for it. The lease belongs to that source, because the unapproved
+// budget is checked there: registering from a second address must not escape it.
+func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*identity.RegisterChallenge, netip.Addr, error) {
 	challengeID := strings.TrimSpace(req.ChallengeID)
 	if challengeID == "" {
-		return nil, identity.ErrRegisterChallengeNotFound
+		return nil, netip.Addr{}, identity.ErrRegisterChallengeNotFound
 	}
 
 	now := time.Now().UTC()
@@ -862,19 +947,19 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 		if record == nil || record.registerChallenge == nil || record.registerChallenge.ChallengeID != challengeID {
 			continue
 		}
-		challenge := record.registerChallenge
+		challenge, source := record.registerChallenge, record.sourceAddr
 		if challenge.Expired(now) {
 			r.deleteRecord(i)
-			return nil, identity.ErrRegisterChallengeExpired
+			return nil, netip.Addr{}, identity.ErrRegisterChallengeExpired
 		}
 		if err := challenge.Verify(req, now); err != nil {
-			return nil, err
+			return nil, netip.Addr{}, err
 		}
 
 		r.deleteRecord(i)
-		return challenge, nil
+		return challenge, source, nil
 	}
-	return nil, identity.ErrRegisterChallengeNotFound
+	return nil, netip.Addr{}, identity.ErrRegisterChallengeNotFound
 }
 
 // verifySigningAccessTokenLease authenticates the access-token header of a
@@ -937,8 +1022,8 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 	// registration never completed or the lease is gone, and the next
 	// registration re-pushes the relay's current decision first. Fresh
 	// entries survive so an in-flight registration cannot lose its decision.
-	for key, pushedAt := range r.blocked {
-		if now.Sub(pushedAt) <= defaultRegisterChallengeTTL {
+	for key, blocked := range r.blocked {
+		if now.Sub(blocked.pushedAt) <= defaultRegisterChallengeTTL {
 			continue
 		}
 		if r.recordByKey(key, now) == nil {

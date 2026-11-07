@@ -32,6 +32,7 @@ var (
 	errMinPortMustLessThanOr              = errors.New("min port must be less than or equal to max port")
 	errX402FacilitatorRequiresValidSuiPay = errors.New("x402 facilitator requires a valid Sui pay-to address")
 	errOnlyOneHelpTopicSupported          = errors.New("only one help topic is supported")
+	errUnapprovedLeaseLimitNegative       = errors.New("unapproved leases per source must not be negative")
 )
 
 func main() {
@@ -52,6 +53,7 @@ type appConfig struct {
 	UDPEnabled        bool
 	TCPEnabled        bool
 	PreAuth           types.PreAuthConfig
+	ApprovalMode      string
 	TrustProxyHeaders bool
 	TrustedProxyCIDRs string
 	FrontendDir       string
@@ -118,6 +120,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig) {
 
 	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.ApprovalMode, "approval-mode", string(policy.ModeAuto), "initial lease approval mode (auto|manual); a mode saved in policy.json wins", "APPROVAL_MODE")
+	utils.IntFlagEnv(fs, &cfg.Relay.UnapprovedLeasesPerSource, "unapproved-leases-per-source", 64, nil, "leases one source IP can hold while they are not routable (0=unlimited)", "UNAPPROVED_LEASES_PER_SOURCE")
 	utils.IntFlagEnv(fs, &cfg.Relay.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	utils.IntFlagEnv(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
@@ -179,6 +183,14 @@ func validateRelaySettings(cfg *appConfig) error {
 	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
 		return err
 	}
+	if cfg.Relay.UnapprovedLeasesPerSource < 0 {
+		return errUnapprovedLeaseLimitNegative
+	}
+	mode, err := policy.ParseMode(cfg.ApprovalMode)
+	if err != nil {
+		return err
+	}
+	cfg.ApprovalMode = string(mode)
 	if _, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs); err != nil {
 		return err
 	}
@@ -226,13 +238,18 @@ func runServer(ctx context.Context, cfg appConfig) error {
 
 	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
 	initialPolicy := types.PolicySettings{
-		ApprovalMode: string(policy.ModeAuto),
+		ApprovalMode: cfg.ApprovalMode,
 		UDP:          types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
 		TCPPort:      types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
 	}
 	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
+	}
+	// Any admin write on an auto relay saves that mode, and a saved mode wins.
+	// Only this direction warns, because it leaves a private relay open.
+	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && access.Snapshot().Mode() == policy.ModeAuto {
+		log.Warn().Str("policy_path", policyPath).Msg("approval mode manual is ignored: policy.json saves auto, so every lease is approved; set the mode with the admin API")
 	}
 
 	base, err := composeRelayHandler(x402Settings, server, relayAPI.Handler())
@@ -245,6 +262,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	handler := policy.Mux(server, base, ingress,
 		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
 		access, cfg.PreAuth)
+	handler = relayAPI.metrics.instrument(handler)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)
 	}
@@ -272,6 +290,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 		serveErr = fmt.Errorf("serve pprof: %w", err)
 		cancel()
 		<-serveDone
+		serveErr = errors.Join(serveErr, relayErr)
 	}
 	cancel()
 

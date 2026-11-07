@@ -10,7 +10,10 @@ import (
 
 var errReverseConnectionIsRequired = errors.New("reverse connection is required")
 
-var errPoolFull = errors.New("reverse ready queue full")
+var (
+	errPoolFull   = errors.New("reverse ready queue full")
+	errPoolPaused = errors.New("reverse pool paused")
+)
 
 // ReversePool owns idle connections until Acquire transfers them to a caller.
 // Idle keepalives detect disconnected peers; activation framing and carriers
@@ -23,6 +26,7 @@ type ReversePool struct {
 	idleInterval time.Duration
 	readyLimit   int
 	reserved     int
+	paused       bool
 	closing      bool
 	closeOnce    sync.Once
 }
@@ -65,6 +69,7 @@ func (p *ReversePool) Offer(conn net.Conn) error {
 // ReserveOffer reserves capacity before the caller acknowledges a remote
 // offer. Rejection leaves conn with the caller so it can send a refusal.
 // Close waits for outstanding reservations; no new offers enter after it begins.
+// Pause is checked at Commit, the one step that parks a connection.
 func (p *ReversePool) ReserveOffer(conn net.Conn) (*offerReservation, error) {
 	if conn == nil {
 		return nil, errReverseConnectionIsRequired
@@ -90,6 +95,10 @@ func (r *offerReservation) Commit() error {
 	}
 	r.finished = true
 	p.reserved--
+	if p.paused {
+		p.cond.Broadcast()
+		return errPoolPaused
+	}
 	c := &pooledConn{Conn: r.conn, stop: make(chan struct{}), done: make(chan struct{})}
 	p.ready = append(p.ready, c)
 	go p.keepIdle(c)
@@ -153,6 +162,27 @@ func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
 	}
 }
 
+// Pause refuses offers until Resume and detaches the idle connections. It
+// returns a function that closes them, nil when there are none, for the caller
+// to run outside its own locks. Acquired connections are not affected.
+func (p *ReversePool) Pause() (closeIdle func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.paused = true
+	ready := p.detachReadyLocked()
+	if len(ready) == 0 {
+		return nil
+	}
+	return func() { closeDetached(ready) }
+}
+
+// Resume accepts offers again after Pause.
+func (p *ReversePool) Resume() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.paused = false
+}
+
 func (p *ReversePool) Close() {
 	p.closeOnce.Do(func() {
 		p.mu.Lock()
@@ -161,17 +191,26 @@ func (p *ReversePool) Close() {
 		for p.reserved > 0 {
 			p.cond.Wait()
 		}
-		ready := p.ready
-		p.ready = nil
-		for _, c := range ready {
-			close(c.stop)
-		}
+		ready := p.detachReadyLocked()
 		p.mu.Unlock()
-		for _, c := range ready {
-			_ = c.Close() // interrupt an idle write before waiting for it
-			<-c.done
-		}
+		closeDetached(ready)
 	})
+}
+
+func (p *ReversePool) detachReadyLocked() []*pooledConn {
+	ready := p.ready
+	p.ready = nil
+	for _, c := range ready {
+		close(c.stop)
+	}
+	return ready
+}
+
+func closeDetached(ready []*pooledConn) {
+	for _, c := range ready {
+		_ = c.Close() // interrupt an idle write before waiting for it
+		<-c.done
+	}
 }
 
 func (p *ReversePool) ReadyCount() int {

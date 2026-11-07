@@ -66,6 +66,7 @@ var (
 	errLeaseNotFound            = &apiError{types.APIErrorCodeLeaseNotFound, "lease not found", http.StatusNotFound}
 	errLeaseTTLExceeded         = &apiError{types.APIErrorCodeInvalidRequest, "lease TTL exceeds 10 minutes", http.StatusBadRequest}
 	errLeaseRejected            = &apiError{types.APIErrorCodeLeaseRejected, "lease is not approved for routing", http.StatusForbidden}
+	errLeaseDenied              = &apiError{types.APIErrorCodeLeaseDenied, "lease is denied by the relay", http.StatusForbidden}
 	errTransportMismatch        = &apiError{types.APIErrorCodeTransportMismatch, "transport mismatch", http.StatusConflict}
 	errUnauthorized             = &apiError{types.APIErrorCodeUnauthorized, "unauthorized", http.StatusForbidden}
 	errUDPDisabled              = &apiError{types.APIErrorCodeUDPDisabled, "udp disabled", http.StatusForbidden}
@@ -75,7 +76,14 @@ var (
 	errTCPPortCapacityExceeded  = &apiError{types.APIErrorCodeTCPPortCapacityExceeded, "tcp port capacity exceeded", http.StatusServiceUnavailable}
 	errTCPPortExhausted         = &apiError{types.APIErrorCodeTCPPortExhausted, "no tcp ports available", http.StatusServiceUnavailable}
 	errRegisterChallengePending = &apiError{types.APIErrorCodeRateLimited, "too many pending register challenges", http.StatusTooManyRequests}
+	errUnapprovedLeaseLimit     = &apiError{types.APIErrorCodeRateLimited, "too many unapproved leases from this source", http.StatusTooManyRequests}
 )
+
+// unapprovedLeaseRetryAfter spaces out retries that cost pre-auth budget, which
+// the same source's approved registrations also need. Each waiting client spends
+// a unit per retry and the default budget refills 10 a minute, so this keeps
+// dozens of waiting clients from draining it.
+const unapprovedLeaseRetryAfter = "300"
 
 func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	if ae, ok := errors.AsType[*apiError](err); ok {
@@ -320,13 +328,13 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 // success response. The relay first applies the returned identity's access
 // decision, then writes the response so the lease cannot become observable
 // before its routability is known.
-func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) (types.ServiceIdentityKey, types.RegisterResponse, bool) {
+func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.ServiceIdentityKey, types.RegisterResponse, bool) {
 	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 
-	challenge, err := s.registry.consumeVerifiedRegisterChallenge(req)
+	challenge, sourceAddr, err := s.registry.consumeVerifiedRegisterChallenge(req)
 	if err != nil {
 		switch {
 		case errors.Is(err, identity.ErrRegisterChallengeInvalidSignature):
@@ -409,7 +417,14 @@ func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request,
 		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
 
-	identityKey := req.Identity.ServiceKey()
+	// The lease holds the normalized identity, so the access decision is for that.
+	normalized, err := identity.NormalizeIdentity(req.Identity)
+	if err != nil {
+		writeAPIErrorResponse(w, err)
+		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
+	}
+	req.Identity = normalized
+	identityKey := normalized.ServiceKey()
 	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI, sourceAddr)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
@@ -417,6 +432,20 @@ func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request,
 	}
 
 	return identityKey, resp, true
+}
+
+// RefuseChallengeOverBudget reports whether it answered 429 because the source
+// of the challenge just issued for key is over its unapproved lease budget. Call
+// it after applying the identity's access decision: only then does the registry
+// know that a new identity is unapproved.
+func (s *Server) RefuseChallengeOverBudget(w http.ResponseWriter, key types.ServiceIdentityKey, challengeID string, sourceAddr netip.Addr) bool {
+	err := s.registry.refuseChallengeOverBudget(key, challengeID, sourceAddr)
+	if err == nil {
+		return false
+	}
+	w.Header().Set("Retry-After", unapprovedLeaseRetryAfter)
+	writeAPIErrorResponse(w, err)
+	return true
 }
 
 func (s *Server) HandleRenew(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) {

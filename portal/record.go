@@ -18,11 +18,14 @@ import (
 
 type leaseRecord struct {
 	types.Identity
-	id                string
-	ExpiresAt         time.Time
-	FirstSeenAt       time.Time
-	LastSeenAt        time.Time
-	sourceAddr        netip.Addr
+	id          string
+	ExpiresAt   time.Time
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	sourceAddr  netip.Addr
+	// registerSource is the address that asked for this lease's challenge.
+	// Unlike sourceAddr it never follows a renew or a reverse connect.
+	registerSource    netip.Addr
 	ReportedIP        string
 	Hostname          string
 	CanonicalHostname string

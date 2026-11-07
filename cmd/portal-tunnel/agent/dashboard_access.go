@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,7 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -25,12 +27,16 @@ func agentDashboardAccessMode(provider string) string {
 	switch provider {
 	case "":
 		return "open to anyone"
-	case gateway.ApplicationAuthProviderCredential:
+	case appauth.ProviderCredential:
 		return "credential"
-	case gateway.ApplicationAuthProviderSIWE:
+	case appauth.ProviderSIWE:
 		return "wallet (siwe)"
-	case gateway.ApplicationAuthProviderOIDC:
+	case appauth.ProviderOIDC:
 		return "OIDC"
+	case appauth.ProviderSAML:
+		return "SAML"
+	case appauth.ProviderEmail:
+		return "email link"
 	default:
 		return provider
 	}
@@ -38,14 +44,14 @@ func agentDashboardAccessMode(provider string) string {
 
 // agentDashboardAllowedHint says what an empty allow list means for a
 // provider, following the gateway rules: credential and siwe accept any valid
-// principal, while OIDC refuses to run without at least one entry.
+// principal, while OIDC, SAML and email refuse to run without at least one entry.
 func agentDashboardAllowedHint(provider string) string {
 	switch provider {
-	case gateway.ApplicationAuthProviderCredential:
+	case appauth.ProviderCredential:
 		return "any valid credential"
-	case gateway.ApplicationAuthProviderSIWE:
+	case appauth.ProviderSIWE:
 		return "any wallet"
-	case gateway.ApplicationAuthProviderOIDC:
+	case appauth.ProviderOIDC, appauth.ProviderSAML, appauth.ProviderEmail:
 		return "needs one entry"
 	default:
 		return ""
@@ -60,8 +66,8 @@ func agentDashboardIdentityHeaders(on bool) string {
 	return "off"
 }
 
-// agentDashboardSecretState says whether a client secret is stored; the secret
-// itself never reaches the dashboard.
+// agentDashboardSecretState says whether a client secret or SMTP password is
+// stored; the secret itself never reaches the dashboard.
 func agentDashboardSecretState(set bool) string {
 	if set {
 		return "set"
@@ -69,14 +75,27 @@ func agentDashboardSecretState(set bool) string {
 	return "not set"
 }
 
+// agentDashboardSecretSet reports whether the tunnel stores the secret of
+// provider: the OIDC client secret or the SMTP password of email.
+func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
+	switch provider {
+	case appauth.ProviderOIDC:
+		return tunnel.AuthOIDCClientSecretSet
+	case appauth.ProviderEmail:
+		return tunnel.AuthSMTPPasswordSet
+	default:
+		return false
+	}
+}
+
 // agentDashboardProviderCheck is the LED, the word and the style that report
-// the check of a tunnel's OIDC provider, made once when the tunnel starts. The
-// reason of a failure is the error in the tunnel status.
+// the check of a tunnel's OIDC or SAML identity provider, or of its SMTP
+// server, made once when the tunnel starts. The reason of a failure is the error in the tunnel status.
 func agentDashboardProviderCheck(th *agentDashboardTheme, tunnel AgentTunnelStatus) (string, lipgloss.Style) {
 	switch {
-	case tunnel.AuthOIDCProviderError != "":
+	case tunnel.AuthProviderError != "":
 		return th.glyph.ledFailed + " failed", th.failed
-	case tunnel.AuthOIDCProviderChecked:
+	case tunnel.AuthProviderChecked:
 		return th.glyph.ledLive + " ok", th.bright
 	case tunnel.State == "running" || tunnel.State == "starting":
 		return th.glyph.ledConnecting + " checking...", th.pending
@@ -96,21 +115,21 @@ func (v *agentDashboardView) addAccessValue(th *agentDashboardTheme, width int, 
 }
 
 // addAccessSummary shows how the tunnel is protected, one detail per line. An
-// open tunnel needs only the first line, and a failed OIDC provider check shows
+// open tunnel needs only the first line, and a failed provider check shows
 // there too, so that it is seen without scrolling.
 func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) {
-	mode, style := agentDashboardAccessMode(tunnel.Auth), th.text
-	if tunnel.AuthOIDCProviderError != "" {
+	mode, style := agentDashboardAccessMode(tunnel.Provider), th.text
+	if tunnel.AuthProviderError != "" {
 		mode, style = mode+" "+th.glyph.ledFailed+" check failed", th.failed
 	}
 	v.addAccessValue(th, width, "Access", mode, style)
-	if tunnel.Auth == "" {
+	if tunnel.Provider == "" {
 		return
 	}
 
-	entries := tunnel.AuthAllowedWallets
+	entries := tunnel.Allowed()
 	if len(entries) == 0 {
-		v.addAccessValue(th, width, "Allowed", agentDashboardAllowedHint(tunnel.Auth), th.text)
+		v.addAccessValue(th, width, "Allowed", agentDashboardAllowedHint(tunnel.Provider), th.text)
 	}
 	for i, entry := range entries[:min(len(entries), agentDashboardAccessMaxEntries)] {
 		label := ""
@@ -122,16 +141,27 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 	if more := len(entries) - agentDashboardAccessMaxEntries; more > 0 {
 		v.addAccessValue(th, width, "", fmt.Sprintf("+%d more", more), th.muted)
 	}
-	v.addAccessValue(th, width, "Headers", agentDashboardIdentityHeaders(tunnel.AuthIdentityHeaders), th.text)
-	if tunnel.Auth != gateway.ApplicationAuthProviderOIDC {
+	v.addAccessValue(th, width, "Headers", agentDashboardIdentityHeaders(tunnel.IdentityHeaders), th.text)
+	switch tunnel.Provider {
+	case appauth.ProviderOIDC:
+		v.addAccessValue(th, width, "Issuer", tunnel.OIDCIssuerURL, th.text)
+		v.addAccessValue(th, width, "Client ID", tunnel.OIDCClientID, th.text)
+		v.addAccessValue(th, width, "Client secret", agentDashboardSecretState(tunnel.AuthOIDCClientSecretSet), th.text)
+	case appauth.ProviderSAML:
+		v.addAccessValue(th, width, "Metadata", cmp.Or(tunnel.SAMLMetadataURL, tunnel.SAMLMetadataFile), th.text)
+		v.addAccessValue(th, width, "Entity ID", cmp.Or(tunnel.SAMLEntityID, agentDashboardSAMLEntityIDDefault), th.text)
+		v.addAccessValue(th, width, "Subject", cmp.Or(tunnel.SAMLSubjectAttribute, agentDashboardSAMLSubjectDefault), th.text)
+	case appauth.ProviderEmail:
+		v.addAccessValue(th, width, "SMTP server", tunnel.SMTPAddr, th.text)
+		v.addAccessValue(th, width, "SMTP user", cmp.Or(tunnel.SMTPUsername, agentDashboardSMTPUsernameDefault), th.text)
+		v.addAccessValue(th, width, "SMTP password", agentDashboardSecretState(tunnel.AuthSMTPPasswordSet), th.text)
+		v.addAccessValue(th, width, "Sender", tunnel.SMTPFrom, th.text)
+	default:
 		return
 	}
-	v.addAccessValue(th, width, "Issuer", tunnel.AuthOIDCIssuer, th.text)
-	v.addAccessValue(th, width, "Client ID", tunnel.AuthOIDCClientID, th.text)
-	v.addAccessValue(th, width, "Client secret", agentDashboardSecretState(tunnel.AuthOIDCClientSecretSet), th.text)
 	check, checkStyle := agentDashboardProviderCheck(th, tunnel)
-	if tunnel.AuthOIDCProviderError != "" {
-		check += ": " + tunnel.AuthOIDCProviderError
+	if tunnel.AuthProviderError != "" {
+		check += ": " + tunnel.AuthProviderError
 	}
 	v.addAccessValue(th, width, "Provider check", check, checkStyle)
 }
@@ -140,10 +170,19 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 // right step through them.
 var agentDashboardAccessProviders = []string{
 	"",
-	gateway.ApplicationAuthProviderCredential,
-	gateway.ApplicationAuthProviderSIWE,
-	gateway.ApplicationAuthProviderOIDC,
+	appauth.ProviderCredential,
+	appauth.ProviderSIWE,
+	appauth.ProviderOIDC,
+	appauth.ProviderSAML,
+	appauth.ProviderEmail,
 }
+
+// What an empty SAML entity ID, subject attribute or SMTP username stands for.
+const (
+	agentDashboardSAMLEntityIDDefault = "metadata URL of each host"
+	agentDashboardSAMLSubjectDefault  = "NameID"
+	agentDashboardSMTPUsernameDefault = "none (no SMTP login)"
+)
 
 // agentDashboardAccessMessageLines is how many lines of an error, or of the
 // reason a provider check failed, the Access screen keeps.
@@ -159,6 +198,13 @@ const (
 	agentDashboardAccessRowIssuer
 	agentDashboardAccessRowClientID
 	agentDashboardAccessRowSecret
+	agentDashboardAccessRowMetadataURL
+	agentDashboardAccessRowMetadataFile
+	agentDashboardAccessRowEntityID
+	agentDashboardAccessRowSubjectAttribute
+	agentDashboardAccessRowSMTPAddr
+	agentDashboardAccessRowSMTPUsername
+	agentDashboardAccessRowFrom
 )
 
 // agentDashboardAccessField is one stop of the focus ring of the Access screen.
@@ -177,7 +223,7 @@ type agentDashboardAccess struct {
 	provider    string
 	headers     bool
 	allowed     []string
-	clearSecret bool // the stored client secret is to be removed; never set while a secret is typed
+	clearSecret bool // the stored secret of the provider is to be removed; never set while a secret is typed
 	applying    bool // an apply was sent and has not been answered
 	applied     bool // an apply of this draft went through
 	err         error
@@ -186,7 +232,11 @@ type agentDashboardAccess struct {
 	// someone else changed the tunnel under the draft (see syncAccess).
 	base AgentTunnelStatus
 
-	add, issuer, clientID, secret textinput.Model
+	// secret is the OIDC client secret or the SMTP password, the one secret
+	// of the provider the draft has.
+	add, issuer, clientID, secret                         textinput.Model
+	metadataURL, metadataFile, entityID, subjectAttribute textinput.Model
+	smtpAddr, smtpUsername, from                          textinput.Model
 }
 
 // agentDashboardAccessMsg is the answer to the PATCH that applies a draft.
@@ -201,6 +251,15 @@ func newAgentDashboardAccess(theme agentDashboardTheme) agentDashboardAccess {
 		issuer:   theme.newInput("https://idp.example"),
 		clientID: theme.newInput("client id"),
 		secret:   theme.newSecretInput(),
+
+		metadataURL:      theme.newInput("https://idp.example/metadata"),
+		metadataFile:     theme.newInput("or a metadata file path"),
+		entityID:         theme.newInput(agentDashboardSAMLEntityIDDefault),
+		subjectAttribute: theme.newInput(agentDashboardSAMLSubjectDefault),
+
+		smtpAddr:     theme.newInput("smtp.example.com:587"),
+		smtpUsername: theme.newInput("none"),
+		from:         theme.newInput("Portal <login@example.com>"),
 	}
 }
 
@@ -234,8 +293,7 @@ func (m *agentDashboardModel) closeAccess() {
 	a := &m.access
 	a.forgetSecret()
 	a.add.Reset()
-	a.issuer.Reset()
-	a.clientID.Reset()
+	a.resetProviderInputs()
 	a.blur()
 	a.tunnelID = ""
 	a.allowed = nil
@@ -273,12 +331,9 @@ func (m *agentDashboardModel) syncAccess() {
 // sameAccessSettings reports whether two statuses of a tunnel agree on
 // everything the Access screen edits or shows as stored.
 func sameAccessSettings(a, b AgentTunnelStatus) bool {
-	return a.Auth == b.Auth &&
-		slices.Equal(a.AuthAllowedWallets, b.AuthAllowedWallets) &&
-		a.AuthIdentityHeaders == b.AuthIdentityHeaders &&
-		a.AuthOIDCIssuer == b.AuthOIDCIssuer &&
-		a.AuthOIDCClientID == b.AuthOIDCClientID &&
-		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet
+	return authChanges(a.AuthConfig, b.AuthConfig) == nil &&
+		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet &&
+		a.AuthSMTPPasswordSet == b.AuthSMTPPasswordSet
 }
 
 // load makes the draft equal to what the tunnel has stored. The secret input
@@ -287,15 +342,32 @@ func sameAccessSettings(a, b AgentTunnelStatus) bool {
 func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
 	a.base = tunnel
 	a.applied = false
-	a.provider = tunnel.Auth
-	a.headers = tunnel.AuthIdentityHeaders
-	a.allowed = slices.Clone(tunnel.AuthAllowedWallets)
+	a.provider = tunnel.Provider
+	a.headers = tunnel.IdentityHeaders
+	a.allowed = slices.Clone(tunnel.Allowed())
 	a.err = nil
 	a.add.Reset()
-	a.issuer.SetValue(tunnel.AuthOIDCIssuer)
-	a.issuer.CursorEnd()
-	a.clientID.SetValue(tunnel.AuthOIDCClientID)
-	a.clientID.CursorEnd()
+	for input, value := range map[*textinput.Model]string{
+		&a.issuer:           tunnel.OIDCIssuerURL,
+		&a.clientID:         tunnel.OIDCClientID,
+		&a.metadataURL:      tunnel.SAMLMetadataURL,
+		&a.metadataFile:     tunnel.SAMLMetadataFile,
+		&a.entityID:         tunnel.SAMLEntityID,
+		&a.subjectAttribute: tunnel.SAMLSubjectAttribute,
+		&a.smtpAddr:         tunnel.SMTPAddr,
+		&a.smtpUsername:     tunnel.SMTPUsername,
+		&a.from:             tunnel.SMTPFrom,
+	} {
+		input.SetValue(value)
+		input.CursorEnd()
+	}
+}
+
+// resetProviderInputs empties the OIDC, SAML and email settings of the draft.
+func (a *agentDashboardAccess) resetProviderInputs() {
+	for _, input := range []*textinput.Model{&a.issuer, &a.clientID, &a.metadataURL, &a.metadataFile, &a.entityID, &a.subjectAttribute, &a.smtpAddr, &a.smtpUsername, &a.from} {
+		input.Reset()
+	}
 }
 
 // forgetSecret drops a typed secret, a pending removal of the stored one, and
@@ -306,8 +378,27 @@ func (a *agentDashboardAccess) forgetSecret() {
 	a.clearSecret = false
 }
 
+// setClearSecret marks the stored secret for removal or takes the mark back. An
+// SMTP username and password are set together, so the username goes with the mark
+// and returns with it, unless another one was typed meanwhile.
+func (a *agentDashboardAccess) setClearSecret(clear bool, stored AgentTunnelStatus) {
+	a.clearSecret = clear
+	if clear {
+		a.secret.Reset()
+	}
+	if a.provider != appauth.ProviderEmail {
+		return
+	}
+	switch {
+	case clear:
+		a.smtpUsername.Reset()
+	case a.smtpUsername.Value() == "":
+		a.smtpUsername.SetValue(stored.SMTPUsername)
+	}
+}
+
 // setProvider switches the draft to provider and drops a typed secret. The
-// allow list and the OIDC settings belong to one provider, so another provider
+// allow list and the OIDC, SAML or email settings belong to one provider, so another provider
 // than the stored one starts without them; coming back to the stored one
 // restores what is stored.
 func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelStatus) {
@@ -315,7 +406,7 @@ func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelSt
 		return
 	}
 	a.forgetSecret()
-	if provider == stored.Auth {
+	if provider == stored.Provider {
 		a.load(stored)
 		return
 	}
@@ -324,13 +415,12 @@ func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelSt
 	a.allowed = nil
 	a.err = nil
 	a.add.Reset()
-	a.issuer.Reset()
-	a.clientID.Reset()
+	a.resetProviderInputs()
 }
 
 // fields is the focus ring: the mode, then, unless the tunnel is open, the
-// allow list entries, the entry input, the identity headers and, for OIDC, the
-// provider settings.
+// allow list entries, the entry input, the identity headers and, for OIDC,
+// SAML or email, the provider settings.
 func (a agentDashboardAccess) fields() []agentDashboardAccessField {
 	fields := []agentDashboardAccessField{{row: agentDashboardAccessRowMode}}
 	if a.provider == "" {
@@ -340,11 +430,26 @@ func (a agentDashboardAccess) fields() []agentDashboardAccessField {
 		fields = append(fields, agentDashboardAccessField{row: agentDashboardAccessRowEntry, entry: i})
 	}
 	fields = append(fields, agentDashboardAccessField{row: agentDashboardAccessRowAdd}, agentDashboardAccessField{row: agentDashboardAccessRowHeaders})
-	if a.provider == gateway.ApplicationAuthProviderOIDC {
+	switch a.provider {
+	case appauth.ProviderOIDC:
 		fields = append(fields,
 			agentDashboardAccessField{row: agentDashboardAccessRowIssuer},
 			agentDashboardAccessField{row: agentDashboardAccessRowClientID},
 			agentDashboardAccessField{row: agentDashboardAccessRowSecret},
+		)
+	case appauth.ProviderSAML:
+		fields = append(fields,
+			agentDashboardAccessField{row: agentDashboardAccessRowMetadataURL},
+			agentDashboardAccessField{row: agentDashboardAccessRowMetadataFile},
+			agentDashboardAccessField{row: agentDashboardAccessRowEntityID},
+			agentDashboardAccessField{row: agentDashboardAccessRowSubjectAttribute},
+		)
+	case appauth.ProviderEmail:
+		fields = append(fields,
+			agentDashboardAccessField{row: agentDashboardAccessRowSMTPAddr},
+			agentDashboardAccessField{row: agentDashboardAccessRowSMTPUsername},
+			agentDashboardAccessField{row: agentDashboardAccessRowSecret},
+			agentDashboardAccessField{row: agentDashboardAccessRowFrom},
 		)
 	}
 	return fields
@@ -368,13 +473,27 @@ func (a *agentDashboardAccess) focusedInput() *textinput.Model {
 		return &a.clientID
 	case agentDashboardAccessRowSecret:
 		return &a.secret
+	case agentDashboardAccessRowMetadataURL:
+		return &a.metadataURL
+	case agentDashboardAccessRowMetadataFile:
+		return &a.metadataFile
+	case agentDashboardAccessRowEntityID:
+		return &a.entityID
+	case agentDashboardAccessRowSubjectAttribute:
+		return &a.subjectAttribute
+	case agentDashboardAccessRowSMTPAddr:
+		return &a.smtpAddr
+	case agentDashboardAccessRowSMTPUsername:
+		return &a.smtpUsername
+	case agentDashboardAccessRowFrom:
+		return &a.from
 	default:
 		return nil
 	}
 }
 
 func (a *agentDashboardAccess) blur() {
-	for _, input := range []*textinput.Model{&a.add, &a.issuer, &a.clientID, &a.secret} {
+	for _, input := range []*textinput.Model{&a.add, &a.issuer, &a.clientID, &a.secret, &a.metadataURL, &a.metadataFile, &a.entityID, &a.subjectAttribute, &a.smtpAddr, &a.smtpUsername, &a.from} {
 		input.Blur()
 	}
 }
@@ -392,42 +511,67 @@ func (a *agentDashboardAccess) moveFocus(index int) {
 // request is the PATCH that turns what the tunnel has stored into the draft. It
 // names only what differs, because a named field replaces the stored one. An
 // empty secret input leaves the stored secret alone; only clearSecret, or
-// leaving OIDC, sends an empty one.
+// leaving the provider of the secret, sends an empty one.
 func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdateRequest {
-	var req AgentTunnelUpdateRequest
-	if a.provider != stored.Auth {
-		req.Auth = &a.provider
-	}
 	if a.provider == "" {
 		// The agent clears the other settings itself and refuses them next to an empty auth.
-		return req
-	}
-	if !slices.Equal(a.allowed, stored.AuthAllowedWallets) {
-		// An empty list must reach the agent as [], since null leaves the list as it is.
-		allowed := append([]string{}, a.allowed...)
-		req.AuthAllowedWallets = &allowed
-	}
-	if a.headers != stored.AuthIdentityHeaders {
-		headers := a.headers
-		req.AuthIdentityHeaders = &headers
+		if stored.Provider == "" {
+			return AgentTunnelUpdateRequest{}
+		}
+		return AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{"auth": json.RawMessage(`""`)}}
 	}
 
-	// Leaving OIDC clears its settings, as the validators refuse them for another provider.
-	var issuer, clientID, secret string
-	if a.provider == gateway.ApplicationAuthProviderOIDC {
-		issuer = strings.TrimSpace(a.issuer.Value())
-		clientID = strings.TrimSpace(a.clientID.Value())
-		secret = strings.TrimSpace(a.secret.Value())
+	// The draft holds the settings of its own provider only, so leaving OIDC,
+	// SAML or email clears the settings of the provider left, which the
+	// validators refuse for another provider.
+	draft := appauth.Config{Provider: a.provider, IdentityHeaders: a.headers}
+	// A tunnel that stays on its provider keeps the key its list is stored under,
+	// so that opening the screen of a released config changes nothing.
+	if appauth.ProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.Allow) == 0) {
+		draft.EmailList = a.allowed
+	} else {
+		draft.Allow = a.allowed
 	}
-	if issuer != stored.AuthOIDCIssuer {
-		req.AuthOIDCIssuer = &issuer
+	switch a.provider {
+	case appauth.ProviderOIDC:
+		draft.OIDCConfig = appauth.OIDCConfig{
+			OIDCIssuerURL: strings.TrimSpace(a.issuer.Value()),
+			OIDCClientID:  strings.TrimSpace(a.clientID.Value()),
+		}
+	case appauth.ProviderSAML:
+		draft.SAMLConfig = appauth.SAMLConfig{
+			SAMLMetadataURL:      strings.TrimSpace(a.metadataURL.Value()),
+			SAMLMetadataFile:     strings.TrimSpace(a.metadataFile.Value()),
+			SAMLEntityID:         strings.TrimSpace(a.entityID.Value()),
+			SAMLSubjectAttribute: strings.TrimSpace(a.subjectAttribute.Value()),
+		}
+	case appauth.ProviderEmail:
+		draft.EmailConfig = appauth.EmailConfig{
+			SMTPAddr:     strings.TrimSpace(a.smtpAddr.Value()),
+			SMTPUsername: strings.TrimSpace(a.smtpUsername.Value()),
+			SMTPFrom:     strings.TrimSpace(a.from.Value()),
+		}
 	}
-	if clientID != stored.AuthOIDCClientID {
-		req.AuthOIDCClientID = &clientID
-	}
-	removeSecret := stored.AuthOIDCClientSecretSet && (a.provider != gateway.ApplicationAuthProviderOIDC || a.clearSecret)
-	if secret != "" || removeSecret {
-		req.AuthOIDCClientSecret = &secret
+	req := AgentTunnelUpdateRequest{Auth: authChanges(stored.AuthConfig, draft)}
+
+	// Each secret belongs to one provider: the typed secret is the draft
+	// provider's, and a stored one is removed when the draft leaves its provider
+	// or clearSecret marks it.
+	for _, owned := range []struct{ provider, key string }{
+		{appauth.ProviderOIDC, "auth_oidc_client_secret"},
+		{appauth.ProviderEmail, "auth_smtp_password"},
+	} {
+		var secret string
+		if a.provider == owned.provider {
+			secret = strings.TrimSpace(a.secret.Value())
+		}
+		removeSecret := agentDashboardSecretSet(owned.provider, stored) && (a.provider != owned.provider || a.clearSecret)
+		if secret != "" || removeSecret {
+			if req.Auth == nil {
+				req.Auth = make(map[string]json.RawMessage)
+			}
+			req.Auth[owned.key], _ = json.Marshal(secret)
+		}
 	}
 	return req
 }
@@ -484,15 +628,15 @@ func (m *agentDashboardModel) addAccessEntry() {
 	if entry == "" {
 		return
 	}
-	normalized, err := gateway.NormalizeApplicationAuthAllowed(a.provider, []string{entry})
+	normalized, err := appauth.Config{Provider: a.provider, Allow: []string{entry}}.Normalize()
 	if err != nil {
 		a.err = err
 		return
 	}
 	a.err = nil
 	a.add.Reset()
-	if !slices.Contains(a.allowed, normalized[0]) {
-		a.allowed = append(slices.Clone(a.allowed), normalized[0])
+	if !slices.Contains(a.allowed, normalized.Allow[0]) {
+		a.allowed = append(slices.Clone(a.allowed), normalized.Allow[0])
 	}
 	// The entry row is one further down now that the list grew.
 	a.moveFocus(slices.IndexFunc(a.fields(), func(field agentDashboardAccessField) bool { return field.row == agentDashboardAccessRowAdd }))
@@ -595,18 +739,35 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 			body.addInputRow(th, inner, "Client ID", a.clientID, agentDashboardActionFocusAccessField, index, focused)
 		case agentDashboardAccessRowSecret:
 			input, label := a.secret, "Client secret"
+			if a.provider == appauth.ProviderEmail {
+				label = "SMTP password"
+			}
 			input.Placeholder = agentDashboardSecretPlaceholder(a, tunnel)
 			if a.revealed() {
 				label = "Secret (shown)"
 			}
 			body.addInputRow(th, inner, label, input, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowMetadataURL:
+			body.addInputRow(th, inner, "Metadata URL", a.metadataURL, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowMetadataFile:
+			body.addInputRow(th, inner, "Metadata file", a.metadataFile, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowEntityID:
+			body.addInputRow(th, inner, "Entity ID", a.entityID, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowSubjectAttribute:
+			body.addInputRow(th, inner, "Subject attr", a.subjectAttribute, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowSMTPAddr:
+			body.addInputRow(th, inner, "SMTP server", a.smtpAddr, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowSMTPUsername:
+			body.addInputRow(th, inner, "SMTP user", a.smtpUsername, agentDashboardActionFocusAccessField, index, focused)
+		case agentDashboardAccessRowFrom:
+			body.addInputRow(th, inner, "Sender", a.from, agentDashboardActionFocusAccessField, index, focused)
 		}
 	}
 	body.addLine("")
-	if tunnel.Auth == gateway.ApplicationAuthProviderOIDC {
+	if tunnel.Provider == appauth.ProviderOIDC || tunnel.Provider == appauth.ProviderSAML || tunnel.Provider == appauth.ProviderEmail {
 		check, style := agentDashboardProviderCheck(th, tunnel)
 		body.addAccessValue(th, inner, "Provider check", check, style)
-		for _, line := range agentDashboardWrap(tunnel.AuthOIDCProviderError, inner, agentDashboardAccessMessageLines) {
+		for _, line := range agentDashboardWrap(tunnel.AuthProviderError, inner, agentDashboardAccessMessageLines) {
 			body.addLine(style.Render(line))
 		}
 	}
@@ -628,10 +789,12 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 
 func agentDashboardAccessEntryPlaceholder(provider string) string {
 	switch provider {
-	case gateway.ApplicationAuthProviderSIWE:
+	case appauth.ProviderSIWE:
 		return "0x... wallet address"
-	case gateway.ApplicationAuthProviderOIDC:
+	case appauth.ProviderOIDC, appauth.ProviderSAML:
 		return "email, @domain, sub:id"
+	case appauth.ProviderEmail:
+		return "email, @domain"
 	default:
 		return "subject"
 	}
@@ -643,7 +806,7 @@ func agentDashboardSecretPlaceholder(a agentDashboardAccess, stored AgentTunnelS
 	switch {
 	case a.clearSecret:
 		return "will be removed"
-	case stored.AuthOIDCClientSecretSet:
+	case agentDashboardSecretSet(a.provider, stored):
 		return "set; type to replace"
 	default:
 		return "not set"

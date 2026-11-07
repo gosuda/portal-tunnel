@@ -45,8 +45,10 @@ const (
 	molsCVThreshold            = 0.6
 	molsFallbackRTTThreshold   = 2 * time.Second
 	molsMinActiveNodes         = 2
-	defaultMaxActiveRelays     = 3
-	molsP2CPressureDelta       = 0.3
+	// DefaultMaxActiveRelays is how many auto-selected relays a listener keeps
+	// when its limit is zero or negative.
+	DefaultMaxActiveRelays = 3
+	molsP2CPressureDelta   = 0.3
 )
 
 // molsScore computes the MOLS grid score for position (i, j) using multipliers m1 and m2.
@@ -373,7 +375,7 @@ func SelectPriority(states []RelayState, routeState routeState) []string {
 	auto := RankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress, routeState.SelectionKey)
 	maxActive := routeState.MaxActiveRelays
 	if maxActive <= 0 {
-		maxActive = defaultMaxActiveRelays
+		maxActive = DefaultMaxActiveRelays
 	}
 	auto = applyActiveStickiness(auto, routeState.ActiveRelayURLs, states, maxActive)
 	if len(auto) > maxActive {

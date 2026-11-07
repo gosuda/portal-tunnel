@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/siweauth"
+	"github.com/gosuda/portal-tunnel/v2/internal/siweauth"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -77,9 +78,15 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if !bearerAuthenticated {
 			// A wallet session is read-only and may be open to any wallet, so it
-			// does not learn who may sign in to a tunnel.
+			// does not learn who may sign in to a tunnel, or which mail account
+			// sends the links. The check error of that account can name it too.
 			for i := range status.Tunnels {
-				status.Tunnels[i].AuthAllowedWallets = nil
+				tunnel := &status.Tunnels[i]
+				tunnel.Allow, tunnel.EmailList = nil, nil
+				tunnel.EmailConfig, tunnel.AuthSMTPPasswordSet = appauth.EmailConfig{}, false
+				if tunnel.Provider == appauth.ProviderEmail && tunnel.AuthProviderError != "" {
+					tunnel.AuthProviderError = "smtp server check failed"
+				}
 			}
 		}
 		utils.WriteAPIData(w, http.StatusOK, status)

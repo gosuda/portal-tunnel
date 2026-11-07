@@ -110,11 +110,20 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
-| `--auth` | string | | Protect HTTP application access with `siwe`, `credential`, or `oidc`; cannot be combined with `--cache` |
-| `--auth-allow` | string | | Principal allowed to sign in (Ethereum wallet for `siwe`, subject for `credential`, or verified email, `@example.com` domain, or `sub:<subject>` for `oidc`); repeat for multiple principals (empty allows any valid principal, except for `oidc`, which requires at least one entry); requires `--auth` |
+| `--auth` | string | | Protect HTTP application access with `siwe`, `credential`, `oidc`, `saml`, or `email`; cannot be combined with `--cache` |
+| `--auth-allow` | string | | Principal allowed to sign in with `siwe` (Ethereum wallet) or `credential` (subject); repeat for multiple principals (empty allows any valid principal); `oidc` and `saml` also read it, as `--auth-email-list`; requires `--auth` |
+| `--auth-email-list` | string | | Who may sign in with `oidc` or `saml` (verified email, `@example.com` domain, or `sub:<subject>`) or `email` (email or `@example.com` domain); repeat for multiple entries (at least one entry is required); requires `--auth` |
 | `--auth-oidc-issuer` | string | | OIDC issuer URL for `--auth oidc` (env: `AUTH_OIDC_ISSUER`) |
 | `--auth-oidc-client-id` | string | | OIDC client ID for `--auth oidc` (env: `AUTH_OIDC_CLIENT_ID`) |
 | `--auth-oidc-client-secret` | string | | Optional OIDC client secret for `--auth oidc` (env: `AUTH_OIDC_CLIENT_SECRET`) |
+| `--auth-saml-metadata-url` | string | | SAML identity provider metadata URL for `--auth saml` (env: `AUTH_SAML_METADATA_URL`) |
+| `--auth-saml-metadata-file` | string | | SAML identity provider metadata file, instead of the URL, for `--auth saml` (env: `AUTH_SAML_METADATA_FILE`) |
+| `--auth-saml-entity-id` | string | `https://<host>/_portal/auth/saml/metadata` | SAML service provider entity ID for `--auth saml` (env: `AUTH_SAML_ENTITY_ID`) |
+| `--auth-saml-subject-attribute` | string | NameID | SAML attribute that names the visitor for `--auth saml`, such as `email` (env: `AUTH_SAML_SUBJECT_ATTRIBUTE`) |
+| `--auth-smtp-addr` | string | | SMTP server `host:port` that sends the login links for `--auth email`; port 465 uses TLS from the start, any other port must offer STARTTLS, and only `localhost`, `127.0.0.1` or `::1` may use plaintext (env: `AUTH_SMTP_ADDR`) |
+| `--auth-smtp-username` | string | | SMTP username for `--auth email`; set it together with the password, or leave both empty for a server that needs no login (env: `AUTH_SMTP_USERNAME`) |
+| `--auth-smtp-password` | string | | SMTP password for `--auth email`, with spaces around it dropped; pass it by environment variable, because process lists show arguments (env: `AUTH_SMTP_PASSWORD`) |
+| `--auth-smtp-from` | string | | The one sender address of every login link for `--auth email`, with an optional display name (env: `AUTH_SMTP_FROM`) |
 | `--x402-pay-to` | string | | Payment recipient address for this tunnel |
 | `--ban-mitm` | bool | `false` | Ban relay when the MITM self-probe detects TLS termination |
 | `--identity-path` | string | `identity.json` | Identity JSON file path; created automatically when missing |
@@ -213,7 +222,7 @@ portal expose 3000 --log-format json
 | Records | One structured JSON log record per line on **stdout**; filter by `"event":"relay_status"` |
 | Human output | Unchanged by default; `--log-format text` (default) keeps the human-readable console |
 | State ownership | Records are emitted from the same authoritative SDK status paths the human logs derive from |
-| Transitions | Records report readiness, readiness loss (`ready` → `connecting`), failures, and deselection; repeated unchanged statuses are omitted |
+| Transitions | Records report readiness, readiness loss (`ready` → `connecting`), the relay refusing the lease, failures, and deselection; repeated unchanged statuses are omitted |
 
 One ready record:
 
@@ -229,6 +238,7 @@ Fields on `event=relay_status` records:
 | `relay_url` | Relay API URL this status describes |
 | `state` | `connecting`, `ready`, or `failed` |
 | `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
+| `approval` | Present while the relay refuses this lease: `pending` (not approved yet) or `refused` (denied or banned). `state` is `connecting` and `public_url` is empty. Its absence does not mean approved |
 | `public_url` | Identity-bound canonical URL; usable only while `state` is `ready`, even if a retained lease keeps this field set while reconnecting |
 | `alias_url` | Short `<name>.<relay-domain>` URL without an Ethereum address; prefer this for sharing when present. Present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |
 | `deselected` | `true` on the removal notification for a relay that left the membership set; a previously advertised relay URL must be retracted |
@@ -240,6 +250,16 @@ snapshot should use the SDK's `Relays()`, not the lossy event stream.
 
 A `connecting` record retracts readiness until a subsequent `ready`
 record, and never reports an `alias_url`.
+
+On a `manual` relay, a waiting tunnel logs `waiting for relay approval` once,
+not on every retry, and needs no restart after approval:
+
+```json
+{"level":"warn","event":"relay_status","relay_url":"https://relay.example.com","state":"connecting","public_url":"","deselected":false,"approval":"pending","address":"0x...","time":"2026-01-01T00:00:00Z","message":"waiting for relay approval"}
+```
+
+Raw TCP and UDP tunnels log `raw transport endpoints allocated` once a reverse
+stream opens, so the line also means that the relay accepts the lease.
 
 ### Examples
 
@@ -272,13 +292,48 @@ Protect it with a standard OpenID Connect provider (see
 portal expose 3000 --auth oidc \
   --auth-oidc-issuer https://accounts.google.com \
   --auth-oidc-client-id <client-id> \
-  --auth-allow alice@example.com
+  --auth-email-list alice@example.com
 ```
 
-`--auth-allow` is required with `--auth oidc`. The `AUTH_OIDC_*` variables are
-read only with `--auth oidc`, so exporting them for one service does not affect
+`--auth-email-list` is required with `--auth oidc`. The `AUTH_OIDC_*` variables
+are read only with `--auth oidc`, so exporting them for one service does not affect
 another `portal expose`. An `--auth-oidc-*` flag given on the command line
 without `--auth oidc` is rejected.
+
+Protect it with a SAML 2.0 identity provider (see
+[SAML 2.0](/siwe-authentication#saml-20)):
+
+```bash
+portal expose 3000 --auth saml \
+  --auth-saml-metadata-url https://idp.example.com/realms/main/protocol/saml/descriptor \
+  --auth-email-list @example.com
+```
+
+`--auth-email-list` is required with `--auth saml`. The `AUTH_SAML_*` variables
+follow the `AUTH_OIDC_*` rule: Portal reads them only with `--auth saml`, and
+it rejects an `--auth-saml-*` flag on the command line without `--auth saml`.
+
+Protect it with one-time sign-in links that Portal sends through your own SMTP
+account (see [Email links](/siwe-authentication#email-links)):
+
+```bash
+# AUTH_SMTP_PASSWORD is set in this shell first, at a prompt
+portal expose 3000 --auth email \
+  --auth-smtp-addr smtp.gmail.com:587 \
+  --auth-smtp-username you@gmail.com \
+  --auth-smtp-from you@gmail.com \
+  --auth-email-list alice@example.com
+```
+
+`--auth-email-list` is required with `--auth email`. The `AUTH_SMTP_*` variables
+follow the `AUTH_OIDC_*` rule: Portal reads them only with `--auth email`, and
+it rejects an `--auth-smtp-*` flag on the command line without `--auth email`.
+
+`--auth-allow` is the list for `siwe` and `credential`. `--auth-email-list` is
+the list for `oidc`, `saml`, and `email`: a tunnel runs one provider, so the one
+list serves all three. `oidc` and `saml` still read `--auth-allow`, so existing
+configs keep working. Setting both is refused. `email` takes only
+`--auth-email-list`.
 
 Portal protects the complete HTTP gateway, including routed, static, and x402
 paths. It always strips inbound Portal identity headers. The auth gate cannot be

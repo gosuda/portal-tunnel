@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -36,22 +36,64 @@ const fakeSecret = "not-a-real-secret-0123"
 func testAccessStatus() AgentStatusResponse {
 	status := testDashboardStatus()
 	web, api, paid, idle := &status.Tunnels[0], &status.Tunnels[1], &status.Tunnels[2], &status.Tunnels[4]
-	web.Auth = gateway.ApplicationAuthProviderOIDC
-	web.AuthAllowedWallets = []string{"alice@example.com", "@corp.example.com", "sub:4f2a9c"}
-	web.AuthIdentityHeaders = true
-	web.AuthOIDCIssuer = "https://accounts.example.com"
-	web.AuthOIDCClientID = "portal-web"
+	web.Provider = appauth.ProviderOIDC
+	web.Allow = []string{"alice@example.com", "@corp.example.com", "sub:4f2a9c"}
+	web.IdentityHeaders = true
+	web.OIDCIssuerURL = "https://accounts.example.com"
+	web.OIDCClientID = "portal-web"
 	web.AuthOIDCClientSecretSet = true
-	web.AuthOIDCProviderChecked = true
-	web.AuthOIDCProviderError = "fetch oidc discovery: no such host"
-	api.Auth = gateway.ApplicationAuthProviderSIWE
-	api.AuthAllowedWallets = []string{"0x52908400098527886E0F7030069857D2E4169EE7"}
-	paid.Auth = gateway.ApplicationAuthProviderCredential
-	idle.Auth = gateway.ApplicationAuthProviderOIDC
-	idle.AuthAllowedWallets = []string{"bob@example.com"}
-	idle.AuthOIDCIssuer = "https://login.example.org"
-	idle.AuthOIDCClientID = "portal-idle"
+	web.AuthProviderChecked = true
+	web.AuthProviderError = "fetch oidc discovery: no such host"
+	api.Provider = appauth.ProviderSIWE
+	api.Allow = []string{"0x52908400098527886E0F7030069857D2E4169EE7"}
+	paid.Provider = appauth.ProviderCredential
+	idle.Provider = appauth.ProviderOIDC
+	idle.Allow = []string{"bob@example.com"}
+	idle.OIDCIssuerURL = "https://login.example.org"
+	idle.OIDCClientID = "portal-idle"
 	return status
+}
+
+// A tunnel with an email list and a stored SMTP password: leaving the password
+// alone names nothing, F6 removes it with the username it is paired with, a
+// typed one replaces it, and leaving the provider removes it. The list stays
+// under its own key throughout.
+func TestDashboardAccessStoredEmailPassword(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	typed := func(text string) tea.Msg { return keyRunes(text) }
+	status := testAccessStatus()
+	mail := &status.Tunnels[accessOpen]
+	mail.Provider = appauth.ProviderEmail
+	mail.EmailList = []string{"alice@example.com"}
+	mail.EmailConfig = appauth.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "portal", SMTPFrom: "login@example.com"}
+	mail.AuthSMTPPasswordSet = true
+
+	// The focus ring is mode, entry 1, add 2, headers 3, server 4, username 5, password 6, sender 7.
+	for _, tt := range []struct {
+		name string
+		keys []tea.Msg
+		want string
+	}{
+		{"nothing touched", nil, `{}`},
+		{"a blank password leaves the stored one alone", []tea.Msg{keyUp, keyUp, typed("   ")}, `{}`},
+		{"a typed password replaces the stored one", []tea.Msg{keyUp, keyUp, typed(fakeSecret)}, `{"auth_smtp_password":"` + fakeSecret + `"}`},
+		{"F6 removes the stored password", []tea.Msg{keyUp, keyUp, keyF6}, `{"auth_smtp_username":"","auth_smtp_password":""}`},
+		{"F6 again takes the mark back", []tea.Msg{keyUp, keyUp, keyF6, keyF6}, `{}`},
+		{"a typed password takes the mark back", []tea.Msg{keyUp, keyUp, keyF6, typed(fakeSecret)}, `{"auth_smtp_password":"` + fakeSecret + `"}`},
+		{"a username typed after the mark stays", []tea.Msg{keyUp, keyUp, keyF6, keyUp, typed("bob"), keyDown, typed(fakeSecret)},
+			`{"auth_smtp_username":"bob","auth_smtp_password":"` + fakeSecret + `"}`},
+		{"an allow list change keeps the list key", []tea.Msg{keyDown, keyDown, typed("bob@example.com"), keyEnter},
+			`{"auth_email_list":["alice@example.com","bob@example.com"]}`},
+		{"leaving email clears its settings and the password", []tea.Msg{keyLeft},
+			`{"auth":"saml","auth_email_list":[],"auth_smtp_addr":"","auth_smtp_username":"","auth_smtp_password":"","auth_smtp_from":""}`},
+		{"turning sign-in off sends only auth", []tea.Msg{keyRight}, `{"auth":""}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := accessBody(t, accessScreen(t, theme, status, accessOpen, tt.keys...)); !sameJSON(t, got, tt.want) {
+				t.Fatalf("request body = %s\nwant           %s", got, tt.want)
+			}
+		})
+	}
 }
 
 // settingsOf shows the Settings pane of the tunnel that is down tunnels from the first one.
@@ -121,7 +163,7 @@ func TestDashboardSettingsListOnlyTheFirstEntriesOfALongAllowList(t *testing.T) 
 	for _, name := range []string{"a", "b", "c", "d", "e", "f"} {
 		entries = append(entries, name+"@example.com")
 	}
-	status.Tunnels[0].AuthAllowedWallets = entries
+	status.Tunnels[0].Allow = entries
 	view := settingsOf(t, status, 0)
 	if !strings.Contains(view, "d@example.com") || strings.Contains(view, "e@example.com") || !strings.Contains(view, "+2 more") {
 		t.Fatalf("the allow list should list four entries and count the rest:\n%s", view)
@@ -135,8 +177,8 @@ func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 		tunnel AgentTunnelStatus
 		want   string
 	}{
-		{"usable", AgentTunnelStatus{State: "running", AuthOIDCProviderChecked: true}, "[*] ok"},
-		{"unusable", AgentTunnelStatus{State: "running", AuthOIDCProviderChecked: true, AuthOIDCProviderError: "no such host"}, "[!] failed"},
+		{"usable", AgentTunnelStatus{State: "running", AuthProviderChecked: true}, "[*] ok"},
+		{"unusable", AgentTunnelStatus{State: "running", AuthProviderChecked: true, AuthProviderError: "no such host"}, "[!] failed"},
 		{"still checking", AgentTunnelStatus{State: "running"}, "[~] checking..."},
 		{"tunnel starting", AgentTunnelStatus{State: "starting"}, "[~] checking..."},
 		{"tunnel not running", AgentTunnelStatus{State: "stopped"}, "[ ] not checked"},
@@ -151,12 +193,12 @@ func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 // The wording of an empty allow list repeats a rule of the gateway, so it is checked against the
 // gateway's own validator.
 func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
-	for _, provider := range []string{gateway.ApplicationAuthProviderCredential, gateway.ApplicationAuthProviderSIWE, gateway.ApplicationAuthProviderOIDC} {
-		cfg := gateway.ApplicationAuthConfig{Provider: provider}
-		if provider == gateway.ApplicationAuthProviderOIDC {
+	for _, provider := range []string{appauth.ProviderCredential, appauth.ProviderSIWE, appauth.ProviderOIDC} {
+		cfg := appauth.Config{Provider: provider}
+		if provider == appauth.ProviderOIDC {
 			cfg.OIDCIssuerURL, cfg.OIDCClientID = "https://accounts.example.com", "portal-web"
 		}
-		emptyAllowed := gateway.ValidateApplicationAuthConfig(cfg) == nil
+		emptyAllowed := appauth.Validate(cfg) == nil
 		hint := agentDashboardAllowedHint(provider)
 		switch {
 		case emptyAllowed && !strings.HasPrefix(hint, "any "):
@@ -166,8 +208,8 @@ func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
 		}
 		if !emptyAllowed {
 			// The refusal must be about the empty list and nothing else.
-			cfg.AllowedWallets = []string{"alice@example.com"}
-			if err := gateway.ValidateApplicationAuthConfig(cfg); err != nil {
+			cfg.Allow = []string{"alice@example.com"}
+			if err := appauth.Validate(cfg); err != nil {
 				t.Fatalf("%s with one entry: %v", provider, err)
 			}
 		}
@@ -224,6 +266,19 @@ func accessBody(t *testing.T, model agentDashboardModel) string {
 		t.Fatal(err)
 	}
 	return string(body)
+}
+
+// sameJSON reports whether two JSON objects hold the same fields, in any order.
+func sameJSON(t *testing.T, a, b string) bool {
+	t.Helper()
+	var x, y map[string]any
+	if err := json.Unmarshal([]byte(a), &x); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(b), &y); err != nil {
+		t.Fatal(err)
+	}
+	return reflect.DeepEqual(x, y)
 }
 
 func TestNewSecretInputMasksByDefault(t *testing.T) {
@@ -346,16 +401,24 @@ func TestDashboardAccessRequestNamesOnlyWhatChanged(t *testing.T) {
 			`{"auth":"siwe","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":"","auth_oidc_client_secret":""}`},
 		{"leaving OIDC without a stored secret does not name it", accessIdle, []tea.Msg{keyLeft},
 			`{"auth":"siwe","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":""}`},
-		{"OIDC to open sends only auth", accessWeb, []tea.Msg{keyRight}, `{"auth":""}`},
+		{"OIDC to open sends only auth", accessWeb, []tea.Msg{keyRight, keyRight, keyRight}, `{"auth":""}`},
+		{"OIDC to SAML clears the OIDC settings and the allow list", accessWeb, []tea.Msg{keyRight},
+			`{"auth":"saml","auth_allowed_wallets":[],"auth_oidc_issuer":"","auth_oidc_client_id":"","auth_oidc_client_secret":""}`},
+		{"open to SAML", accessOpen,
+			[]tea.Msg{keyLeft, keyLeft, keyDown, typed("@example.com"), keyEnter, keyDown, keyDown, typed("https://idp.example/metadata"), keyDown, keyDown, typed("urn:portal:web"), keyDown, typed("email")},
+			`{"auth":"saml","auth_email_list":["@example.com"],"auth_saml_metadata_url":"https://idp.example/metadata","auth_saml_entity_id":"urn:portal:web","auth_saml_subject_attribute":"email"}`},
+		{"open to email", accessOpen,
+			[]tea.Msg{keyLeft, keyDown, typed("alice@example.com"), keyEnter, keyDown, keyDown, typed("smtp.example.com:587"), keyDown, typed("portal"), keyDown, typed(fakeSecret), keyDown, typed("login@example.com")},
+			`{"auth":"email","auth_email_list":["alice@example.com"],"auth_smtp_addr":"smtp.example.com:587","auth_smtp_username":"portal","auth_smtp_password":"` + fakeSecret + `","auth_smtp_from":"login@example.com"}`},
 		{"open to credential", accessOpen, []tea.Msg{keyRight}, `{"auth":"credential"}`},
 		{"wallet to OIDC", accessWallet,
 			[]tea.Msg{keyRight, keyDown, typed("carol@example.com"), keyEnter, keyDown, keyDown, typed("https://idp.example.org"), keyDown, typed("client-1"), keyDown, typed(fakeSecret)},
-			`{"auth":"oidc","auth_allowed_wallets":["carol@example.com"],"auth_oidc_issuer":"https://idp.example.org","auth_oidc_client_id":"client-1","auth_oidc_client_secret":"` + fakeSecret + `"}`},
+			`{"auth":"oidc","auth_allowed_wallets":[],"auth_email_list":["carol@example.com"],"auth_oidc_issuer":"https://idp.example.org","auth_oidc_client_id":"client-1","auth_oidc_client_secret":"` + fakeSecret + `"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			model := accessScreen(t, theme, testAccessStatus(), tt.down, tt.keys...)
-			if got := accessBody(t, model); got != tt.want {
+			if got := accessBody(t, model); !sameJSON(t, got, tt.want) {
 				t.Fatalf("request body = %s\nwant           %s", got, tt.want)
 			}
 			applied, cmd := press(model, keyF2)
@@ -441,7 +504,7 @@ func TestDashboardAccessApply(t *testing.T) {
 func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	added := testAccessStatus()
-	added.Tunnels[accessWeb].AuthAllowedWallets = append(added.Tunnels[accessWeb].AuthAllowedWallets, "carol@example.com")
+	added.Tunnels[accessWeb].Allow = append(added.Tunnels[accessWeb].Allow, "carol@example.com")
 
 	model := accessScreen(t, theme, testAccessStatus(), accessWeb, append(downs(4), keyRunes("carol@example.com"), keyEnter)...)
 	model = send(press1(model, keyF2), agentDashboardAccessMsg{tunnelID: "web"})
@@ -467,8 +530,8 @@ func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) 
 func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	elsewhere := testAccessStatus()
-	elsewhere.Tunnels[accessWeb].AuthAllowedWallets = []string{"alice@example.com", "dave@example.com"}
-	elsewhere.Tunnels[accessWeb].AuthOIDCClientID = "portal-web-2"
+	elsewhere.Tunnels[accessWeb].Allow = []string{"alice@example.com", "dave@example.com"}
+	elsewhere.Tunnels[accessWeb].OIDCClientID = "portal-web-2"
 
 	for _, tt := range []struct {
 		name string
@@ -543,7 +606,7 @@ func TestDashboardAccessAppliesOneAtATime(t *testing.T) {
 
 	t.Run("an edit made while it runs is dropped for the stored settings", func(t *testing.T) {
 		applied := testAccessStatus()
-		applied.Tunnels[accessWeb].AuthAllowedWallets = append(applied.Tunnels[accessWeb].AuthAllowedWallets, "carol@example.com")
+		applied.Tunnels[accessWeb].Allow = append(applied.Tunnels[accessWeb].Allow, "carol@example.com")
 		model := press1(accessScreen(t, theme, testAccessStatus(), accessWeb, typedEntry...), keyF2)
 		model = press1(model, keyRunes("erin@example.com"), keyEnter)
 		model = send(model, agentDashboardStatusMsg{status: applied})
@@ -774,7 +837,7 @@ func TestDashboardAccessFollowsTheFocusInALongList(t *testing.T) {
 	for i := range entries {
 		entries[i] = fmt.Sprintf("user%02d@example.com", i)
 	}
-	status.Tunnels[accessWeb].AuthAllowedWallets = entries
+	status.Tunnels[accessWeb].Allow = entries
 
 	for _, size := range [][2]int{{80, 24}, {100, 30}} {
 		model := newTestDashboard(t, theme, size[0], size[1], agentDashboardStatusMsg{status: status}, keyF4)
@@ -800,7 +863,7 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 	const storedSecret = "stored-fake-secret"
 	const wallet = "0x52908400098527886E0F7030069857D2E4169EE7"
 	app := oidcTunnel("app", unreachableIssuer, storedSecret)
-	app.AuthIdentityHeaders = true
+	app.IdentityHeaders = true
 	m, path := testManager(t, app, testTunnel("site"))
 	startManager(t, m)
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
@@ -815,49 +878,49 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 		// app has one entry, so its focus ring is mode, entry 1, add 2, headers 3, issuer 4, client ID 5, secret 6.
 		{"remove the stored secret and add an entry", 0, []tea.Msg{keyUp, keyF6, keyDown, keyDown, keyDown, typed("carol@example.com"), keyEnter},
 			func(t *testing.T, saved TunnelConfig) {
-				if !slices.Equal(saved.AuthAllowedWallets, []string{"alice@example.com", "carol@example.com"}) || saved.AuthOIDCClientSecret != "" {
+				if !slices.Equal(saved.Allow, []string{"alice@example.com", "carol@example.com"}) || saved.OIDCClientSecret != "" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"type a secret and turn the identity headers off", 0, []tea.Msg{keyUp, typed("replacement-fake-secret"), keyUp, keyUp, keyUp, keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.AuthOIDCClientSecret != "replacement-fake-secret" || saved.AuthIdentityHeaders {
+				if saved.OIDCClientSecret != "replacement-fake-secret" || saved.IdentityHeaders {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"leave the stored secret alone while the issuer changes", 0, []tea.Msg{keyUp, keyUp, keyUp, typed("/")},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.AuthOIDCClientSecret != "replacement-fake-secret" || saved.AuthOIDCIssuer != unreachableIssuer+"/" {
+				if saved.OIDCClientSecret != "replacement-fake-secret" || saved.OIDCIssuerURL != unreachableIssuer+"/" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"remove the secret", 0, []tea.Msg{keyUp, keyF6},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.AuthOIDCClientSecret != "" || saved.Auth != "oidc" {
+				if saved.OIDCClientSecret != "" || saved.Provider != "oidc" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"OIDC to wallet", 0, []tea.Msg{keyLeft, keyDown, typed(wallet), keyEnter},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.Auth != "siwe" || len(saved.AuthAllowedWallets) != 1 || saved.AuthOIDCIssuer != "" || saved.AuthOIDCClientID != "" || saved.AuthOIDCClientSecret != "" {
+				if saved.Provider != "siwe" || len(saved.Allow) != 1 || saved.OIDCIssuerURL != "" || saved.OIDCClientID != "" || saved.OIDCClientSecret != "" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"wallet to credential", 0, []tea.Msg{keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.Auth != "credential" || len(saved.AuthAllowedWallets) != 0 {
+				if saved.Provider != "credential" || len(saved.Allow) != 0 {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"credential to open", 0, []tea.Msg{keyLeft},
 			func(t *testing.T, saved TunnelConfig) {
-				if !reflect.DeepEqual(saved.applicationAuth(), TunnelConfig{}.applicationAuth()) {
+				if auth := saved.AuthConfig; !auth.IsZero() {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},
 		{"open to OIDC", 1, []tea.Msg{keyRight, keyRight, keyRight, keyDown, typed("bob@example.com"), keyEnter, keyDown, keyDown, typed(unreachableIssuer), keyDown, typed("client-1"), keyDown, typed("first-fake-secret")},
 			func(t *testing.T, saved TunnelConfig) {
-				if saved.Auth != "oidc" || saved.AuthOIDCIssuer != unreachableIssuer || saved.AuthOIDCClientID != "client-1" || saved.AuthOIDCClientSecret != "first-fake-secret" {
+				if saved.Provider != "oidc" || saved.OIDCIssuerURL != unreachableIssuer || saved.OIDCClientID != "client-1" || saved.OIDCClientSecret != "first-fake-secret" {
 					t.Fatalf("saved = %+v", saved)
 				}
 			}},

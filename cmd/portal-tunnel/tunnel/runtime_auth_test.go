@@ -15,7 +15,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
 // startOIDCRuntime starts a tunnel protected by OIDC at issuer. Its only relay
@@ -28,11 +28,10 @@ func startOIDCRuntime(t *testing.T, issuer string) *Runtime {
 		Identity:  IdentitySpec{Name: "auth-check", Path: filepath.Join(t.TempDir(), "identity.json")},
 		Relays:    RelaySpec{URLs: []string{"https://127.0.0.1:1"}},
 		Transport: TransportSpec{Target: "127.0.0.1:3000"},
-		HTTP: &HTTPConfig{Auth: &gateway.ApplicationAuthConfig{
-			Provider:       gateway.ApplicationAuthProviderOIDC,
-			AllowedWallets: []string{"alice@example.com"},
-			OIDCIssuerURL:  issuer,
-			OIDCClientID:   "client-123",
+		HTTP: &HTTPConfig{Auth: &appauth.Config{
+			Provider:   appauth.ProviderOIDC,
+			Allow:      []string{"alice@example.com"},
+			OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: "client-123"},
 		}},
 	})
 	if err != nil {

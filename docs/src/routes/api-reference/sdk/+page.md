@@ -284,6 +284,38 @@ The SDK keeps several ready reverse streams open. When an end user connects to
 the lease hostname, the relay claims one ready stream and bridges encrypted
 tenant bytes between the browser side and the SDK side.
 
+### Waiting for approval
+
+A relay reports its routing decision only as the answer to a reverse connect.
+`RegisterResponse` and `RenewResponse` carry no approval field.
+
+| Reverse connect answers | Meaning | `RelayStatus` |
+|-------------------------|---------|---------------|
+| `101` | lease may route | `State` is `ready`, `Approval` is empty |
+| `403 lease_rejected` | not approved yet, or approval was revoked | `State` is `connecting`, `Approval` is `pending` |
+| `403 lease_denied` | denied or banned | `State` is `connecting`, `Approval` is `refused` |
+
+The SDK retries every 3 seconds, so an approved lease becomes ready without a
+new registration. When a lease stops being routable, the relay closes its idle
+reverse streams, and the lease leaves `ready` at once.
+
+While `Approval` is set, `PublicURL`, `AliasURL`, `TCPAddr`, and `UDPAddr` are
+empty and `Active()` is false, because nothing routes. The lease still exists on
+the relay and renews normally.
+
+An empty `Approval` means that no refusal was reported. It never means approved.
+Show `Approval.Message()` to people: `waiting for relay approval` or
+`refused by relay`.
+
+| SDK and relay | While waiting | After a revoke |
+|---------------|---------------|----------------|
+| Old SDK, new relay | `connecting` | leaves `ready` for `connecting` |
+| New SDK, old relay | `pending`, also when denied | stays `ready`; an old relay does not report it |
+| New SDK, new relay | `pending` or `refused` | `pending` or `refused` |
+
+The browser SDK stays at `connecting`, because a failed WebSocket does not
+expose its status.
+
 <div id="browser-wasm-sdk-runtime"></div>
 
 ## Browser/WASM SDK Runtime
@@ -340,3 +372,128 @@ command is the maintained JS interop reference. See
 [Browser reverse transport](/architecture#browser-reverse-transport) for the
 carrier protocol and [Browser/WASM transport](/security-model#browser-wasm-transport)
 for its trust boundary.
+
+## Go Application Auth
+
+The tables above are the wire protocol. A Go program that embeds the SDK can also
+put the sign-in gate of `portal expose --auth` in front of its own handler.
+Package `github.com/gosuda/portal-tunnel/v2/sdk/appauth` is that gate. It is a
+separate package so a program that does not use it, including a browser WASM
+build, does not compile the OIDC and SAML dependencies.
+
+```go
+id, err := identity.LoadOrCreate("my-app", identityPath, "")
+if err != nil {
+	log.Fatal(err)
+}
+exposure, err := sdk.Expose(ctx, id, nil, sdk.WithDiscovery(3))
+if err != nil {
+	log.Fatal(err)
+}
+defer exposure.Close()
+
+cfg := appauth.Config{
+	Provider:  appauth.ProviderOIDC,
+	EmailList: []string{"alice@example.com", "@example.org"},
+	OIDCConfig: appauth.OIDCConfig{
+		OIDCIssuerURL:    "https://accounts.google.com",
+		OIDCClientID:     clientID,
+		OIDCClientSecret: clientSecret,
+	},
+}
+gate, err := appauth.New(app, id, cfg)
+if err != nil {
+	log.Fatal(err) // a mistake in cfg
+}
+if err := appauth.Check(ctx, cfg); err != nil {
+	log.Printf("sign-in provider: %v", err) // sessions still work; show this in a status
+}
+if err := sdk.RunHTTP(ctx, exposure, gate, ""); err != nil {
+	log.Fatal(err)
+}
+```
+
+The application reads the visitor from the request context, with or without
+identity headers:
+
+```go
+principal, ok := appauth.PrincipalFromContext(r.Context())
+```
+
+| Name | Purpose |
+|------|---------|
+| `New(next, id, cfg)` | Builds the gate. It reads no network, so a provider outage cannot stop a rebuild. It returns an error for a mistake in `cfg` and for an `id` without its `TokenSecret`. |
+| `Check(ctx, cfg)` | Tests the provider: the OIDC discovery document and keys, the SAML metadata, or a login at the SMTP server. It sends no mail. Run it at startup and show the result. |
+| `Validate(cfg)` | Runs the config checks of `New` on a `Config` that is not being built yet. It needs no identity, and it does not ask for `PublicURLs`. |
+| `Config` | The provider, the allowlist, and the provider settings. `oidc`, `saml`, and `email` refuse an empty list. **An empty list opens `siwe` to any wallet, and `credential` to any credential issued from `id`.** Secrets are plain values: read them from where your program keeps secrets. |
+| `Principal` | `Provider`, `Subject`, and `Email`. `Subject` is the principal the allowlist checks: a wallet address, a credential subject, an email, or a `sub:` entry. `Email` is the address `oidc`, `saml`, or `email` vouches for, or empty. An OIDC email counts only with `email_verified`. |
+| `IssueCredential`, `CredentialRedeemURL` | Create a credential and its sign-in link for the `credential` provider. |
+| `ProviderTakesEmailList(provider)` | Reports whether a provider reads `Config.EmailList`. The others read `Config.Allow`. |
+| `ReservedPathPrefix` | `/_portal/auth/`. The gate answers its endpoints under this prefix, so serve none of your own routes there. A later release may add endpoints. |
+
+### Keeping sessions across a rebuild
+
+A gate built with the same `id`, including its `TokenSecret`, accepts the sessions
+of an earlier gate when these settings are also the same:
+
+| Provider | Settings |
+|----------|----------|
+| `oidc` | issuer and client ID |
+| `saml` | metadata source, entity ID, and subject attribute |
+| `email` | SMTP server, username, and sender |
+| `siwe`, `credential` | none |
+
+The allowlist is checked again on every request, so a principal you remove loses
+access at once, and a rebuild does not bring it back. A change to one of these
+settings ends the sessions that the old settings made.
+
+These do not survive a rebuild:
+
+- A SIWE login in progress: the wallet signs again.
+- The list of SAML assertions already used. An assertion still valid could be presented once more.
+- Email links that were mailed and not used: the visitor asks for a new one.
+
+Store an identity with `identity.Marshal`, not `json.Marshal`. `json.Marshal`
+leaves out the `TokenSecret`. `New` refuses an identity without one, but
+`identity.Parse` of a document without one creates a random secret, and every
+session then ends at the next start without an error.
+
+To replace the application, keep one gate and swap `next` behind it. Then a
+redeploy changes nothing about sign-in, and an in-progress login also survives.
+
+### Hostnames
+
+The gate builds a redirect from the host the visitor used, so it works on every
+host. An identity provider needs a registered URI for each one: the canonical
+host on each relay, and the alias if you share it. Portal has no setting for one
+public base URL, because an exposure on several relays has several canonical
+hosts.
+
+The `email` provider needs `Config.PublicURLs`, and `New` refuses it without one. It
+lists the hosts that a login link may name, so a request with a forged `Host`
+gets no link. An email session works only while its host is on the list:
+
+```go
+cfg.PublicURLs = func() []string {
+	var urls []string
+	for _, relay := range exposure.Relays() {
+		urls = append(urls, relay.PublicURL, relay.AliasURL)
+	}
+	return urls
+}
+```
+
+### What the gate cannot protect
+
+The gate protects the handler it wraps. `portal expose` refuses these
+combinations, but `New` cannot see how a program exposes itself, so a program must
+not combine them:
+
+- `sdk.WithStaticRelayCache`: the relay serves the cached site without calling your handler.
+- `sdk.WithTCP` and `sdk.WithUDP`: connections and datagrams do not pass through an `http.Handler`.
+
+A session is also tied to the origin of the application. A request with a session
+cookie and an `Origin` of another origin gets `403` for a protocol upgrade and for
+any method other than `GET`, `HEAD`, or `OPTIONS`. A request without `Origin`, a
+request that presents a credential header, and a form post with `Origin: null`
+that a browser marks with `Sec-Fetch-Site: same-origin` are not affected.

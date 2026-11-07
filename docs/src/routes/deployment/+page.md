@@ -46,6 +46,7 @@ Create `.env` next to `docker-compose.yml`:
 ```dotenv
 PORTAL_URL=https://portal.example.com
 ADMIN_TOKEN=replace-with-a-long-random-value
+APPROVAL_MODE=auto
 
 DISCOVERY=false
 BOOTSTRAPS=
@@ -60,6 +61,11 @@ EMBEDDED_DNS_PORT=53
 ```
 
 Embedded DNS logs its DS as soon as the local DNS listeners start; startup does not check delegation. After NS/glue delegation is reachable, publish the DS printed at startup at the parent zone. Persist `IDENTITY_PATH/dnssec-csk.json` with the identity volume across container replacement and backup/restore; replacing this key without coordinating the parent DS breaks DNSSEC validation. See [Embedded DNS](/configuration#embedded-dns) for the complete DNSSEC setup and key-storage requirements. Manual certificate overrides remain supported.
+
+APPROVAL_MODE supplies the initial value. Changes made
+from the admin dashboard are stored in IDENTITY_PATH/policy.json and survive
+restarts. For a relay that serves only tunnels you approve, see
+[Private relay](/self-hosting#private-relay).
 
 To enable optional IVNP-backed overlay networking, set `DISCOVERY=true`, mount an IVNP
 `RouterConfig` JSON file, and set `IVNP_CONFIG` to its container path. A file

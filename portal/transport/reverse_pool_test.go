@@ -237,3 +237,66 @@ func TestAcquireAfterCloseFailsWithNetErrClosed(t *testing.T) {
 		t.Fatalf("Claim() after Close() error = %v, want net.ErrClosed", err)
 	}
 }
+
+func TestReversePoolPauseDropsIdleConnectionsAndRefusesOffers(t *testing.T) {
+	pool := NewReversePool(0, 2)
+	t.Cleanup(pool.Close)
+	local, remote := net.Pipe()
+	t.Cleanup(func() { _ = remote.Close() })
+	if err := pool.Offer(local); err != nil {
+		t.Fatal(err)
+	}
+
+	closeIdle := pool.Pause()
+	if closeIdle == nil || pool.ReadyCount() != 0 {
+		t.Fatalf("Pause left %d idle connections", pool.ReadyCount())
+	}
+	closeIdle()
+	if _, err := remote.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("idle connection stayed open: %v", err)
+	}
+
+	refused, refusedRemote := net.Pipe()
+	t.Cleanup(func() { _ = refusedRemote.Close() })
+	if err := pool.Offer(refused); !errors.Is(err, errPoolPaused) {
+		t.Fatalf("Offer() while paused = %v", err)
+	}
+	if _, err := refusedRemote.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("refused connection stayed open: %v", err)
+	}
+
+	pool.Resume()
+	accepted, acceptedRemote := net.Pipe()
+	t.Cleanup(func() { _ = acceptedRemote.Close() })
+	if err := pool.Offer(accepted); err != nil {
+		t.Fatalf("Offer() after Resume = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if conn, err := pool.Acquire(ctx); err != nil || conn != accepted {
+		t.Fatalf("Acquire() after Resume = %v, %v", conn, err)
+	}
+}
+
+// A connection admitted just before a routing decision must not park after it.
+func TestReversePoolPauseBeatsAnOutstandingReservation(t *testing.T) {
+	pool := NewReversePool(0, 2)
+	t.Cleanup(pool.Close)
+	local, remote := net.Pipe()
+	t.Cleanup(func() {
+		_ = local.Close()
+		_ = remote.Close()
+	})
+	reservation, err := pool.ReserveOffer(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.Pause()
+	if err := reservation.Commit(); !errors.Is(err, errPoolPaused) {
+		t.Fatalf("Commit() after Pause = %v", err)
+	}
+	if pool.ReadyCount() != 0 {
+		t.Fatal("a paused pool parked a reserved connection")
+	}
+	reservation.Cancel()
+}

@@ -93,10 +93,8 @@ var agentDashboardBindings = []agentDashboardBinding{
 	{
 		keys: []string{"f6", "ctrl+x"}, label: "Clear", when: agentDashboardModel.canClearAccessSecret,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
-			m.access.clearSecret = !m.access.clearSecret
-			if m.access.clearSecret {
-				m.access.secret.Reset()
-			}
+			tunnel, _ := m.accessTunnel()
+			m.access.setClearSecret(!m.access.clearSecret, tunnel)
 			return m, nil
 		},
 	},
@@ -267,10 +265,10 @@ func (m agentDashboardModel) onAccessChoice() bool {
 }
 
 // canClearAccessSecret reports whether the focused row is the secret of a
-// tunnel that has one stored.
+// tunnel that has one stored for the draft's provider.
 func (m agentDashboardModel) canClearAccessSecret() bool {
 	tunnel, ok := m.accessTunnel()
-	return ok && m.onAccessSecret() && tunnel.AuthOIDCClientSecretSet
+	return ok && m.onAccessSecret() && agentDashboardSecretSet(m.access.provider, tunnel)
 }
 
 // inAccess reports whether the Access screen takes keys: it is open and no
@@ -333,9 +331,10 @@ func (m agentDashboardModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	*input, cmd = input.Update(msg)
-	if m.inAccess() && input == &m.access.secret && input.Value() != "" {
+	if m.inAccess() && input == &m.access.secret && input.Value() != "" && m.access.clearSecret {
 		// A typed secret replaces the stored one, so it takes the removal mark with it.
-		m.access.clearSecret = false
+		tunnel, _ := m.accessTunnel()
+		m.access.setClearSecret(false, tunnel)
 	}
 	return m, cmd
 }

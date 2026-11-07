@@ -42,6 +42,30 @@ const (
 	RelayFailed     RelayState = "failed"
 )
 
+// RelayApproval reports that a relay refused this lease's reverse connection.
+type RelayApproval string
+
+const (
+	// RelayApprovalPending means the relay has not approved the lease. An old
+	// relay reports a denied lease this way too.
+	RelayApprovalPending RelayApproval = "pending"
+	// RelayApprovalRefused means the relay denied or banned the lease:
+	// lease_denied on the wire, types.LeaseDenied in the relay.
+	RelayApprovalRefused RelayApproval = "refused"
+)
+
+// Message is the wording to show people for this state.
+func (a RelayApproval) Message() string {
+	switch a {
+	case RelayApprovalPending:
+		return "waiting for relay approval"
+	case RelayApprovalRefused:
+		return "refused by relay"
+	default:
+		return ""
+	}
+}
+
 // RelayFailure classifies why a relay listener stopped.  It is an SDK
 // runtime/listener-status concept, not a wire DTO: the listener goroutine
 // produces it and the exposure consumer reads it to decide relay-selection
@@ -64,10 +88,11 @@ type RelayStatus struct {
 	PublicURL string
 	// AliasURL is the <name>.<root host> URL when the relay granted that
 	// alias to this lease, else empty: another identity may own the name
-	// (canonical fallback). The relay holds the alias only while the lease
-	// lives: it stays set while the lease is held (also RelayConnecting while
-	// reverse sessions reconnect) and is cleared on RelayFailed. Show it only
-	// while State is RelayReady. It always reaches the live origin.
+	// (canonical fallback). A set alias is held by the lease: it stays set
+	// while the lease is held (also RelayConnecting while reverse sessions
+	// reconnect), is cleared on RelayFailed, and always reaches the live
+	// origin. The RelayReady rule is for display only: show the alias only
+	// while State is RelayReady.
 	AliasURL string
 	UDPAddr  string
 	TCPAddr  string
@@ -75,6 +100,11 @@ type RelayStatus struct {
 	State    RelayState
 	Failure  RelayFailure
 	Err      error
+	// Approval is set while the relay refuses this lease's reverse connection.
+	// State stays RelayConnecting and no endpoint field is set, because nothing
+	// routes. Empty means no refusal was reported, and it never means approved:
+	// an old relay reports no revoke, and the browser SDK cannot read a refusal.
+	Approval RelayApproval
 	// Deselected marks a best-effort removal notification, never a stored
 	// snapshot: the relay left the desired membership set (discovery
 	// deselection or a relay-list change) and the endpoint fields carry
@@ -611,6 +641,7 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	} else if update.state != RelayFailed {
 		status.Failure = RelayFailureNone
 	}
+	status.Approval = update.approval
 	if update.version != "" {
 		status.Version = update.version
 	}
@@ -678,6 +709,11 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		relayStatusLogEvent(log.Warn(), status).
 			Str("address", e.identity.Address).
 			Msg("relay failed")
+	}
+	if status.Approval != "" && status.Approval != previous.Approval {
+		relayStatusLogEvent(log.Warn(), status).
+			Str("address", e.identity.Address).
+			Msg(status.Approval.Message())
 	}
 
 	e.publishRelayStatus(status)
@@ -750,6 +786,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 		a.Version == b.Version &&
 		a.State == b.State &&
 		a.Failure == b.Failure &&
+		a.Approval == b.Approval &&
 		a.Deselected == b.Deselected &&
 		errorsEqual
 }
@@ -781,18 +818,8 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 	}
 	changed := false
 	for relayURL, status := range desired {
-		if current, ok := e.statuses[relayURL]; ok {
-			status.PublicURL = current.PublicURL
-			status.AliasURL = current.AliasURL
-			status.UDPAddr = current.UDPAddr
-			status.TCPAddr = current.TCPAddr
-			status.Version = current.Version
-			status.State = current.State
-			status.Failure = current.Failure
-			status.Err = current.Err
-			if relayStatusEqual(current, status) {
-				continue
-			}
+		if _, ok := e.statuses[relayURL]; ok {
+			continue
 		}
 		e.statuses[relayURL] = status
 		changed = true
@@ -850,6 +877,9 @@ func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Even
 	}
 	if status.State == RelayFailed {
 		event = event.Str("failure", string(status.Failure))
+	}
+	if status.Approval != "" {
+		event = event.Str("approval", string(status.Approval))
 	}
 	return event
 }
