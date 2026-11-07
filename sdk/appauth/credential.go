@@ -113,7 +113,7 @@ type applicationAuthSettings struct {
 // Validate checks the complete configuration of a gate, including the
 // provider-specific OIDC, SAML and email settings and the allowlist. New runs the
 // same checks and also needs what a config file does not hold: the identity and,
-// for email, PublicURLs.
+// for email, PublicHosts.
 func Validate(cfg Config) error {
 	_, err := resolveApplicationAuthConfig(cfg)
 	return err

@@ -117,7 +117,7 @@ if err := sdk.RunHTTP(ctx, exposure, gate, ""); err != nil {
 
 - `appauth.New` reads no network. Call `appauth.Check(ctx, cfg)` at startup and show the result: a provider that cannot be reached still serves existing sessions.
 - The handler reads the visitor with `appauth.PrincipalFromContext(r.Context())`, which returns `Provider`, `Subject` and `Email`. It works without identity headers. Set `Config.IdentityHeaders` only when the handler proxies to something else that needs the `X-Portal-*` headers.
-- List `Allow` for `siwe` and `credential`, and `EmailList` for `oidc`, `saml` and `email`. `oidc`, `saml` and `email` refuse an empty list, but an empty `Allow` opens `siwe` to any wallet and `credential` to any credential issued from the identity, so always list who may open the app. `email` also needs `Config.PublicURLs`; the SDK API page has the snippet.
+- List `Allow` for `siwe` and `credential`, and `EmailList` for `oidc`, `saml` and `email`. `oidc`, `saml` and `email` refuse an empty list, but an empty `Allow` opens `siwe` to any wallet and `credential` to any credential issued from the identity, so always list who may open the app. `email` also needs `Config.PublicHosts`; the SDK API page has the snippet.
 - A gate built with the same identity and provider settings keeps existing sessions. Prefer one gate with `next` swapped behind it: a rebuild ends a SIWE login in progress and unused email links.
 - Store the identity with `identity.Marshal`, never `json.Marshal`, which leaves out the `TokenSecret` that session keys derive from.
 - Serve no routes of your own under `appauth.ReservedPathPrefix` (`/_portal/auth/`).
