@@ -67,7 +67,6 @@ Create `.env` and `docker-compose.yml` per the standard relay deployment:
 PORTAL_URL=https://relay.example.com
 ADMIN_TOKEN=<long random value>
 DISCOVERY=true
-LANDING_PAGE_ENABLED=false  # default; set true to show the public directory page
 APPROVAL_MODE=auto          # default; set manual so only tunnels you approve receive traffic
 ```
 

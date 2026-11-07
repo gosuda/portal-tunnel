@@ -1,6 +1,9 @@
 export const RELAY_API_PATHS = {
   public: {
     state: "/api/state",
+    comments: "/api/comments",
+    commentsVote: "/api/comments/vote",
+    commentsDelete: "/api/comments/delete",
     reputationVote: "/api/reputation/vote",
   },
   admin: {

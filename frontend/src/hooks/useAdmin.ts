@@ -43,7 +43,6 @@ export interface TCPPortSettings {
 
 const DEFAULT_POLICY_SETTINGS: PolicySettings = {
   approval_mode: "auto",
-  landing_page_enabled: false,
   udp: { enabled: false, max_leases: 0 },
   tcp_port: { enabled: false, max_leases: 0 },
 };
@@ -126,8 +125,6 @@ function normalizeApprovalMode(value: string | undefined): ApprovalMode {
 function normalizePolicySettings(settings: PolicySettings | undefined): PolicySettings {
   return {
     approval_mode: normalizeApprovalMode(settings?.approval_mode),
-    landing_page_enabled:
-      settings?.landing_page_enabled ?? DEFAULT_POLICY_SETTINGS.landing_page_enabled,
     udp: {
       enabled: settings?.udp?.enabled ?? DEFAULT_POLICY_SETTINGS.udp.enabled,
       max_leases: settings?.udp?.max_leases ?? DEFAULT_POLICY_SETTINGS.udp.max_leases,
@@ -234,7 +231,6 @@ export function useAdmin(enabled = true) {
 
   const listState = useList({
     servers,
-    storageKey: "adminFavorites",
     additionalFilter,
   });
 
@@ -329,9 +325,6 @@ export function useAdmin(enabled = true) {
   const handleApprovalModeChange = (mode: ApprovalMode) =>
     updatePolicySettings({ approval_mode: mode });
 
-  const handleLandingPageEnabledChange = (enabled: boolean) =>
-    updatePolicySettings({ landing_page_enabled: enabled });
-
   const handleSettingsChange = (key: "udp" | "tcp_port") =>
     (settings: { enabled: boolean; maxLeases: number }) =>
       updatePolicySettings({
@@ -390,7 +383,6 @@ export function useAdmin(enabled = true) {
   const handleBulkBan = (identityKeys: string[]) => handleBulkAction(identityKeys, "ban");
 
   const approvalMode = normalizeApprovalMode(policySettings.approval_mode);
-  const landingPageEnabled = policySettings.landing_page_enabled;
   const udpSettings: UDPSettings = {
     enabled: policySettings.udp.enabled,
     maxLeases: policySettings.udp.max_leases,
@@ -405,7 +397,6 @@ export function useAdmin(enabled = true) {
     ...listState,
     banFilter,
     approvalMode,
-    landingPageEnabled,
     udpSettings,
     tcpPortSettings,
     policySaving,
@@ -415,7 +406,6 @@ export function useAdmin(enabled = true) {
     handleBanStatus,
     handleBPSChange,
     handleApprovalModeChange,
-    handleLandingPageEnabledChange,
     handleUDPSettingsChange,
     handleTCPPortSettingsChange,
     handleApproveStatus,

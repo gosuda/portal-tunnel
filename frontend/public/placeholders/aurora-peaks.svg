@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 458 161" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="ap-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#041529" />
+      <stop offset="42%" stop-color="#07314a" />
+      <stop offset="74%" stop-color="#094c61" />
+      <stop offset="100%" stop-color="#031222" />
+    </linearGradient>
+
+    <radialGradient id="ap-aurora-core" cx="46%" cy="52%" r="56%">
+      <stop offset="0%" stop-color="#2cf7d2" stop-opacity="0.72" />
+      <stop offset="38%" stop-color="#0fd4c8" stop-opacity="0.46" />
+      <stop offset="72%" stop-color="#0a7ea3" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#04182b" stop-opacity="0" />
+    </radialGradient>
+
+    <linearGradient id="ap-curtain-left" x1="0.1" y1="1" x2="0.45" y2="0">
+      <stop offset="0%" stop-color="#3bfce0" stop-opacity="0.82" />
+      <stop offset="45%" stop-color="#14d3c8" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#073b54" stop-opacity="0" />
+    </linearGradient>
+
+    <linearGradient id="ap-curtain-right" x1="0.7" y1="1" x2="0.4" y2="0">
+      <stop offset="0%" stop-color="#2bf0d8" stop-opacity="0.75" />
+      <stop offset="50%" stop-color="#11b5cc" stop-opacity="0.38" />
+      <stop offset="100%" stop-color="#082f49" stop-opacity="0" />
+    </linearGradient>
+
+    <linearGradient id="ap-peak-lit" x1="0.2" y1="0" x2="0.65" y2="1">
+      <stop offset="0%" stop-color="#7ef9ec" />
+      <stop offset="28%" stop-color="#29b8be" />
+      <stop offset="68%" stop-color="#0c4d69" />
+      <stop offset="100%" stop-color="#051c30" />
+    </linearGradient>
+
+    <linearGradient id="ap-peak-shadow" x1="0.5" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#144966" />
+      <stop offset="48%" stop-color="#0a2942" />
+      <stop offset="100%" stop-color="#041222" />
+    </linearGradient>
+
+    <linearGradient id="ap-mist" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1fe0cf" stop-opacity="0" />
+      <stop offset="55%" stop-color="#18c5be" stop-opacity="0.26" />
+      <stop offset="100%" stop-color="#030f1e" stop-opacity="0.92" />
+    </linearGradient>
+
+    <filter id="ap-blur" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" />
+    </filter>
+    <filter id="ap-ray-blur" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="3.5" />
+    </filter>
+  </defs>
+
+  <!-- Night Sky -->
+  <rect width="458" height="161" fill="url(#ap-sky)" />
+
+  <!-- Subtle Starfield -->
+  <g fill="#d8f8ff" opacity="0.65">
+    <circle cx="34" cy="18" r="0.7" />
+    <circle cx="78" cy="12" r="0.9" opacity="0.5" />
+    <circle cx="122" cy="24" r="0.6" />
+    <circle cx="164" cy="14" r="0.8" />
+    <circle cx="198" cy="29" r="0.6" opacity="0.4" />
+    <circle cx="215" cy="11" r="1" />
+    <circle cx="256" cy="19" r="0.7" />
+    <circle cx="289" cy="10" r="0.8" opacity="0.5" />
+    <circle cx="318" cy="28" r="0.6" />
+    <circle cx="344" cy="15" r="0.9" />
+    <circle cx="382" cy="22" r="0.7" />
+    <circle cx="418" cy="14" r="0.8" />
+    <circle cx="441" cy="31" r="0.6" />
+    <circle cx="152" cy="48" r="0.6" opacity="0.5" />
+    <circle cx="362" cy="44" r="0.7" opacity="0.5" />
+  </g>
+
+  <!-- Aurora Ambient Glow -->
+  <ellipse cx="218" cy="82" rx="220" ry="72" fill="url(#ap-aurora-core)" filter="url(#ap-blur)" />
+
+  <!-- Aurora Sweeping Curtains & Light Pillars -->
+  <g filter="url(#ap-ray-blur)">
+    <path d="M-10,122 Q68,86 142,96 T245,48 L222,0 L-10,0 Z" fill="url(#ap-curtain-left)" />
+    <path d="M468,118 Q380,76 306,82 T232,44 L276,0 L468,0 Z" fill="url(#ap-curtain-right)" />
+    <path d="M52,115 C92,72 135,62 178,32 L196,32 C164,66 132,88 98,118 Z" fill="#47f9e2" opacity="0.32" />
+    <path d="M294,88 C286,58 294,28 312,4 L334,4 C320,34 316,60 326,90 Z" fill="#3cf2df" opacity="0.35" />
+    <path d="M352,96 C348,66 360,36 382,10 L398,10 C382,38 374,66 380,98 Z" fill="#22d3ee" opacity="0.24" />
+    <path d="M18,98 C64,104 118,98 176,78 C134,104 78,116 14,114 Z" fill="#5efce8" opacity="0.45" />
+  </g>
+
+  <!-- Distant Left & Right Mountain Ridges -->
+  <path
+    d="M0,118 L34,104 L68,109 L105,94 L138,99 L168,82 L198,94 L220,76 L220,145 L0,145 Z"
+    fill="#072c44"
+    opacity="0.88"
+  />
+  <path
+    d="M270,82 L308,78 L334,88 L362,85 L392,94 L426,88 L458,98 L458,145 L270,145 Z"
+    fill="#072840"
+    opacity="0.9"
+  />
+
+  <!-- Central Main Jagged Peak (Shadow Base) -->
+  <path
+    d="M72,146 L124,112 L156,104 L184,96 L208,79 L226,69 L243,45 L258,55 L282,69 L308,79 L338,94 L378,112 L422,146 Z"
+    fill="url(#ap-peak-shadow)"
+  />
+
+  <!-- Snow/Aurora-Lit Facets on Central Peak -->
+  <path
+    d="M243,45 L226,69 L208,79 L184,96 L199,98 L218,84 L232,89 L238,71 L245,78 L243,45 Z"
+    fill="url(#ap-peak-lit)"
+    opacity="0.88"
+  />
+  <path
+    d="M243,45 L258,55 L282,69 L308,79 L292,83 L274,73 L263,79 L251,64 L245,78 Z"
+    fill="url(#ap-peak-lit)"
+    opacity="0.45"
+  />
+  <path
+    d="M168,82 L152,96 L165,98 L177,89 Z M308,78 L294,89 L312,92 L322,84 Z"
+    fill="#38d9df"
+    opacity="0.32"
+  />
+
+  <!-- Mid-ground Dark Ridge -->
+  <path
+    d="M0,132 L48,116 L92,124 L138,108 L182,118 L228,102 L272,114 L318,103 L366,118 L412,110 L458,124 L458,161 L0,161 Z"
+    fill="#04182b"
+  />
+
+  <!-- Valley Aurora Mist -->
+  <rect x="0" y="92" width="458" height="69" fill="url(#ap-mist)" />
+
+  <!-- Foreground Conifer/Pine Silhouettes (Left & Right) -->
+  <path
+    d="M0,161 L0,112 L5,102 L10,114 L15,96 L21,112 L26,104 L31,118 L37,92 L43,115 L48,105 L53,121 L59,98 L65,119 L70,109 L75,124 L82,106 L88,125 L94,116 L100,129 L106,118 L112,132 L119,122 L126,135 L134,126 L142,139 L152,131 L162,143 L175,137 L190,148 L215,152 L248,151 L276,144 L288,134 L296,142 L304,126 L311,139 L318,121 L325,136 L333,115 L340,132 L347,118 L354,133 L362,108 L369,128 L376,114 L383,129 L391,102 L398,124 L405,112 L412,126 L420,96 L427,119 L434,105 L441,122 L449,94 L455,114 L458,106 L458,161 Z"
+    fill="#020b16"
+  />
+</svg>

@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { useList, type BaseServer } from "./useList";
 
 const server = (id: string, up?: number, name = id): BaseServer => ({
@@ -17,8 +17,6 @@ const server = (id: string, up?: number, name = id): BaseServer => ({
   }),
 });
 
-beforeEach(() => localStorage.clear());
-
 describe("recommendation sorting", () => {
   it("orders by recommendation count, then name and hostname, treating missing votes as zero", () => {
     const servers = [
@@ -29,7 +27,7 @@ describe("recommendation sorting", () => {
       server("popular", 12),
       server("alpha", 4, "Alpha"),
     ];
-    const { result } = renderHook(() => useList({ servers, storageKey: "favorites" }));
+    const { result } = renderHook(() => useList({ servers }));
 
     act(() => result.current.handleSortByChange("recommended"));
 
@@ -38,7 +36,7 @@ describe("recommendation sorting", () => {
     ]);
   });
 
-  it("keeps favorites first and applies recommendation order within the filtered groups", () => {
+  it("applies recommendation order to the filtered apps", () => {
     const servers = [
       server("favorite-low", 1),
       server("popular", 12),
@@ -46,24 +44,22 @@ describe("recommendation sorting", () => {
       { ...server("offline", 100), online: false },
       { ...server("other-tag", 100), tags: ["games"] },
     ];
-    const { result } = renderHook(() => useList({ servers, storageKey: "favorites" }));
+    const { result } = renderHook(() => useList({ servers }));
 
     act(() => {
-      result.current.handleToggleFavorite("favorite-low");
-      result.current.handleToggleFavorite("favorite-high");
       result.current.handleStatusChange("online");
       result.current.handleTagToggle("tools");
       result.current.handleSortByChange("recommended");
     });
 
     expect(result.current.filteredServers.map(({ id }) => id)).toEqual([
-      "favorite-high", "favorite-low", "popular",
+      "popular", "favorite-high", "favorite-low",
     ]);
   });
 
   it("reorders when refreshed vote counts change without resetting the selected sort", () => {
     const { result, rerender } = renderHook(
-      ({ servers }) => useList({ servers, storageKey: "favorites" }),
+      ({ servers }) => useList({ servers }),
       { initialProps: { servers: [server("alpha", 2), server("beta", 1)] } }
     );
     act(() => result.current.handleSortByChange("recommended"));

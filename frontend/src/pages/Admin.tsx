@@ -21,7 +21,6 @@ export function Admin() {
     selectedTags,
     banFilter,
     approvalMode,
-    landingPageEnabled,
     udpSettings,
     tcpPortSettings,
     policySaving,
@@ -35,7 +34,6 @@ export function Admin() {
     handleBanStatus,
     handleBPSChange,
     handleApprovalModeChange,
-    handleLandingPageEnabledChange,
     handleUDPSettingsChange,
     handleTCPPortSettingsChange,
     handleApproveStatus,
@@ -99,7 +97,6 @@ export function Admin() {
         onTagToggle={handleTagToggle}
         banFilter={banFilter}
         approvalMode={approvalMode}
-        landingPageEnabled={landingPageEnabled}
         udpSettings={udpSettings}
         tcpPortSettings={tcpPortSettings}
         policySaving={policySaving}
@@ -107,7 +104,6 @@ export function Admin() {
         onBanStatusChange={handleBanStatus}
         onBPSChange={handleBPSChange}
         onApprovalModeChange={handleApprovalModeChange}
-        onLandingPageEnabledChange={handleLandingPageEnabledChange}
         onUDPSettingsChange={handleUDPSettingsChange}
         onTCPPortSettingsChange={handleTCPPortSettingsChange}
         onApproveStatusChange={handleApproveStatus}

@@ -113,8 +113,8 @@ const REPUTATION: ReputationSummary = {
 
 // Routes probe: the card sits on the directory route; navigation into
 // /server/srv-1 would swap in the "service detail" marker.
-function renderVotingCard() {
-  const onVote = vi.fn();
+function renderCardWithComments() {
+  const onOpenComments = vi.fn();
   render(
     <MemoryRouter initialEntries={["/"]}>
       <Routes>
@@ -136,7 +136,7 @@ function renderVotingCard() {
                   link: "/server/srv-1",
                   reputation: REPUTATION,
                 }}
-                onVote={onVote}
+                onOpenComments={onOpenComments}
               />
             </>
           }
@@ -145,22 +145,15 @@ function renderVotingCard() {
       </Routes>
     </MemoryRouter>
   );
-  return onVote;
+  return { onOpenComments };
 }
 
-describe("ServerCard community reputation votes", () => {
-  it("renders counts and votes without navigating the card", async () => {
-    const onVote = renderVotingCard();
+describe("ServerCard comments interaction", () => {
+  it("opens the app's comments without navigating into the service", () => {
+    const { onOpenComments } = renderCardWithComments();
+    fireEvent.click(screen.getByRole("button", { name: "Comments" }));
 
-    expect(screen.getByText("12")).toBeTruthy();
-    expect(screen.getByText("8")).toBeTruthy();
-
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Recommend" })));
-    expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "up");
-
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Do not recommend" })));
-    expect(onVote).toHaveBeenCalledWith("minecraft.relay.example.com", "down");
-
+    expect(onOpenComments).toHaveBeenCalledWith(expect.objectContaining({ id: "srv-1" }));
     expect(screen.getByText("directory")).toBeTruthy();
     expect(screen.queryByText("service detail")).toBeNull();
   });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SortOption, StatusFilter } from "@/types/filters";
 import type { ReputationSummary } from "@/types/api";
 
@@ -23,7 +23,6 @@ export interface BaseServer {
 
 export interface UseListOptions<T extends BaseServer> {
   servers: T[];
-  storageKey: string;
   additionalFilter?: (server: T) => boolean;
 }
 
@@ -32,41 +31,12 @@ export interface UseListReturn<T extends BaseServer> {
   status: StatusFilter;
   sortBy: SortOption;
   selectedTags: string[];
-  favorites: string[];
   availableTags: string[];
   filteredServers: T[];
   handleSearchChange: (value: string) => void;
   handleStatusChange: (value: StatusFilter) => void;
   handleSortByChange: (value: SortOption) => void;
   handleTagToggle: (tag: string) => void;
-  handleToggleFavorite: (serverId: string) => void;
-}
-
-function readStoredFavorites(storageKey: string): string[] {
-  let raw: string | null = null;
-  try {
-    raw = localStorage.getItem(storageKey);
-  } catch {
-    return [];
-  }
-
-  if (!raw) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return [...new Set(
-      parsed.filter(
-        (value): value is string => typeof value === "string" && value.length > 0
-      )
-    )];
-  } catch {
-    return [];
-  }
 }
 
 function parseTimestamp(value?: string, fallback = 0): number {
@@ -91,30 +61,12 @@ function matchesStatus(online: boolean, status: StatusFilter): boolean {
 
 export function useList<T extends BaseServer>({
   servers,
-  storageKey,
   additionalFilter,
 }: UseListOptions<T>): UseListReturn<T> {
   const [searchQuery, setSearchQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sortBy, setSortBy] = useState<SortOption>("duration");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [favorites, setFavorites] = useState<string[]>(() =>
-    readStoredFavorites(storageKey)
-  );
-  const hasLoadedServersRef = useRef(false);
-
-  useEffect(() => {
-    setFavorites(readStoredFavorites(storageKey));
-  }, [storageKey]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(favorites));
-    } catch {
-      // Ignore storage write failures (quota/private browsing).
-    }
-  }, [favorites, storageKey]);
-
   const availableTags = useMemo(() => {
     const counts = new Map<string, number>();
     servers.forEach((server) => {
@@ -133,20 +85,6 @@ export function useList<T extends BaseServer>({
   }, [servers]);
 
   useEffect(() => {
-    if (servers.length > 0) {
-      hasLoadedServersRef.current = true;
-    }
-    if (!hasLoadedServersRef.current && servers.length === 0) {
-      return;
-    }
-    const validIDs = new Set(servers.map((server) => server.id));
-    setFavorites((prev) => {
-      const next = prev.filter((id) => validIDs.has(id));
-      return next.length === prev.length ? prev : next;
-    });
-  }, [servers]);
-
-  useEffect(() => {
     const availableTagSet = new Set(availableTags);
     setSelectedTags((prev) => {
       const next = prev.filter((tag) => availableTagSet.has(tag));
@@ -157,7 +95,6 @@ export function useList<T extends BaseServer>({
   const filteredServers = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     const selectedTagSet = new Set(selectedTags);
-    const favoriteSet = new Set(favorites);
     const now = Date.now();
 
     const matchesTags = (server: T): boolean => {
@@ -223,10 +160,8 @@ export function useList<T extends BaseServer>({
     };
 
     const compare = sortByField(sortBy);
-    return filtered.sort((a, b) =>
-      Number(favoriteSet.has(b.id)) - Number(favoriteSet.has(a.id)) || compare(a, b)
-    );
-  }, [servers, searchQuery, status, sortBy, selectedTags, favorites, additionalFilter]);
+    return filtered.sort(compare);
+  }, [servers, searchQuery, status, sortBy, selectedTags, additionalFilter]);
 
   function handleTagToggle(tag: string): void {
     const normalizedTag = tag.trim().toLowerCase();
@@ -241,26 +176,16 @@ export function useList<T extends BaseServer>({
     );
   }
 
-  function handleToggleFavorite(serverId: string): void {
-    setFavorites((prev) =>
-      prev.includes(serverId)
-        ? prev.filter((id) => id !== serverId)
-        : [...prev, serverId]
-    );
-  }
-
   return {
     searchQuery,
     status,
     sortBy,
     selectedTags,
-    favorites,
     availableTags,
     filteredServers,
     handleSearchChange: setSearchQuery,
     handleStatusChange: setStatus,
     handleSortByChange: setSortBy,
     handleTagToggle,
-    handleToggleFavorite,
   };
 }

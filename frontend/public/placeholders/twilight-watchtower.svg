@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 562 161" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="tw-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#141d4a" />
+      <stop offset="22%" stop-color="#2e2460" />
+      <stop offset="44%" stop-color="#683178" />
+      <stop offset="64%" stop-color="#b84b84" />
+      <stop offset="78%" stop-color="#e57c6c" />
+      <stop offset="90%" stop-color="#4b226d" />
+      <stop offset="100%" stop-color="#0b0826" />
+    </linearGradient>
+
+    <radialGradient id="tw-horizon-glow" cx="52%" cy="68%" r="54%">
+      <stop offset="0%" stop-color="#ff9a76" stop-opacity="0.55" />
+      <stop offset="45%" stop-color="#d9468f" stop-opacity="0.32" />
+      <stop offset="100%" stop-color="#2e1854" stop-opacity="0" />
+    </radialGradient>
+
+    <linearGradient id="tw-meteor" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0" />
+      <stop offset="65%" stop-color="#ffd6e8" stop-opacity="0.65" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.98" />
+    </linearGradient>
+
+    <linearGradient id="tw-ridge-far" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5e2d79" />
+      <stop offset="100%" stop-color="#2b124c" />
+    </linearGradient>
+
+    <linearGradient id="tw-ridge-mid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3c1b64" />
+      <stop offset="100%" stop-color="#1a0b38" />
+    </linearGradient>
+
+    <linearGradient id="tw-ridge-near" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#231044" />
+      <stop offset="100%" stop-color="#090721" />
+    </linearGradient>
+  </defs>
+
+  <!-- Twilight Sky -->
+  <rect width="562" height="161" fill="url(#tw-sky)" />
+  <rect width="562" height="161" fill="url(#tw-horizon-glow)" />
+
+  <!-- Stars -->
+  <g fill="#fce7f3" opacity="0.75">
+    <circle cx="42" cy="18" r="0.8" />
+    <circle cx="96" cy="28" r="0.6" opacity="0.5" />
+    <circle cx="148" cy="15" r="0.9" />
+    <circle cx="204" cy="24" r="0.7" />
+    <circle cx="233" cy="39" r="1.1" />
+    <circle cx="268" cy="19" r="0.7" opacity="0.6" />
+    <circle cx="312" cy="14" r="0.8" />
+    <circle cx="392" cy="22" r="0.7" />
+    <circle cx="436" cy="36" r="0.9" />
+    <circle cx="488" cy="18" r="0.7" />
+    <circle cx="528" cy="29" r="0.8" />
+  </g>
+
+  <!-- Shooting Star / Meteor Streak -->
+  <line
+    x1="336"
+    y1="8"
+    x2="292"
+    y2="42"
+    stroke="url(#tw-meteor)"
+    stroke-width="1.35"
+    stroke-linecap="round"
+  />
+  <circle cx="292" cy="42" r="1.3" fill="#ffffff" />
+
+  <!-- Wispy Twilight Clouds -->
+  <g fill="#f48fb1" opacity="0.18">
+    <ellipse cx="142" cy="58" rx="48" ry="3.5" />
+    <ellipse cx="228" cy="64" rx="38" ry="2.5" />
+    <ellipse cx="446" cy="56" rx="52" ry="3.5" />
+    <ellipse cx="486" cy="63" rx="34" ry="2.2" />
+  </g>
+
+  <!-- Far Mountain Range -->
+  <path
+    d="M0,98 L38,84 L74,90 L118,74 L162,88 L198,79 L246,66 L292,84 L334,76 L376,65 L424,84 L468,75 L516,66 L562,79 L562,135 L0,135 Z"
+    fill="url(#tw-ridge-far)"
+  />
+
+  <!-- Mid Mountain Range -->
+  <path
+    d="M0,108 L46,94 L94,102 L148,82 L202,99 L254,88 L302,98 L354,82 L408,96 L458,84 L512,95 L562,86 L562,145 L0,145 Z"
+    fill="url(#tw-ridge-mid)"
+  />
+
+  <!-- Near Mountain Ridge -->
+  <path
+    d="M0,118 L64,106 L122,115 L184,98 L244,112 L308,101 L366,112 L426,99 L488,112 L562,102 L562,161 L0,161 Z"
+    fill="url(#tw-ridge-near)"
+  />
+
+  <!-- Fire Watchtower Silhouette (Centered at x=329) -->
+  <g fill="#16092e" stroke="#16092e" stroke-linejoin="round">
+    <!-- Pointed Roof -->
+    <polygon points="329,43 313,54 345,54" />
+    <!-- Cabin Box -->
+    <rect x="318" y="54" width="22" height="12" />
+    <!-- Glowing Cabin Windows -->
+    <rect x="320.5" y="56.5" width="5" height="5.5" fill="#fb923c" stroke="none" />
+    <rect x="326.5" y="56.5" width="5" height="5.5" fill="#fde047" stroke="none" />
+    <rect x="332.5" y="56.5" width="5" height="5.5" fill="#fb923c" stroke="none" />
+    <!-- Balcony Deck & Railing -->
+    <rect x="312" y="65.5" width="34" height="2.4" />
+    <line x1="314" y1="61.5" x2="344" y2="61.5" stroke="#16092e" stroke-width="1.2" />
+    <line x1="314" y1="61.5" x2="314" y2="66" stroke="#16092e" stroke-width="1.2" />
+    <line x1="344" y1="61.5" x2="344" y2="66" stroke="#16092e" stroke-width="1.2" />
+    <!-- Support Legs -->
+    <line x1="320" y1="67.5" x2="313" y2="122" stroke="#14082b" stroke-width="2.2" />
+    <line x1="338" y1="67.5" x2="345" y2="122" stroke="#14082b" stroke-width="2.2" />
+    <line x1="325" y1="67.5" x2="322" y2="122" stroke="#14082b" stroke-width="1.3" />
+    <line x1="333" y1="67.5" x2="336" y2="122" stroke="#14082b" stroke-width="1.3" />
+    <!-- Horizontal Struts & X-Bracing -->
+    <line x1="318" y1="81" x2="340" y2="81" stroke="#14082b" stroke-width="1.4" />
+    <line x1="316" y1="95" x2="342" y2="95" stroke="#14082b" stroke-width="1.4" />
+    <line x1="314" y1="109" x2="344" y2="109" stroke="#14082b" stroke-width="1.4" />
+    <line x1="320" y1="68" x2="340" y2="81" stroke="#14082b" stroke-width="1.1" />
+    <line x1="338" y1="68" x2="318" y2="81" stroke="#14082b" stroke-width="1.1" />
+    <line x1="318" y1="81" x2="342" y2="95" stroke="#14082b" stroke-width="1.1" />
+    <line x1="340" y1="81" x2="316" y2="95" stroke="#14082b" stroke-width="1.1" />
+    <line x1="316" y1="95" x2="344" y2="109" stroke="#14082b" stroke-width="1.1" />
+    <line x1="342" y1="95" x2="314" y2="109" stroke="#14082b" stroke-width="1.1" />
+  </g>
+
+  <!-- Foreground Pine Treeline Silhouette -->
+  <path
+    d="M0,161 L0,126 L8,114 L15,127 L23,118 L30,129 L38,112 L46,127 L54,119 L62,131 L70,116 L78,129 L86,121 L94,132 L103,117 L111,130 L120,122 L128,133 L137,118 L145,131 L154,120 L162,132 L171,115 L179,129 L188,119 L196,131 L205,114 L214,128 L222,118 L231,130 L240,115 L249,128 L258,116 L267,129 L276,112 L285,126 L294,114 L303,127 L312,110 L321,124 L330,112 L339,125 L348,108 L357,123 L366,111 L375,125 L384,106 L393,122 L402,109 L411,124 L420,98 L429,119 L438,104 L447,121 L456,96 L465,118 L474,105 L483,122 L492,99 L501,119 L510,94 L519,117 L528,102 L537,119 L546,95 L555,116 L562,104 L562,161 Z"
+    fill="#07051a"
+  />
+</svg>

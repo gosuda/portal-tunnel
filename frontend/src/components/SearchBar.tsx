@@ -38,14 +38,16 @@ export function SearchBar({
   setShowFilterModal,
 }: SearchBarProps) {
   return (
-    <div className="flex flex-wrap mt-4 sm:mt-6 items-center gap-3 px-0">
-      <div className="flex gap-2 items-center w-full">
-        <label className="flex min-w-55 flex-1 items-stretch h-10 relative">
+    <div className="flex flex-wrap mt-5 items-center gap-3 border-b border-border pb-4">
+      <div className="flex gap-2 items-center w-full lg:w-auto lg:min-w-72 lg:flex-1">
+        <label className="flex min-w-0 flex-1 items-stretch h-10 relative">
           <div className="left-0 h-full absolute text-text-muted flex items-center justify-center pl-3 pr-2 rounded-l-md bg-border border border-border">
             <Search className="w-4 h-4" />
           </div>
           <Input
-            placeholder="Search live apps..."
+            aria-label="Search live apps"
+            type="search"
+            placeholder="Search apps, descriptions, or tags"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             className="h-10 pl-12 border border-border rounded-md"
@@ -63,12 +65,14 @@ export function SearchBar({
       </div>
 
       <StatusSelect
+        className="flex-1 sm:flex-none"
         status={status}
         onStatusChange={onStatusChange}
         hideFiltersOnMobile={hideFiltersOnMobile}
       />
 
       <SortbySelect
+        className="flex-1 sm:flex-none"
         allowRecommendationSort={allowRecommendationSort}
         sortBy={sortBy}
         onSortByChange={onSortByChange}
@@ -76,7 +80,7 @@ export function SearchBar({
       />
 
       <div
-        className={`relative flex w-full sm:w-auto sm:min-w-[320px] flex-1 ${
+        className={`relative flex w-full sm:w-auto sm:min-w-48 lg:max-w-72 flex-1 ${
           hideFiltersOnMobile ? "hidden sm:flex" : ""
         }`}
       >

@@ -30,8 +30,8 @@ afterEach(() => vi.useRealTimers());
 describe("useServerList public snapshot", () => {
   it("refreshes the original leases and directory entries together", async () => {
     vi.mocked(apiClient.get)
-      .mockResolvedValueOnce({ leases: [lease], landing_page_enabled: true })
-      .mockResolvedValueOnce({ leases: [{ ...lease, ready: 1 }], landing_page_enabled: true });
+      .mockResolvedValueOnce({ leases: [lease] })
+      .mockResolvedValueOnce({ leases: [{ ...lease, ready: 1 }] });
     const { result, unmount } = renderHook(() => useServerList());
     await act(async () => {});
 
@@ -48,19 +48,18 @@ describe("useServerList public snapshot", () => {
   it("marks status unavailable without replacing the last directory snapshot, then recovers", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(apiClient.get)
-      .mockResolvedValueOnce({ leases: [{ ...lease, ready: 1 }], landing_page_enabled: true })
+      .mockResolvedValueOnce({ leases: [{ ...lease, ready: 1 }] })
       .mockRejectedValueOnce(new Error("unavailable"))
-      .mockResolvedValueOnce({ leases: [lease], landing_page_enabled: true });
+      .mockResolvedValueOnce({ leases: [lease] });
     const { result, unmount } = renderHook(() => useServerList());
     await act(async () => {});
 
     const lastDirectory = result.current.filteredServers;
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
     expect(result.current.leases).toBeNull();
-    // Keeping this input unchanged prevents useList from pruning favorites/tags.
+    // Keeping this input unchanged preserves the last directory and its tags.
     expect(result.current.filteredServers).toBe(lastDirectory);
     expect(result.current.filteredServers[0].online).toBe(true);
-    expect(result.current.landingPageEnabled).toBe(true);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
     expect(result.current.leases).toEqual([lease]);
@@ -70,8 +69,8 @@ describe("useServerList public snapshot", () => {
 
   it("treats a successful empty snapshot as authoritative", async () => {
     vi.mocked(apiClient.get)
-      .mockResolvedValueOnce({ leases: [lease], landing_page_enabled: true })
-      .mockResolvedValueOnce({ leases: [], landing_page_enabled: true });
+      .mockResolvedValueOnce({ leases: [lease] })
+      .mockResolvedValueOnce({ leases: [] });
     const { result, unmount } = renderHook(() => useServerList());
     await act(async () => {});
 

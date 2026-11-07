@@ -164,9 +164,8 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `DISCOVERY` | `false` | bool | Serve relay discovery endpoints and poll discovery peers |
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
 | `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the IVNP overlay and requires `DISCOVERY=true`; empty disables the overlay |
-| `LANDING_PAGE_ENABLED` | `false` | bool | Initial dashboard landing-page visibility; admin changes are persisted in the relay policy state |
-| `APPROVAL_MODE` | `auto` | string | Initial lease approval mode (`auto` \| `manual`). A mode saved in `policy.json` wins; see [Private relay](/self-hosting#private-relay) |
-| `UNAPPROVED_LEASES_PER_SOURCE` | `64` | int | Leases one source IP can hold while they are not routable; `0` is unlimited; see [Private relay](/self-hosting#private-relay) |
+| APPROVAL_MODE | uto | string | Initial lease approval mode (uto \| manual). A mode saved in policy.json wins; see [Private relay](/self-hosting#private-relay) |
+| UNAPPROVED_LEASES_PER_SOURCE | 64 | int | Leases one source IP can hold while they are not routable;   is unlimited; see [Private relay](/self-hosting#private-relay) |
 
 ### IVNP overlay
 

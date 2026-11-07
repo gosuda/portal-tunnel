@@ -129,7 +129,7 @@
 	{/if}
 
 	{#if isLandingPage}
-	<!-- Landing page: max-width container with side borders (matches React frontend) -->
+	<!-- Landing page: max-width container with side borders -->
 	<div class="mx-auto flex w-full max-w-6xl flex-1 flex-col border-x border-border/80">
 		<main class="px-4 pt-6 pb-8 sm:px-6 sm:pb-10 md:px-8">
 			{@render children()}

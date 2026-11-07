@@ -1,40 +1,50 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
-import type { ReputationVote } from "@/types/api";
+import { BadgeDollarSign, Menu, MessageSquare } from "lucide-react";
 import type { BaseServer } from "@/hooks/useList";
 import { useCopy } from "@/hooks/useCopy";
+import { isHiddenByVotes } from "@/utils/reputation";
+
+const PLACEHOLDER_THUMBNAILS = [
+  "/placeholders/aurora-peaks.svg",
+  "/placeholders/twilight-watchtower.svg",
+  "/placeholders/nebula-fjord.svg",
+  "/placeholders/synth-horizon.svg",
+] as const;
+
+function pickPlaceholderThumbnail(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 33 + seed.charCodeAt(i)) >>> 0;
+  }
+  return PLACEHOLDER_THUMBNAILS[hash % PLACEHOLDER_THUMBNAILS.length];
+}
 
 interface ServerCardProps {
   server: BaseServer;
-  isFavorite?: boolean;
-  onToggleFavorite?: (serverId: string) => void;
   action?: ReactNode;
   children?: ReactNode;
   navigable?: boolean;
-  onVote?: (hostname: string, vote: ReputationVote) => void | Promise<void>;
+  onOpenComments?: (server: BaseServer) => void;
 }
 
 export function ServerCard({
   server,
-  isFavorite = false,
-  onToggleFavorite,
   action,
   children,
   navigable = true,
-  onVote,
+  onOpenComments,
 }: ServerCardProps) {
   const {
     id: serverId, name, description, tags, thumbnail, owner, online,
     firstSeen, tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
   } = server;
-  const reputation = onVote ? server.reputation : undefined;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
-  const [isVoting, setIsVoting] = useState(false);
-  const [voteError, setVoteError] = useState("");
-  const effectiveThumbnail = thumbnailFailed ? "" : thumbnail;
+  const effectiveThumbnail = thumbnailFailed ? "" : thumbnail.trim();
+  const resolvedThumbnail =
+    effectiveThumbnail || pickPlaceholderThumbnail(name || serverId);
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
@@ -44,39 +54,33 @@ export function ServerCard({
   ];
   const isTransportService = endpoints.length > 0;
   const isNavigable = navigable && !isTransportService;
-  const displayTags = [
-    ...new Set([...tags, ...endpoints.map((endpoint) => endpoint.protocol)]),
-  ];
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
 
   useEffect(() => {
     setThumbnailFailed(false);
   }, [thumbnail]);
 
-
-  const handleFavoriteClick = (event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    onToggleFavorite?.(serverId);
-  };
-
-  // Voting must never navigate into the service, even though the whole card
-  // can be a <Link>.
-  const handleVoteClick = (vote: ReputationVote) => async (event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (reputation) {
-      if (!onVote || isVoting) return;
-      setVoteError("");
-      setIsVoting(true);
-      try {
-        await onVote(reputation.hostname, vote);
-      } catch {
-        setVoteError("Vote failed. Please try again.");
-      } finally {
-        setIsVoting(false);
+  useEffect(() => {
+    const handleOutsideClick = (event: PointerEvent) => {
+      const details = detailsRef.current;
+      if (details?.open && !details.contains(event.target as Node)) {
+        details.removeAttribute("open");
       }
-    }
-  };
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && detailsRef.current?.open) {
+        detailsRef.current.removeAttribute("open");
+      }
+    };
+
+    document.addEventListener("pointerdown", handleOutsideClick);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsideClick);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   const copyEndpoint = (protocol: string, address: string) =>
     copy(address, protocol);
@@ -84,6 +88,9 @@ export function ServerCard({
   const formattedDuration = useMemo(() => {
     if (!firstSeen) return "";
     const start = new Date(firstSeen).getTime();
+    if (Number.isNaN(start)) {
+      return firstSeen;
+    }
     const now = Date.now();
     const diff = Math.max(0, now - start);
 
@@ -92,173 +99,157 @@ export function ServerCard({
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
 
-    if (days > 0) return `${days}d ${hours % 24}h`;
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    if (minutes > 0) return `${minutes}m`;
-    return `${seconds}s`;
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
+    return `${seconds}s ago`;
   }, [firstSeen]);
 
   const cardBody = (
-    <article
-      data-hero-key={`server-bg-${serverId}`}
-      className={clsx(
-        "relative w-full overflow-hidden rounded-lg group border border-border bg-card shadow-sm transition-shadow hover:shadow-md dark:border-white/10",
-        children ? "h-71.5" : "h-[174.5px]"
-      )}
-    >
-      <div
-        className="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105"
-        style={{
-          backgroundImage: effectiveThumbnail
-            ? `url(${effectiveThumbnail})`
-            : "linear-gradient(135deg, var(--card) 0%, var(--background) 100%)",
-        }}
-      />
-      {effectiveThumbnail && (
+    <article data-hero-key={`server-bg-${serverId}`} className="relative w-full min-w-0">
+      {/* 1. Thumbnail Container (16:9 aspect ratio) */}
+      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted">
         <img
+          src={resolvedThumbnail}
           alt=""
-          aria-hidden="true"
-          className="hidden"
-          src={effectiveThumbnail}
-          onError={() => setThumbnailFailed(true)}
+          loading="lazy"
+          className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
+          onError={effectiveThumbnail ? () => setThumbnailFailed(true) : undefined}
         />
-      )}
 
-      <div className="absolute inset-0 bg-linear-to-t from-black/86 via-black/58 to-black/18" />
-
-      <div
-        className={clsx(
-          "relative flex h-full flex-col justify-between p-5",
-          isNavigable ? "pointer-events-none z-30" : "z-10"
-        )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 rounded-md bg-black/45 px-2.5 py-1 backdrop-blur-sm border border-white/8">
-              <div
-                className={clsx(
-                  "size-2 rounded-full",
-                  online
-                    ? "bg-primary"
-                    : "bg-gray-500"
-                )}
-              />
-              <span
-                className={clsx(
-                  "text-[10px] font-bold uppercase tracking-wider",
-                  online ? "text-white" : "text-white/60"
-                )}
-              >
-                {online ? (isTransportService ? "Live" : "Online") : "Offline"}
-                {formattedDuration && online && ` · ${formattedDuration}`}
-              </span>
-            </div>
-
-            {showPaymentBadge && (
-              <div className="inline-flex max-w-[8.5rem] items-center gap-1.5 rounded-md border border-amber-300/25 bg-amber-300/18 px-2.5 py-1 text-[10px] font-bold uppercase tracking-normal text-amber-100 backdrop-blur-sm">
-                <BadgeDollarSign className="size-3 shrink-0" />
-                <span className="min-w-0 truncate">{effectivePaymentLabel}</span>
-              </div>
-            )}
+        {/* Top-right custom action overlay */}
+        {action && (
+          <div className="pointer-events-auto absolute top-2.5 right-2.5 z-30">
+            {action}
           </div>
+        )}
+        {server.reputation && isHiddenByVotes(server.reputation.up, server.reputation.down) && (
+          <span className="absolute top-2.5 right-2.5 rounded bg-black/80 px-2 py-0.5 text-xs text-white">
+            Hidden by downvotes
+          </span>
+        )}
 
-          {action ?? (
-            <button
-              onClick={handleFavoriteClick}
-              className={clsx(
-                "pointer-events-auto relative z-30 flex size-8 items-center justify-center rounded-md backdrop-blur-md transition-colors border border-white/8 cursor-pointer",
-                isFavorite
-                  ? "bg-primary text-black"
-                  : "bg-black/40 text-white/70 hover:bg-primary hover:text-black"
+        {/* Payment badge */}
+        {showPaymentBadge && (
+          <span
+            className={clsx(
+              "absolute inline-flex max-w-[80%] items-center gap-1 rounded bg-black/80 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-xs",
+              isTransportService ? "top-2.5 left-2.5" : "bottom-2.5 left-2.5"
+            )}
+          >
+            <BadgeDollarSign className="size-3.5 shrink-0 text-emerald-400" />
+            <span className="truncate">{effectivePaymentLabel}</span>
+          </span>
+        )}
+
+        {/* Online LIVE badge */}
+        {online && !isTransportService && (
+          <span className="absolute bottom-2.5 right-2.5 inline-flex items-center gap-1.5 rounded bg-black/80 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-400 backdrop-blur-xs">
+            <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            LIVE
+          </span>
+        )}
+
+        {/* Raw transport endpoints (TCP / UDP) */}
+        {isTransportService && (
+          <div className="absolute inset-x-2.5 bottom-2.5 space-y-1 rounded-lg border border-white/10 bg-black/80 p-2 backdrop-blur-md">
+            {endpoints.map((endpoint) => (
+              <div key={endpoint.protocol} className="flex min-w-0 items-center gap-2">
+                <code
+                  className="min-w-0 flex-1 truncate font-mono text-xs text-white/90"
+                  title={endpoint.address}
+                >
+                  {endpoint.address}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
+                  className="pointer-events-auto relative z-30 shrink-0 rounded bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                >
+                  {copiedProtocol === endpoint.protocol ? "Copied!" : `Copy ${endpoint.protocol}`}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 2. Details Container: (Title/Desc) + Right Actions */}
+      <div className={clsx("mt-3 flex items-start justify-between gap-3", isNavigable ? "pointer-events-none" : "")}>
+        {/* Title and Short Metadata */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <h3
+            title={name}
+            className="line-clamp-2 break-words text-[15px] font-semibold leading-snug text-foreground transition-colors group-hover:text-primary"
+          >
+            {name}
+          </h3>
+
+          {(owner || formattedDuration) && (
+            <div className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+              {owner && (
+                <span className="truncate font-medium text-muted-foreground hover:text-foreground">
+                  {owner}
+                </span>
               )}
-              aria-label={
-                isFavorite ? "Remove from favorites" : "Add to favorites"
-              }
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                className="w-4.5 h-4.5"
-                fill={isFavorite ? "currentColor" : "none"}
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-              </svg>
-            </button>
+              {owner && formattedDuration && <span className="shrink-0">•</span>}
+              {formattedDuration && (
+                <span className="shrink-0">{formattedDuration}</span>
+              )}
+            </div>
           )}
         </div>
 
-        <div className="flex flex-col gap-3">
-          <div className="flex items-end justify-between gap-3">
-            <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <h3 className="min-w-0 flex-1 truncate font-display text-xl font-bold leading-tight text-white">
-                  {name}
-                </h3>
+        {/* Right Actions: Comments + Hamburger Details */}
+        <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5 pt-0.5">
+          {onOpenComments && (
+            <button
+              type="button"
+              data-comments-trigger
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onOpenComments(server);
+              }}
+              aria-label="Comments"
+              title="Comments"
+              className="flex size-7.5 items-center justify-center rounded-lg border border-border/70 bg-secondary/60 text-foreground/80 transition-colors hover:bg-secondary hover:text-foreground"
+            >
+              <MessageSquare className="size-3.5" />
+            </button>
+          )}
 
-                {reputation && (
-                  <div
-                    className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1"
-                    aria-busy={isVoting}
-                  >
-                    <button
-                      type="button"
-                      onClick={handleVoteClick("up")}
-                      disabled={isVoting}
-                      aria-label="Recommend"
-                      className={clsx(
-                        "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
-                        isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
-                        reputation.viewer_vote === "up"
-                          ? "border-primary/60 bg-primary/90 text-black"
-                          : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
-                      )}
-                    >
-                      <ThumbsUp className="size-3 shrink-0" />
-                      <span>{reputation.up}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleVoteClick("down")}
-                      disabled={isVoting}
-                      aria-label="Do not recommend"
-                      className={clsx(
-                        "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold backdrop-blur-sm transition-colors",
-                        isVoting ? "cursor-not-allowed opacity-50" : "cursor-pointer",
-                        reputation.viewer_vote === "down"
-                          ? "border-primary/60 bg-primary/90 text-black"
-                          : "border-white/16 bg-black/40 text-white/80 hover:bg-primary hover:text-black"
-                      )}
-                    >
-                      <ThumbsDown className="size-3 shrink-0" />
-                      <span>{reputation.down}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {voteError && (
-                <span role="alert" className="text-[10px] text-red-400">
-                  {voteError}
-                </span>
-              )}
-
+          {/* Details menu */}
+          <details ref={detailsRef} className="relative z-30 shrink-0">
+            <summary
+              aria-label={`Actions for ${name}`}
+              title={`Actions for ${name}`}
+              className="flex size-7.5 cursor-pointer list-none items-center justify-center rounded-lg border border-border/70 bg-secondary/60 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&::-webkit-details-marker]:hidden"
+            >
+              <Menu className="size-4" />
+            </summary>
+            <div className="absolute right-0 top-9 z-40 max-h-96 w-64 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-xl [scrollbar-width:thin]">
               {description && (
-                <p className="text-xs text-white/70 line-clamp-1 font-medium">
-                  {description}
-                </p>
+                <div className="border-b border-border/60 pb-2.5 mb-2.5">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Description
+                  </span>
+                  <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
+                    {description}
+                  </p>
+                </div>
               )}
 
-              {displayTags.length > 0 && (
-                <div className="pointer-events-auto relative z-30 mt-1 w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  <div className="flex min-w-max gap-1.5">
-                    {displayTags.map((tag, index) => (
+              {tags && tags.length > 0 && (
+                <div className="border-b border-border/60 pb-2.5 mb-2.5">
+                  <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Tags
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {tags.map((tag) => (
                       <span
-                        key={index}
-                        className="rounded-sm bg-primary/16 px-2 py-0.5 text-[10px] font-bold uppercase tracking-normal text-primary border border-primary/24 whitespace-nowrap"
+                        key={tag}
+                        className="inline-flex items-center rounded-md bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground"
                       >
                         #{tag}
                       </span>
@@ -267,56 +258,38 @@ export function ServerCard({
                 </div>
               )}
 
-              {isTransportService && (
-                <div className="min-w-0 space-y-1 text-sm font-medium text-white/90">
-                  {endpoints.map((endpoint) => (
-                    <div key={endpoint.protocol} className="flex items-center gap-2">
-                      <code className="min-w-0 flex-1 truncate font-mono tracking-tight">
-                        {endpoint.address}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
-                        className="shrink-0 rounded-md border border-white/20 bg-black/40 px-2 py-1 text-[10px] font-bold text-white transition-colors hover:bg-primary hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                      >
-                        {copiedProtocol === endpoint.protocol
-                          ? "Copied!"
-                          : `Copy ${endpoint.protocol}`}
-                      </button>
-                    </div>
-                  ))}
+              {owner && (
+                <div className="border-b border-border/60 pb-2.5 mb-2.5">
+                  <span className="mb-0.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Owner
+                  </span>
+                  <p className="text-xs text-foreground/80">
+                    {owner}
+                  </p>
                 </div>
               )}
 
-              {owner && (
-                <span className="text-[10px] font-medium text-white/50">
-                  by {owner}
-                </span>
+              {!description && (!tags || tags.length === 0) && !owner && (
+                <div className="border-b border-border/60 pb-2 mb-2 text-xs text-muted-foreground">
+                  No additional details.
+                </div>
               )}
             </div>
-
-            {!children && effectiveThumbnail && (
-              <div className="shrink-0">
-                <div className="size-10 overflow-hidden rounded-md border border-white/20 shadow-sm">
-                  <img
-                    alt={`${name} avatar`}
-                    className="h-full w-full object-cover"
-                    src={effectiveThumbnail}
-                    onError={() => setThumbnailFailed(true)}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {children}
+          </details>
         </div>
       </div>
+
+      {/* Children slot (e.g. Admin controls) */}
+      {children && (
+        <div className="pointer-events-auto relative z-30 mt-3 border-t border-border pt-3">
+          {children}
+        </div>
+      )}
     </article>
   );
 
   return (
-    <div className="relative">
+    <div className="group relative">
       {cardBody}
       {isNavigable && (
         <Link
@@ -335,7 +308,7 @@ export function ServerCard({
             reputation: server.reputation,
           }}
           aria-label={`Open ${name}`}
-          className="absolute inset-0 z-20 cursor-pointer rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          className="absolute inset-0 z-20 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         />
       )}
     </div>

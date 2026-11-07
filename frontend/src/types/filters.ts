@@ -13,3 +13,5 @@ export type SortOption =
   | "duration";
 
 export type TagMode = "AND" | "OR";
+
+export type BrowseView = "home" | "favorites" | "relays";

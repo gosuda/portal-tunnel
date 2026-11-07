@@ -9,7 +9,6 @@
 5. `VITE_PORTAL_API_BASE_URL` is the only built-in API origin setting. Leave it empty for same-origin deployment.
 6. Lease and policy wire fields use snake_case. Go types in `../types/` own the contract mirrored by `src/types/api.ts`.
 7. Lease metadata parsing and UI defaults are owned by `src/lib/metadata.ts`.
-8. Landing-page visibility comes from `landing_page_enabled` in the Go relay public and policy state.
 
 ## Frontend Conventions
 

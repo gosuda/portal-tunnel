@@ -30,8 +30,9 @@ var errReputationStoreRequiresStatePath = errors.New("reputation store requires 
 
 // Vote values are the relay-local wire contract mirrored by the frontend.
 const (
-	VoteUp   = "up"
-	VoteDown = "down"
+	VoteUp    = "up"
+	VoteDown  = "down"
+	VoteClear = "clear"
 )
 
 const (
@@ -126,13 +127,13 @@ func (s *ReputationStore) CastVote(hostname, identity, vote, cookieID string, so
 	}
 
 	previous := s.state.Identities[identity]
-	if previous != nil && previous[hash] == vote {
+	if (vote == VoteClear && previous[hash] == "") || previous[hash] == vote {
 		return s.summarize(hostname, previous, hash), minted, nil
 	}
-	if previous == nil && len(s.state.Identities) >= reputationMaxIdentities {
+	if vote != VoteClear && previous == nil && len(s.state.Identities) >= reputationMaxIdentities {
 		return ReputationSummary{}, "", ErrReputationCapacity
 	}
-	if _, exists := previous[hash]; !exists {
+	if _, exists := previous[hash]; vote != VoteClear && !exists {
 		if len(previous) >= reputationMaxVoters {
 			return ReputationSummary{}, "", ErrReputationCapacity
 		}
@@ -149,8 +150,17 @@ func (s *ReputationStore) CastVote(hostname, identity, vote, cookieID string, so
 	if votes == nil {
 		votes = make(map[string]string)
 	}
-	votes[hash] = vote
-	nextIdentities[identity] = votes
+	if vote == VoteClear {
+		delete(votes, hash)
+		if len(votes) == 0 {
+			delete(nextIdentities, identity)
+		} else {
+			nextIdentities[identity] = votes
+		}
+	} else {
+		votes[hash] = vote
+		nextIdentities[identity] = votes
+	}
 	nextState := s.state
 	nextState.Identities = nextIdentities
 
@@ -184,6 +194,14 @@ func (s *ReputationStore) ViewerHashFor(cookieID string) string {
 		return ""
 	}
 	return hash
+}
+
+// ResolveVoter resolves a cookie or derives a stable source-bound voter identity,
+// returning the voter digest and any newly minted cookie string.
+func (s *ReputationStore) ResolveVoter(cookieID string, source netip.Addr) (hash, minted string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resolveVoterLocked(cookieID, source)
 }
 
 // resolveVoterLocked returns the digest of a verified cookie or derives one

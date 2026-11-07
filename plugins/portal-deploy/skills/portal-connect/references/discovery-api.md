@@ -26,7 +26,7 @@ Control endpoints wrap responses:
 { "ok": false, "error": { "code": "unauthorized", "message": "unauthorized" } }
 ```
 
-`/llms.txt`, install scripts, and `/api/x402/*` are outside the envelope. Unknown paths on the relay root host fall through to the landing page SPA, so a `200` HTML page for a typo is expected.
+`/llms.txt`, install scripts, and `/api/x402/*` are outside the envelope. Unknown paths on the relay root host fall through to the dashboard SPA, so a `200` HTML page for a typo is expected.
 
 ## Endpoints a consumer uses
 
@@ -71,7 +71,6 @@ curl -sS --connect-timeout 5 --max-time 15 https://portal.example.com/api/state
         "ready": 2
       }
     ],
-    "landing_page_enabled": true,
     "reputation": [
       { "hostname": "my-app-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.portal.example.com", "up": 3, "down": 0, "total": 3, "viewer_vote": "" }
     ]

@@ -132,7 +132,7 @@ if err := sdk.RunHTTP(ctx, exposure, gate, ""); err != nil {
 
 ## Options and their limits
 
-- `sdk.WithMetadata(types.LeaseMetadata{Description, Owner, Thumbnail, Tags, Hide})` sets the listing entry; `exposure.UpdateMetadata` changes it at the next renewal. `Hide: true` keeps the service out of `/api/state` and landing pages.
+- `sdk.WithMetadata(types.LeaseMetadata{Description, Owner, Thumbnail, Tags, Hide})` sets the listing entry; `exposure.UpdateMetadata` changes it at the next renewal. `Hide: true` keeps the service out of `/api/state` and the public directory.
 - `sdk.WithStaticRelayCache(path, ttl)` lets the selected relays store a static site and terminate browser TLS for it. It cannot be combined with TCP, UDP, or MITM blocking, and it changes the trust boundary in the same way `--cache` does.
 - `sdk.WithMITMProtection(true)` is `--ban-mitm`: the SDK self-probes its public URL and bans a relay whose exported TLS keying material does not match. It fails at start against a relay whose tenant TLS stack cannot export keying material.
 

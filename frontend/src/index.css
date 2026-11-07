@@ -42,7 +42,7 @@
     --card-foreground: oklch(25% 0.02 250);
     --popover: oklch(100% 0 0);
     --popover-foreground: oklch(25% 0.02 250);
-    --primary: oklch(60% 0.11 195);
+    --primary: oklch(50% 0.1 195);
     --primary-foreground: oklch(100% 0 0);
     --secondary: oklch(92% 0.01 250);
     --secondary-foreground: oklch(45% 0.02 250);
@@ -54,51 +54,50 @@
     --destructive-foreground: oklch(100% 0 0);
     --border: oklch(90% 0.01 250);
     --input: oklch(95% 0.005 250);
-    --ring: oklch(60% 0.11 195);
+    --ring: oklch(50% 0.1 195);
 
     --green-status: oklch(55% 0.16 150);
     --text-muted: oklch(55% 0.03 250);
 
-    --hero-grid-dot: oklch(60% 0.11 195 / 0.14);
-    --hero-terminal-bg:
-      linear-gradient(180deg, oklch(19% 0.005 250 / 0.98), oklch(15% 0.006 250 / 0.98));
-    --hero-terminal-border: oklch(60% 0.11 195 / 0.22);
-    --hero-terminal-foreground: oklch(98% 0.01 0);
-    --hero-terminal-accent: var(--primary);
-    --hero-terminal-shadow: oklch(15% 0 0 / 0.12);
+    /* Directory backdrop colors are RGB triplets for configurable alpha. */
+    --stage-bg: 238 244 250;
+    --stage-bg-edge: 247 249 252;
+    --stage-star: 148 163 184;
+    --stage-accent: 15 118 110;
+    --stage-accent-2: 3 105 161;
+    --stage-glow: 0.55;
   }
 
   .dark {
-    --background: oklch(15% 0 0);
-    --foreground: oklch(98% 0.01 0);
-    --card: oklch(20% 0 0);
-    --card-foreground: oklch(98% 0.01 0);
-    --popover: oklch(20% 0 0);
-    --popover-foreground: oklch(98% 0.01 0);
-    --primary: oklch(78% 0.1 195);
-    --primary-foreground: oklch(10% 0 0);
-    --secondary: oklch(25% 0.02 195);
-    --secondary-foreground: oklch(98% 0.01 0);
-    --muted: oklch(25% 0.01 0);
-    --muted-foreground: oklch(65% 0.02 0);
-    --accent: oklch(25% 0.03 195);
-    --accent-foreground: oklch(98% 0.01 0);
+    --background: #030e1e;
+    --foreground: #f8fafc;
+    --card: #0b192c;
+    --card-foreground: #f8fafc;
+    --popover: #0b192c;
+    --popover-foreground: #f8fafc;
+    --primary: #46efe4;
+    --primary-foreground: #031322;
+    --secondary: #10233a;
+    --secondary-foreground: #f8fafc;
+    --muted: #0e1e33;
+    --muted-foreground: #8fa3b8;
+    --accent: #132a44;
+    --accent-foreground: #f8fafc;
     --destructive: oklch(62% 0.22 25);
     --destructive-foreground: oklch(98% 0 0);
-    --border: oklch(100% 0 0 / 0.1);
-    --input: oklch(22% 0.01 0);
-    --ring: oklch(78% 0.1 195);
+    --border: rgba(148, 163, 184, 0.16);
+    --input: #081525;
+    --ring: #46efe4;
 
-    --green-status: oklch(75% 0.16 150);
-    --text-muted: oklch(65% 0.02 0);
+    --green-status: #10b981;
+    --text-muted: #8fa3b8;
 
-    --hero-grid-dot: oklch(78% 0.1 195 / 0.18);
-    --hero-terminal-bg:
-      linear-gradient(180deg, oklch(18% 0 0 / 0.9), oklch(12% 0.01 250 / 0.94));
-    --hero-terminal-border: oklch(78% 0.1 195 / 0.28);
-    --hero-terminal-foreground: oklch(98% 0.01 0);
-    --hero-terminal-accent: var(--primary);
-    --hero-terminal-shadow: oklch(0% 0 0 / 0.28);
+    --stage-bg: 4 20 40;
+    --stage-bg-edge: 2 11 24;
+    --stage-star: 224 242 254;
+    --stage-accent: 94 252 232;
+    --stage-accent-2: 56 189 248;
+    --stage-glow: 1;
   }
 
   * {
@@ -137,10 +136,7 @@
   }
 
   .dark body {
-    background:
-      radial-gradient(circle at top center, oklch(80% 0.14 195 / 0.16), transparent 32%),
-      radial-gradient(circle at 82% 10%, oklch(55% 0.25 350 / 0.12), transparent 20%),
-      linear-gradient(180deg, oklch(16% 0 0) 0%, oklch(13% 0.01 250) 54%, oklch(11% 0.01 250) 100%);
+    background: var(--background);
   }
 
   h1,
@@ -174,4 +170,61 @@
     animation-duration: 280ms;
     animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
   }
+}
+
+@layer base {
+  :where(a, button, input, select, textarea):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+}
+/* Keep the original Portal palette and atmosphere around the directory. */
+.portal-browser {
+  background:
+    radial-gradient(ellipse 340px 48px at 58% 100%, rgb(var(--stage-accent) / calc(0.22 * var(--stage-glow))), transparent 100%),
+    radial-gradient(ellipse at 70% 0%, rgb(var(--stage-accent-2) / 0.12), transparent 45%),
+    linear-gradient(180deg, rgb(var(--stage-bg)) 0, rgb(var(--stage-bg-edge)) 420px, var(--background) 900px);
+}
+.portal-nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 1rem;
+  border-radius: 0.625rem;
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.portal-nav-item > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.portal-nav-item > svg {
+  flex-shrink: 0;
+}
+
+.portal-nav-item:hover,
+.portal-nav-item[aria-current="page"] {
+  background: var(--secondary);
+}
+
+.portal-nav-item[aria-current="page"] {
+  font-weight: 600;
+}
+
+.portal-category {
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.portal-category:hover {
+  filter: brightness(0.92);
 }

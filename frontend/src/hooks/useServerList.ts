@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import type { BrowseView } from "@/types/filters";
 import { useList, type BaseServer } from "@/hooks/useList";
 import { apiClient } from "@/lib/apiClient";
+import { isHiddenByVotes } from "@/utils/reputation";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import {
   parseLeaseMetadata,
@@ -11,7 +13,7 @@ import type {
   Lease,
   PublicStateResponse,
   ReputationSummary,
-  ReputationVote,
+  ReputationVoteAction,
   ReputationVoteResponse,
 } from "@/types/api";
 
@@ -21,7 +23,6 @@ function normalizeHostname(hostname: string): string {
 
 type PublicState = {
   leases: Lease[];
-  landingPageEnabled: boolean;
   stale: boolean;
 };
 
@@ -74,12 +75,32 @@ function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
 }
 
 export function useServerList() {
+  const [commentServer, setCommentServer] = useState<BaseServer | null>(null);
+  const [browseView, setBrowseView] = useState<BrowseView>("home");
+  const [showHidden, setShowHidden] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(min-width: 1024px)").matches
+      : false
+  );
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
-    landingPageEnabled: false,
     stale: true,
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const handleBreakpointChange = (event: MediaQueryListEvent) => {
+      setSidebarOpen(event.matches);
+    };
+    setSidebarOpen(desktop.matches);
+    desktop.addEventListener("change", handleBreakpointChange);
+    return () => desktop.removeEventListener("change", handleBreakpointChange);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,7 +118,6 @@ export function useServerList() {
         setSummaries(collectReputation(data?.reputation));
         setPublicState({
           leases: Array.isArray(data?.leases) ? data.leases : [],
-          landingPageEnabled: data?.landing_page_enabled ?? false,
           stale: false,
         });
       } catch (error) {
@@ -120,7 +140,7 @@ export function useServerList() {
     };
   }, []);
 
-  const vote = async (hostname: string, vote: ReputationVote): Promise<void> => {
+  const vote = async (hostname: string, vote: ReputationVoteAction): Promise<void> => {
     const key = normalizeHostname(hostname);
     if (key === "") {
       return;
@@ -159,8 +179,8 @@ export function useServerList() {
     () =>
       convertPublicLeasesToServers(publicState.leases).map((server) => ({
         ...server,
-        reputation: summaries[normalizeHostname(server.dns)] ?? {
-          hostname: normalizeHostname(server.dns),
+        reputation: summaries[normalizeHostname(server.id)] ?? {
+          hostname: normalizeHostname(server.id),
           up: 0,
           down: 0,
           total: 0,
@@ -170,16 +190,40 @@ export function useServerList() {
     [publicState.leases, summaries]
   );
 
-  const list = useList({
-    servers,
-    storageKey: "serverFavorites",
-  });
+  const hiddenCount = servers.filter((server) => isHiddenByVotes(server.reputation?.up ?? 0, server.reputation?.down ?? 0)).length;
+  const visibleServers = useMemo(
+    () => showHidden ? servers : servers.filter((server) => !isHiddenByVotes(server.reputation?.up ?? 0, server.reputation?.down ?? 0)),
+    [servers, showHidden]
+  );
+  const list = useList({ servers: visibleServers });
+  const favorites = visibleServers.filter((server) => server.reputation?.viewer_vote === "up").length;
 
   return {
     ...list,
+    commentServer: commentServer ? servers.find((server) => server.id === commentServer.id) ?? commentServer : null,
+    setCommentServer,
+    browseView,
+    favorites,
+    showHidden,
+    setShowHidden,
+    hiddenCount,
+    sidebarOpen,
+    setSidebarOpen,
+    filteredServers: browseView === "favorites"
+      ? list.filteredServers.filter((server) => server.reputation?.viewer_vote === "up")
+      : list.filteredServers,
+    handleBrowseViewChange: (view: BrowseView) => {
+      setBrowseView(view);
+      if (typeof window !== "undefined" && typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 1024px)").matches) {
+        setSidebarOpen(false);
+      }
+      list.handleSearchChange("");
+      list.handleStatusChange("all");
+      list.handleSortByChange("default");
+      list.selectedTags.forEach(list.handleTagToggle);
+    },
     // null means unavailable; an empty array is an authoritative empty snapshot.
     leases: publicState.stale ? null : publicState.leases,
-    landingPageEnabled: publicState.landingPageEnabled,
     onVote: vote,
   };
 }

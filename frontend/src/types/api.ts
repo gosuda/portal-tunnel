@@ -53,7 +53,6 @@ export interface PolicyLease extends Lease {
 
 export interface PublicStateResponse {
   leases?: Lease[];
-  landing_page_enabled: boolean;
   reputation?: ReputationSummary[];
 }
 
@@ -69,7 +68,6 @@ export interface PolicyStateResponse {
 
 export interface PolicySettings {
   approval_mode: ApprovalMode;
-  landing_page_enabled: boolean;
   udp: PolicyPortSettings;
   tcp_port: PolicyPortSettings;
 }
@@ -132,6 +130,7 @@ export interface DiscoveryResponse {
 }
 
 export type ReputationVote = "up" | "down";
+export type ReputationVoteAction = ReputationVote | "clear";
 
 // Every reputation response carries viewer_vote; anonymous viewers carry "".
 export type ViewerVote = ReputationVote | "";
@@ -146,7 +145,7 @@ export interface ReputationSummary {
 
 export interface ReputationVoteRequest {
   hostname: string;
-  vote: ReputationVote;
+  vote: ReputationVoteAction;
 }
 
 // The vote response is the same aggregate as a directory row, hostname included.
@@ -158,4 +157,26 @@ export interface LeasePolicyUpdate {
   is_approved?: boolean;
   is_banned?: boolean;
   is_denied?: boolean;
+}
+
+export const COMMENT_MAX_LENGTH = 2000;
+
+export interface AppComment {
+  id: string;
+  text: string;
+  created_at: string;
+  up?: number;
+  down?: number;
+  viewer_vote?: ViewerVote;
+  can_delete?: boolean;
+}
+
+export interface VoteCommentRequest {
+  hostname: string;
+  id: string;
+  vote: ReputationVoteAction;
+}
+
+export interface CommentListResponse {
+  comments: AppComment[];
 }

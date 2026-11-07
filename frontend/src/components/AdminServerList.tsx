@@ -27,7 +27,6 @@ interface AdminServerListProps {
   banFilter: BanFilter;
   approvalMode: ApprovalMode;
   policySaving: boolean;
-  landingPageEnabled: boolean;
   onBanFilterChange: (value: BanFilter) => void;
   onBanStatusChange: (
     identityKey: string,
@@ -35,7 +34,6 @@ interface AdminServerListProps {
   ) => void | Promise<void>;
   onBPSChange: (identityKey: string, bps: number) => void | Promise<void>;
   onApprovalModeChange: (mode: ApprovalMode) => void;
-  onLandingPageEnabledChange: (enabled: boolean) => void | Promise<void>;
   udpSettings: UDPSettings;
   onUDPSettingsChange: (settings: UDPSettings) => void | Promise<void>;
   tcpPortSettings: TCPPortSettings;
@@ -68,12 +66,10 @@ export function AdminServerList({
   banFilter,
   approvalMode,
   policySaving,
-  landingPageEnabled,
   onBanFilterChange,
   onBanStatusChange,
   onBPSChange,
   onApprovalModeChange,
-  onLandingPageEnabledChange,
   udpSettings,
   onUDPSettingsChange,
   tcpPortSettings,
@@ -190,10 +186,6 @@ export function AdminServerList({
     void onTCPPortSettingsChange({ ...tcpPortSettings, enabled });
   };
 
-  const handleLandingPageToggle = (enabled: boolean) => {
-    void onLandingPageEnabledChange(enabled);
-  };
-
   const handleMaxLeasesSave = () => {
     const value = Math.max(0, parseInt(maxLeasesInput, 10) || 0);
     setMaxLeasesInput(String(value));
@@ -224,31 +216,6 @@ export function AdminServerList({
           disabled={policySaving}
           onApprovalModeChange={onApprovalModeChange}
         />
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">Landing</span>
-        <div className="flex overflow-hidden rounded-lg border border-foreground/20">
-          <button
-            disabled={policySaving}
-            onClick={() => handleLandingPageToggle(true)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${landingPageEnabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Shown
-          </button>
-          <button
-            disabled={policySaving}
-            onClick={() => handleLandingPageToggle(false)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${!landingPageEnabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Hidden
-          </button>
-        </div>
       </div>
     </>
   );
@@ -418,31 +385,6 @@ export function AdminServerList({
                 disabled={policySaving}
                 onApprovalModeChange={onApprovalModeChange}
               />
-            </div>
-            <div className="mt-4 flex items-center gap-3 sm:hidden">
-              <span className="text-sm font-medium text-text-muted">Landing</span>
-              <div className="flex overflow-hidden rounded-lg border border-foreground/20">
-                <button
-                  disabled={policySaving}
-                  onClick={() => handleLandingPageToggle(true)}
-                  className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${landingPageEnabled
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                    }`}
-                >
-                  Shown
-                </button>
-                <button
-                  disabled={policySaving}
-                  onClick={() => handleLandingPageToggle(false)}
-                  className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${!landingPageEnabled
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                    }`}
-                >
-                  Hidden
-                </button>
-              </div>
             </div>
           </div>
         </div>
