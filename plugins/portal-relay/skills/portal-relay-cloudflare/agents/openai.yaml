@@ -1,0 +1,4 @@
+interface:
+  display_name: "Portal Relay DNS on Cloudflare"
+  short_description: "Delegate relay DNS from Cloudflare"
+  default_prompt: "Use $portal-relay-cloudflare to plan the NS, glue, and DS records for my Portal relay in my Cloudflare zone and verify them after I approve."
