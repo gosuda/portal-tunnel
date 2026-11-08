@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
 import {
@@ -45,8 +45,8 @@ export function ServerCard({
   onVote,
 }: ServerCardProps) {
   const {
-    id: serverId, name, description, tags, thumbnail, owner, online,
-    firstSeen, tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
+    id: serverId, name, description, tags, thumbnail, online,
+    tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
   } = server;
   // The thumbnail that failed to load; a new thumbnail URL gets its own try.
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
@@ -65,29 +65,10 @@ export function ServerCard({
   ];
   const isTransportService = endpoints.length > 0;
   const isNavigable = navigable && !isTransportService;
+  const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation));
 
   const copyEndpoint = (protocol: string, address: string) =>
     copy(address, protocol);
-
-  const formattedDuration = useMemo(() => {
-    if (!firstSeen) return "";
-    const start = new Date(firstSeen).getTime();
-    if (Number.isNaN(start)) {
-      return firstSeen;
-    }
-    const now = Date.now();
-    const diff = Math.max(0, now - start);
-
-    const seconds = Math.floor(diff / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `${days}d ago`;
-    if (hours > 0) return `${hours}h ago`;
-    if (minutes > 0) return `${minutes}m ago`;
-    return `${seconds}s ago`;
-  }, [firstSeen]);
 
   const handleVote = async (event: React.MouseEvent, targetVote: "up" | "down") => {
     event.preventDefault();
@@ -210,104 +191,94 @@ export function ServerCard({
         )}
       </div>
 
-      {/* 2. Details Container: Title/Metadata + Southeast Actions (Up, Down, Comments) */}
-      <div className={clsx("mt-2.5 flex flex-col gap-1.5", isNavigable ? "pointer-events-none" : "")}>
+      {/* 2. Details Container: Title (left) + Southeast Actions (Up, Down, Comments) (right) */}
+      <div className={clsx("mt-2.5 flex items-center justify-between gap-2", isNavigable ? "pointer-events-none" : "")}>
         {/* Title */}
         <h3
           title={name}
-          className="line-clamp-2 break-words text-[15px] font-semibold leading-snug text-foreground transition-colors group-hover:text-primary"
+          className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-foreground transition-colors group-hover:text-primary"
         >
           {name}
         </h3>
 
-        {/* Bottom row: Metadata (left) + Southeast stats (right) */}
-        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          {/* Owner and duration */}
-          <div className="flex min-w-0 items-center gap-1.5 truncate">
-            {owner && (
-              <span className="truncate font-medium text-muted-foreground hover:text-foreground">
-                {owner}
-              </span>
-            )}
-            {owner && formattedDuration && <span className="shrink-0">•</span>}
-            {formattedDuration && (
-              <span className="shrink-0">{formattedDuration}</span>
-            )}
-          </div>
-
-          {/* Southeast actions: Upvotes, Downvotes, Comments */}
+        {/* Southeast actions: Upvotes, Downvotes, Comments */}
+        {showActions && (
           <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5">
             {/* Rating Pill: [ 👍 12 | 👎 3 ] */}
-            <div className="inline-flex h-7 items-center rounded-lg border border-border/70 bg-secondary/50 p-0.5 text-xs text-muted-foreground shadow-2xs backdrop-blur-xs">
-              <button
-                type="button"
-                onClick={(e) => void handleVote(e, "up")}
-                disabled={!onVote || isVoting}
-                aria-label="Recommend app"
-                aria-pressed={server.reputation?.viewer_vote === "up"}
-                title={`Recommend: ${server.reputation?.up ?? 0}`}
-                className={clsx(
-                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
-                  onVote ? "cursor-pointer" : "cursor-default",
-                  server.reputation?.viewer_vote === "up"
-                    ? "bg-primary text-primary-foreground shadow-xs font-semibold hover:bg-primary/90"
-                    : "hover:bg-secondary hover:text-foreground"
-                )}
-              >
-                <ThumbsUp className="size-3.5 shrink-0" />
-                <span className="tabular-nums">{server.reputation?.up ?? 0}</span>
-              </button>
+            {(onVote || server.reputation) && (
+              <div className="inline-flex h-7 items-center rounded-lg border border-border/70 bg-secondary/50 p-0.5 text-xs text-muted-foreground shadow-2xs backdrop-blur-xs">
+                <button
+                  type="button"
+                  onClick={(e) => void handleVote(e, "up")}
+                  disabled={!onVote || isVoting}
+                  aria-label="Recommend app"
+                  aria-pressed={server.reputation?.viewer_vote === "up"}
+                  title={`Recommend: ${server.reputation?.up ?? 0}`}
+                  className={clsx(
+                    "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
+                    onVote ? "cursor-pointer" : "cursor-default",
+                    server.reputation?.viewer_vote === "up"
+                      ? "bg-primary text-primary-foreground shadow-xs font-semibold hover:bg-primary/90"
+                      : "hover:bg-secondary hover:text-foreground"
+                  )}
+                >
+                  <ThumbsUp className="size-3.5 shrink-0" />
+                  <span className="tabular-nums">{server.reputation?.up ?? 0}</span>
+                </button>
 
-              <div className="my-1 h-3 w-px bg-border/70" />
+                <div className="my-1 h-3 w-px bg-border/70" />
 
-              <button
-                type="button"
-                onClick={(e) => void handleVote(e, "down")}
-                disabled={!onVote || isVoting}
-                aria-label="Do not recommend app"
-                aria-pressed={server.reputation?.viewer_vote === "down"}
-                title={`Do not recommend: ${server.reputation?.down ?? 0}`}
-                className={clsx(
-                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
-                  onVote ? "cursor-pointer" : "cursor-default",
-                  server.reputation?.viewer_vote === "down"
-                    ? "bg-destructive text-destructive-foreground shadow-xs font-semibold hover:bg-destructive/90"
-                    : "hover:bg-secondary hover:text-foreground"
-                )}
-              >
-                <ThumbsDown className="size-3.5 shrink-0" />
-                <span className="tabular-nums">{server.reputation?.down ?? 0}</span>
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={(e) => void handleVote(e, "down")}
+                  disabled={!onVote || isVoting}
+                  aria-label="Do not recommend app"
+                  aria-pressed={server.reputation?.viewer_vote === "down"}
+                  title={`Do not recommend: ${server.reputation?.down ?? 0}`}
+                  className={clsx(
+                    "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
+                    onVote ? "cursor-pointer" : "cursor-default",
+                    server.reputation?.viewer_vote === "down"
+                      ? "bg-destructive text-destructive-foreground shadow-xs font-semibold hover:bg-destructive/90"
+                      : "hover:bg-secondary hover:text-foreground"
+                  )}
+                >
+                  <ThumbsDown className="size-3.5 shrink-0" />
+                  <span className="tabular-nums">{server.reputation?.down ?? 0}</span>
+                </button>
+              </div>
+            )}
 
             {/* Comments Button: [ 💬 5 ] */}
-            {onOpenComments ? (
-              <button
-                type="button"
-                data-comments-trigger
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onOpenComments(server);
-                }}
-                aria-label="Comments"
-                title={`Comments: ${server.reputation?.comments ?? 0}`}
-                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
-              >
-                <MessageSquare className="size-3.5 shrink-0" />
-                <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
-              </button>
-            ) : (
-              <span
-                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs"
-                title={`Comments: ${server.reputation?.comments ?? 0}`}
-              >
-                <MessageSquare className="size-3.5 shrink-0" />
-                <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
-              </span>
+            {(onOpenComments || server.reputation?.comments !== undefined) && (
+              onOpenComments ? (
+                <button
+                  type="button"
+                  data-comments-trigger
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenComments(server);
+                  }}
+                  aria-label="Comments"
+                  title={`Comments: ${server.reputation?.comments ?? 0}`}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
+                >
+                  <MessageSquare className="size-3.5 shrink-0" />
+                  <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
+                </button>
+              ) : (
+                <span
+                  className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs"
+                  title={`Comments: ${server.reputation?.comments ?? 0}`}
+                >
+                  <MessageSquare className="size-3.5 shrink-0" />
+                  <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
+                </span>
+              )
             )}
           </div>
-        </div>
+        )}
       </div>
 
       {/* Children slot (e.g. Admin controls) */}

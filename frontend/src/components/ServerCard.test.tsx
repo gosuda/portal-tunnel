@@ -301,4 +301,32 @@ describe("ServerCard comments interaction", () => {
     });
     expect(onVote).toHaveBeenCalledWith("srv-1", "down");
   });
+
+  it("does not render rating or comment controls when in admin mode or actions are omitted", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "srv-admin",
+            name: "admin-app",
+            description: "",
+            tags: [],
+            thumbnail: "",
+            owner: "",
+            online: true,
+            dns: "admin.relay.example.com",
+            link: "/server/srv-admin",
+          }}
+        >
+          <div>admin controls</div>
+        </ServerCard>
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByLabelText("Recommend app")).toBeNull();
+    expect(screen.queryByLabelText("Do not recommend app")).toBeNull();
+    expect(screen.queryByLabelText("Comments")).toBeNull();
+    expect(screen.getByText("admin-app")).toBeTruthy();
+    expect(screen.getByText("admin controls")).toBeTruthy();
+  });
 });
