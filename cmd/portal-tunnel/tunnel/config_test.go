@@ -85,8 +85,6 @@ func TestConfigSpecModes(t *testing.T) {
 	}
 }
 
-// A Config keeps nil and zero for what was not set, so Spec owns the defaults,
-// and an explicit value, false and zero included, wins over them.
 func TestReplicaConfigResolvesHTTPAndRejectsUnsupportedModes(t *testing.T) {
 	cfg := Config{Replica: true, TargetAddr: "localhost:3000"}
 	spec, err := cfg.Spec()
@@ -105,6 +103,8 @@ func TestReplicaConfigResolvesHTTPAndRejectsUnsupportedModes(t *testing.T) {
 	}
 }
 
+// A Config keeps nil and zero for what was not set, so Spec owns the defaults,
+// and an explicit value, false and zero included, wins over them.
 func TestConfigSpecDefaults(t *testing.T) {
 	off, on := false, true
 	for _, tc := range []struct {
