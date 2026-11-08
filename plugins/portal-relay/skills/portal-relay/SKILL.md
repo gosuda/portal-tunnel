@@ -56,7 +56,13 @@ Bandwidth guidance: web/API tunnels are lightweight (tens of GB/month for typica
 
 ### 1. Verify the host
 
-- Check Docker: `docker compose version`
+- Check Docker: `docker version` and `docker compose version`. Both must succeed, and Compose must be v2 (the `docker compose` plugin, not the old `docker-compose` binary).
+- If either is missing, which is normal on a fresh cloud image, the host needs a bootstrap before **Deploy**. This is the only place that installs Docker; provider skills hand off here instead of installing it themselves:
+  1. Read the OS with `. /etc/os-release && echo "$ID $VERSION_ID"`. Continue only on a distribution that Docker's official Engine install guide supports, and use that guide's repository method for it (for Ubuntu and Debian: Docker's apt repository with its signing key, then `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin`). Do not use the distribution's `docker.io` or a `curl | sh` convenience script without the user asking for it.
+  2. Show the exact commands and get approval before running them; they add a package repository and install system packages with `sudo`.
+  3. Run them, then `sudo systemctl enable --now docker`.
+  4. Check again with `sudo docker version` and `sudo docker compose version`. Use `sudo` for the following `docker` commands, or add the user to the `docker` group only when the user approves it (that group is root-equivalent, and the change takes effect after a new login).
+- If Docker exists but Compose v2 does not, install only `docker-compose-plugin` from the same repository.
 - Check public IP reachability: confirm the host's firewall allows inbound on the required ports
 - Confirm a domain or subdomain is available for delegation (e.g., `relay.example.com`)
 

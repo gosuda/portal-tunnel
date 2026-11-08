@@ -14,7 +14,7 @@ Run every provider workflow in this order and do not skip a phase:
 4. **Approve**: get explicit approval for that exact plan. Ask again when the plan changes.
 5. **Apply**: make only the approved changes through the provider CLI or API.
 6. **Verify**: check the result from outside the provider, then hand off to the next skill.
-7. **Hand off**: report what exists now, what it costs, how to undo it, and what was not verified.
+7. **Hand off**: report what exists now, what it costs, how to undo it, and what was not verified. A cloud skill hands a new host to `portal-relay` at **Verify the host**, which owns the Docker and Compose bootstrap; provider skills do not install software on the host themselves, except the provider-specific network setup they document (such as OCI host iptables).
 
 ## Credential rules
 
