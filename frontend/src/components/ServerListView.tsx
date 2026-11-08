@@ -438,7 +438,123 @@ export function ServerListView({
         </div>
       </aside>
 
-      <main id="portal-content" tabIndex={-1} className={`min-w-0 pb-12 outline-none ${sidebarOpen ? "lg:pl-[240px]" : ""}`}>
+      {!sidebarOpen && (
+        <aside
+          id="portal-mini-navigation"
+          aria-label="Mini Navigation"
+          className="fixed top-[116px] bottom-0 left-0 z-40 hidden w-[72px] flex-col items-center overflow-y-auto border-r border-border bg-background/85 px-1.5 py-3 backdrop-blur-xl md:top-16 lg:flex"
+        >
+          <nav aria-label="Browse apps" className="flex w-full flex-col items-center space-y-1">
+            <button
+              type="button"
+              title="Home"
+              aria-label="Home"
+              aria-current={browseView === "home" && status === "all" && sortBy === "default" ? "page" : undefined}
+              onClick={() => onBrowseViewChange("home")}
+              className="flex w-full flex-col items-center justify-center gap-1 rounded-lg py-2.5 px-1 text-[10px] font-medium text-foreground hover:bg-secondary aria-[current=page]:bg-secondary aria-[current=page]:font-semibold"
+            >
+              <Home className="size-5 shrink-0" />
+              <span className="max-w-full truncate text-center">Home</span>
+            </button>
+            <button
+              type="button"
+              title="Most recommended"
+              aria-label="Most recommended"
+              aria-current={browseView === "home" && sortBy === "recommended" ? "page" : undefined}
+              onClick={() => {
+                onBrowseViewChange("home");
+                onSortByChange("recommended");
+              }}
+              className="flex w-full flex-col items-center justify-center gap-1 rounded-lg py-2.5 px-1 text-[10px] font-medium text-foreground hover:bg-secondary aria-[current=page]:bg-secondary aria-[current=page]:font-semibold"
+            >
+              <ThumbsUp className="size-5 shrink-0" />
+              <span className="max-w-full truncate text-center">Top</span>
+            </button>
+            <button
+              type="button"
+              title="Favorites"
+              aria-label="Favorites"
+              aria-current={browseView === "favorites" ? "page" : undefined}
+              onClick={() => onBrowseViewChange("favorites")}
+              className="flex w-full flex-col items-center justify-center gap-1 rounded-lg py-2.5 px-1 text-[10px] font-medium text-foreground hover:bg-secondary aria-[current=page]:bg-secondary aria-[current=page]:font-semibold"
+            >
+              <div className="relative">
+                <ThumbsUp className="size-5 shrink-0" />
+                {favorites > 0 && (
+                  <span className="absolute -top-1 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] font-bold leading-none text-primary-foreground">
+                    {favorites}
+                  </span>
+                )}
+              </div>
+              <span className="max-w-full truncate text-center">Favorites</span>
+            </button>
+          </nav>
+
+          <nav aria-label="Host" className="mt-2 flex w-full flex-col items-center border-t border-border pt-2">
+            <TunnelCommandModal
+              trigger={
+                <button
+                  type="button"
+                  title="Host"
+                  aria-label="Launch App"
+                  className="flex w-full flex-col items-center justify-center gap-1 rounded-lg py-2.5 px-1 text-[10px] font-medium text-foreground hover:bg-secondary"
+                >
+                  <Terminal className="size-5 shrink-0" />
+                  <span className="max-w-full truncate text-center">Host</span>
+                </button>
+              }
+            />
+          </nav>
+
+          <nav aria-label="Portal resources" className="mt-2 flex w-full flex-col items-center space-y-1 border-t border-border pt-2">
+            <button
+              type="button"
+              title="Public relays"
+              aria-label="Public relays"
+              aria-current={browseView === "relays" ? "page" : undefined}
+              onClick={() => onBrowseViewChange("relays")}
+              className="flex w-full flex-col items-center justify-center gap-1 rounded-lg py-2.5 px-1 text-[10px] font-medium text-foreground hover:bg-secondary aria-[current=page]:bg-secondary aria-[current=page]:font-semibold"
+            >
+              <Globe className="size-5 shrink-0" />
+              <span className="max-w-full truncate text-center">Relays</span>
+            </button>
+            <a
+              href="https://gosuda.github.io/portal-tunnel"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Documentation"
+              aria-label="Documentation"
+              className="flex w-full flex-col items-center justify-center gap-1 rounded-lg py-2.5 px-1 text-[10px] font-medium text-foreground hover:bg-secondary"
+            >
+              <BookOpen className="size-5 shrink-0" />
+              <span className="max-w-full truncate text-center">Docs</span>
+            </a>
+          </nav>
+
+          <div className="mt-auto flex w-full flex-col items-center space-y-1 border-t border-border pt-3">
+            <a
+              href={REPOSITORY_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="GitHub"
+              aria-label="GitHub"
+              className="flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"
+            >
+              <Github className="size-4 shrink-0" aria-hidden="true" />
+            </a>
+            <a
+              href={ROUTE_PATHS.admin}
+              title="Admin"
+              aria-label="Admin"
+              className="flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"
+            >
+              <ShieldCheck className="size-4 shrink-0" aria-hidden="true" />
+            </a>
+          </div>
+        </aside>
+      )}
+
+      <main id="portal-content" tabIndex={-1} className={`min-w-0 pb-12 outline-none ${sidebarOpen ? "lg:pl-[240px]" : "lg:pl-[72px]"}`}>
         {isAppView && (
           <section id="live-servers" aria-label={browseView === "favorites" ? "Favorite apps" : "Discover apps"}>
             <div className="sticky top-[116px] z-30 bg-background/80 px-4 pb-3 pt-2 backdrop-blur-xl md:top-16 lg:px-8">
