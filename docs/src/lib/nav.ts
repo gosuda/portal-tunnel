@@ -61,6 +61,7 @@ export const guidesNavigation: NavSection[] = [
 			{ title: 'Portal Agent', href: '/portal-agent' },
 			{ title: 'TCP/UDP Tunneling', href: '/tcp-udp-tunneling' },
 			{ title: 'Game Server Hosting', href: '/game-server-hosting' },
+			{ title: 'Webhook and Discord Endpoints', href: '/webhook-endpoints' },
 			{ title: 'Wallet and ENS', href: '/wallet-and-ens' },
 			{ title: 'Application Authentication', href: '/siwe-authentication' },
 			{ title: 'Deployment', href: '/deployment' },
