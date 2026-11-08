@@ -22,8 +22,6 @@ export interface SidebarNavProps {
 interface NavEntry {
   icon: LucideIcon;
   label: string;
-  /** The rail is narrow, so a long label gets a short form there. */
-  shortLabel?: string;
   current?: boolean;
   badge?: number;
   onClick?: () => void;
@@ -31,22 +29,40 @@ interface NavEntry {
 }
 
 const MINI_ITEM_CLASS =
-  "flex w-full flex-col items-center justify-center gap-1 rounded-lg px-1 py-2.5 text-[10px] font-medium text-foreground hover:bg-secondary aria-[current=page]:bg-secondary aria-[current=page]:font-semibold";
+  "group relative flex size-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground aria-[current=page]:bg-secondary aria-[current=page]:text-foreground";
+
+function NavTooltip({ label, badge }: { label: string; badge?: number }) {
+  return (
+    <span
+      role="tooltip"
+      className="pointer-events-none absolute left-full ml-3.5 z-50 flex items-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+    >
+      <span className="relative whitespace-nowrap rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-100 shadow-md dark:bg-zinc-800 dark:text-zinc-100 dark:border dark:border-zinc-700/60">
+        <span
+          className="absolute -left-1 top-1/2 -translate-y-1/2 border-y-4 border-r-4 border-y-transparent border-r-zinc-900 dark:border-r-zinc-800"
+          aria-hidden="true"
+        />
+        {label}
+        {badge !== undefined && badge > 0 ? ` (${badge})` : ""}
+      </span>
+    </span>
+  );
+}
 
 function NavItem({ entry, variant }: { entry: NavEntry; variant: SidebarVariant }) {
   const Icon = entry.icon;
   const mini = variant === "mini";
   const content: ReactNode = mini ? (
     <>
-      <span className="relative">
+      <span className="relative flex items-center justify-center">
         <Icon className="size-5 shrink-0" aria-hidden="true" />
         {entry.badge !== undefined && entry.badge > 0 && (
-          <span className="absolute -top-1 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] font-bold leading-none text-primary-foreground">
+          <span className="absolute -top-1.5 -right-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground">
             {entry.badge}
           </span>
         )}
       </span>
-      <span className="max-w-full truncate text-center">{entry.shortLabel ?? entry.label}</span>
+      <NavTooltip label={entry.label} badge={entry.badge} />
     </>
   ) : (
     <>
@@ -57,7 +73,6 @@ function NavItem({ entry, variant }: { entry: NavEntry; variant: SidebarVariant 
   );
   const shared = {
     className: mini ? MINI_ITEM_CLASS : "portal-nav-item",
-    title: mini ? entry.label : undefined,
     "aria-label": mini ? entry.label : undefined,
   };
 
@@ -89,8 +104,8 @@ function NavGroup({
   children: ReactNode;
 }) {
   const mini = variant === "mini";
-  const divider = first ? "" : mini ? "mt-2 border-t border-border pt-2" : "mt-3 border-t border-border pt-3";
-  const layout = mini ? "flex w-full flex-col items-center space-y-1" : "shrink-0 space-y-1";
+  const divider = first ? "" : mini ? "mt-2.5 w-full border-t border-border pt-2.5" : "mt-3 border-t border-border pt-3";
+  const layout = mini ? "flex w-full flex-col items-center space-y-1.5" : "shrink-0 space-y-1";
   return (
     <nav aria-label={label} className={`${layout} ${divider}`}>
       {!mini && heading && <p className="px-3 py-2 text-base font-semibold">{heading}</p>}
@@ -119,7 +134,6 @@ export function SidebarNav({
     {
       icon: ThumbsUp,
       label: "Most recommended",
-      shortLabel: "Top",
       current: browseView === "home" && sortBy === "recommended",
       onClick: () => {
         onBrowseViewChange("home");
@@ -138,15 +152,11 @@ export function SidebarNav({
     {
       icon: Globe,
       label: "Public relays",
-      shortLabel: "Relays",
       current: browseView === "relays",
       onClick: () => onBrowseViewChange("relays"),
     },
-    { icon: BookOpen, label: "Documentation", shortLabel: "Docs", href: DOCS_URL },
+    { icon: BookOpen, label: "Documentation", href: DOCS_URL },
   ];
-  const footerLinkClass = mini
-    ? "flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"
-    : "inline-flex items-center gap-1.5 hover:text-foreground";
 
   return (
     <>
@@ -159,11 +169,10 @@ export function SidebarNav({
             <button
               type="button"
               aria-label="Launch App"
-              title={mini ? "Launch App" : undefined}
               className={mini ? MINI_ITEM_CLASS : "portal-nav-item"}
             >
               <Terminal className="size-5 shrink-0" aria-hidden="true" />
-              <span className={mini ? "max-w-full truncate text-center" : undefined}>{mini ? "Host" : "Launch App"}</span>
+              {mini ? <NavTooltip label="Launch App" /> : <span>Launch App</span>}
             </button>
           }
         />
@@ -171,15 +180,25 @@ export function SidebarNav({
       <NavGroup label="Portal resources" heading="Explore Portal" variant={variant}>
         {resources.map((entry) => <NavItem key={entry.label} entry={entry} variant={variant} />)}
       </NavGroup>
-      <div className={mini ? "mt-auto flex w-full flex-col items-center space-y-1 border-t border-border pt-3" : "mt-auto shrink-0 pt-4"}>
-        <div className={mini ? "contents" : "flex items-center gap-4 border-t border-border px-3 pt-5 text-xs text-muted-foreground"}>
-          <a href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" title={mini ? "GitHub" : undefined} aria-label={mini ? "GitHub" : undefined} className={footerLinkClass}>
-            <Github className="size-4 shrink-0" aria-hidden="true" />
-            {!mini && "GitHub"}
+      <div className={mini ? "mt-auto flex w-full flex-col items-center space-y-1.5 border-t border-border pt-3" : "mt-auto shrink-0 pt-4"}>
+        <div className={mini ? "flex flex-col items-center space-y-1.5" : "flex items-center gap-4 border-t border-border px-3 pt-5 text-xs text-muted-foreground"}>
+          <a
+            href={REPOSITORY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="GitHub"
+            className={mini ? MINI_ITEM_CLASS : "inline-flex items-center gap-1.5 hover:text-foreground"}
+          >
+            <Github className={mini ? "size-5 shrink-0" : "size-4 shrink-0"} aria-hidden="true" />
+            {mini ? <NavTooltip label="GitHub" /> : "GitHub"}
           </a>
-          <a href={ROUTE_PATHS.admin} title={mini ? "Admin" : undefined} aria-label={mini ? "Admin" : undefined} className={footerLinkClass}>
-            <ShieldCheck className="size-4 shrink-0" aria-hidden="true" />
-            {!mini && "Admin"}
+          <a
+            href={ROUTE_PATHS.admin}
+            aria-label="Admin"
+            className={mini ? MINI_ITEM_CLASS : "inline-flex items-center gap-1.5 hover:text-foreground"}
+          >
+            <ShieldCheck className={mini ? "size-5 shrink-0" : "size-4 shrink-0"} aria-hidden="true" />
+            {mini ? <NavTooltip label="Admin" /> : "Admin"}
           </a>
         </div>
       </div>
