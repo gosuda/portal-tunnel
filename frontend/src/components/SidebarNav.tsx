@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { BookOpen, Flame, Github, Globe, Home, ShieldCheck, Star, Terminal, type LucideIcon } from "lucide-react";
+import { BookOpen, Github, Globe, Home, ShieldCheck, Star, Terminal, ThumbsUp, type LucideIcon } from "lucide-react";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { ROUTE_PATHS } from "@/lib/apiPaths";
 import type { BrowseView, SortOption, StatusFilter } from "@/types/filters";
@@ -119,7 +119,7 @@ export function SidebarNav({
       onClick: () => onBrowseViewChange("home"),
     },
     {
-      icon: Flame,
+      icon: ThumbsUp,
       label: "Most recommended",
       shortLabel: "Top",
       current: browseView === "home" && sortBy === "recommended",
