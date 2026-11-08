@@ -47,6 +47,6 @@ Rollback: `aws lightsail delete-instance --instance-name <name>`, then `aws ligh
 
 From outside AWS, `ssh` works, and after deployment `dig @<ip> <relay domain> NS` and `curl -fsS https://<relay domain>/api/healthz` succeed. A timeout with the container healthy almost always means a missing security group rule or Lightsail port.
 
-Then continue with the `portal-relay` skill from **Verify the host**, not from **Deploy**: a fresh image may lack Docker and Compose v2, and that step checks and, with approval, installs them. Use this host's public address as the glue address. The DNS records come after **Deploy**, at the common skill's **Delegate DNS** step. Report the resources created, the account and region, the estimated monthly cost, and the rollback commands.
+Then continue with the `portal-relay` skill from **Verify the host**, not from **Deploy**: a fresh image may lack Docker and Compose v2, and that step checks and, with approval, installs them. Use this host's public address as the glue address. The NS and glue records come before **Deploy**, at the common skill's **Delegate DNS** step, because the relay's first start needs them to issue its certificate; the DS comes after **Deploy**, at **Publish the DS**. Report the resources created, the account and region, the estimated monthly cost, and the rollback commands.
 
 Portal can also use Route 53 as its ACME DNS provider (`ACME_DNS_PROVIDER=route53`); that is relay configuration covered by the configuration reference, not by this skill.

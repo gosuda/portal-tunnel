@@ -2,7 +2,7 @@
 
 Provider skills (`portal-relay-oracle`, `portal-relay-hetzner`, `portal-relay-aws`, `portal-relay-cloudflare`) handle only what differs per provider: account authentication, creating the host, opening its network, or editing the parent DNS zone. Relay deployment, DNS layout, DNSSEC, and verification stay in `portal-relay`. A host that already exists with a public IP needs no provider skill.
 
-A cloud provider and a DNS provider compose independently. "Deploy a relay on Oracle Cloud and configure DNS with Cloudflare" runs, in this order: `portal-relay-oracle` for the host; `portal-relay` from **Verify the host** through **Deploy**; `portal-relay-cloudflare` at the common skill's **Delegate DNS** step for NS, glue, and DS; then `portal-relay` from **Verify** to **Hand off**. The DNS skill runs after **Deploy** because the relay's embedded DNS must answer and its DS comes from the startup log. The "Provider skills" section of `portal-relay` holds the same order.
+A cloud provider and a DNS provider compose independently. "Deploy a relay on Oracle Cloud and configure DNS with Cloudflare" runs, in this order: `portal-relay-oracle` for the host; `portal-relay` **Verify the host** for the Docker bootstrap; `portal-relay-cloudflare` for NS and glue at **Delegate DNS**; `portal-relay` **Deploy**, whose first start issues the certificate through ACME DNS-01 on the relay's own embedded DNS and therefore needs the delegation; `portal-relay-cloudflare` for the DS at **Publish the DS**, once the relay's DNSSEC key exists; then `portal-relay` from **Verify** to **Hand off**. The "Provider skills" section of `portal-relay` holds the same order.
 
 ## Phases
 

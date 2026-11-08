@@ -30,11 +30,13 @@ This skill deploys on a host that already exists. When the host or the parent DN
 A cloud skill and a DNS skill can be combined in one request. Run them at these points of the workflow below, for example Oracle + Cloudflare:
 
 1. Cloud skill (`portal-relay-oracle`, `-hetzner`, or `-aws`): create the host and open its network.
-2. This skill, **Verify the host** through **Deploy** (and step 3 when TCP/UDP leases are wanted): bootstrap Docker and start the relay.
-3. DNS skill (`portal-relay-cloudflare`) at step 4, **Delegate DNS**: NS, glue, then DS.
-4. This skill, **Verify** through **Hand off**: verify end to end and register.
+2. This skill, step 1 **Verify the host**: bootstrap Docker and Compose v2.
+3. DNS skill (`portal-relay-cloudflare`), NS and glue part, at step 2 **Delegate DNS**. This must come before Deploy, because the relay's first start issues its certificate through ACME DNS-01 on its own embedded DNS, which the CA reaches only through the delegation.
+4. This skill, step 3 **Deploy** (and step 4 when TCP/UDP leases are wanted): start the relay; the first start issues the certificate and creates the DNSSEC key.
+5. DNS skill, DS part, at step 5 **Publish the DS**.
+6. This skill, steps 6-8 **Verify**, **Register**, and **Hand off**.
 
-Without a DNS skill, do step 4 by hand. Without a cloud skill, start at **Verify the host**.
+Without a DNS skill, do steps 2 and 5 by hand. Without a cloud skill, start at **Verify the host**.
 
 After deployment, use `portal-relay-admin` to approve, deny, ban, or rate-limit leases and change approval mode, and `portal-relay-diagnose` when the relay, its DNS, TLS, or lease ports fail.
 
@@ -64,7 +66,7 @@ Bandwidth guidance: web/API tunnels are lightweight (tens of GB/month for typica
 ### 1. Verify the host
 
 - Check Docker: `docker version` and `docker compose version`. Both must succeed, and Compose must be v2 (the `docker compose` plugin, not the old `docker-compose` binary).
-- If either is missing, which is normal on a fresh cloud image, the host needs a bootstrap before **Deploy**. This is the only place that installs Docker; provider skills hand off here instead of installing it themselves:
+- If either is missing, which is normal on a fresh cloud image, the host needs a bootstrap before **Delegate DNS** and **Deploy**. This is the only place that installs Docker; provider skills hand off here instead of installing it themselves:
   1. Read the OS with `. /etc/os-release && echo "$ID $VERSION_ID"`. Continue only on a distribution that Docker's official Engine install guide supports, and use that guide's repository method for it (for Ubuntu and Debian: Docker's apt repository with its signing key, then `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin`). Do not use the distribution's `docker.io` or a `curl | sh` convenience script without the user asking for it.
   2. Show the exact commands and get approval before running them; they add a package repository and install system packages with `sudo`.
   3. Run them, then `sudo systemctl enable --now docker`.
@@ -73,7 +75,25 @@ Bandwidth guidance: web/API tunnels are lightweight (tens of GB/month for typica
 - Check public IP reachability: confirm the host's firewall allows inbound on the required ports
 - Confirm a domain or subdomain is available for delegation (e.g., `relay.example.com`)
 
-### 2. Deploy
+### 2. Delegate DNS (NS and glue)
+
+Do this **before Deploy**. At startup the relay obtains its certificate before it opens any listener, and with embedded DNS the ACME DNS-01 challenge is answered by the relay's own DNS. The CA can reach that answer only through the parent zone's NS and glue records. Without them, issuance fails, the relay exits, and Compose restarts it in a loop.
+
+When the parent zone is on a DNS provider with a provider skill (`portal-relay-cloudflare`), run its NS and glue part now, then return here. Otherwise create the records by hand at the parent zone's DNS management. The embedded authoritative DNS server needs no external DNS provider credentials:
+
+| Type | Name | Value |
+|---|---|---|
+| `NS` | `relay.example.com` | `ns.relay.example.com` |
+| `A` | `ns.relay.example.com` | `<public IP>` (glue, when IPv4 is reachable) |
+| `AAAA` | `ns.relay.example.com` | `<public IPv6>` (glue, when IPv6 is reachable) |
+
+No wildcard record is needed — the relay synthesizes A answers for every tunnel hostname under its zone. See the [Configuration Reference](https://gosuda.github.io/portal-tunnel/configuration#embedded-dns) for the canonical embedded DNS documentation.
+
+Before **Deploy**, confirm that the parent publishes the delegation: `dig @<parent NS> relay.example.com NS +norec` lists `ns.relay.example.com` with the glue address in the additional section. The relay itself does not answer yet, so do not expect a reply from `ns.relay.example.com` at this point. Allow for the parent's TTL before Deploy.
+
+Do not publish a DS record in this step. The DS comes from the relay's DNSSEC key, which exists only after the first start.
+
+### 3. Deploy
 
 Create `.env` and `docker-compose.yml` per the standard relay deployment:
 
@@ -104,7 +124,9 @@ docker compose up -d --force-recreate portal
 
 Always name the service; never pass `--remove-orphans` on a shared Compose project.
 
-### 3. Optional: enable TCP/UDP leases for game hosting
+Watch the first start with `docker compose logs -f portal`. The `ds_record` line appears as soon as the embedded DNS listeners start, before certificate issuance, so it does not prove the start succeeded. The start succeeded when no certificate error follows and the container stays up. If it logs `ensure relay certificate` or `obtain certificate` errors and restarts, the delegation from step 2 is not reachable yet: stop the service (`docker compose stop portal`), fix the delegation, and start it again, rather than letting it hit the CA's rate limits in a restart loop.
+
+### 4. Optional: enable TCP/UDP leases for game hosting
 
 Most public relays do not enable raw transport. If the user wants to support game servers (Minecraft, Terraria, etc.) or other TCP/UDP services through their relay:
 
@@ -119,25 +141,15 @@ MAX_PORT=40009
 
 The host's cloud firewall or security group must allow the same ports. See the [Game Server Hosting guide](https://gosuda.github.io/portal-tunnel/game-server-hosting) for game-specific knowledge.
 
-### 4. Delegate DNS
+### 5. Publish the DS
 
-The relay must be running before this step: its embedded DNS answers for the zone only after **Deploy**, and the DS record comes from its startup log (`docker compose logs portal | grep ds_record`).
+After the relay has started, read the DS from its log: `docker compose logs portal | grep ds_record`. The embedded DNS signs its zone with a CSK stored at `IDENTITY_PATH/dnssec-csk.json`, created at the first start.
 
-When the parent zone is on a DNS provider with a provider skill (`portal-relay-cloudflare`), run that skill now for the NS, glue, and DS records, then return here at **Verify**. Otherwise create the records by hand at the parent zone's DNS management:
+Check that the relay answers for its zone (`dig @<public IP> relay.example.com SOA`), then publish the DS at the parent zone. With a DNS provider skill (`portal-relay-cloudflare`), run its DS part now; otherwise create the DS by hand. Publishing a DS for a zone that does not answer makes validating resolvers fail for the whole subdomain.
 
+Back up `dnssec-csk.json` with the identity directory: replacing it without re-coordinating the parent DS breaks validation for resolvers that validate DNSSEC.
 
-The embedded authoritative DNS server (default since #311) needs no external DNS provider credentials. Create two records:
-
-| Type | Name | Value |
-|---|---|---|
-| `NS` | `relay.example.com` | `ns.relay.example.com` |
-| `A` | `ns.relay.example.com` | `<public IP>` (glue) |
-
-No wildcard record is needed — the relay synthesizes A answers for every tunnel hostname under its zone. See the [Configuration Reference](https://gosuda.github.io/portal-tunnel/configuration) for the canonical embedded DNS documentation.
-
-After the delegation resolves, publish the DS record printed in the relay's startup log at the parent zone; the embedded DNS signs its zone with a CSK stored at `IDENTITY_PATH/dnssec-csk.json`. Back that file up with the identity directory: replacing it without re-coordinating the parent DS breaks validation for resolvers that validate DNSSEC.
-
-### 5. Verify
+### 6. Verify
 
 ```sh
 # Health check
@@ -152,11 +164,11 @@ dig +short @<public IP> relay.example.com NS
 
 If game hosting is enabled, also verify a raw transport allocation by exposing with `--tcp` or `--udp`.
 
-### 6. Register in the public pool
+### 7. Register in the public pool
 
 Submit a PR to add the relay URL to `registry.json` in the portal-tunnel repository. This makes the relay discoverable by all Portal clients through the default registry. The maintainers review and merge.
 
-### 7. Hand off
+### 8. Hand off
 
 Report: the relay URL, whether game hosting (TCP/UDP leases) is enabled, the identity directory path (must stay backed up and private), the admin token location, and the update procedure (`docker compose pull portal && docker compose up -d --force-recreate portal` tracks the latest `ghcr.io/gosuda/portal:2` image; the compose sets `pull_policy: always`).
 

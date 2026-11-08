@@ -32,7 +32,12 @@ Cloudflare cannot delegate a subdomain of a zone on a partial (CNAME) setup. Glu
 
 ## Plan and apply
 
-Run this at the `portal-relay` skill's **Delegate DNS** step, after **Deploy**: the relay must already answer DNS, and the DS comes from its startup log.
+This skill runs in two parts at two points of the `portal-relay` workflow:
+
+- **Part A, NS and glue** (steps 1-4 below): at **Delegate DNS**, before **Deploy**. The relay's first start issues its certificate through ACME DNS-01 answered by its own embedded DNS, so the delegation must exist first. The relay is not running yet, so verify Part A at the parent only.
+- **Part B, DS** (step 5 below): at **Publish the DS**, after **Deploy**. The DS comes from the DNSSEC key that the relay creates at its first start, and the relay must answer for its zone before a DS is published.
+
+Return to `portal-relay` after each part.
 
 1. Read existing records with `GET /zones/<zone_id>/dns_records?name=<name>&type=<type>` for each row of the table. Decide one action per row and show the plan with current values:
    - **No record** of that name and type: `create` with `POST /zones/<zone_id>/dns_records`.
@@ -40,10 +45,10 @@ Run this at the `portal-relay` skill's **Delegate DNS** step, after **Deploy**: 
    - **A record with the same value**: `no-op`. Send no request.
 2. Before any write, save a rollback record per row: the record `id` (from the read for an update, from the `POST` response for a create), the action, and for an update the full previous record (`type`, `content` or `data`, `ttl`, `proxied`).
 3. After approval, apply the NS and glue actions. The request bodies are the same for `POST` and `PATCH`: `{"type": "NS", "name": "relay.example.com", "content": "ns.relay.example.com"}` and `{"type": "A", "name": "ns.relay.example.com", "content": "<ip>", "proxied": false}` (`AAAA` likewise).
-4. Verify the delegation (below) before the DS step. Publishing a DS for a zone that does not answer yet makes validating resolvers fail for the whole subdomain.
-5. Apply the DS action with the same create / update / no-op rule and the body `{"type": "DS", "name": "relay.example.com", "data": {"key_tag": <tag>, "algorithm": 13, "digest_type": 2, "digest": "<hex>"}}`, copying every field exactly from the relay's `ds_record` log line. That line is in zone-file form, `relay.example.com. <ttl> IN DS <key tag> <algorithm> <digest type> <digest>`; the embedded DNS uses algorithm `13` and digest type `2`. A DS only builds a chain of trust when DNSSEC is active on the Cloudflare zone; if it is not, report that and let the user decide whether to enable it.
+4. Check Part A at the parent: `dig @<cloudflare NS of the zone> relay.example.com NS +norec` lists `ns.relay.example.com` with the glue address. Then return to `portal-relay` for **Deploy**.
+5. Part B, after the relay is running: confirm `dig @<relay IP> relay.example.com SOA` answers, then apply the DS action with the same create / update / no-op rule and the body `{"type": "DS", "name": "relay.example.com", "data": {"key_tag": <tag>, "algorithm": 13, "digest_type": 2, "digest": "<hex>"}}`, copying every field exactly from the relay's `ds_record` log line. That line is in zone-file form, `relay.example.com. <ttl> IN DS <key tag> <algorithm> <digest type> <digest>`; the embedded DNS uses algorithm `13` and digest type `2`. A DS only builds a chain of trust when DNSSEC is active on the Cloudflare zone; if it is not, report that and let the user decide whether to enable it.
 
-Then return to `portal-relay` at **Verify**.
+After Part B, return to `portal-relay` at **Verify**. Publishing a DS for a zone that does not answer yet makes validating resolvers fail for the whole subdomain.
 
 ## Verify
 
