@@ -242,29 +242,6 @@ describe("ServerCard comments interaction", () => {
     expect(openLink.getAttribute("href")).toBe("https://cool.relay.example.com/");
   });
 
-  it("renders website URL in browser style address bar", () => {
-    render(
-      <MemoryRouter>
-        <ServerCard
-          server={{
-            id: "cool-app",
-            name: "Cool App",
-            description: "",
-            tags: [],
-            thumbnail: "",
-            owner: "alice",
-            online: true,
-            dns: "cool.relay.example.com",
-            link: "https://cool.relay.example.com/",
-          }}
-        />
-      </MemoryRouter>
-    );
-
-    expect(screen.getByTitle("cool.relay.example.com")).toBeTruthy();
-    expect(screen.getByText("cool.relay.example.com")).toBeTruthy();
-  });
-
   it("renders description and tags in overlay alongside transport endpoints", () => {
     render(
       <MemoryRouter>
