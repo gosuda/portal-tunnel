@@ -465,6 +465,136 @@ function AllowList({
   );
 }
 
+const FIELD_INPUT_CLASS = cn(
+  TUNNEL_FORM_STYLES.input,
+  "h-9 font-mono text-[13px] read-only:opacity-70"
+);
+
+/** A labelled text input with the issues for its field and optional help below. */
+function TextField({
+  label,
+  optional = false,
+  value,
+  onChange,
+  placeholder,
+  issues,
+  field,
+  inputMode,
+  readOnly,
+  children,
+}: {
+  label: string;
+  optional?: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  issues?: TunnelAuthIssue[];
+  field?: TunnelAuthField;
+  inputMode?: "url";
+  readOnly?: boolean;
+  /** Notices and help shown under the input. */
+  children?: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={id} className={TUNNEL_FORM_STYLES.label}>
+        {label}
+        {optional && (
+          <>
+            {" "}
+            <span className="font-normal opacity-70">(optional)</span>
+          </>
+        )}
+      </label>
+      <Input
+        id={id}
+        type="text"
+        inputMode={inputMode}
+        value={value}
+        readOnly={readOnly}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        className={FIELD_INPUT_CLASS}
+      />
+      {issues && field && <FieldIssues issues={issues} field={field} />}
+      {children}
+    </div>
+  );
+}
+
+/** The prompt that reads a secret into the shell before the tunnel starts. */
+function SecretPrompt({
+  title,
+  secret,
+  noun,
+  shortNoun,
+  copyLabel,
+  os,
+}: {
+  title: string;
+  secret: "oidc" | "email";
+  /** What is asked for, such as "client secret". */
+  noun: string;
+  /** How the rest of the sentence refers to it, such as "secret". */
+  shortNoun: string;
+  copyLabel: string;
+  os: TunnelCommandOS;
+}) {
+  const s = TUNNEL_FORM_STYLES;
+  return (
+    <div className="space-y-1.5">
+      <p className={s.label}>{title}</p>
+      <p className={s.help}>
+        Run this in the shell you will start the tunnel from. It asks for the{" "}
+        {noun} without showing it, so the {shortNoun} stays out of the process
+        list, your shell history and the command you copy.
+        {os === "unix" && (
+          <> If you press Ctrl-C at the prompt, run <code>stty echo</code> to
+          see what you type again.</>
+        )}
+      </p>
+      <CopyLine value={buildSecretCommand(secret, os)} label={copyLabel} />
+    </div>
+  );
+}
+
+/**
+ * What to register beyond the listed short URLs. The listed addresses exist
+ * only once a Name is chosen; relay discovery can add relays, each with its
+ * own addresses.
+ */
+function RegisterNote({
+  listed,
+  name,
+  discovery,
+  children,
+}: {
+  listed: boolean;
+  name: string;
+  discovery: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <p className={TUNNEL_FORM_STYLES.help}>
+      {listed
+        ? "These are for the short URL on each relay in the command. "
+        : name === "" &&
+          "A Name gives each relay a short URL you can register now. "}
+      {children}
+      {discovery && (
+        <>
+          {" "}Relay discovery, on by default, can publish on more relays,
+          each with its own addresses; to keep to the relays in the command,
+          add <code>--discovery=false</code>.
+        </>
+      )}
+    </p>
+  );
+}
+
 function OIDCSetup({
   auth,
   patch,
@@ -482,8 +612,6 @@ function OIDCSetup({
   name: string;
   os: TunnelCommandOS;
 }) {
-  const issuerId = useId();
-  const clientId = useId();
   const s = TUNNEL_FORM_STYLES;
   const isGoogle = auth.oidcIssuer === GOOGLE_OIDC_ISSUER;
   const providers = useRadioGroup(
@@ -493,7 +621,6 @@ function OIDCSetup({
       patch({ oidcIssuer: provider === "google" ? GOOGLE_OIDC_ISSUER : "" })
   );
   const redirectURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_CALLBACK_PATH);
-  const inputClass = cn(s.input, "h-9 font-mono text-[13px] read-only:opacity-70");
 
   return (
     <div className="space-y-4">
@@ -526,22 +653,15 @@ function OIDCSetup({
       </div>
 
       <div className="space-y-3">
-        <div className="space-y-1.5">
-          <label htmlFor={issuerId} className={s.label}>
-            Issuer
-          </label>
-          <Input
-            id={issuerId}
-            type="text"
-            value={auth.oidcIssuer}
-            readOnly={isGoogle}
-            onChange={(event) => patch({ oidcIssuer: event.target.value })}
-            placeholder="https://login.example.com"
-            autoComplete="off"
-            spellCheck={false}
-            className={inputClass}
-          />
-          <FieldIssues issues={issues} field="issuer" />
+        <TextField
+          label="Issuer"
+          value={auth.oidcIssuer}
+          readOnly={isGoogle}
+          onChange={(oidcIssuer) => patch({ oidcIssuer })}
+          placeholder="https://login.example.com"
+          issues={issues}
+          field="issuer"
+        >
           {!isGoogle && (
             <p className={s.help}>
               Any provider that publishes{" "}
@@ -549,23 +669,15 @@ function OIDCSetup({
               its login is not OpenID Connect.
             </p>
           )}
-        </div>
-        <div className="space-y-1.5">
-          <label htmlFor={clientId} className={s.label}>
-            Client ID
-          </label>
-          <Input
-            id={clientId}
-            type="text"
-            value={auth.oidcClientId}
-            onChange={(event) => patch({ oidcClientId: event.target.value })}
-            placeholder="abc.apps.googleusercontent.com"
-            autoComplete="off"
-            spellCheck={false}
-            className={inputClass}
-          />
-          <FieldIssues issues={issues} field="clientId" />
-        </div>
+        </TextField>
+        <TextField
+          label="Client ID"
+          value={auth.oidcClientId}
+          onChange={(oidcClientId) => patch({ oidcClientId })}
+          placeholder="abc.apps.googleusercontent.com"
+          issues={issues}
+          field="clientId"
+        />
       </div>
 
       <div className="space-y-1.5">
@@ -582,43 +694,24 @@ function OIDCSetup({
             label={`Copy redirect address ${url}`}
           />
         ))}
-        <p className={s.help}>
-          {redirectURLs.length > 0
-            ? "These are for the short URL on each relay in the command. "
-            : name === "" &&
-              "A Name gives each relay a short URL you can register now. "}
+        <RegisterNote listed={redirectURLs.length > 0} name={name} discovery={discovery}>
           When the tunnel is ready, Portal prints each relay's address-bound
           URL after <code>service ready at</code>, and its short URL only if
           that relay granted the name. Register every address it prints that is
           not listed here, including the address-bound one: the address
           followed by <code>{AUTH_CALLBACK_PATH}</code>, without{" "}
           <code>:443</code>.
-          {discovery && (
-            <>
-              {" "}Relay discovery, on by default, can publish on more relays,
-              each with its own addresses; to keep to the relays in the command,
-              add <code>--discovery=false</code>.
-            </>
-          )}
-        </p>
+        </RegisterNote>
       </div>
 
-      <div className="space-y-1.5">
-        <p className={s.label}>2. In your terminal, before the command below</p>
-        <p className={s.help}>
-          Run this in the shell you will start the tunnel from. It asks for the
-          client secret without showing it, so the secret stays out of the
-          process list, your shell history and the command you copy.
-          {os === "unix" && (
-            <> If you press Ctrl-C at the prompt, run <code>stty echo</code> to
-            see what you type again.</>
-          )}
-        </p>
-        <CopyLine
-          value={buildSecretCommand("oidc", os)}
-          label="Copy secret prompt"
-        />
-      </div>
+      <SecretPrompt
+        title="2. In your terminal, before the command below"
+        secret="oidc"
+        noun="client secret"
+        shortNoun="secret"
+        copyLabel="Copy secret prompt"
+        os={os}
+      />
     </div>
   );
 }
@@ -638,71 +731,44 @@ function SAMLSetup({
   discovery: boolean;
   name: string;
 }) {
-  const metadataId = useId();
-  const entityId = useId();
-  const subjectId = useId();
   const s = TUNNEL_FORM_STYLES;
   const acsURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_SAML_ACS_PATH);
   const metadataURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_SAML_METADATA_PATH);
-  const inputClass = cn(s.input, "h-9 font-mono text-[13px]");
 
   return (
     <div className="space-y-4">
       <div className="space-y-3">
-        <div className="space-y-1.5">
-          <label htmlFor={metadataId} className={s.label}>
-            Identity provider metadata
-          </label>
-          <Input
-            id={metadataId}
-            type="text"
-            inputMode="url"
-            value={auth.samlMetadataURL}
-            onChange={(event) => patch({ samlMetadataURL: event.target.value })}
-            placeholder="https://idp.example.com/metadata"
-            autoComplete="off"
-            spellCheck={false}
-            className={inputClass}
-          />
-          <FieldIssues issues={issues} field="metadataURL" />
+        <TextField
+          label="Identity provider metadata"
+          inputMode="url"
+          value={auth.samlMetadataURL}
+          onChange={(samlMetadataURL) => patch({ samlMetadataURL })}
+          placeholder="https://idp.example.com/metadata"
+          issues={issues}
+          field="metadataURL"
+        >
           <p className={s.help}>
             The address where the provider publishes its SAML metadata, such
             as Keycloak's <code>/protocol/saml/descriptor</code>. For a
             provider that only gives you a file, replace this flag with{" "}
             <code>--auth-saml-metadata-file</code> and the file's path.
           </p>
-        </div>
+        </TextField>
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <label htmlFor={entityId} className={s.label}>
-              Entity ID <span className="font-normal opacity-70">(optional)</span>
-            </label>
-            <Input
-              id={entityId}
-              type="text"
-              value={auth.samlEntityId}
-              onChange={(event) => patch({ samlEntityId: event.target.value })}
-              placeholder="metadata address of each host"
-              autoComplete="off"
-              spellCheck={false}
-              className={inputClass}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor={subjectId} className={s.label}>
-              Subject attribute <span className="font-normal opacity-70">(optional)</span>
-            </label>
-            <Input
-              id={subjectId}
-              type="text"
-              value={auth.samlSubjectAttribute}
-              onChange={(event) => patch({ samlSubjectAttribute: event.target.value })}
-              placeholder="NameID"
-              autoComplete="off"
-              spellCheck={false}
-              className={inputClass}
-            />
-          </div>
+          <TextField
+            label="Entity ID"
+            optional
+            value={auth.samlEntityId}
+            onChange={(samlEntityId) => patch({ samlEntityId })}
+            placeholder="metadata address of each host"
+          />
+          <TextField
+            label="Subject attribute"
+            optional
+            value={auth.samlSubjectAttribute}
+            onChange={(samlSubjectAttribute) => patch({ samlSubjectAttribute })}
+            placeholder="NameID"
+          />
         </div>
         <p className={s.help}>
           The subject is the NameID unless you name an attribute, such as{" "}
@@ -732,25 +798,14 @@ function SAMLSetup({
             label={`Copy metadata address ${url}`}
           />
         ))}
-        <p className={s.help}>
-          {acsURLs.length > 0
-            ? "These are for the short URL on each relay in the command. "
-            : name === "" &&
-              "A Name gives each relay a short URL you can register now. "}
+        <RegisterNote listed={acsURLs.length > 0} name={name} discovery={discovery}>
           Every address a visitor opens the app on has its own ACS address:
           the address followed by <code>{AUTH_SAML_ACS_PATH}</code>, without{" "}
           <code>:443</code>. When the tunnel is ready, Portal prints each
           relay's address-bound URL after <code>service ready at</code>. With
           more than one address, set an Entity ID so the provider sees one
           application, and register every ACS address with it.
-          {discovery && (
-            <>
-              {" "}Relay discovery, on by default, can publish on more relays,
-              each with its own addresses; to keep to the relays in the command,
-              add <code>--discovery=false</code>.
-            </>
-          )}
-        </p>
+        </RegisterNote>
       </div>
     </div>
   );
@@ -767,30 +822,19 @@ function EmailSetup({
   issues: TunnelAuthIssue[];
   os: TunnelCommandOS;
 }) {
-  const serverId = useId();
-  const fromId = useId();
-  const usernameId = useId();
   const s = TUNNEL_FORM_STYLES;
-  const inputClass = cn(s.input, "h-9 font-mono text-[13px]");
 
   return (
     <div className="space-y-4">
       <div className="space-y-3">
-        <div className="space-y-1.5">
-          <label htmlFor={serverId} className={s.label}>
-            SMTP server
-          </label>
-          <Input
-            id={serverId}
-            type="text"
-            value={auth.emailSMTPAddr}
-            onChange={(event) => patch({ emailSMTPAddr: event.target.value })}
-            placeholder="smtp.example.com:587"
-            autoComplete="off"
-            spellCheck={false}
-            className={inputClass}
-          />
-          <FieldIssues issues={issues} field="smtpAddr" />
+        <TextField
+          label="SMTP server"
+          value={auth.emailSMTPAddr}
+          onChange={(emailSMTPAddr) => patch({ emailSMTPAddr })}
+          placeholder="smtp.example.com:587"
+          issues={issues}
+          field="smtpAddr"
+        >
           <p className={s.help}>
             The host and port of your mail provider's submission server, such
             as a mailbox with an app password or a transactional mail service.
@@ -798,64 +842,42 @@ function EmailSetup({
             only a server on this computer at localhost, 127.0.0.1 or ::1 may
             run without TLS.
           </p>
-        </div>
-        <div className="space-y-1.5">
-          <label htmlFor={fromId} className={s.label}>
-            Sender
-          </label>
-          <Input
-            id={fromId}
-            type="text"
-            value={auth.emailFrom}
-            onChange={(event) => patch({ emailFrom: event.target.value })}
-            placeholder="Portal <login@example.com>"
-            autoComplete="off"
-            spellCheck={false}
-            className={inputClass}
-          />
-          <FieldIssues issues={issues} field="from" />
+        </TextField>
+        <TextField
+          label="Sender"
+          value={auth.emailFrom}
+          onChange={(emailFrom) => patch({ emailFrom })}
+          placeholder="Portal <login@example.com>"
+          issues={issues}
+          field="from"
+        >
           <p className={s.help}>
             Every link comes from this one address. Use an address your SMTP
             account may send from.
           </p>
-        </div>
-        <div className="space-y-1.5">
-          <label htmlFor={usernameId} className={s.label}>
-            SMTP username <span className="font-normal opacity-70">(optional)</span>
-          </label>
-          <Input
-            id={usernameId}
-            type="text"
-            value={auth.emailSMTPUsername}
-            onChange={(event) => patch({ emailSMTPUsername: event.target.value })}
-            placeholder="login@example.com"
-            autoComplete="off"
-            spellCheck={false}
-            className={inputClass}
-          />
+        </TextField>
+        <TextField
+          label="SMTP username"
+          optional
+          value={auth.emailSMTPUsername}
+          onChange={(emailSMTPUsername) => patch({ emailSMTPUsername })}
+          placeholder="login@example.com"
+        >
           <p className={s.help}>
             Leave it empty only for a server that needs no login.
           </p>
-        </div>
+        </TextField>
       </div>
 
       {auth.emailSMTPUsername.trim() !== "" && (
-        <div className="space-y-1.5">
-          <p className={s.label}>In your terminal, before the command below</p>
-          <p className={s.help}>
-            Run this in the shell you will start the tunnel from. It asks for
-            the SMTP password without showing it, so the password stays out of
-            the process list, your shell history and the command you copy.
-            {os === "unix" && (
-              <> If you press Ctrl-C at the prompt, run <code>stty echo</code> to
-              see what you type again.</>
-            )}
-          </p>
-          <CopyLine
-            value={buildSecretCommand("email", os)}
-            label="Copy password prompt"
-          />
-        </div>
+        <SecretPrompt
+          title="In your terminal, before the command below"
+          secret="email"
+          noun="SMTP password"
+          shortNoun="password"
+          copyLabel="Copy password prompt"
+          os={os}
+        />
       )}
 
       <p className={s.help}>
@@ -884,8 +906,6 @@ function InviteBlock({
   exampleURL: string;
   os: TunnelCommandOS;
 }) {
-  const addressId = useId();
-  const subjectId = useId();
   const expiresId = useId();
   const s = TUNNEL_FORM_STYLES;
   const [address, setAddress] = useState("");
@@ -899,26 +919,17 @@ function InviteBlock({
     ? buildAuthIssueCommand({ address, subject: trimmed, expires, os })
     : "";
   const missing = address.trim() === "" || check === null;
-  const fieldClass = cn(s.input, "h-9 text-[13px]");
 
   return (
     <div className="space-y-2">
       <p className={s.label}>After it runs: invite someone</p>
-      <div className="space-y-1.5">
-        <label htmlFor={addressId} className={s.label}>
-          URL you send
-        </label>
-        <Input
-          id={addressId}
-          type="text"
-          inputMode="url"
-          value={address}
-          onChange={(event) => setAddress(event.target.value)}
-          placeholder={exampleURL || "https://"}
-          autoComplete="off"
-          spellCheck={false}
-          className={cn(fieldClass, "font-mono")}
-        />
+      <TextField
+        label="URL you send"
+        inputMode="url"
+        value={address}
+        onChange={setAddress}
+        placeholder={exampleURL || "https://"}
+      >
         {badAddress && (
           <Notice tone="error">
             Paste an https:// address without a path, as Portal prints it.
@@ -929,29 +940,20 @@ function InviteBlock({
           Portal printed for the relay you share: the short URL if it printed
           one, otherwise the address after <code>service ready at</code>.
         </p>
-      </div>
+      </TextField>
       <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <label htmlFor={subjectId} className={s.label}>
-            Name
-          </label>
-          <Input
-            id={subjectId}
-            type="text"
-            value={subject}
-            onChange={(event) => setSubject(event.target.value)}
-            placeholder="alice"
-            autoComplete="off"
-            spellCheck={false}
-            className={cn(fieldClass, "font-mono")}
-          />
-        </div>
+        <TextField
+          label="Name"
+          value={subject}
+          onChange={setSubject}
+          placeholder="alice"
+        />
         <div className="space-y-1.5">
           <label htmlFor={expiresId} className={s.label}>
             Valid for
           </label>
           <Select value={expires} onValueChange={setExpires}>
-            <SelectTrigger id={expiresId} className={fieldClass}>
+            <SelectTrigger id={expiresId} className={cn(s.input, "h-9 text-[13px]")}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
