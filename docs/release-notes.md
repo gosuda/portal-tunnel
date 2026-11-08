@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Agent: relay status and configuration compatibility
+
+`/agent/status` now reports relay `state` (`ready`, `connecting`, or `failed`)
+and optional `failure` instead of the `connecting` boolean. Scripts should use
+`state == "connecting"` for that check. The previously unpopulated `explicit`,
+`bootstrap`, `banned`, `supports_udp`, and `supports_tcp` fields are removed.
+Stopped or retrying tunnels return no historical relay entries. A running
+tunnel's failed relays remain removable with **Disconnect** in the dashboard.
+
+HTTP route `methods` now rejects empty or whitespace-only entries, including
+entries on free routes. Previously those entries could disappear during
+normalization; on a paid route, an emptied list charged every method. Before
+upgrading, replace blank entries with the intended methods, or remove `methods`
+entirely when no method filter is needed. Free routes must omit `methods`.
+One invalid saved route prevents the entire agent configuration from loading,
+so correct it in the TOML configuration before restarting the upgraded agent.
+
+Discovery announcement attempts, including network failures, now log at debug
+level. An unreachable bootstrap target does not emit a warning every poll.
+
 ### Relay: accept tunnels only from your networks
 
 `TUNNEL_SOURCE_CIDRS` lists the networks that may register tunnels. A tunnel from

@@ -236,7 +236,7 @@ func TestExistingConfigKeysFillComponents(t *testing.T) {
 	if got := *specs["sso"].HTTP.Auth; !reflect.DeepEqual(got, saml) {
 		t.Errorf("sso auth = %+v, want %+v", got, saml)
 	}
-	if got := specs["paid"].HTTP.Payment.X402Config; !reflect.DeepEqual(got, payment) {
+	if got := specs["paid"].HTTP.Payment; !reflect.DeepEqual(got, payment) {
 		t.Errorf("paid payment = %+v, want %+v", got, payment)
 	}
 	if got := specs["web"].Relays; got.Discovery || !got.BanMITM || got.MaxActive != 5 || !got.Overlay {

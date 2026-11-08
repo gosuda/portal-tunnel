@@ -85,11 +85,11 @@ func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
 	handler, err := ComposeHTTPRoutes([]ExposedHTTPRoute{
 		{Prefix: "/paid", Upstream: upstream.URL, Amount: "0.01"},
 		{Prefix: "/also-paid", Upstream: upstream.URL, Amount: "0.01"},
-	}, X402Payment{X402Config: X402Config{
+	}, X402Config{
 		Network:   "nano:mainnet",
 		PayTo:     strings.ToUpper(nanoTestPayTo[:1]) + nanoTestPayTo[1:],
 		Endpoints: []string{nodeA.URL, nodeB.URL},
-	}})
+	})
 	if err != nil {
 		t.Fatalf("ComposeHTTPRoutes() error = %v", err)
 	}
@@ -190,13 +190,75 @@ func TestComposeHTTPRoutesRejectsInvalidNanoContract(t *testing.T) {
 			Prefix:   "/paid",
 			Upstream: "http://127.0.0.1:1",
 			Amount:   tt.amount,
-		}}, X402Payment{X402Config: X402Config{
+		}}, X402Config{
 			Network:   "nano:mainnet",
 			PayTo:     tt.payTo,
 			Endpoints: tt.endpoints,
-		}})
+		})
 		if err == nil {
 			t.Errorf("%s: ComposeHTTPRoutes() error = nil, want rejection", name)
 		}
+	}
+}
+
+// Payment and upstream dispatch must use the same longest canonical prefix,
+// including an unpaid child of a paid route and a paid child of that exception.
+func TestComposeHTTPRoutesPaymentFollowsSelectedRoute(t *testing.T) {
+	t.Parallel()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.URL.RequestURI())
+	}))
+	t.Cleanup(upstream.Close)
+	handler, err := ComposeHTTPRoutes([]ExposedHTTPRoute{
+		{Prefix: "/pay", Upstream: upstream.URL, Amount: "0.01"},
+		{Prefix: "/pay/free/", Upstream: upstream.URL},
+		{Prefix: "/pay/free/locked", Upstream: upstream.URL, Amount: "0.01", Methods: []string{"POST"}},
+	}, X402Config{Network: "nano:mainnet", PayTo: nanoTestPayTo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		method string
+		path   string
+		status int
+		body   string
+	}{
+		{http.MethodGet, "/pay/item", http.StatusPaymentRequired, ""},
+		{http.MethodGet, "/pay/free/item?q=1", http.StatusOK, "/item?q=1"},
+		{http.MethodGet, "/pay/free/locked/item", http.StatusOK, "/item"},
+		{http.MethodPost, "/pay/free/locked/item", http.StatusPaymentRequired, ""},
+		{http.MethodGet, "/pay/free/../item", http.StatusPaymentRequired, ""},
+		{http.MethodGet, "/payment", http.StatusNotFound, ""},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(tc.method, "https://tenant.example"+tc.path, nil))
+			if rec.Code != tc.status || (tc.body != "" && rec.Body.String() != tc.body) {
+				t.Fatalf("status = %d, body = %q; want status %d, body %q", rec.Code, rec.Body.String(), tc.status, tc.body)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		path   string
+		method string
+		status int
+	}{
+		{"/pay/item", "GET", http.StatusPaymentRequired},
+		{"/pay/free/item", "GET", http.StatusNotFound},
+		{"/pay/free/locked/item", "GET", http.StatusNotFound},
+		{"/pay/free/locked/item", "POST", http.StatusPaymentRequired},
+		{"/payment", "GET", http.StatusNotFound},
+	} {
+		t.Run("prepare "+tc.method+" "+tc.path, func(t *testing.T) {
+			body, err := json.Marshal(x402PreparePaymentRequest{Path: tc.path, Method: tc.method})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://tenant.example"+X402PreparePath, strings.NewReader(string(body))))
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, body = %q; want %d", rec.Code, rec.Body.String(), tc.status)
+			}
+		})
 	}
 }

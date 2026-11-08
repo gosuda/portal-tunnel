@@ -18,100 +18,14 @@ import (
 // agentDashboardRelayLead is the width of the row marker and the space after it.
 const agentDashboardRelayLead = 2
 
-type relayAttemptKey struct {
-	tunnelID string
-	relayURL string
-}
-
-func (m *agentDashboardModel) trackRelayAttempt(tunnelID, relayURL string) {
-	key := agentDashboardRelayKey(tunnelID, relayURL)
-	if key == (relayAttemptKey{}) {
-		return
-	}
-	if m.relayAttempts == nil {
-		m.relayAttempts = make(map[relayAttemptKey]bool)
-	}
-	m.relayAttempts[key] = false
-}
-
-func (m *agentDashboardModel) clearRelayAttempt(tunnelID, relayURL string) {
-	key := agentDashboardRelayKey(tunnelID, relayURL)
-	delete(m.relayAttempts, key)
-	if len(m.relayAttempts) == 0 {
-		m.relayAttempts = nil
-	}
-}
-
-func (m *agentDashboardModel) syncRelayAttempts() {
-	if len(m.relayAttempts) == 0 {
-		return
-	}
-	seen := make(map[relayAttemptKey]struct{})
-	for _, tunnel := range m.status.Tunnels {
-		for _, relay := range tunnel.Relays {
-			key := agentDashboardRelayKey(tunnel.ID, relay.RelayURL)
-			if key == (relayAttemptKey{}) {
-				continue
-			}
-			seen[key] = struct{}{}
-			if _, ok := m.relayAttempts[key]; !ok {
-				continue
-			}
-			if relayDashboardConnected(tunnel, relay) {
-				delete(m.relayAttempts, key)
-				continue
-			}
-			if relay.Connecting {
-				m.relayAttempts[key] = false
-			} else {
-				m.relayAttempts[key] = true
-			}
-		}
-	}
-	for key := range m.relayAttempts {
-		if _, ok := seen[key]; !ok {
-			delete(m.relayAttempts, key)
-		}
-	}
-	if len(m.relayAttempts) == 0 {
-		m.relayAttempts = nil
-	}
-}
-
-func (m agentDashboardModel) relayDashboardFailed(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
-	if relayDashboardConnected(tunnel, relay) || relay.Connecting {
-		return false
-	}
-	failed, ok := m.relayAttempts[agentDashboardRelayKey(tunnel.ID, relay.RelayURL)]
-	return ok && failed
-}
-
-func (m agentDashboardModel) relayDashboardConnecting(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
-	if relayDashboardConnected(tunnel, relay) || relay.Connecting {
-		return relay.Connecting
-	}
-	failed, ok := m.relayAttempts[agentDashboardRelayKey(tunnel.ID, relay.RelayURL)]
-	return ok && !failed
-}
-
-func agentDashboardRelayKey(tunnelID, relayURL string) relayAttemptKey {
-	tunnelID = strings.TrimSpace(tunnelID)
-	relayURL = strings.TrimSpace(relayURL)
-	if tunnelID == "" || relayURL == "" {
-		return relayAttemptKey{}
-	}
-	return relayAttemptKey{tunnelID: tunnelID, relayURL: relayURL}
-}
-
 func (m agentDashboardModel) connectSelectedRelay() (tea.Model, tea.Cmd) {
 	tunnel, relay, ok := m.selectedTunnelRelay()
 	if !ok {
 		return m, nil
 	}
-	if relay.Banned || relayDashboardActive(tunnel, relay) || m.relayDashboardConnecting(tunnel, relay) {
+	if tunnel.State != "running" || relay.State == sdk.RelayReady || relay.State == sdk.RelayConnecting {
 		return m, nil
 	}
-	m.trackRelayAttempt(tunnel.ID, relay.RelayURL)
 	return m, agentDashboardRun(func(ctx context.Context) error {
 		return ConnectRelay(ctx, m.stateDir, tunnel.ID, relay.RelayURL)
 	})
@@ -122,10 +36,9 @@ func (m agentDashboardModel) disconnectSelectedRelay() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if relay.Banned || !relayDashboardActive(tunnel, relay) {
+	if tunnel.State != "running" {
 		return m, nil
 	}
-	m.clearRelayAttempt(tunnel.ID, relay.RelayURL)
 	return m, agentDashboardRun(func(ctx context.Context) error {
 		return DisconnectRelay(ctx, m.stateDir, tunnel.ID, relay.RelayURL)
 	})
@@ -158,14 +71,14 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 	}
 
 	relay, hasRelay := m.selectedRelayStatus()
-	connectDisabled := !hasRelay || relay.Banned || relayDashboardActive(tunnel, relay) || m.relayDashboardConnecting(tunnel, relay)
-	disconnectDisabled := !hasRelay || relay.Banned || !relayDashboardActive(tunnel, relay)
+	connectDisabled := !hasRelay || tunnel.State != "running" || relay.State == sdk.RelayReady || relay.State == sdk.RelayConnecting
+	disconnectDisabled := !hasRelay || tunnel.State != "running"
 	pane.addButtons(th, width,
 		agentDashboardButton{label: "Connect", action: agentDashboardActionConnectRelay, disabled: connectDisabled},
 		agentDashboardButton{label: "Disconnect", action: agentDashboardActionDisconnectRelay, disabled: disconnectDisabled},
 	)
 	rowWidth := width - agentDashboardRelayLead
-	header := agentDashboardRelayRow(rowWidth, "STATUS", "VERSION", "FEATURES", "TUNNEL URL")
+	header := agentDashboardRelayRow(rowWidth, "STATUS", "VERSION", "TUNNEL URL")
 	pane.addLine(th.strong.Render(strings.Repeat(" ", agentDashboardRelayLead) + header))
 
 	if len(tunnel.Relays) == 0 {
@@ -185,53 +98,30 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 			marker = th.glyph.selected
 		}
 		line := marker + " " + agentDashboardRelayRow(rowWidth,
-			m.relayDashboardMode(tunnel, relay),
+			relayDashboardMode(relay),
 			relayDashboardVersion(relay),
-			relayDashboardFeatures(relay),
 			relayDashboardURL(relay),
 		)
-		style := agentDashboardRelayStyle(th, i == selected, tunnel, relay, m.relayDashboardFailed(tunnel, relay), m.relayDashboardConnecting(tunnel, relay))
+		style := agentDashboardRelayStyle(th, i == selected, relay)
 		pane.addClickRow(line, width, style, agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
 	}
 	return pane
 }
 
-func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, tunnel AgentTunnelStatus, relay AgentRelayStatus, failed, connecting bool) lipgloss.Style {
+func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, relay AgentRelayStatus) lipgloss.Style {
 	if selected {
 		return th.selected
 	}
-	if relay.Banned || failed {
+	if relay.State == sdk.RelayFailed {
 		return th.failed
 	}
-	if relayDashboardConnected(tunnel, relay) {
+	if relay.State == sdk.RelayReady {
 		return th.bright
 	}
-	if connecting {
+	if relay.State == sdk.RelayConnecting {
 		return th.pending
 	}
 	return th.muted
-}
-
-func relayDashboardActive(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
-	return relayDashboardConnected(tunnel, relay) || relay.Connecting
-}
-
-func relayDashboardConnected(tunnel AgentTunnelStatus, relay AgentRelayStatus) bool {
-	return relay.PublicURL != ""
-}
-
-func relayDashboardFeatures(relay AgentRelayStatus) string {
-	var features []string
-	if relay.SupportsUDP {
-		features = append(features, "udp")
-	}
-	if relay.SupportsTCP {
-		features = append(features, "tcp")
-	}
-	if len(features) == 0 {
-		return "-"
-	}
-	return strings.Join(features, ",")
 }
 
 func relayDashboardVersion(relay AgentRelayStatus) string {
@@ -285,26 +175,24 @@ func relayDashboardRelayLabel(rawURL string) string {
 	return host
 }
 
-func (m agentDashboardModel) relayDashboardMode(tunnel AgentTunnelStatus, relay AgentRelayStatus) string {
+func relayDashboardMode(relay AgentRelayStatus) string {
 	switch {
-	case relay.Banned:
-		return "banned"
-	case relay.Approval == string(sdk.RelayApprovalPending):
+	case relay.Approval == sdk.RelayApprovalPending:
 		return "waiting"
-	case relay.Approval == string(sdk.RelayApprovalRefused):
+	case relay.Approval == sdk.RelayApprovalRefused:
 		return "refused"
-	case relay.PublicURL != "":
-		return "direct"
-	case relay.Connecting || m.relayDashboardConnecting(tunnel, relay):
-		return "connecting..."
-	case m.relayDashboardFailed(tunnel, relay):
+	case relay.State == sdk.RelayFailed:
 		return "failed"
+	case relay.State == sdk.RelayReady:
+		return "direct"
+	case relay.State == sdk.RelayConnecting:
+		return "connecting..."
 	default:
 		return "-"
 	}
 }
 
-func agentDashboardRelayRow(width int, mode, version, features, displayURL string) string {
+func agentDashboardRelayRow(width int, mode, version, displayURL string) string {
 	if width < 28 {
 		modeW := lipgloss.Width(mode)
 		urlW := max(1, width-modeW-1)
@@ -317,11 +205,9 @@ func agentDashboardRelayRow(width int, mode, version, features, displayURL strin
 	}
 	modeW := 13
 	versionW := 8
-	featuresW := 15
-	relayW := max(1, width-modeW-versionW-featuresW-3)
+	relayW := max(1, width-modeW-versionW-2)
 	return agentDashboardCell(mode, modeW) + " " +
 		agentDashboardCell(version, versionW) + " " +
-		agentDashboardCell(features, featuresW) + " " +
 		agentDashboardURLCell(displayURL, relayW)
 }
 

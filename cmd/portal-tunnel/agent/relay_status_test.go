@@ -38,18 +38,22 @@ func TestAgentRelayStatusAdvertisesAliasOnlyWhileReady(t *testing.T) {
 
 func TestAgentRelayStatusCarriesApproval(t *testing.T) {
 	statuses := agentRelayStatuses([]sdk.RelayStatus{{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalPending}})
-	if statuses[0].Approval != "pending" || !statuses[0].Connecting {
+	if statuses[0].Approval != sdk.RelayApprovalPending || statuses[0].State != sdk.RelayConnecting {
 		t.Fatalf("status = %+v", statuses[0])
 	}
 }
 
-func TestStoppedTunnelSnapshotDoesNotAdvertiseCachedAlias(t *testing.T) {
-	tunnel := &managedTunnel{relays: []AgentRelayStatus{{
-		PublicURL: "https://identity.relay.example/",
-		AliasURL:  "https://app.relay.example/",
-	}}}
+func TestStoppedTunnelSnapshotDoesNotAdvertiseRelayEndpoints(t *testing.T) {
+	tunnel := &managedTunnel{cfg: testTunnel("web")}
 	status := tunnel.Snapshot()
-	if status.Relays[0].AliasURL != "" {
-		t.Fatalf("stopped tunnel advertises alias %q", status.Relays[0].AliasURL)
+	if status.State != "stopped" || len(status.Relays) != 0 {
+		t.Fatalf("stopped tunnel advertises relay endpoints: state=%q relays=%+v", status.State, status.Relays)
+	}
+}
+
+func TestAgentRelayStatusCarriesFailure(t *testing.T) {
+	statuses := agentRelayStatuses([]sdk.RelayStatus{{State: sdk.RelayFailed, Failure: sdk.RelayFailureMITM}})
+	if statuses[0].State != sdk.RelayFailed || statuses[0].Failure != sdk.RelayFailureMITM {
+		t.Fatalf("status = %+v", statuses[0])
 	}
 }

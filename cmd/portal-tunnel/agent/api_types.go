@@ -10,6 +10,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -59,20 +60,16 @@ type AgentTunnelStatus struct {
 }
 
 type AgentRelayStatus struct {
-	RelayURL   string `json:"relay_url"`
-	PublicURL  string `json:"public_url,omitempty"`
-	AliasURL   string `json:"alias_url,omitempty"`
-	TCPAddr    string `json:"tcp_addr,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Explicit   bool   `json:"explicit,omitempty"`
-	Connecting bool   `json:"connecting"`
+	RelayURL  string           `json:"relay_url"`
+	PublicURL string           `json:"public_url,omitempty"`
+	AliasURL  string           `json:"alias_url,omitempty"`
+	TCPAddr   string           `json:"tcp_addr,omitempty"`
+	Version   string           `json:"version,omitempty"`
+	State     sdk.RelayState   `json:"state"`
+	Failure   sdk.RelayFailure `json:"failure,omitempty"`
 	// Approval is pending or refused while the relay refuses this tunnel's
 	// lease. Empty never means approved.
-	Approval    string `json:"approval,omitempty"`
-	Bootstrap   bool   `json:"bootstrap"`
-	Banned      bool   `json:"banned"`
-	SupportsUDP bool   `json:"supports_udp"`
-	SupportsTCP bool   `json:"supports_tcp"`
+	Approval sdk.RelayApproval `json:"approval,omitempty"`
 }
 
 // AgentTunnelRequest adds a tunnel. The auth and payment components are the
