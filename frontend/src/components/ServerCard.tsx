@@ -1,7 +1,16 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { BadgeDollarSign, Info, MessageSquare, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import {
+  BadgeDollarSign,
+  Info,
+  Lock,
+  MessageSquare,
+  Terminal,
+  ThumbsDown,
+  ThumbsUp,
+  X,
+} from "lucide-react";
 import type { BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
@@ -20,6 +29,26 @@ function pickPlaceholderThumbnail(seed: string): string {
     hash = (hash * 33 + seed.charCodeAt(i)) >>> 0;
   }
   return PLACEHOLDER_THUMBNAILS[hash % PLACEHOLDER_THUMBNAILS.length];
+}
+
+function formatDisplayUrl(server: BaseServer): string {
+  const { tcpAddr, udpAddr, dns, link, id } = server;
+  if (tcpAddr && udpAddr) return `tcp://${tcpAddr}`;
+  if (tcpAddr) return `tcp://${tcpAddr}`;
+  if (udpAddr) return `udp://${udpAddr}`;
+
+  if (link) {
+    try {
+      if (link.startsWith("http://") || link.startsWith("https://")) {
+        const parsed = new URL(link);
+        const path = parsed.pathname === "/" ? "" : parsed.pathname;
+        return `${parsed.host}${path}`;
+      }
+    } catch {
+      // Ignore URL parsing errors for relative paths
+    }
+  }
+  return dns || id || "";
 }
 
 interface ServerCardProps {
@@ -85,6 +114,8 @@ export function ServerCard({
     return `${seconds}s ago`;
   }, [firstSeen]);
 
+  const displayUrl = useMemo(() => formatDisplayUrl(server), [server]);
+
   const handleVote = async (event: React.MouseEvent, targetVote: "up" | "down") => {
     event.preventDefault();
     event.stopPropagation();
@@ -104,149 +135,188 @@ export function ServerCard({
 
   const cardBody = (
     <article className="relative w-full min-w-0">
-      {/* 1. Thumbnail Container (16:9 aspect ratio) */}
-      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted">
-        <img
-          src={resolvedThumbnail}
-          alt=""
-          loading="lazy"
-          className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
-          onError={effectiveThumbnail ? () => setFailedThumbnail(thumbnail) : undefined}
-        />
-
-        {/* Top-right custom action overlay */}
-        {action && (
-          <div className="pointer-events-auto absolute top-2.5 right-2.5 z-30">
-            {action}
+      {/* 1. Browser Window Frame */}
+      <div className="relative flex flex-col w-full overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xs transition-all duration-200 group-hover:border-border group-hover:shadow-md">
+        {/* Browser Header Bar */}
+        <div className="flex h-8 w-full items-center justify-between gap-2 border-b border-border/70 bg-muted/40 px-3 py-1.5 backdrop-blur-xs select-none">
+          {/* Traffic light window controls */}
+          <div className="flex items-center gap-1.5 shrink-0" aria-hidden="true">
+            <span className="size-2 rounded-full bg-border transition-colors duration-150 group-hover:bg-red-500/80" />
+            <span className="size-2 rounded-full bg-border transition-colors duration-150 group-hover:bg-amber-500/80" />
+            <span className="size-2 rounded-full bg-border transition-colors duration-150 group-hover:bg-emerald-500/80" />
           </div>
-        )}
-        {server.reputation && isHiddenByVotes(server.reputation.up, server.reputation.down) && (
-          <span className="absolute top-2.5 right-2.5 rounded bg-black/80 px-2 py-0.5 text-xs text-white">
-            Hidden by downvotes
-          </span>
-        )}
 
-        {/* Payment badge */}
-        {showPaymentBadge && (
-          <span
-            className={clsx(
-              "absolute inline-flex max-w-[80%] items-center gap-1 rounded bg-black/80 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-xs",
-              isTransportService ? "top-2.5 left-2.5" : "bottom-2.5 left-2.5"
-            )}
-          >
-            <BadgeDollarSign className="size-3.5 shrink-0 text-emerald-400" />
-            <span className="truncate">{effectivePaymentLabel}</span>
-          </span>
-        )}
-
-        {/* Online LIVE badge */}
-        {online && !isTransportService && (
-          <span className="absolute bottom-2.5 right-2.5 inline-flex items-center gap-1.5 rounded bg-black/80 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-400 backdrop-blur-xs">
-            <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            LIVE
-          </span>
-        )}
-
-        {/* Touch / Click Disclosure Toggle Button */}
-        {hasDetails && (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setShowDetails((prev) => !prev);
-            }}
-            aria-label={showDetails ? "Hide description" : "Show description"}
-            aria-expanded={showDetails}
-            title={showDetails ? "Hide description" : "Show description"}
-            className={clsx(
-              "pointer-events-auto absolute z-30 flex size-7 items-center justify-center rounded-full text-white/90 backdrop-blur-md transition-all active:scale-95 cursor-pointer shadow-xs",
-              isTransportService && showPaymentBadge ? "top-2.5 left-28" : "top-2.5 left-2.5",
-              showDetails
-                ? "bg-black/90 text-white ring-1 ring-white/30"
-                : "bg-black/60 hover:bg-black/80 hover:text-white"
-            )}
-          >
-            {showDetails ? (
-              <X className="size-3.5 shrink-0" />
-            ) : (
-              <Info className="size-3.5 shrink-0" />
-            )}
-          </button>
-        )}
-
-        {/* Description overlay on hover, focus-within, or touch disclosure */}
-        {hasDetails && (
+          {/* URL Address Bar */}
           <div
-            onClick={
-              showDetails
-                ? (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setShowDetails(false);
-                  }
-                : undefined
-            }
-            className={clsx(
-              "absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 transition-opacity duration-200",
-              isTransportService ? "pb-16" : "",
-              showDetails
-                ? "pointer-events-auto opacity-100 cursor-pointer"
-                : "pointer-events-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-            )}
+            className="flex min-w-0 flex-1 max-w-[68%] items-center justify-center gap-1.5 rounded-md border border-border/60 bg-background/80 px-2 py-0.5 text-[11px] text-muted-foreground shadow-2xs transition-colors group-hover:border-border"
+            title={displayUrl}
           >
-            {description && (
-              <>
-                <div className="mb-1 flex items-center justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-white/60">
-                    Description
-                  </span>
-                  {showDetails && (
-                    <span className="text-[10px] text-white/50">Tap to close</span>
-                  )}
-                </div>
-                <p className="line-clamp-4 text-xs leading-relaxed text-white/95 whitespace-pre-wrap break-words">
-                  {description}
-                </p>
-              </>
+            {isTransportService ? (
+              <Terminal className="size-2.5 shrink-0 text-muted-foreground/80" />
+            ) : (
+              <Lock className="size-2.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
             )}
-            {tags && tags.length > 0 && (
-              <div className={clsx("flex flex-wrap gap-1", description ? "mt-2" : "")}>
-                {tags.slice(0, 4).map((tag) => (
-                  <span
-                    key={tag}
-                    className="rounded bg-white/20 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-xs"
-                  >
-                    #{tag}
-                  </span>
-                ))}
-              </div>
-            )}
+            <span className="truncate font-mono text-[11px] text-foreground/80">
+              {displayUrl}
+            </span>
           </div>
-        )}
 
-        {/* Raw transport endpoints (TCP / UDP) */}
-        {isTransportService && (
-          <div className="absolute inset-x-2.5 bottom-2.5 space-y-1 rounded-lg border border-white/10 bg-black/80 p-2 backdrop-blur-md">
-            {endpoints.map((endpoint) => (
-              <div key={endpoint.protocol} className="flex min-w-0 items-center gap-2">
-                <code
-                  className="min-w-0 flex-1 truncate font-mono text-xs text-white/90"
-                  title={endpoint.address}
-                >
-                  {endpoint.address}
-                </code>
-                <button
-                  type="button"
-                  onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
-                  className="pointer-events-auto relative z-30 shrink-0 rounded bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                >
-                  {copiedProtocol === endpoint.protocol ? "Copied!" : `Copy ${endpoint.protocol}`}
-                </button>
-              </div>
-            ))}
+          {/* Right status (LIVE) */}
+          <div className="flex items-center justify-end shrink-0 min-w-5">
+            {online && !isTransportService ? (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-emerald-600 dark:text-emerald-400"
+                title="Live"
+              >
+                <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-[9px]">LIVE</span>
+              </span>
+            ) : online ? (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400" title="Online">
+                <span className="size-1.5 rounded-full bg-emerald-500" />
+              </span>
+            ) : (
+              <span className="size-1.5 rounded-full bg-muted-foreground/30" title="Offline" />
+            )}
           </div>
-        )}
+        </div>
+
+        {/* Viewport / Thumbnail Container (16:9 aspect ratio) */}
+        <div className="relative aspect-video w-full overflow-hidden bg-muted">
+          <img
+            src={resolvedThumbnail}
+            alt=""
+            loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
+            onError={effectiveThumbnail ? () => setFailedThumbnail(thumbnail) : undefined}
+          />
+
+          {/* Top-right custom action overlay */}
+          {action && (
+            <div className="pointer-events-auto absolute top-2.5 right-2.5 z-30">
+              {action}
+            </div>
+          )}
+          {server.reputation && isHiddenByVotes(server.reputation.up, server.reputation.down) && (
+            <span className="absolute top-2.5 right-2.5 rounded bg-black/80 px-2 py-0.5 text-xs text-white">
+              Hidden by downvotes
+            </span>
+          )}
+
+          {/* Payment badge */}
+          {showPaymentBadge && (
+            <span
+              className={clsx(
+                "absolute inline-flex max-w-[80%] items-center gap-1 rounded bg-black/80 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-xs",
+                isTransportService ? "top-2.5 left-2.5" : "bottom-2.5 left-2.5"
+              )}
+            >
+              <BadgeDollarSign className="size-3.5 shrink-0 text-emerald-400" />
+              <span className="truncate">{effectivePaymentLabel}</span>
+            </span>
+          )}
+
+          {/* Touch / Click Disclosure Toggle Button */}
+          {hasDetails && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setShowDetails((prev) => !prev);
+              }}
+              aria-label={showDetails ? "Hide description" : "Show description"}
+              aria-expanded={showDetails}
+              title={showDetails ? "Hide description" : "Show description"}
+              className={clsx(
+                "pointer-events-auto absolute z-30 flex size-7 items-center justify-center rounded-full text-white/90 backdrop-blur-md transition-all active:scale-95 cursor-pointer shadow-xs",
+                isTransportService && showPaymentBadge ? "top-2.5 left-28" : "top-2.5 left-2.5",
+                showDetails
+                  ? "bg-black/90 text-white ring-1 ring-white/30"
+                  : "bg-black/60 hover:bg-black/80 hover:text-white"
+              )}
+            >
+              {showDetails ? (
+                <X className="size-3.5 shrink-0" />
+              ) : (
+                <Info className="size-3.5 shrink-0" />
+              )}
+            </button>
+          )}
+
+          {/* Description overlay on hover, focus-within, or touch disclosure */}
+          {hasDetails && (
+            <div
+              onClick={
+                showDetails
+                  ? (event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setShowDetails(false);
+                    }
+                  : undefined
+              }
+              className={clsx(
+                "absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 transition-opacity duration-200",
+                isTransportService ? "pb-16" : "",
+                showDetails
+                  ? "pointer-events-auto opacity-100 cursor-pointer"
+                  : "pointer-events-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              )}
+            >
+              {description && (
+                <>
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-white/60">
+                      Description
+                    </span>
+                    {showDetails && (
+                      <span className="text-[10px] text-white/50">Tap to close</span>
+                    )}
+                  </div>
+                  <p className="line-clamp-4 text-xs leading-relaxed text-white/95 whitespace-pre-wrap break-words">
+                    {description}
+                  </p>
+                </>
+              )}
+              {tags && tags.length > 0 && (
+                <div className={clsx("flex flex-wrap gap-1", description ? "mt-2" : "")}>
+                  {tags.slice(0, 4).map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded bg-white/20 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-xs"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Raw transport endpoints (TCP / UDP) */}
+          {isTransportService && (
+            <div className="absolute inset-x-2.5 bottom-2.5 space-y-1 rounded-lg border border-white/10 bg-black/80 p-2 backdrop-blur-md">
+              {endpoints.map((endpoint) => (
+                <div key={endpoint.protocol} className="flex min-w-0 items-center gap-2">
+                  <code
+                    className="min-w-0 flex-1 truncate font-mono text-xs text-white/90"
+                    title={endpoint.address}
+                  >
+                    {endpoint.address}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
+                    className="pointer-events-auto relative z-30 shrink-0 rounded bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  >
+                    {copiedProtocol === endpoint.protocol ? "Copied!" : `Copy ${endpoint.protocol}`}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 2. Details Container: Title/Metadata + Southeast Actions (Up, Down, Comments) */}

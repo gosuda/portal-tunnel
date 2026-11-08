@@ -242,6 +242,29 @@ describe("ServerCard comments interaction", () => {
     expect(openLink.getAttribute("href")).toBe("https://cool.relay.example.com/");
   });
 
+  it("renders website URL in browser style address bar", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "cool-app",
+            name: "Cool App",
+            description: "",
+            tags: [],
+            thumbnail: "",
+            owner: "alice",
+            online: true,
+            dns: "cool.relay.example.com",
+            link: "https://cool.relay.example.com/dashboard",
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTitle("cool.relay.example.com/dashboard")).toBeTruthy();
+    expect(screen.getByText("cool.relay.example.com/dashboard")).toBeTruthy();
+  });
+
   it("toggles description disclosure via touch-accessible Info button without navigating", () => {
     renderCardWithComments();
     const infoButton = screen.getByRole("button", { name: "Show description" });
