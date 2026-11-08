@@ -229,6 +229,33 @@ describe("ServerCard comments interaction", () => {
     expect(screen.queryByText("Tap to close")).toBeNull();
   });
 
+  it("closes description disclosure when tapping directly on the overlay without navigating into the app", () => {
+    renderCardWithComments();
+    const infoButton = screen.getByRole("button", { name: "Show description" });
+
+    // Open disclosure
+    fireEvent.click(infoButton);
+    expect(screen.getByText("Tap to close")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+
+    // Directly tap on the overlay ("Tap to close" text)
+    fireEvent.click(screen.getByText("Tap to close"));
+    expect(screen.queryByText("Tap to close")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+
+    // Re-open and tap on the description paragraph text
+    fireEvent.click(screen.getByRole("button", { name: "Show description" }));
+    expect(screen.getByText("Tap to close")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("A cool sandbox game"));
+    expect(screen.queryByText("Tap to close")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+  });
+
   it("allows direct voting from the card without navigating into the service", () => {
     const onVote = vi.fn().mockResolvedValue(undefined);
     render(

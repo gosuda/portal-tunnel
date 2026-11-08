@@ -370,7 +370,7 @@ export function ServerCard({
           to={detailPath}
           state={server}
           aria-label={`Open ${name}`}
-          className="absolute inset-0 z-20 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         />
       )}
     </div>
