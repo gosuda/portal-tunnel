@@ -16,6 +16,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/sdk/staticsite"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -243,12 +244,10 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	prefix = utils.NormalizeURLPath(prefix)
 
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
-		staticIndex := strings.TrimSpace(routeConfig.StaticIndex)
-		staticIndex = cmp.Or(staticIndex, utils.DefaultStaticIndex)
 		return &httpRoute{
 			prefix:      prefix,
 			staticRoot:  staticRoot,
-			staticIndex: staticIndex,
+			staticIndex: strings.TrimSpace(routeConfig.StaticIndex),
 		}, nil
 	}
 
@@ -287,7 +286,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 
 func (r *httpRoute) baseHandler() http.Handler {
 	if r.staticRoot != "" {
-		return utils.NewStaticSiteHandler(r.prefix, r.staticRoot, r.staticIndex)
+		return staticsite.NewHandler(r.prefix, r.staticRoot, r.staticIndex)
 	}
 	return &httputil.ReverseProxy{
 		Rewrite:        r.rewriteProxyRequest,

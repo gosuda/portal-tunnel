@@ -24,6 +24,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/sdk/staticsite"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -375,7 +376,7 @@ func TestManualModeRevokesOfflineCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	static := utils.NewStaticSiteHandler("/", siteDir, "index.html")
+	static := staticsite.NewHandler("/", siteDir, "index.html")
 	go func() { _ = sdk.RunHTTP(ctx, exposure, static, "") }()
 	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

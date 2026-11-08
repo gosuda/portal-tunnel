@@ -27,6 +27,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/sdk/staticsite"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -170,7 +171,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	}
 	defer exposure.Close()
 	var originCalls atomic.Int32
-	static := utils.NewStaticSiteHandler("/", siteDir, "index.html")
+	static := staticsite.NewHandler("/", siteDir, "index.html")
 	go func() {
 		_ = sdk.RunHTTP(ctx, exposure, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			originCalls.Add(1)

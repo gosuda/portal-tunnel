@@ -23,6 +23,11 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   integration owns authentication and reverse-stream fallback. SDK exposures own
   source lifecycle, and listeners supply current transport and lease credentials.
 
+- `sdk/staticsite`: owns local static file serving, root-confined file access,
+  and SPA fallback. SDK routes and embedders use its HTTP handler. Shared path
+  resolution remains in `utils`; `portal/cache` owns immutable snapshots,
+  cached-content serving, and origin fallback.
+
 - `sdk/appauth`: owns the application sign-in gate, its providers, and its
   sessions. It is public API for programs that embed the SDK, and the CLI uses
   the same package. It stays apart from `sdk` so that `sdk` and its WASM build do
