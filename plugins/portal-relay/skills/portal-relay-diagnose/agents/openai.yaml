@@ -1,0 +1,4 @@
+interface:
+  display_name: "Diagnose a Portal Relay"
+  short_description: "Find which relay layer is failing"
+  default_prompt: "Use $portal-relay-diagnose to find why my Portal relay is not working, with read-only checks, and propose a fix."

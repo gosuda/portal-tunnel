@@ -1,6 +1,6 @@
 ---
 name: portal-relay
-description: Set up and run a public Portal relay on any Linux host with a public IP — Docker Compose deployment, embedded authoritative DNS with one-time NS delegation, optional TCP/UDP lease ports for game hosting, and registration in the public relay pool. Use when the user asks to run their own relay, contribute a relay to the Portal network, self-host a relay instead of using public ones, or open a relay with game-server support. Do not use for exposing a local service (portal-expose), reaching a published service as a client (portal-connect), or for accessing a CLI agent remotely.
+description: Set up and run a public Portal relay on any Linux host with a public IP — Docker Compose deployment, embedded authoritative DNS with one-time NS delegation, optional TCP/UDP lease ports for game hosting, and registration in the public relay pool. Use when the user asks to run their own relay, contribute a relay to the Portal network, self-host a relay instead of using public ones, or open a relay with game-server support. Do not use for exposing a local service (portal-expose), reaching a published service as a client (portal-connect), or for accessing a CLI agent remotely. Administration of a running relay is portal-relay-admin, and failure diagnosis is portal-relay-diagnose.
 license: MIT
 ---
 
@@ -24,9 +24,12 @@ This skill deploys on a host that already exists. When the host or the parent DN
 
 - `portal-relay-oracle`: create an Oracle Cloud instance and open its network.
 - `portal-relay-hetzner`: create a Hetzner Cloud server and firewall.
+- `portal-relay-aws`: create an EC2 or Lightsail instance and open its network.
 - `portal-relay-cloudflare`: write the NS, glue, and DS records in a Cloudflare parent zone.
 
 A cloud skill and a DNS skill can be combined in one request.
+
+After deployment, use `portal-relay-admin` to approve, deny, ban, or rate-limit leases and change approval mode, and `portal-relay-diagnose` when the relay, its DNS, TLS, or lease ports fail.
 
 ## Prerequisites (hosting-agnostic)
 
@@ -140,6 +143,9 @@ Submit a PR to add the relay URL to `registry.json` in the portal-tunnel reposit
 Report: the relay URL, whether game hosting (TCP/UDP leases) is enabled, the identity directory path (must stay backed up and private), the admin token location, and the update procedure (`docker compose pull portal && docker compose up -d --force-recreate portal` tracks the latest `ghcr.io/gosuda/portal:2` image; the compose sets `pull_policy: always`).
 
 ## Failure rules
+
+For anything beyond these first checks, run `portal-relay-diagnose`.
+
 
 - `healthz` unreachable: check Docker logs (`docker compose logs portal --tail 50`) before assuming a DNS issue.
 - DNS delegation not resolving: verify the glue A record at the parent zone with `dig @<parent NS> ns.relay.example.com`.
