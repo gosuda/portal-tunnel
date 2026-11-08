@@ -165,6 +165,7 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `BOOTSTRAPS` | `""` | string | Additional bootstrap relay API URLs used for discovery expansion (comma-separated) |
 | `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the IVNP overlay and requires `DISCOVERY=true`; empty disables the overlay |
 | `APPROVAL_MODE` | `auto` | string | Initial lease approval mode (`auto` \| `manual`). A mode saved in `policy.json` wins; see [Private relay](/self-hosting#private-relay) |
+| `DEFAULT_IDENTITY_BPS` | `1048576` | int | Stream bytes/second per service identity without an individual admin override (`--default-identity-bps`); shared across all connections and both directions; `0` is unlimited |
 | `UNAPPROVED_LEASES_PER_SOURCE` | `64` | int | Leases one source IP can hold while they are not routable; `0` is unlimited; see [Private relay](/self-hosting#private-relay) |
 | `TUNNEL_SOURCE_CIDRS` | `""` | string | Networks that may register tunnels (comma-separated CIDRs); a tunnel from anywhere else gets `403 source_not_allowed`; empty allows every network, and a value that names no network is a startup error; see [Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks) |
 

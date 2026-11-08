@@ -187,6 +187,28 @@ environment:
 
 See the [Deployment Guide](/deployment) for full ACME configuration options, credential setup per provider, and managed DNS automation.
 
+## Identity bandwidth limits
+
+The relay defaults to **1 MiB/s (1,048,576 bytes/second)** per service identity,
+shared across that identity's HTTP/SNI and raw TCP connections in both
+directions. Set the initial default in the relay environment or with
+`--default-identity-bps`:
+
+```yaml
+environment:
+  DEFAULT_IDENTITY_BPS: "1048576"
+```
+
+Raise an individual identity's limit in the admin dashboard's BPS settings.
+Individual settings persist in `policy.json` and override the relay default
+after reconnects and restarts. Setting an identity to `0` explicitly permits
+unlimited traffic; identities without a saved override inherit the current
+startup default. Setting `DEFAULT_IDENTITY_BPS=0` makes that default unlimited.
+
+This limits forwarded streams, not UDP datagrams, cache responses, total relay
+bandwidth, or cumulative traffic volume. Programs embedding `portal.Server`
+set `ServerConfig.DefaultIdentityBPS` explicitly; its zero value is unlimited.
+
 ## Private relay
 
 To serve only tunnels you approve, start the relay in `manual` mode:

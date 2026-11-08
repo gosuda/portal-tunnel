@@ -53,7 +53,7 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 		t.Fatalf("LoadOrCreateRelayIdentity() error = %v", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
-	registry, err := newLeaseRegistry(minPort, maxPort, relay.Name, relayAuthority, "https://example.com")
+	registry, err := newLeaseRegistry(minPort, maxPort, relay.Name, relayAuthority, "https://example.com", 0)
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
@@ -838,7 +838,7 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 	relayAuthority := identity.NewLocalAuthority(relay.Identity)
 	newRegistry := func() *leaseRegistry {
 		t.Helper()
-		registry, registryErr := newLeaseRegistry(0, 0, relay.Name, relayAuthority, "https://example.com")
+		registry, registryErr := newLeaseRegistry(0, 0, relay.Name, relayAuthority, "https://example.com", 0)
 		if registryErr != nil {
 			t.Fatalf("newLeaseRegistry() error = %v", registryErr)
 		}
