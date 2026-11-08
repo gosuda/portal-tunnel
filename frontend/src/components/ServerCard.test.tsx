@@ -177,6 +177,58 @@ describe("ServerCard comments interaction", () => {
     expect(screen.queryByLabelText(/Actions for/i)).toBeNull();
   });
 
+  it("navigates to /server/:id route even when server.link is an external URL", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <ServerCard
+                server={{
+                  id: "cool-app",
+                  name: "Cool App",
+                  description: "A secure app",
+                  tags: [],
+                  thumbnail: "",
+                  owner: "alice",
+                  online: true,
+                  dns: "cool.relay.example.com",
+                  link: "https://cool.relay.example.com/",
+                  reputation: REPUTATION,
+                }}
+              />
+            }
+          />
+          <Route path="/server/cool-app" element={<div>reputation gate page</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const openLink = screen.getByRole("link", { name: "Open Cool App" });
+    expect(openLink.getAttribute("href")).toBe("/server/cool-app");
+    fireEvent.click(openLink);
+    expect(screen.getByText("reputation gate page")).toBeTruthy();
+  });
+
+  it("toggles description disclosure via touch-accessible Info button without navigating", () => {
+    const { onOpenComments } = renderCardWithComments();
+    const infoButton = screen.getByRole("button", { name: "Show description" });
+    expect(infoButton.getAttribute("aria-expanded")).toBe("false");
+
+    // Open disclosure
+    fireEvent.click(infoButton);
+    expect(screen.getByRole("button", { name: "Hide description" })).toBeTruthy();
+    expect(screen.getByText("Tap to close")).toBeTruthy();
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+
+    // Close disclosure by clicking X button
+    fireEvent.click(screen.getByRole("button", { name: "Hide description" }));
+    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
+    expect(screen.queryByText("Tap to close")).toBeNull();
+  });
+
   it("allows direct voting from the card without navigating into the service", () => {
     const onVote = vi.fn().mockResolvedValue(undefined);
     render(

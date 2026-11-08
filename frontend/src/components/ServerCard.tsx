@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { BadgeDollarSign, MessageSquare, ThumbsDown, ThumbsUp } from "lucide-react";
+import { BadgeDollarSign, Info, MessageSquare, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import type { BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
@@ -46,7 +46,9 @@ export function ServerCard({
   // The thumbnail that failed to load; a new thumbnail URL gets its own try.
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const [isVoting, setIsVoting] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
+  const hasDetails = Boolean(description || (tags && tags.length > 0));
   const effectiveThumbnail = failedThumbnail === thumbnail ? "" : thumbnail.trim();
   const resolvedThumbnail =
     effectiveThumbnail || pickPlaceholderThumbnail(name || serverId);
@@ -145,19 +147,64 @@ export function ServerCard({
           </span>
         )}
 
-        {/* Description overlay on hover */}
-        {(description || (tags && tags.length > 0)) && (
-          <div
+        {/* Touch / Click Disclosure Toggle Button */}
+        {hasDetails && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setShowDetails((prev) => !prev);
+            }}
+            aria-label={showDetails ? "Hide description" : "Show description"}
+            aria-expanded={showDetails}
+            title={showDetails ? "Hide description" : "Show description"}
             className={clsx(
-              "pointer-events-none absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/80 to-black/30 p-3.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100",
-              isTransportService ? "pb-16" : ""
+              "pointer-events-auto absolute z-30 flex size-7 items-center justify-center rounded-full text-white/90 backdrop-blur-md transition-all active:scale-95 cursor-pointer shadow-xs",
+              isTransportService && showPaymentBadge ? "top-2.5 left-28" : "top-2.5 left-2.5",
+              showDetails
+                ? "bg-black/90 text-white ring-1 ring-white/30"
+                : "bg-black/60 hover:bg-black/80 hover:text-white"
+            )}
+          >
+            {showDetails ? (
+              <X className="size-3.5 shrink-0" />
+            ) : (
+              <Info className="size-3.5 shrink-0" />
+            )}
+          </button>
+        )}
+
+        {/* Description overlay on hover, focus-within, or touch disclosure */}
+        {hasDetails && (
+          <div
+            onClick={
+              showDetails
+                ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setShowDetails(false);
+                  }
+                : undefined
+            }
+            className={clsx(
+              "absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 transition-opacity duration-200",
+              isTransportService ? "pb-16" : "",
+              showDetails
+                ? "pointer-events-auto opacity-100 cursor-pointer"
+                : "pointer-events-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
             )}
           >
             {description && (
               <>
-                <span className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/60">
-                  Description
-                </span>
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-white/60">
+                    Description
+                  </span>
+                  {showDetails && (
+                    <span className="text-[10px] text-white/50">Tap to close</span>
+                  )}
+                </div>
                 <p className="line-clamp-4 text-xs leading-relaxed text-white/95 whitespace-pre-wrap break-words">
                   {description}
                 </p>
@@ -311,12 +358,16 @@ export function ServerCard({
     </article>
   );
 
+  const detailPath = serverId
+    ? `/server/${encodeURIComponent(serverId)}`
+    : (server.link || "#");
+
   return (
     <div className="group relative" title={description || undefined}>
       {cardBody}
       {isNavigable && (
         <Link
-          to={server.link || "#"}
+          to={detailPath}
           state={server}
           aria-label={`Open ${name}`}
           className="absolute inset-0 z-20 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
