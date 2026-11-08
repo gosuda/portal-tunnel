@@ -256,7 +256,7 @@ describe("ServerCard comments interaction", () => {
     expect(screen.queryByText("service detail")).toBeNull();
   });
 
-  it("allows direct voting from the card without navigating into the service", () => {
+  it("allows direct voting from the card without navigating into the service", async () => {
     const onVote = vi.fn().mockResolvedValue(undefined);
     render(
       <MemoryRouter>
@@ -278,10 +278,14 @@ describe("ServerCard comments interaction", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Recommend app" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Recommend app" }));
+    });
     expect(onVote).toHaveBeenCalledWith("srv-1", "up");
 
-    fireEvent.click(screen.getByRole("button", { name: "Do not recommend app" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Do not recommend app" }));
+    });
     expect(onVote).toHaveBeenCalledWith("srv-1", "down");
   });
 });
