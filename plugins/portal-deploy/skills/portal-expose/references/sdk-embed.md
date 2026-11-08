@@ -2,7 +2,7 @@
 
 Use this reference only when the app is written in Go and the user wants the tunnel to live inside the app process instead of running the `portal` CLI next to it. For every other language, and for most Go apps, the CLI path in `SKILL.md` is the right answer: it is what the relay websites, the docs, and the agent config all assume.
 
-Last checked against `gosuda/portal-tunnel` release `v2.7.3` (commit `e10679a5`) on 2026-11-08 (module `github.com/gosuda/portal-tunnel/v2`, `go 1.27`). The Go API is described in `docs/maintainer/architecture.md` and by the code's doc comments, and the docs site's SDK API page (`docs/src/routes/api-reference/sdk/+page.md`) covers the sign-in gate; read `sdk/expose.go`, `sdk/http.go`, `sdk/proxy.go`, `sdk/appauth/`, `cmd/demo-app/main.go`, and `cmd/payment-app/` when something here does not match.
+Last checked against `gosuda/portal-tunnel` release `v2.7.3` (commit `e10679a5`) on 2026-11-08 (module `github.com/gosuda/portal-tunnel/v2`, `go 1.27.3`). The Go API is described in `docs/maintainer/architecture.md` and by the code's doc comments, and the docs site's SDK API page (`docs/src/routes/api-reference/sdk/+page.md`) covers the sign-in gate; read `sdk/expose.go`, `sdk/http.go`, `sdk/proxy.go`, `sdk/appauth/`, `cmd/demo-app/main.go`, and `cmd/payment-app/` when something here does not match.
 
 ## Smallest working program
 
