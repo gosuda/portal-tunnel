@@ -51,7 +51,7 @@ const (
 	defaultHandshakeTimeout = 30 * time.Second
 	defaultLeaseTTL         = 2 * time.Minute
 	defaultRenewBefore      = 30 * time.Second
-	defaultReadyTarget      = 2
+	defaultReadyTarget      = 8
 	defaultRetryWait        = 3 * time.Second
 	// defaultChainCheckInterval bounds how often a lease asks the relay whether
 	// its pinned certificate chain is still the one served. A replaced relay
