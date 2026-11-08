@@ -354,29 +354,7 @@ func (s *RelaySet) upsertDescriptorLocked(record relayState, now time.Time, allo
 }
 
 func (s *RelaySet) selectRelays(routeState routeState) []string {
-	now := time.Now().UTC()
-	states := s.currentRelayStates(now)
-	if len(routeState.ExplicitRelayURLs) > 0 {
-		seen := make(map[string]struct{}, len(states))
-		for _, state := range states {
-			if relayURL := strings.TrimSpace(state.Descriptor.APIHTTPSAddr); relayURL != "" {
-				seen[relayURL] = struct{}{}
-			}
-		}
-		for _, relayURL := range routeState.ExplicitRelayURLs {
-			relayURL = strings.TrimSpace(relayURL)
-			if relayURL == "" {
-				continue
-			}
-			if _, ok := seen[relayURL]; ok {
-				continue
-			}
-			states = append(states, newRelayState(relayURL))
-			seen[relayURL] = struct{}{}
-		}
-	}
-
-	return selectPriority(states, routeState)
+	return selectPriority(s.currentRelayStates(time.Now().UTC()), routeState)
 }
 
 // filterCandidatePool returns the auto-selected relay pool eligible for MOLS

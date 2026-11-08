@@ -25,12 +25,11 @@ const (
 )
 
 type Refresher struct {
-	relaySet               *RelaySet
-	httpClient             *http.Client
-	publicHTTPClient       *http.Client
-	directRecoveryFailures int
-	lastAnnounceSuccess    map[string]bool
-	lastAnnounceMu         sync.Mutex
+	relaySet            *RelaySet
+	httpClient          *http.Client
+	publicHTTPClient    *http.Client
+	lastAnnounceSuccess map[string]bool
+	lastAnnounceMu      sync.Mutex
 }
 
 func NewRefresher(relaySet *RelaySet) *Refresher {
@@ -57,8 +56,7 @@ func NewRefresher(relaySet *RelaySet) *Refresher {
 			CheckRedirect: rejectDiscoveryRedirect,
 			Timeout:       defaultRequestTimeout,
 		},
-		directRecoveryFailures: defaultRecoveryFailures,
-		lastAnnounceSuccess:    make(map[string]bool),
+		lastAnnounceSuccess: make(map[string]bool),
 	}
 }
 
@@ -170,7 +168,7 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error {
 	relayURL := state.Descriptor.APIHTTPSAddr
 
-	recoveryFailures := r.directRecoveryFailures
+	recoveryFailures := defaultRecoveryFailures
 	if state.Bootstrap {
 		recoveryFailures = 0
 	}

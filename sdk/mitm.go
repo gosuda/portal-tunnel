@@ -112,12 +112,8 @@ type mitmProbePending struct {
 type mitmProbeNonce [16]byte
 
 type mitmManager struct {
-	// responderCapable reports whether terminated tenant connections can
-	// export keying material. Only then can the listener answer initiator
-	// probes; the manager stays dormant otherwise.
-	responderCapable bool
-	listener         *listener
-	ban              bool
+	listener *listener
+	ban      bool
 
 	mu      sync.Mutex
 	pending map[mitmProbeNonce]*mitmProbePending
@@ -134,17 +130,6 @@ func newMITMManager(listener *listener, ban bool) *mitmManager {
 func (m *mitmManager) reset() {
 	m.mu.Lock()
 	clear(m.pending)
-	m.mu.Unlock()
-}
-
-// setResponderCapable arms the responder side once the tenant TLS client is
-// known to support keying material export.
-func (m *mitmManager) setResponderCapable(capable bool) {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	m.responderCapable = capable
 	m.mu.Unlock()
 }
 
@@ -286,10 +271,7 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 // run is one worker of runLease. That owner cancels and joins it before
 // replacing the lease, so attempts and results cannot overlap lease lifetimes.
 func (m *mitmManager) run(ctx context.Context, ready <-chan struct{}) {
-	m.mu.Lock()
-	capable := m.responderCapable
-	m.mu.Unlock()
-	if !capable || m.listener.cache != nil || runtime.GOOS == "js" {
+	if m.listener.cache != nil || runtime.GOOS == "js" {
 		return
 	}
 	select {
@@ -601,11 +583,9 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 
 	m.mu.Lock()
 	hasPending := len(m.pending) > 0
-	capable := m.responderCapable
 	m.mu.Unlock()
-	// Channel binding shares the self-probe's capability boundary and is not
-	// offered for cache exposures, where relay TLS termination is allowed.
-	canChannelBind := capable && m.listener != nil && m.listener.cache == nil
+	// Cache exposures allow relay TLS termination and do not offer channel binding.
+	canChannelBind := m.listener != nil && m.listener.cache == nil
 	if !hasPending && !canChannelBind {
 		return conn, false, nil
 	}

@@ -29,6 +29,22 @@ import (
 
 var errSignerCloseFailed = errors.New("signer close failed")
 
+func TestNewClientHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	client, err := NewClient(ctx, ClientConfig{
+		RelayURL: "https://127.0.0.1:1",
+		Hostname: "tenant.example",
+	})
+	if client != nil {
+		_ = client.Close()
+		t.Fatal("NewClient returned a client after cancellation")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("NewClient() error = %v, want context.Canceled", err)
+	}
+}
+
 func TestClientAccessTokenUpdateChangesSignerHeaders(t *testing.T) {
 	t.Parallel()
 	client := &Client{}
@@ -165,7 +181,7 @@ func TestClientTerminateConnLoopback(t *testing.T) {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 
-	client, err := NewClient(ClientConfig{
+	client, err := NewClient(t.Context(), ClientConfig{
 		RelayURL:    srv.URL,
 		Hostname:    hostname,
 		AccessToken: initialToken,
@@ -178,9 +194,6 @@ func TestClientTerminateConnLoopback(t *testing.T) {
 			t.Errorf("client.Close() error = %v", closeErr)
 		}
 	})
-	if !client.ExportsKeyingMaterial() {
-		t.Fatal("ExportsKeyingMaterial() = false, want true for the t13server terminator")
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeBudget)
 	defer cancel()
@@ -367,14 +380,11 @@ func TestClientTerminateConnExportsKeyingMaterial(t *testing.T) {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 
-	client, err := NewClient(ClientConfig{RelayURL: srv.URL, Hostname: hostname})
+	client, err := NewClient(t.Context(), ClientConfig{RelayURL: srv.URL, Hostname: hostname})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	if !client.ExportsKeyingMaterial() {
-		t.Fatal("ExportsKeyingMaterial() = false, want true for the t13server terminator")
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeBudget)
 	defer cancel()

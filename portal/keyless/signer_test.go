@@ -164,7 +164,7 @@ func (r *relayStandIn) renew(next relayCertificate, retire bool) {
 
 func (r *relayStandIn) newClient(t *testing.T) *Client {
 	t.Helper()
-	client, err := NewClient(ClientConfig{RelayURL: r.url, Hostname: tenantHostname, AccessToken: "token"})
+	client, err := NewClient(t.Context(), ClientConfig{RelayURL: r.url, Hostname: tenantHostname, AccessToken: "token"})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}

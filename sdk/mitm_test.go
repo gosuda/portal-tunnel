@@ -193,56 +193,6 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 	}
 }
 
-// TestListenerBanMITMRequiresKeyingMaterialExporter pins the explicit
-// startup failure for probe protection a relay cannot deliver: with
-// ban-mitm requested, a tenant TLS stack without keying material export
-// fails registration terminally instead of silently skipping the probe,
-// while an exporting stack or an unset ban-mitm proceeds.
-func TestListenerBanMITMRequiresKeyingMaterialExporter(t *testing.T) {
-	relayURL, err := url.Parse("https://relay.example")
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
-	}
-
-	for name, test := range map[string]struct {
-		banMITM         bool
-		exporterCapable bool
-		wantErr         bool
-	}{
-		"ban mitm without exporter": {banMITM: true, exporterCapable: false, wantErr: true},
-		"ban mitm with exporter":    {banMITM: true, exporterCapable: true},
-		"no ban mitm":               {exporterCapable: false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			listener := &listener{
-				api:      &apiClient{relayURL: relayURL},
-				banMITM:  test.banMITM,
-				identity: types.Identity{Name: "probe-guard"},
-			}
-			listener.mitmManager = newMITMManager(listener, test.banMITM)
-
-			err := listener.ensureMITMProbeSupport(test.exporterCapable)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("ensureMITMProbeSupport() error = %v, wantErr %v", err, test.wantErr)
-			}
-			if !test.wantErr {
-				return
-			}
-			if !errors.Is(err, errRelayIncompatible) {
-				t.Fatalf("ensureMITMProbeSupport() error = %v, want errRelayIncompatible", err)
-			}
-			if !listener.closeForTerminalRelayError(err) {
-				t.Fatal("ban-mitm capability error was not treated as terminal")
-			}
-			for _, fragment := range []string{"--ban-mitm", "does not export keying material", "remove the ban-mitm option"} {
-				if !strings.Contains(err.Error(), fragment) {
-					t.Fatalf("error %q missing fragment %q", err, fragment)
-				}
-			}
-		})
-	}
-}
-
 // Lease cancellation must join the loop both before reverse readiness and
 // while waiting between failed attempts. Virtual time avoids network fixtures,
 // production injection seams, and wall-clock waits for the retry interval.
@@ -259,7 +209,6 @@ func TestMITMProbeLoopLeaseCancellation(t *testing.T) {
 				l := &listener{}
 				l.readySessions.Store(1)
 				manager := newMITMManager(l, false)
-				manager.setResponderCapable(true)
 				reverseReady := make(chan struct{}, 1)
 				done := make(chan struct{})
 				go func() {
@@ -370,7 +319,6 @@ func newChannelBindingListener(t *testing.T, seed, hostname string) *listener {
 		lease:    utils.NewSnapshot(listenerSnapshot{hostname: hostname, accessToken: "test-access-token"}, listenerSnapshot.snapshot),
 	}
 	l.mitmManager = newMITMManager(l, true)
-	l.mitmManager.setResponderCapable(true)
 	return l
 }
 
@@ -800,26 +748,32 @@ func TestAcceptIsNotHeldUpByClientsThatStallDuringAdmission(t *testing.T) {
 	}
 }
 
-// Channel binding shares the self-probe's capability boundary: a listener whose
-// tenant TLS cannot export keying material, or a cache exposure where relay TLS
-// termination is allowed, treats the request as ordinary application bytes.
+// Connections without a TLS exporter and cache exposures pass channel-binding
+// requests through as ordinary application bytes.
 func TestTLSChannelBindingIsNotServedOutsideResponderBoundary(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		setup func(l *listener)
+		name     string
+		exporter bool
+		cache    bool
 	}{
-		{"tenant tls cannot export keying material", func(l *listener) { l.mitmManager.setResponderCapable(false) }},
-		{"cache exposure", func(l *listener) { l.cache = &cache.Source{} }},
+		{name: "connection without exporter"},
+		{name: "cache exposure", exporter: true, cache: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				l := newChannelBindingListener(t, "7", "")
-				tc.setup(l)
+				if tc.cache {
+					l.cache = &cache.Source{}
+				}
 				request := append([]byte(types.TLSChannelBindingRequestMagic), bytes.Repeat([]byte{7}, types.TLSChannelBindingNonceSize)...)
 				clientRaw, serverRaw := net.Pipe()
 				go func() { _, _ = clientRaw.Write(request) }()
 
-				nextConn, handled, err := l.mitmManager.maybeHandleConn(&testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)})
+				var serverConn net.Conn = serverRaw
+				if tc.exporter {
+					serverConn = &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)}
+				}
+				nextConn, handled, err := l.mitmManager.maybeHandleConn(serverConn)
 				if err != nil || handled {
 					t.Fatalf("maybeHandleConn() = (handled %v, err %v); want the connection passed to the application", handled, err)
 				}

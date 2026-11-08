@@ -352,9 +352,6 @@ func rankRelayPool(autoPool []relayState, localAddress string, key []byte) []str
 
 // selectPriority returns the ordered relay URLs for a client using MOLS selection with explicit relays prepended.
 func selectPriority(states []relayState, routeState routeState) []string {
-	if len(states) == 0 {
-		return nil
-	}
 	now := time.Now().UTC()
 	explicit := make([]string, 0, len(routeState.ExplicitRelayURLs))
 	seen := make(map[string]struct{}, len(routeState.ExplicitRelayURLs))
@@ -363,13 +360,19 @@ func selectPriority(states []relayState, routeState routeState) []string {
 			continue
 		}
 		seen[relayURL] = struct{}{}
+		// Explicit URLs remain selectable if discovery evicts their candidate.
+		// Retained state still enforces bans, backoff, and transport requirements.
+		eligible := true
 		for _, state := range states {
-			suppressed := !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now)
-			if state.Descriptor.APIHTTPSAddr == relayURL && !state.Banned && !state.Dead && !suppressed &&
-				state.supportsRequiredTransports(routeState, now) {
-				explicit = append(explicit, relayURL)
-				break
+			if state.Descriptor.APIHTTPSAddr != relayURL {
+				continue
 			}
+			suppressed := !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now)
+			eligible = !state.Banned && !state.Dead && !suppressed && state.supportsRequiredTransports(routeState, now)
+			break
+		}
+		if eligible {
+			explicit = append(explicit, relayURL)
 		}
 	}
 	auto := rankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress, routeState.SelectionKey)

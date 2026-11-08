@@ -68,6 +68,21 @@ func TestSelectPriorityKeepsExplicitRelayIndependentOfDiscoveryState(t *testing.
 	}
 }
 
+func TestSelectPriorityKeepsExplicitRelayAbsentFromDiscovery(t *testing.T) {
+	const explicitURL = "https://explicit.example"
+	for _, states := range [][]relayState{
+		nil,
+		{bootstrapRelayState("https://bootstrap.example")},
+	} {
+		selected := selectPriority(states, routeState{
+			ExplicitRelayURLs: []string{explicitURL, explicitURL},
+		})
+		if len(selected) != len(states)+1 || selected[0] != explicitURL {
+			t.Fatalf("selectPriority() = %v, want the explicit relay once before discovered relays", selected)
+		}
+	}
+}
+
 func TestSelectPriorityStickinessDoesNotRestoreFallbackRelays(t *testing.T) {
 	now := time.Now().UTC()
 	fallback := verifiedRelayState(t, "https://fallback.example")
