@@ -109,6 +109,7 @@ const REPUTATION: ReputationSummary = {
   down: 8,
   total: 20,
   viewer_vote: "",
+  comments: 5,
 };
 
 // Routes probe: the card sits on the directory route; navigation into
@@ -127,10 +128,10 @@ function renderCardWithComments() {
                 server={{
                   id: "srv-1",
                   name: "minecraft",
-                  description: "",
-                  tags: [],
+                  description: "A cool sandbox game",
+                  tags: ["game"],
                   thumbnail: "",
-                  owner: "",
+                  owner: "notch",
                   online: true,
                   dns: "minecraft.relay.example.com",
                   link: "/server/srv-1",
@@ -156,5 +157,23 @@ describe("ServerCard comments interaction", () => {
     expect(onOpenComments).toHaveBeenCalledWith(expect.objectContaining({ id: "srv-1" }));
     expect(screen.getByText("directory")).toBeTruthy();
     expect(screen.queryByText("service detail")).toBeNull();
+  });
+
+  it("displays upvotes, downvotes, and comment counts", () => {
+    renderCardWithComments();
+
+    expect(screen.getByTitle("Recommend: 12")).toBeTruthy();
+    expect(screen.getByTitle("Do not recommend: 8")).toBeTruthy();
+    expect(screen.getByTitle("Comments: 5")).toBeTruthy();
+    expect(screen.getByText("12")).toBeTruthy();
+    expect(screen.getByText("8")).toBeTruthy();
+    expect(screen.getByText("5")).toBeTruthy();
+  });
+
+  it("renders description in hover overlay and removes hamburger details menu", () => {
+    renderCardWithComments();
+
+    expect(screen.getByText("A cool sandbox game")).toBeTruthy();
+    expect(screen.queryByLabelText(/Actions for/i)).toBeNull();
   });
 });

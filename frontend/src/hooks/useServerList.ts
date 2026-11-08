@@ -37,7 +37,10 @@ function collectReputation(
       typeof summary.down === "number" &&
       typeof summary.total === "number"
     ) {
-      summaries[normalizeHostname(summary.hostname)] = summary;
+      summaries[normalizeHostname(summary.hostname)] = {
+        ...summary,
+        comments: typeof summary.comments === "number" ? summary.comments : 0,
+      };
     }
   }
   return summaries;
@@ -160,6 +163,7 @@ export function useServerList() {
             down: response.down,
             total: response.total,
             viewer_vote: response.viewer_vote ?? "",
+            comments: response.comments ?? current[key]?.comments ?? 0,
           },
         }));
       }
@@ -182,6 +186,7 @@ export function useServerList() {
           down: 0,
           total: 0,
           viewer_vote: "" as const,
+          comments: 0,
         },
       })),
     [publicState.leases, summaries]
