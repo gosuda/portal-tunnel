@@ -126,8 +126,8 @@ func (r *Refresher) shouldLogAnnounce(relayURL string, success bool) bool {
 // sortRefreshCandidates orders relays so that the most important sources are
 // refreshed first under concurrency limits: bootstrap, then discovered
 // healthy relays, and finally recovery/backoff candidates.
-func sortRefreshCandidates(states []RelayState) []RelayState {
-	slices.SortFunc(states, func(a, b RelayState) int {
+func sortRefreshCandidates(states []relayState) []relayState {
+	slices.SortFunc(states, func(a, b relayState) int {
 		if a.Bootstrap != b.Bootstrap {
 			if a.Bootstrap {
 				return -1
@@ -162,12 +162,12 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 	}
 	candidates = sortRefreshCandidates(candidates)
 
-	return parallel(candidates, maxConcurrentRefresh, func(state RelayState) error {
+	return parallel(candidates, maxConcurrentRefresh, func(state relayState) error {
 		return r.refreshOneHTTPS(ctx, state)
 	})
 }
 
-func (r *Refresher) refreshOneHTTPS(ctx context.Context, state RelayState) error {
+func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error {
 	relayURL := state.Descriptor.APIHTTPSAddr
 
 	recoveryFailures := r.directRecoveryFailures

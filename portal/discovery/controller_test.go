@@ -29,14 +29,14 @@ func TestControllerRelayIntentOpsComposeAtomicUnits(t *testing.T) {
 
 	controller.RemoveRelay(relayA)
 
-	routes := controller.relaySet.SelectRelays(routeState{})
+	routes := controller.relaySet.selectRelays(routeState{})
 	if len(routes) != 1 || routes[0] != relayB {
 		t.Fatalf("selection after RemoveRelay = %+v, want only relay B", routes)
 	}
 
 	controller.AddRelay(relayA)
 
-	routes = controller.relaySet.SelectRelays(routeState{})
+	routes = controller.relaySet.selectRelays(routeState{})
 	if len(routes) != 2 {
 		t.Fatalf("selection after AddRelay = %+v, want both relays eligible again", routes)
 	}
@@ -54,13 +54,13 @@ func TestControllerPassingDiscoveryDoesNotClearRuntimeSuppression(t *testing.T) 
 		mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, healthy))
 		controller.Report(failed, FailureRuntime)
 		mustApplyAuthoritative(t, controller.relaySet, descriptor)
-		selected := controller.relaySet.SelectRelays(routeState{})
+		selected := controller.relaySet.selectRelays(routeState{})
 		if !slices.Equal(selected, []string{healthy}) {
 			t.Fatalf("passing discovery bypassed runtime suppression: %v", selected)
 		}
 		// Ordinary outages recover without an operator override or a malice label.
 		synctest.Sleep(defaultDirectRecoveryBackoff + time.Second)
-		selected = controller.relaySet.SelectRelays(routeState{})
+		selected = controller.relaySet.selectRelays(routeState{})
 		if len(selected) != 2 || !slices.Contains(selected, healthy) || !slices.Contains(selected, failed) {
 			t.Fatalf("temporary failure did not recover both alternatives: %v", selected)
 		}
@@ -82,12 +82,12 @@ func TestControllerLocalSecurityBanSurvivesDiscoveryUntilOperatorOverride(t *tes
 	if err == nil {
 		t.Fatal("locally banned relay's advertisement was accepted as a direct target")
 	}
-	selected := controller.relaySet.SelectRelays(routeState{})
+	selected := controller.relaySet.selectRelays(routeState{})
 	if !slices.Equal(selected, []string{healthy}) {
 		t.Fatalf("advertisement changed a local security ban or healthy alternative: %v", selected)
 	}
 	controller.AddRelay(blocked)
-	selected = controller.relaySet.SelectRelays(controller.buildRouteState())
+	selected = controller.relaySet.selectRelays(controller.buildRouteState())
 	if len(selected) != 2 || !slices.Contains(selected, healthy) || !slices.Contains(selected, blocked) {
 		t.Fatalf("explicit operator override did not restore the relay: %v", selected)
 	}
@@ -149,7 +149,7 @@ func TestControllerReportMITMBansRelay(t *testing.T) {
 
 	controller.Report(relayURL, FailureMITM)
 
-	routes := controller.relaySet.SelectRelays(routeState{
+	routes := controller.relaySet.selectRelays(routeState{
 		ExplicitRelayURLs: []string{relayURL},
 	})
 	if len(routes) != 0 {
@@ -193,7 +193,7 @@ func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 
 	// MITM bans permanently — relay A is excluded even from explicit selection.
 	controller.Report(relayA, FailureMITM)
-	routes := controller.relaySet.SelectRelays(routeState{
+	routes := controller.relaySet.selectRelays(routeState{
 		ExplicitRelayURLs: []string{relayA, relayB},
 	})
 	for _, r := range routes {

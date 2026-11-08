@@ -11,9 +11,9 @@ import (
 )
 
 // relayStates returns the current non-banned relay states.
-func relayStates(set *RelaySet) []RelayState {
+func relayStates(set *RelaySet) []relayState {
 	states := set.currentRelayStates(time.Now().UTC())
-	out := make([]RelayState, 0, len(states))
+	out := make([]relayState, 0, len(states))
 	for _, state := range states {
 		if !state.Banned {
 			out = append(out, state)
@@ -28,23 +28,23 @@ func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 	return mustSignedDescriptor(t, mustSigningIdentity(t), relayURL, now)
 }
 
-func verifiedRelayState(t *testing.T, relayURL string) RelayState {
+func verifiedRelayState(t *testing.T, relayURL string) relayState {
 	t.Helper()
-	return RelayState{
+	return relayState{
 		Descriptor: mustRelayDescriptor(t, relayURL),
-		Trust:      RelayVerified,
+		Trust:      relayVerified,
 		LastSeenAt: time.Now().UTC(),
 	}
 }
 
-func bootstrapRelayState(relayURL string) RelayState {
+func bootstrapRelayState(relayURL string) relayState {
 	state := newRelayState(relayURL)
 	state.Bootstrap = true
 	return state
 }
 
 // mustApplyAuthoritative ingests the descriptor as a successful authoritative
-// discovery response from the relay itself, promoting it to RelayVerified.
+// discovery response from the relay itself, promoting it to relayVerified.
 func mustApplyAuthoritative(t *testing.T, set *RelaySet, desc types.RelayDescriptor) {
 	t.Helper()
 	if _, err := set.ApplyRelayDiscoveryResponse(desc.APIHTTPSAddr, types.DiscoveryResponse{
@@ -68,7 +68,7 @@ func servesDescriptor(set *RelaySet, relayURL string) bool {
 // routesTo reports whether automatic single-hop route planning selects relayURL.
 func routesTo(t *testing.T, set *RelaySet, relayURL string) bool {
 	t.Helper()
-	routes := set.SelectRelays(routeState{LocalAddress: "client"})
+	routes := set.selectRelays(routeState{LocalAddress: "client"})
 	for _, route := range routes {
 		if route == relayURL {
 			return true
@@ -152,7 +152,7 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 	if got := states[0].Descriptor.APIHTTPSAddr; got != desc.APIHTTPSAddr {
 		t.Fatalf("states[0] = %q, want %q", got, desc.APIHTTPSAddr)
 	}
-	if states[0].Trust != RelayCandidate {
+	if states[0].Trust != relayCandidate {
 		t.Fatal("a gossip hint must remain an unverified candidate")
 	}
 }
@@ -181,7 +181,7 @@ func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t
 	if got := states[0].Descriptor.APIHTTPSAddr; got != hinted.APIHTTPSAddr {
 		t.Fatalf("states[0] = %q, want %q", got, hinted.APIHTTPSAddr)
 	}
-	if states[0].Trust != RelayCandidate {
+	if states[0].Trust != relayCandidate {
 		t.Fatal("a missing target must not verify a hinted relay")
 	}
 }
@@ -298,12 +298,12 @@ func TestSelectRelaysSkipsExplicitRelayWithoutRequiredTransport(t *testing.T) {
 	state.Descriptor.SupportsUDP = false
 	set.relays[relayURL] = state
 
-	routes := set.SelectRelays(routeState{
+	routes := set.selectRelays(routeState{
 		ExplicitRelayURLs: []string{relayURL},
 		RequireUDP:        true,
 	})
 	if len(routes) != 0 {
-		t.Fatalf("SelectRelays() = %v, want no UDP-incompatible explicit route", routes)
+		t.Fatalf("selectRelays() = %v, want no UDP-incompatible explicit route", routes)
 	}
 }
 
@@ -338,7 +338,7 @@ func TestProtocolMismatchKeepsOlderRelayVisibleWithoutRouting(t *testing.T) {
 		t.Fatal("incompatible relay must not be selected for routes")
 	}
 	for _, state := range relayStates(set) {
-		if state.Descriptor.APIHTTPSAddr == relayURL && state.Trust == RelayVerified {
+		if state.Descriptor.APIHTTPSAddr == relayURL && state.Trust == relayVerified {
 			t.Fatal("incompatible relay must not become a verified descriptor")
 		}
 	}
@@ -398,7 +398,7 @@ func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	var state *RelayState
+	var state *relayState
 	for _, candidate := range relayStates(set) {
 		if candidate.Descriptor.APIHTTPSAddr == relayURL {
 			state = &candidate
@@ -408,8 +408,8 @@ func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
 	if state == nil {
 		t.Fatalf("relayStates() has no entry for %q", relayURL)
 	}
-	if state.Trust != RelayVerified {
-		t.Fatalf("RelayState.Trust = %d, want RelayVerified after the authoritative poll", state.Trust)
+	if state.Trust != relayVerified {
+		t.Fatalf("relayState.Trust = %d, want relayVerified after the authoritative poll", state.Trust)
 	}
 
 	versions := set.KnownRelayReleaseVersions()
@@ -451,7 +451,7 @@ func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	// A gossip batch re-lists the same relay and refreshes its RelayState
+	// A gossip batch re-lists the same relay and refreshes its relayState
 	// freshness, but it is not a direct contact and carries no release of
 	// its own: it must not extend the release observation's clock.
 	gossipAt := t0.Add(2 * time.Hour)

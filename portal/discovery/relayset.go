@@ -57,7 +57,7 @@ var (
 // the entire batch).
 type RelaySet struct {
 	mu              sync.RWMutex
-	relays          map[string]RelayState
+	relays          map[string]relayState
 	keyIndex        map[string]keyIndexEntry
 	incompatible    map[string]types.IncompatibleRelayEntry
 	releaseVersions map[string]relayReleaseObservation
@@ -99,7 +99,7 @@ const (
 
 func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	set := &RelaySet{
-		relays:          make(map[string]RelayState),
+		relays:          make(map[string]relayState),
 		keyIndex:        make(map[string]keyIndexEntry),
 		incompatible:    make(map[string]types.IncompatibleRelayEntry),
 		releaseVersions: make(map[string]relayReleaseObservation),
@@ -113,7 +113,7 @@ func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 }
 
 // currentRelayStates returns a copy of the set after expiring temporary pool bans.
-func (s *RelaySet) currentRelayStates(now time.Time) []RelayState {
+func (s *RelaySet) currentRelayStates(now time.Time) []relayState {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -121,7 +121,7 @@ func (s *RelaySet) currentRelayStates(now time.Time) []RelayState {
 	defer s.mu.Unlock()
 
 	s.clearExpiredPoolBansLocked(now)
-	states := make([]RelayState, 0, len(s.relays))
+	states := make([]relayState, 0, len(s.relays))
 	for _, state := range s.relays {
 		states = append(states, state)
 	}
@@ -130,12 +130,12 @@ func (s *RelaySet) currentRelayStates(now time.Time) []RelayState {
 
 // refreshCandidates returns relays worth directly polling after applying local
 // pool-ban expiry. The refresher owns HTTP; RelaySet owns pool eligibility.
-func (s *RelaySet) refreshCandidates(now time.Time) []RelayState {
+func (s *RelaySet) refreshCandidates(now time.Time) []relayState {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 	states := s.currentRelayStates(now)
-	out := make([]RelayState, 0, len(states))
+	out := make([]relayState, 0, len(states))
 	for _, state := range states {
 		if state.Banned {
 			continue
@@ -193,7 +193,7 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 	delete(s.releaseVersions, relayURL)
 }
 
-func mergeLocalRelayState(record, existing RelayState) RelayState {
+func mergeLocalRelayState(record, existing relayState) relayState {
 	record.Bootstrap = record.Bootstrap || existing.Bootstrap
 	record.Banned = record.Banned || existing.Banned
 	record.Dead = record.Dead || existing.Dead
@@ -224,8 +224,8 @@ func mergeLocalRelayState(record, existing RelayState) RelayState {
 	return record
 }
 
-func markDiscoveryVerified(state RelayState) RelayState {
-	state.Trust = RelayVerified
+func markDiscoveryVerified(state relayState) relayState {
+	state.Trust = relayVerified
 	state.Dead = false
 	state.discoveryFailures = 0
 	state.nextDiscoveryRefreshAt = time.Time{}
@@ -234,7 +234,7 @@ func markDiscoveryVerified(state RelayState) RelayState {
 }
 
 func (s *RelaySet) descriptorRollbackResultLocked(
-	record RelayState,
+	record relayState,
 	relayURL string,
 	address string,
 	now time.Time,
@@ -277,7 +277,7 @@ func (s *RelaySet) crossIdentityTakeoverBlockedLocked(relayURL, address string, 
 	return differentIdentity && unexpired
 }
 
-// upsertDescriptorLocked applies a fully-merged RelayState to s.relays and
+// upsertDescriptorLocked applies a fully-merged relayState to s.relays and
 // updates the keyIndex. The caller MUST already hold s.mu as a write lock.
 //
 // The returned status indicates whether the descriptor was accepted, ignored
@@ -301,7 +301,7 @@ func (s *RelaySet) crossIdentityTakeoverBlockedLocked(relayURL, address string, 
 // Equal IssuedAt values at the same URL and signing identity must carry the
 // same canonical signed contents. Idempotent re-broadcasts may refresh local
 // telemetry, but conflicting statements cannot replace the retained observation.
-func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allowCrossIdentityTakeover bool) upsertResult {
+func (s *RelaySet) upsertDescriptorLocked(record relayState, now time.Time, allowCrossIdentityTakeover bool) upsertResult {
 	relayURL := record.Descriptor.APIHTTPSAddr
 	if relayURL == "" {
 		return upsertRejected
@@ -353,7 +353,7 @@ func (s *RelaySet) upsertDescriptorLocked(record RelayState, now time.Time, allo
 	return upsertAccepted
 }
 
-func (s *RelaySet) SelectRelays(routeState routeState) []string {
+func (s *RelaySet) selectRelays(routeState routeState) []string {
 	now := time.Now().UTC()
 	states := s.currentRelayStates(now)
 	if len(routeState.ExplicitRelayURLs) > 0 {
@@ -376,16 +376,16 @@ func (s *RelaySet) SelectRelays(routeState routeState) []string {
 		}
 	}
 
-	return SelectPriority(states, routeState)
+	return selectPriority(states, routeState)
 }
 
 // filterCandidatePool returns the auto-selected relay pool eligible for MOLS
 // ranking.
-func filterCandidatePool(states []RelayState, routeState routeState, now time.Time) []RelayState {
-	pool := make([]RelayState, 0, len(states))
+func filterCandidatePool(states []relayState, routeState routeState, now time.Time) []relayState {
+	pool := make([]relayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr
-		if state.Trust != RelayVerified {
+		if state.Trust != relayVerified {
 			// A bootstrap URL configured by the operator stays eligible as
 			// a URL-only single-hop fallback until a direct probe verifies
 			// it, but a descriptor squatted on a bootstrap URL by an
@@ -463,7 +463,7 @@ func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescript
 		if state.Banned || state.Dead || !state.hasObservedDescriptor() {
 			continue
 		}
-		if state.Trust != RelayVerified {
+		if state.Trust != relayVerified {
 			continue
 		}
 		add(state.Descriptor)
@@ -536,23 +536,23 @@ func (s *RelaySet) discoveryRelayStateLocked(
 	descriptor types.RelayDescriptor,
 	now time.Time,
 	targetURL string,
-) (RelayState, string, bool) {
+) (relayState, string, bool) {
 	verified, err := verifyFreshRelayDescriptor(descriptor, now)
 	if err != nil {
-		return RelayState{}, "", false
+		return relayState{}, "", false
 	}
 	relayURL := verified.APIHTTPSAddr
 	if err := requirePublicRelayURL(relayURL); err != nil {
 		// Only a direct response from an explicitly configured bootstrap
 		// relay may advertise its own local/private URL.
 		if relayURL != targetURL || !s.relays[relayURL].Bootstrap {
-			return RelayState{}, "", false
+			return relayState{}, "", false
 		}
 	}
 	if existing, ok := s.relays[relayURL]; ok && existing.Banned {
-		return RelayState{}, "", false
+		return relayState{}, "", false
 	}
-	return RelayState{Descriptor: verified, LastSeenAt: now}, relayURL, true
+	return relayState{Descriptor: verified, LastSeenAt: now}, relayURL, true
 }
 
 func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
@@ -571,7 +571,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	defer s.mu.Unlock()
 	s.clearExpiredPoolBansLocked(now)
 
-	discoveredByURL := make(map[string]RelayState, len(resp.Relays))
+	discoveredByURL := make(map[string]relayState, len(resp.Relays))
 	discoveredOrder := make([]string, 0, len(resp.Relays)+1)
 	targetFound := false
 	for _, descriptor := range resp.Relays {
@@ -820,14 +820,14 @@ func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measur
 		return
 	}
 
-	state.RTTTracker.Add(rtt)
+	state.RTTTracker.add(rtt)
 	state.DiscoveryRTT = rtt
 	state.DiscoveryRTTAt = measuredAt
 	s.relays[relayURL] = state
 }
 
 // InsertCandidate ingests a single descriptor from an announce or gossiped
-// discovery response as a RelayCandidate. The full validation
+// discovery response as a relayCandidate. The full validation
 // pipeline runs inline:
 //
 //  1. The descriptor signature is verified against the recovered public key
@@ -847,7 +847,7 @@ func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measur
 //
 // Candidates remain refresh-poll targets, but they stay out of Descriptors() and
 // automatic route planning until a direct authoritative probe of that exact
-// relay promotes them to RelayVerified via ApplyRelayDiscoveryResponse.
+// relay promotes them to relayVerified via ApplyRelayDiscoveryResponse.
 func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -863,7 +863,7 @@ func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) er
 		return err
 	}
 
-	record := RelayState{
+	record := relayState{
 		Descriptor: normalized,
 		LastSeenAt: now,
 	}
@@ -912,7 +912,7 @@ func (s *RelaySet) enforceIdentityCapLocked(address string) {
 	}
 	owned := make([]ownedEntry, 0, MaxAnnouncedRelaysPerIdentity+1)
 	for url, state := range s.relays {
-		if state.Bootstrap || state.Banned || state.Trust == RelayVerified {
+		if state.Bootstrap || state.Banned || state.Trust == relayVerified {
 			continue
 		}
 		if strings.ToLower(strings.TrimSpace(state.Descriptor.Address)) != address {
@@ -988,7 +988,7 @@ func (s *RelaySet) enforceCapLocked() {
 		}
 		candidates = append(candidates, ageEntry{
 			url:       url,
-			protected: state.Trust == RelayVerified,
+			protected: state.Trust == relayVerified,
 			seenAt:    state.LastSeenAt,
 		})
 	}

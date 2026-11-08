@@ -166,8 +166,8 @@ func molsDigest(key []byte, s string) [16]byte {
 // its latency distribution is non-linear. Fallback relays are excluded: their
 // multi-second RTTs reflect unhealthiness, not congestion, and would
 // otherwise flip the ranking into congestion inversion spuriously.
-func molsCongestionMode(states []RelayState) (congested, nonLinear bool) {
-	active := make([]RelayState, 0, len(states))
+func molsCongestionMode(states []relayState) (congested, nonLinear bool) {
+	active := make([]relayState, 0, len(states))
 	for _, state := range states {
 		if !isRelayFallback(state) {
 			active = append(active, state)
@@ -178,7 +178,7 @@ func molsCongestionMode(states []RelayState) (congested, nonLinear bool) {
 }
 
 // molsRTTStats computes the mean RTT and coefficient of variation across relay states.
-func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
+func molsRTTStats(states []relayState) (mean time.Duration, cv float64) {
 	var count int
 	var sum float64
 	for _, state := range states {
@@ -211,12 +211,12 @@ func molsRTTStats(states []RelayState) (mean time.Duration, cv float64) {
 }
 
 // isRelayFallback reports whether the relay's effective RTT exceeds the fallback threshold.
-func isRelayFallback(state RelayState) bool {
+func isRelayFallback(state relayState) bool {
 	return !state.DiscoveryRTTAt.IsZero() && state.effectiveRTT() > molsFallbackRTTThreshold
 }
 
 type molsCandidate struct {
-	state RelayState
+	state relayState
 	score int
 	seq   int
 }
@@ -234,11 +234,11 @@ func betterMOLSCandidate(a, b molsCandidate) bool {
 	return a.seq < b.seq
 }
 
-// RankRelayPool ranks relay URLs by MOLS priority and observed latency.
+// rankRelayPool ranks relay URLs by MOLS priority and observed latency.
 // The key is the per-client selection secret that makes the ranking
 // unpredictable to outside observers; a nil key keeps the ranking
 // deterministic (tooling and tests).
-func RankRelayPool(autoPool []RelayState, localAddress string, key []byte) []string {
+func rankRelayPool(autoPool []relayState, localAddress string, key []byte) []string {
 	if len(autoPool) == 0 {
 		return nil
 	}
@@ -274,7 +274,7 @@ func RankRelayPool(autoPool []RelayState, localAddress string, key []byte) []str
 		relayCols[rh.url] = col
 	}
 
-	scoreFor := func(state RelayState) int {
+	scoreFor := func(state relayState) int {
 		col := relayCols[state.Descriptor.APIHTTPSAddr]
 		if congested {
 			return molsCongestionScore(ingressRow, ingressCol, col, m1, m2, order, ok)
@@ -282,8 +282,8 @@ func RankRelayPool(autoPool []RelayState, localAddress string, key []byte) []str
 		return molsScore(ingressRow, ingressCol, col, m1, m2, order, ok)
 	}
 
-	activeStates := make([]RelayState, 0, len(autoPool))
-	fallbackStates := make([]RelayState, 0)
+	activeStates := make([]relayState, 0, len(autoPool))
+	fallbackStates := make([]relayState, 0)
 	for _, state := range autoPool {
 		if isRelayFallback(state) {
 			fallbackStates = append(fallbackStates, state)
@@ -293,7 +293,7 @@ func RankRelayPool(autoPool []RelayState, localAddress string, key []byte) []str
 	}
 
 	if len(activeStates) < molsMinActiveNodes && len(fallbackStates) > 0 {
-		slices.SortFunc(fallbackStates, func(a, b RelayState) int {
+		slices.SortFunc(fallbackStates, func(a, b relayState) int {
 			aRTT := a.effectiveRTT()
 			bRTT := b.effectiveRTT()
 			if aRTT != bRTT {
@@ -306,7 +306,7 @@ func RankRelayPool(autoPool []RelayState, localAddress string, key []byte) []str
 		fallbackStates = fallbackStates[promote:]
 	}
 
-	rankTier := func(states []RelayState) []string {
+	rankTier := func(states []relayState) []string {
 		if len(states) == 0 {
 			return nil
 		}
@@ -331,8 +331,8 @@ func RankRelayPool(autoPool []RelayState, localAddress string, key []byte) []str
 		// Swap the top slot when its tail latency exceeds its peer's, so a
 		// marginally pressured leader falls one place instead of below worse relays.
 		if len(candidates) >= 2 {
-			p0 := candidates[0].state.Pressure()
-			p1 := candidates[1].state.Pressure()
+			p0 := candidates[0].state.pressure()
+			p1 := candidates[1].state.pressure()
 			if p0-p1 > molsP2CPressureDelta {
 				candidates[0], candidates[1] = candidates[1], candidates[0]
 			}
@@ -350,8 +350,8 @@ func RankRelayPool(autoPool []RelayState, localAddress string, key []byte) []str
 	return append(activeURLs, fallbackURLs...)
 }
 
-// SelectPriority returns the ordered relay URLs for a client using MOLS selection with explicit relays prepended.
-func SelectPriority(states []RelayState, routeState routeState) []string {
+// selectPriority returns the ordered relay URLs for a client using MOLS selection with explicit relays prepended.
+func selectPriority(states []relayState, routeState routeState) []string {
 	if len(states) == 0 {
 		return nil
 	}
@@ -372,7 +372,7 @@ func SelectPriority(states []RelayState, routeState routeState) []string {
 			}
 		}
 	}
-	auto := RankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress, routeState.SelectionKey)
+	auto := rankRelayPool(filterCandidatePool(states, routeState, now), routeState.LocalAddress, routeState.SelectionKey)
 	maxActive := routeState.MaxActiveRelays
 	if maxActive <= 0 {
 		maxActive = DefaultMaxActiveRelays
@@ -386,12 +386,12 @@ func SelectPriority(states []RelayState, routeState routeState) []string {
 
 // applyActiveStickiness retains healthy active connections under the quota,
 // then appends every other candidate in ranked order.
-func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []RelayState, maxActive int) []string {
+func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []relayState, maxActive int) []string {
 	if len(ranked) == 0 || maxActive <= 0 || len(activeRelayURLs) == 0 {
 		return ranked
 	}
 
-	stateMap := make(map[string]RelayState, len(states))
+	stateMap := make(map[string]relayState, len(states))
 	for _, s := range states {
 		stateMap[s.Descriptor.APIHTTPSAddr] = s
 	}
@@ -402,7 +402,7 @@ func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []R
 			break
 		}
 		s, ok := stateMap[u]
-		if !ok || isRelayFallback(s) || s.Pressure() > 0.5 {
+		if !ok || isRelayFallback(s) || s.pressure() > 0.5 {
 			continue
 		}
 		if slices.Contains(ranked, u) && !slices.Contains(selected, u) {

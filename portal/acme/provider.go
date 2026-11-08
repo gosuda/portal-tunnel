@@ -30,7 +30,7 @@ const (
 	TypeVultr      = "vultr"
 )
 
-type DNSProvider interface {
+type dnsProvider interface {
 	Name() string
 	ChallengeProvider(ctx context.Context) (challenge.Provider, error)
 	EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error
@@ -41,7 +41,7 @@ type DNSProvider interface {
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error)
 }
 
-func newDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
+func newDNSProvider(providerType string, cfg Config) (dnsProvider, error) {
 	switch providerType {
 	case TypeEmbedded:
 		return embedded.New(embedded.Config{

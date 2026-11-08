@@ -252,7 +252,7 @@ func (c *Controller) Next(ctx context.Context) ([]string, error) {
 			c.refreshAt = time.Now().Add(DiscoveryPollInterval)
 		}
 		rs := c.buildRouteState()
-		next := c.relaySet.SelectRelays(rs)
+		next := c.relaySet.selectRelays(rs)
 		if !c.published || !slices.Equal(c.selected, next) {
 			c.selected = append([]string(nil), next...)
 			c.published = true

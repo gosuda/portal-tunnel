@@ -31,7 +31,7 @@ type ensDNSCommand struct {
 	remove   bool
 }
 
-func newENSStatus(cfg Config, dns DNSProvider) types.ENSStatus {
+func newENSStatus(cfg Config, dns dnsProvider) types.ENSStatus {
 	provider := strings.TrimSpace(cfg.DNSProvider)
 	if dns != nil {
 		provider = dns.Name()

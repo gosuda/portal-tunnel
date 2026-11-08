@@ -66,7 +66,7 @@ func TestExplicitBootstrapAcceptsOwnLocalDescriptor(t *testing.T) {
 		t.Fatalf("configured localhost bootstrap rejected: %v", err)
 	}
 	states := relayStates(set)
-	if len(states) != 1 || states[0].Trust != RelayVerified {
+	if len(states) != 1 || states[0].Trust != relayVerified {
 		t.Fatalf("bootstrap states = %v, want verified local relay", states)
 	}
 }
