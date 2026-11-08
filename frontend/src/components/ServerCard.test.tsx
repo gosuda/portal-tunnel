@@ -419,4 +419,29 @@ describe("ServerCard Blockies default thumbnail", () => {
     expect(blockiesSvg).toBeTruthy();
     expect(blockiesSvg?.querySelectorAll("rect").length).toBe(64);
   });
+
+  it("renders identity address chip in corner when address is provided", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "srv-addr",
+            name: "addr-app",
+            description: "",
+            tags: [],
+            thumbnail: "",
+            owner: "",
+            online: true,
+            dns: "addr.relay.example.com",
+            link: "/server/srv-addr",
+            address: "0xca2586617c06cbef8f936a5ea3faee9eefcb394f",
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    const chip = screen.getByText("0xca25…394f");
+    expect(chip).toBeTruthy();
+    expect(chip.closest("div")?.getAttribute("title")).toBe("0xca2586617c06cbef8f936a5ea3faee9eefcb394f");
+  });
 });

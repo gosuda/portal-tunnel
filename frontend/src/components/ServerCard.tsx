@@ -70,11 +70,29 @@ export function createBlockiesData(seed: string): string[][] {
   return grid;
 }
 
-export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
+export function DefaultServerThumbnail({
+  server,
+  hasAction = false,
+}: {
+  server: BaseServer;
+  hasAction?: boolean;
+}) {
   const patternId = useId();
   const seed = (server.address || server.name || server.id || "portal").trim();
   const grid = useMemo(() => createBlockiesData(seed), [seed]);
   const isTransport = Boolean(server.tcpAddr || server.udpAddr);
+
+  const displayAddress = useMemo(() => {
+    if (!server.address) return null;
+    const addr = server.address.trim();
+    if (addr.startsWith("0x") && addr.length > 10) {
+      return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+    }
+    if (addr.length > 12) {
+      return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+    }
+    return addr;
+  }, [server.address]);
 
   return (
     <div
@@ -84,9 +102,24 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
       )}
       aria-hidden="true"
     >
-      {/* Subtle Engineering Dot Grid Wallpaper */}
+      {/* 1. Ambient Blurred Backdrop Generated from Blockies Palette */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <svg
+          viewBox="0 0 8 8"
+          className="h-full w-full scale-150 blur-3xl opacity-35 dark:opacity-40"
+          preserveAspectRatio="none"
+        >
+          {grid.map((row, y) =>
+            row.map((fill, x) => (
+              <rect key={`bg-${x}-${y}`} x={x} y={y} width={1} height={1} fill={fill} />
+            ))
+          )}
+        </svg>
+      </div>
+
+      {/* 2. Subtle Engineering Dot Grid Wallpaper */}
       <svg
-        className="pointer-events-none absolute inset-0 h-full w-full opacity-40 dark:opacity-25"
+        className="pointer-events-none absolute inset-0 h-full w-full opacity-35 dark:opacity-20"
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
@@ -97,8 +130,22 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
         <rect width="100%" height="100%" fill={`url(#${patternId})`} />
       </svg>
 
-      {/* Centered 96x96px App Icon Badge */}
-      <div className="relative z-10 size-24 shrink-0 rounded-2xl overflow-hidden shadow-lg border border-black/10 dark:border-white/15 transition-transform duration-300 motion-safe:group-hover:scale-105">
+      {/* 3. Top-Right Cryptographic Identity Address Chip */}
+      {displayAddress && (
+        <div
+          title={server.address}
+          className={clsx(
+            "pointer-events-none absolute top-2.5 z-10 inline-flex items-center gap-1.5 rounded-full border border-black/10 dark:border-white/15 bg-background/75 dark:bg-black/60 px-2.5 py-0.5 text-[10px] font-mono font-medium text-foreground/80 dark:text-white/80 shadow-2xs backdrop-blur-md transition-all duration-300",
+            hasAction ? "right-12" : "right-2.5"
+          )}
+        >
+          <span className="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]" />
+          <span>{displayAddress}</span>
+        </div>
+      )}
+
+      {/* 4. Centered Blockies App Icon Badge */}
+      <div className="relative z-10 size-24 shrink-0 rounded-2xl overflow-hidden shadow-xl border border-black/10 dark:border-white/20 ring-4 ring-black/5 dark:ring-white/10 transition-transform duration-300 motion-safe:group-hover:scale-105">
         <svg
           viewBox="0 0 8 8"
           className="h-full w-full"
@@ -186,7 +233,10 @@ export function ServerCard({
             onError={() => setFailedThumbnail(thumbnail)}
           />
         ) : (
-          <DefaultServerThumbnail server={server} />
+          <DefaultServerThumbnail
+            server={server}
+            hasAction={Boolean(action || (server.reputation && isHiddenByVotes(server.reputation.up, server.reputation.down)))}
+          />
         )}
 
         {/* Top-right custom action overlay */}
