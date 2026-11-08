@@ -373,7 +373,8 @@ func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, tried map[st
 		if record == nil || !record.replica || record.ServiceKey() != key {
 			continue
 		}
-		if record.isExpired(now) || tried[record.id] || (requireReady && record.reverse.ReadyCount() == 0) {
+		unready := requireReady && record.reverse.ReadyCount() == 0
+		if record.isExpired(now) || tried[record.id] || unready {
 			continue
 		}
 		if selected == nil || record.lastSelected < selected.lastSelected {
