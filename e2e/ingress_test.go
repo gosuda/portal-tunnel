@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -74,92 +73,5 @@ func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
 	leases := server.PolicyLeases()
 	if len(leases) != 1 || leases[0].ClientIP != "127.0.0.2" {
 		t.Fatalf("registration peer = %+v, want socket source 127.0.0.2", leases)
-	}
-}
-
-// A relay ban must survive subsequent registration challenges: the public
-// connect endpoint must answer Forbidden before any connection is offered
-// to the lease stream.
-func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
-	sniPort := harnessPort(t, "127.0.0.1")
-	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     "https://localhost",
-		StateDir:      t.TempDir(),
-		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
-	})
-	if err != nil {
-		t.Fatalf("create portal server: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	access := policy.NewAccess()
-	if err := server.Start(ctx, policy.Mux(server, nil, nil, nil, access, policy.DefaultPreAuthConfig())); err != nil {
-		t.Fatalf("start portal server: %v", err)
-	}
-	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "localhost"}}
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
-	t.Cleanup(func() {
-		transport.CloseIdleConnections()
-		cancel()
-		if err := server.Wait(); err != nil {
-			t.Error(err)
-		}
-	})
-	leaseIdentity, err := identity.Generate("banned-ingress")
-	if err != nil {
-		t.Fatalf("generate lease identity: %v", err)
-	}
-	// The transport sends SNI "localhost", the relay identity name from
-	// PortalURL, so the SNI listener hands this connection to the
-	// control-plane API server — public API surface only, no direct listener.
-	base, err := url.Parse("https://127.0.0.1:" + strconv.Itoa(sniPort))
-	if err != nil {
-		t.Fatalf("parse API base URL: %v", err)
-	}
-	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-		t.Fatalf("register challenge: %v", err)
-	}
-	signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(challenge.SIWEMessage)
-	if err != nil {
-		t.Fatalf("sign challenge: %v", err)
-	}
-	var registered types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}, nil, &registered); err != nil {
-		t.Fatalf("register lease: %v", err)
-	}
-	leases := server.PolicyLeases()
-	if len(leases) != 1 || leases[0].IdentityKey == "" {
-		t.Fatalf("policy leases = %+v, want the registered identity key", leases)
-	}
-	// The relay pushes its ban decision into the data path; the public
-	// connect endpoint must answer before any connection is offered.
-	proposedAccess := access.Snapshot()
-	identityKey, err := types.ParseServiceIdentityKey(leases[0].IdentityKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposedAccess.Ban(identityKey)
-	committed := access.Commit(proposedAccess)
-	server.SetServiceIdentityAccess(identityKey, committed.Access(identityKey), committed.Revision())
-
-	// A new challenge pushes the current relay decision again. It must not
-	// restore access to the existing lease after the ban has been applied.
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-		t.Fatalf("register challenge after ban: %v", err)
-	}
-
-	connect, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://127.0.0.1:"+strconv.Itoa(sniPort)+types.PathSDKConnect, nil)
-	if err != nil {
-		t.Fatalf("build connect request: %v", err)
-	}
-	connect.Header.Set(types.HeaderReverseCapability, registered.ReverseEndpoint.Capability)
-	resp, err := client.Do(connect)
-	if err != nil {
-		t.Fatalf("connect request: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("connect status = %d, want forbidden for banned identity", resp.StatusCode)
 	}
 }

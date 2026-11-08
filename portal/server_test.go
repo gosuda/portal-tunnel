@@ -8,6 +8,9 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -333,4 +337,134 @@ func TestPublicIngressAggregateAdmissionAndRelease(t *testing.T) {
 		server.releaseIngress(conn, false)
 	}
 	server.ingressWorkers.Wait()
+}
+
+func TestCertificateSignerMismatchRejectsStartup(t *testing.T) {
+	managerA, err := acme.NewManager(acme.Config{BaseDomain: "localhost", KeyDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := managerA.EnsureTLSMaterial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	certFile, _, err := managerA.TLSFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	managerB, err := acme.NewManager(acme.Config{BaseDomain: "localhost", KeyDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := managerB.EnsureTLSMaterial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, keyFile, err := managerB.TLSFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stateDir, "fullchain.pem"), certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "privatekey.pem"), keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	relay, err := NewServer(ServerConfig{
+		PortalURL:     "https://localhost",
+		StateDir:      stateDir,
+		SNIListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = relay.Start(t.Context(), http.NotFoundHandler())
+	if err == nil {
+		_ = relay.Shutdown(context.Background())
+		t.Fatal("Start() succeeded with mismatched certificate and private key")
+	}
+	if !strings.Contains(err.Error(), "private key does not match public key") {
+		t.Fatalf("Start() error = %q, want key mismatch", err)
+	}
+}
+
+func TestRelayHTTPRedirectListener(t *testing.T) {
+	for _, hsts := range []bool{false, true} {
+		t.Run("hsts="+strconv.FormatBool(hsts), func(t *testing.T) {
+			redirectListener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			redirectAddr := redirectListener.Addr().String()
+			_ = redirectListener.Close()
+
+			sniListener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			sniAddr := sniListener.Addr().String()
+			_ = sniListener.Close()
+
+			server, err := NewServer(ServerConfig{
+				PortalURL:     "https://localhost:4017/base/?configured=discarded#fragment",
+				StateDir:      t.TempDir(),
+				SNIListenAddr: sniAddr,
+				HTTPRedirect:  types.HTTPRedirectConfig{Enabled: true, Addr: redirectAddr, HSTS: hsts},
+			})
+			if err != nil {
+				t.Fatalf("create portal server: %v", err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if err := server.Start(ctx, http.NotFoundHandler()); err != nil {
+				t.Fatalf("start portal server: %v", err)
+			}
+			t.Cleanup(func() {
+				shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+				defer c()
+				_ = server.Shutdown(shutdownCtx)
+				_ = server.Wait()
+			})
+
+			client := &http.Client{
+				Transport:     &http.Transport{DisableKeepAlives: true},
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+				Timeout:       5 * time.Second,
+			}
+			t.Cleanup(client.CloseIdleConnections)
+
+			req, err := http.NewRequest(http.MethodGet, "http://"+redirectAddr+"//tenant/path?secret=discarded", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = "attacker.example"
+			req.Header.Set("X-Forwarded-Host", "other-attacker.example")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("redirect request: %v", err)
+			}
+			_ = resp.Body.Close()
+			const wantLocation = "https://localhost:4017/base"
+			if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != wantLocation {
+				t.Fatalf("status=%d Location=%q, want 301 to %s", resp.StatusCode, resp.Header.Get("Location"), wantLocation)
+			}
+			wantHSTS := ""
+			if hsts {
+				wantHSTS = "max-age=31536000"
+			}
+			if got := resp.Header.Get("Strict-Transport-Security"); got != wantHSTS {
+				t.Fatalf("Strict-Transport-Security=%q, want %q", got, wantHSTS)
+			}
+		})
+	}
 }

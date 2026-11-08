@@ -5,9 +5,13 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/miekg/dns"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal"
@@ -199,4 +203,192 @@ func startUDPTestTunnel(t *testing.T, relayHost, relayName, originAddress string
 		}
 	}
 	return publicPort, restart, stop
+}
+
+// A relay hostname can advertise both families while only one is reachable.
+// Exercise the complete UDP path through that hostname with each family absent.
+func TestUDPRelayAddressFallback(t *testing.T) {
+	const hostname = "fallback.localhost"
+	packet, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for local DNS: %v", err)
+	}
+	started := make(chan struct{})
+	server := &dns.Server{
+		PacketConn:        packet,
+		NotifyStartedFunc: func() { close(started) },
+		Handler: dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) {
+			response := new(dns.Msg)
+			response.SetReply(request)
+			response.Authoritative = true
+			for _, question := range request.Question {
+				if !strings.EqualFold(question.Name, dns.Fqdn(hostname)) {
+					response.Rcode = dns.RcodeNameError
+					continue
+				}
+				header := dns.RR_Header{Name: question.Name, Rrtype: question.Qtype, Class: dns.ClassINET, Ttl: 1}
+				switch question.Qtype {
+				case dns.TypeA:
+					response.Answer = append(response.Answer, &dns.A{Hdr: header, A: net.IPv4(127, 0, 0, 1)})
+				case dns.TypeAAAA:
+					response.Answer = append(response.Answer, &dns.AAAA{Hdr: header, AAAA: net.IPv6loopback})
+				}
+			}
+			_ = w.WriteMsg(response)
+		}),
+	}
+	stopped := make(chan struct{})
+	var serveErr error
+	go func() {
+		serveErr = server.ActivateAndServe()
+		close(stopped)
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.ShutdownContext(ctx)
+		_ = packet.Close()
+		select {
+		case <-stopped:
+			if serveErr != nil {
+				t.Errorf("serve local DNS: %v", serveErr)
+			}
+		case <-ctx.Done():
+			t.Error("local DNS server did not stop")
+		}
+	})
+	select {
+	case <-started:
+	case <-stopped:
+		t.Fatalf("start local DNS: %v", serveErr)
+	}
+
+	originalResolver := net.DefaultResolver
+	net.DefaultResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "udp", packet.LocalAddr().String())
+		},
+	}
+	// Subtest cleanup closes the exposure and joins its proxy before restoring
+	// this process-wide resolver or stopping the DNS server.
+	t.Cleanup(func() { net.DefaultResolver = originalResolver })
+
+	for _, tc := range []struct {
+		name string
+		host string
+	}{
+		{name: "IPv4 relay", host: "127.0.0.1"},
+		{name: "IPv6 relay", host: "::1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testUDPPortRelay(t, tc.host, hostname, tc.host)
+		})
+	}
+}
+
+func TestUDPRelayRestartIsolatesSenderSockets(t *testing.T) {
+	origin, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = origin.Close() })
+	port, restart, _ := startUDPTestTunnel(t, "127.0.0.1", "127.0.0.1", origin.LocalAddr().String())
+	dial := func() *net.UDPConn {
+		t.Helper()
+		client, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		return client
+	}
+	oldSender := dial()
+	if _, err := oldSender.Write([]byte("old sender")); err != nil {
+		t.Fatal(err)
+	}
+	var buf [2048]byte
+	_ = origin.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, oldPeer, err := origin.ReadFromUDP(buf[:])
+	if err != nil || string(buf[:n]) != "old sender" {
+		t.Fatalf("old sender did not reach origin: %q, %v", buf[:n], err)
+	}
+	restart()
+	newSender := dial()
+	// The surviving SDK re-registers asynchronously. Retry only new ingress
+	// until its origin socket is observable, using the same public UDP port.
+	var newPeer *net.UDPAddr
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := newSender.Write([]byte("new sender")); err != nil && !errors.Is(err, syscall.ECONNREFUSED) {
+			t.Fatal(err)
+		}
+		_ = origin.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		n, newPeer, err = origin.ReadFromUDP(buf[:])
+		if err == nil {
+			break
+		}
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatal(err)
+		}
+	}
+	if err != nil || string(buf[:n]) != "new sender" {
+		t.Fatalf("new sender did not reach origin after restart: %q, %v", buf[:n], err)
+	}
+	if _, err := origin.WriteToUDP([]byte("delayed old reply"), oldPeer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := origin.WriteToUDP([]byte("new reply"), newPeer); err != nil {
+		t.Fatal(err)
+	}
+	_ = newSender.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, err = newSender.Read(buf[:])
+	if err != nil || string(buf[:n]) != "new reply" {
+		t.Fatalf("new sender received stale reply or no reply: %q, %v", buf[:n], err)
+	}
+	_ = newSender.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := newSender.Read(buf[:]); err == nil {
+		t.Fatalf("unexpected delayed reply crossed lease boundary: %q", buf[:n])
+	} else {
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestUDPProxyCloseReleasesOriginSocket(t *testing.T) {
+	for attempt := range 3 {
+		t.Run(strconv.Itoa(attempt), func(t *testing.T) {
+			origin, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = origin.Close() })
+			port, _, stop := startUDPTestTunnel(t, "127.0.0.1", "127.0.0.1", origin.LocalAddr().String())
+			client, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+			if _, err := client.Write([]byte("live socket")); err != nil {
+				t.Fatal(err)
+			}
+			_ = origin.SetReadDeadline(time.Now().Add(10 * time.Second))
+			var payload [64]byte
+			n, peer, err := origin.ReadFromUDP(payload[:])
+			if err != nil || string(payload[:n]) != "live socket" {
+				t.Fatalf("origin did not observe live proxy socket: %q, %v", payload[:n], err)
+			}
+			stop()
+			// Proxy completion must release its connected origin socket, not
+			// merely stop accepting new frames while its reader remains alive.
+			rebound, err := net.ListenUDP("udp4", peer)
+			if err != nil {
+				t.Fatalf("proxy close retained origin socket %s: %v", peer, err)
+			}
+			_ = rebound.Close()
+		})
+	}
 }
