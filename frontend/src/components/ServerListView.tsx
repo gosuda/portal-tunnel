@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { Search, X, ThumbsUp, Menu, Plus } from "lucide-react";
+import { Search, X, Star, Menu, Plus } from "lucide-react";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { HeroBackdropSVG } from "@/components/DirectoryBackdrop";
 import { PublicRelaysSection } from "@/components/PublicRelaysSection";
@@ -250,7 +250,7 @@ export function ServerListView({
                 </div>
               ) : (
                 <div className="mx-auto flex min-h-[55vh] max-w-md flex-col items-center justify-center gap-3 px-4 text-center">
-                  {browseView === "favorites" ? <ThumbsUp className="mb-2 size-12 text-muted-foreground" /> : <Search className="mb-2 size-12 text-muted-foreground" />}
+                  {browseView === "favorites" ? <Star className="mb-2 size-12 text-muted-foreground" /> : <Search className="mb-2 size-12 text-muted-foreground" />}
                   <h2 className="text-xl font-semibold">{showConnecting ? "Finding live apps" : hasActiveFilters ? "No results found" : browseView === "favorites" ? "Keep your favorite apps here" : "No apps are live yet"}</h2>
                   <p className="text-sm leading-6 text-muted-foreground">{showConnecting ? "Waiting for this relay to respond." : hasActiveFilters ? "Try another search or change your filters." : browseView === "favorites" ? "Recommend an app to find it here later." : "Create a tunnel to share your first app."}</p>
                 </div>
