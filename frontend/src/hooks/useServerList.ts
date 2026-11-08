@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BrowseView } from "@/types/filters";
 import { useList } from "@/hooks/useList";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { leaseToServer, type BaseServer } from "@/lib/server";
 import { apiClient } from "@/lib/apiClient";
 import { isHiddenByVotes } from "@/utils/reputation";
@@ -12,6 +13,8 @@ import type {
   ReputationVoteAction,
   ReputationVoteResponse,
 } from "@/types/api";
+
+const DESKTOP_QUERY = "(min-width: 1024px)";
 
 function normalizeHostname(hostname: string): string {
   return hostname.trim().toLowerCase();
@@ -43,29 +46,20 @@ export function useServerList() {
   const [commentServer, setCommentServer] = useState<BaseServer | null>(null);
   const [browseView, setBrowseView] = useState<BrowseView>("home");
   const [showHidden, setShowHidden] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(() =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia("(min-width: 1024px)").matches
-      : false
-  );
+  const isDesktop = useMediaQuery(DESKTOP_QUERY);
+  // The sidebar opens on desktop and closes on mobile, and follows the
+  // breakpoint when it is crossed; in between, the visitor toggles it.
+  const [sidebarOpen, setSidebarOpen] = useState(isDesktop);
+  const [sidebarBreakpoint, setSidebarBreakpoint] = useState(isDesktop);
+  if (sidebarBreakpoint !== isDesktop) {
+    setSidebarBreakpoint(isDesktop);
+    setSidebarOpen(isDesktop);
+  }
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     stale: true,
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return;
-    }
-    const desktop = window.matchMedia("(min-width: 1024px)");
-    const handleBreakpointChange = (event: MediaQueryListEvent) => {
-      setSidebarOpen(event.matches);
-    };
-    setSidebarOpen(desktop.matches);
-    desktop.addEventListener("change", handleBreakpointChange);
-    return () => desktop.removeEventListener("change", handleBreakpointChange);
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,13 +173,10 @@ export function useServerList() {
       : list.filteredServers,
     handleBrowseViewChange: (view: BrowseView) => {
       setBrowseView(view);
-      if (typeof window !== "undefined" && typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 1024px)").matches) {
+      if (!isDesktop) {
         setSidebarOpen(false);
       }
-      list.handleSearchChange("");
-      list.handleStatusChange("all");
-      list.handleSortByChange("default");
-      list.selectedTags.forEach(list.handleTagToggle);
+      list.resetFilters();
     },
     // null means unavailable; an empty array is an authoritative empty snapshot.
     leases: publicState.stale ? null : publicState.leases,

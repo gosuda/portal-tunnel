@@ -18,6 +18,27 @@ const server = (id: string, up?: number, name = id): BaseServer => ({
   }),
 });
 
+describe("filter reset", () => {
+  it("clears search, status and tags and applies the given order", () => {
+    const servers = [server("b"), { ...server("a"), online: false }];
+    const { result } = renderHook(() => useList({ servers }));
+
+    act(() => {
+      result.current.handleSearchChange("zzz");
+      result.current.handleStatusChange("online");
+      result.current.handleTagToggle("tools");
+    });
+    expect(result.current.filteredServers).toEqual([]);
+
+    act(() => result.current.resetFilters("name-asc"));
+
+    expect(result.current.searchQuery).toBe("");
+    expect(result.current.status).toBe("all");
+    expect(result.current.selectedTags).toEqual([]);
+    expect(result.current.filteredServers.map(({ id }) => id)).toEqual(["a", "b"]);
+  });
+});
+
 describe("recommendation sorting", () => {
   it("orders by recommendation count, then name and hostname, treating missing votes as zero", () => {
     const servers = [

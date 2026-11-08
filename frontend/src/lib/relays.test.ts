@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   mergeIncompatibleRelays,
   relayReleaseLabel,
-} from "./ServerListView";
+} from "./relays";
 
 const CURRENT = "https://relay-current.example";
 

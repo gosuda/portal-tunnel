@@ -8,16 +8,11 @@ import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { useCopy } from "@/hooks/useCopy";
 import type { BaseServer } from "@/lib/server";
 import type { BrowseView, SortOption, StatusFilter } from "@/types/filters";
-import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
-import { apiClient } from "@/lib/apiClient";
-import { RELAY_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
-import type { Lease, DiscoveryResponse, DomainResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
-
-export interface KnownRelay {
-  relayURL: string;
-  isCurrent: boolean;
-  protocolVersion?: string;
-}
+import { matchesMedia } from "@/hooks/useMediaQuery";
+import { useRelayDiscovery } from "@/hooks/useRelayDiscovery";
+import { ROUTE_PATHS } from "@/lib/apiPaths";
+import { relayReleaseLabel } from "@/lib/relays";
+import type { Lease } from "@/types/api";
 
 const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
@@ -40,116 +35,12 @@ function animateReorder(update: () => void, maxCards: number): void {
   if (
     typeof document.startViewTransition !== "function" ||
     maxCards > REORDER_ANIMATION_MAX_CARDS ||
-    (typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+    matchesMedia("(prefers-reduced-motion: reduce)")
   ) {
     update();
     return;
   }
   document.startViewTransition(() => flushSync(update));
-}
-
-function normalizeRelayURL(relayURL: string | undefined): string {
-  return typeof relayURL === "string" ? relayURL.trim() : "";
-}
-
-function normalizeKnownRelays(
-  relays: RelayDescriptor[] | undefined,
-  currentRelayURL: string
-): KnownRelay[] {
-  const seen = new Set<string>();
-  const knownRelays: KnownRelay[] = [];
-
-  relays?.forEach((relay) => {
-    const relayURL = normalizeRelayURL(relay.api_https_addr);
-    if (relayURL === "" || seen.has(relayURL)) {
-      return;
-    }
-
-    seen.add(relayURL);
-    knownRelays.push({
-      relayURL,
-      isCurrent: relayURL === currentRelayURL,
-    });
-  });
-
-  if (currentRelayURL !== "" && !seen.has(currentRelayURL)) {
-    knownRelays.push({
-      relayURL: currentRelayURL,
-      isCurrent: true,
-    });
-  }
-
-  knownRelays.sort((a, b) => {
-    if (a.isCurrent !== b.isCurrent) {
-      return a.isCurrent ? -1 : 1;
-    }
-    return a.relayURL.localeCompare(b.relayURL);
-  });
-
-  return knownRelays;
-}
-
-export function mergeIncompatibleRelays(
-  knownRelays: KnownRelay[],
-  incompatible: IncompatibleRelayEntry[] | undefined,
-  currentRelayURL: string
-): KnownRelay[] {
-  if (!incompatible?.length) {
-    return knownRelays;
-  }
-
-  const seen = new Set(knownRelays.map((relay) => relay.relayURL));
-  const merged = [...knownRelays];
-
-  incompatible.forEach((entry) => {
-    const relayURL = normalizeRelayURL(entry.url);
-    if (relayURL === "" || seen.has(relayURL)) {
-      return;
-    }
-    seen.add(relayURL);
-    merged.push({
-      relayURL,
-      isCurrent: relayURL === currentRelayURL,
-      protocolVersion: entry.protocol_version?.trim() || undefined,
-    });
-  });
-
-  return merged;
-}
-
-// Locally observed release metadata: peer versions collected from the serving
-// relay's own discovery response, plus the response envelope itself.
-export function relayReleaseLabel(
-  versions: Record<string, string>,
-  relay: KnownRelay,
-  discovery?: DiscoveryResponse
-): string | null {
-  const observed =
-    versions[normalizeRelayURL(relay.relayURL)]?.trim() ?? "";
-  if (observed !== "") {
-    return observed;
-  }
-
-  if (relay.isCurrent) {
-    const selfRelease =
-      typeof discovery?.release_version === "string"
-        ? discovery.release_version.trim()
-        : "";
-    if (selfRelease !== "") {
-      return selfRelease;
-    }
-  }
-
-  const protocolVersion =
-    relay.protocolVersion?.trim() ||
-    (relay.isCurrent && typeof discovery?.protocol_version === "string"
-      ? discovery.protocol_version.trim()
-      : "");
-  if (protocolVersion !== "") {
-    return `discovery ${protocolVersion}`;
-  }
-
-  return null;
 }
 
 interface LiveAppCardProps {
@@ -195,6 +86,7 @@ interface ServerListViewProps {
   onSearchChange: (value: string) => void;
   onSortByChange: (value: SortOption) => void;
   onTagToggle: (tag: string) => void;
+  onClearTags: () => void;
   onOpenComments: (server: BaseServer) => void;
 }
 
@@ -218,86 +110,17 @@ export function ServerListView({
   onSearchChange,
   onSortByChange,
   onTagToggle,
+  onClearTags,
   onOpenComments,
 }: ServerListViewProps) {
-  const [relayReleases, setRelayReleases] = useState<{
-    versions: Record<string, string>;
-    discovery?: DiscoveryResponse;
-  }>({ versions: {} });
-  const [knownRelays, setKnownRelays] = useState<KnownRelay[]>([]);
-  const [releaseVersion, setReleaseVersion] = useState("");
-  const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(true);
   const [relaySearchQuery, setRelaySearchQuery] = useState("");
-
   const { copiedKey: copiedRelayURL, copy: copyRelayURL } = useCopy(1500);
-  const currentRelayURL = useMemo(() => readCurrentOrigin(), []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRelayDiscoveryLoading(true);
-    setRelayReleases({ versions: {} });
-    setKnownRelays([]);
-
-    void (async () => {
-      let nextKnownRelays = normalizeKnownRelays(undefined, currentRelayURL);
-      let nextReleases: {
-        versions: Record<string, string>;
-        discovery?: DiscoveryResponse;
-      } = { versions: {} };
-
-      try {
-        const domainPromise = apiClient.get<DomainResponse>(RELAY_API_PATHS.sdk.domain).catch(() => null);
-        const discoveryPromise = apiClient.get<DiscoveryResponse>(RELAY_API_PATHS.discovery).catch(() => null);
-        const [domain, discovery] = await Promise.all([domainPromise, discoveryPromise]);
-
-        const fetchedVersion =
-          (typeof domain?.release_version === "string" && domain.release_version.trim()) ||
-          (typeof discovery?.release_version === "string" && discovery.release_version.trim()) ||
-          "";
-        if (!cancelled && fetchedVersion) {
-          setReleaseVersion(fetchedVersion);
-        }
-
-        nextKnownRelays = mergeIncompatibleRelays(
-          normalizeKnownRelays(discovery?.relays, currentRelayURL),
-          discovery?.incompatible_relays,
-          currentRelayURL
-        );
-
-        const versions: Record<string, string> = {};
-        Object.entries(discovery?.relay_release_versions ?? {}).forEach(
-          ([url, ver]) => {
-            const relayURL = normalizeRelayURL(url);
-            const trimmedVersion = ver.trim();
-            if (relayURL !== "" && trimmedVersion !== "") {
-              versions[relayURL] = trimmedVersion;
-            }
-          }
-        );
-        nextReleases = {
-          versions,
-          discovery: {
-            release_version: discovery?.release_version,
-            protocol_version: discovery?.protocol_version,
-          },
-        };
-      } catch {
-        // Keep the current relay fallback when discovery is unavailable.
-      }
-
-      if (cancelled) {
-        return;
-      }
-
-      setKnownRelays(nextKnownRelays);
-      setRelayReleases(nextReleases);
-      setRelayDiscoveryLoading(false);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentRelayURL]);
+  const {
+    knownRelays,
+    relayReleases,
+    releaseVersion,
+    loading: relayDiscoveryLoading,
+  } = useRelayDiscovery();
 
   const gridRef = useRef<HTMLDivElement>(null);
   const hasActiveFilters =
@@ -315,7 +138,7 @@ export function ServerListView({
       return;
     }
 
-    const animateEntrance = typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: no-preference)").matches;
+    const animateEntrance = matchesMedia("(prefers-reduced-motion: no-preference)");
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -559,7 +382,7 @@ export function ServerListView({
           <section id="live-servers" aria-label={browseView === "favorites" ? "Favorite apps" : "Discover apps"}>
             <div className="sticky top-[116px] z-30 bg-background/80 px-4 pb-3 pt-2 backdrop-blur-xl md:top-16 lg:px-8">
               <div aria-label="Filter by category" className="flex gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <button type="button" aria-pressed={selectedTags.length === 0} onClick={() => selectedTags.forEach(onTagToggle)} className={`portal-category ${selectedTags.length === 0 ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>All</button>
+                <button type="button" aria-pressed={selectedTags.length === 0} onClick={onClearTags} className={`portal-category ${selectedTags.length === 0 ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>All</button>
                 {availableTags.map((tag) => <button key={tag} type="button" aria-pressed={selectedTags.includes(tag)} onClick={() => handleTagToggle(tag)} className={`portal-category ${selectedTags.includes(tag) ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>{tag}</button>)}
               </div>
             </div>

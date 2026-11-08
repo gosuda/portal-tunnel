@@ -18,6 +18,9 @@ export interface UseListReturn<T extends BaseServer> {
   handleStatusChange: (value: StatusFilter) => void;
   handleSortByChange: (value: SortOption) => void;
   handleTagToggle: (tag: string) => void;
+  clearTags: () => void;
+  /** Back to the unfiltered list in the given order. */
+  resetFilters: (sortBy?: SortOption) => void;
 }
 
 function parseTimestamp(value?: string, fallback = 0): number {
@@ -157,6 +160,15 @@ export function useList<T extends BaseServer>({
     );
   }
 
+  const clearTags = () => setSelectedTags([]);
+
+  const resetFilters = (nextSortBy: SortOption = "default") => {
+    setSearchQuery("");
+    setStatus("all");
+    setSortBy(nextSortBy);
+    setSelectedTags([]);
+  };
+
   return {
     searchQuery,
     status,
@@ -168,5 +180,7 @@ export function useList<T extends BaseServer>({
     handleStatusChange: setStatus,
     handleSortByChange: setSortBy,
     handleTagToggle,
+    clearTags,
+    resetFilters,
   };
 }

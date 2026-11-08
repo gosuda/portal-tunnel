@@ -27,6 +27,7 @@ export function ServerList() {
     handleSearchChange,
     handleSortByChange,
     handleTagToggle,
+    clearTags,
     onVote,
     leases,
   } = useServerList();
@@ -52,6 +53,7 @@ export function ServerList() {
         onSearchChange={handleSearchChange}
         onSortByChange={handleSortByChange}
         onTagToggle={handleTagToggle}
+        onClearTags={clearTags}
         onOpenComments={(server) =>
           setCommentServer((current) => (current?.id === server.id ? null : server))
         }
