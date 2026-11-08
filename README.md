@@ -88,17 +88,17 @@ portal expose 3000 --overlay
 
 ### 2. Use the local AI agent plugin
 
-The repository includes a `portal-deploy` plugin with shared skills (`portal-expose` and `portal-connect`) for Codex, Claude Code, and Cursor:
+The repository includes two plugins for Codex, Claude Code, and Cursor: `portal-tunnel` (`portal-expose` and `portal-connect`) for publishing and reaching services, and `portal-relay` for running a relay:
 
 ```bash
 # GitHub CLI
-gh skill install gosuda/portal-tunnel portal-deploy/portal-expose
+gh skill install gosuda/portal-tunnel portal-tunnel/portal-expose
 
 # skills CLI
 npx skills add gosuda/portal-tunnel --skill portal-expose
 ```
 
-Ask your agent: *"Expose my app on port 3000 with Portal and verify the public URL."* See [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md) for full setup instructions.
+Ask your agent: *"Expose my app on port 3000 with Portal and verify the public URL."* See [plugins/portal-tunnel/README.md](plugins/portal-tunnel/README.md) and [plugins/portal-relay/README.md](plugins/portal-relay/README.md) for full setup instructions.
 
 ### 3. Manage persistent tunnels with Portal Agent
 

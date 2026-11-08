@@ -276,9 +276,12 @@ type PolicySettings struct {
 type LeasePolicyUpdate struct {
 	IdentityKey string `json:"identity_key"`
 	BPS         *int64 `json:"bps,omitempty"`
-	IsApproved  *bool  `json:"is_approved,omitempty"`
-	IsBanned    *bool  `json:"is_banned,omitempty"`
-	IsDenied    *bool  `json:"is_denied,omitempty"`
+	// ResetBPS removes the override and restores the relay's startup default.
+	// It is mutually exclusive with BPS; zero BPS means explicit unlimited.
+	ResetBPS   bool  `json:"reset_bps,omitempty"`
+	IsApproved *bool `json:"is_approved,omitempty"`
+	IsBanned   *bool `json:"is_banned,omitempty"`
+	IsDenied   *bool `json:"is_denied,omitempty"`
 }
 
 type PolicyPortSettings struct {

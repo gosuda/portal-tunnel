@@ -31,6 +31,10 @@ const (
 )
 
 const (
+	// DefaultIdentityBPS is the relay CLI's default stream budget per service
+	// identity, shared across connections and both directions, in bytes/second.
+	DefaultIdentityBPS = 1 << 20
+
 	DefaultUDPFlowIdleTimeout = 5 * time.Minute
 	DefaultUDPMaxFlows        = 1024
 	// QUICInitialPacketSize is the backhaul packet size and its lower limit.

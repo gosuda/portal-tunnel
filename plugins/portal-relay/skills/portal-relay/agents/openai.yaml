@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run a Portal Relay"
+  short_description: "Run a self-hosted Portal relay"
+  default_prompt: "Use $portal-relay to deploy a public Portal relay on this host, verify it, and report how to keep it updated."

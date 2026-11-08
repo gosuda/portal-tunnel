@@ -240,7 +240,8 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `is_banned` | `boolean` | optional |
 | `is_approved` | `boolean` | optional |
 | `is_denied` | `boolean` | optional; `true` also revokes approval |
-| `bps` | `number` | optional; `0` removes the limit |
+| `bps` | `number` | optional individual bytes/second override; `0` explicitly permits unlimited traffic; omission preserves the setting |
+| `reset_bps` | `boolean` | `true` removes the override and restores the relay default; cannot be combined with `bps` |
 
 `DiscoveryResponse`:
 

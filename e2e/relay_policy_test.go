@@ -159,6 +159,97 @@ func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Co
 	return ctx, base, client
 }
 
+// Defaults apply without per-identity setup. Saved rate increases and explicit
+// unlimited overrides survive restart with a different default. Resetting either
+// override restores inheritance, including after another restart.
+func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
+	stateDir := t.TempDir()
+	identities := make([]types.Identity, 3)
+	for i, name := range []string{"upgraded", "unlimited", "inherited"} {
+		var err error
+		identities[i], err = identity.Generate(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	headers := http.Header{"Authorization": {"Bearer admin-test"}}
+	startPhase := func(t *testing.T, defaultBPS int) (context.Context, *url.URL, *http.Client, func([]int64)) {
+		t.Helper()
+		ctx, base, client := startPolicyRelay(t, stateDir, "--default-identity-bps", strconv.Itoa(defaultBPS))
+		for _, tenant := range identities {
+			exposure, err := sdk.Expose(ctx, tenant, []string{"https://localhost:" + base.Port()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = exposure.Close() })
+			readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			_, err = exposure.WaitReady(readyCtx)
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		checkLimits := func(want []int64) {
+			t.Helper()
+			var state types.PolicyStateResponse
+			if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
+				t.Fatal(err)
+			}
+			got := make(map[string]int64)
+			for _, lease := range state.Leases {
+				got[lease.IdentityKey] = lease.BPS
+			}
+			for i, tenant := range identities {
+				if limit, found := got[tenant.Key()]; !found || limit != want[i] {
+					t.Fatalf("identity %s limit = %d (found %v), want %d", tenant.Name, limit, found, want[i])
+				}
+			}
+		}
+		return ctx, base, client, checkLimits
+	}
+
+	t.Run("initial defaults and overrides", func(t *testing.T) {
+		ctx, base, client, checkLimits := startPhase(t, types.DefaultIdentityBPS)
+		checkLimits([]int64{types.DefaultIdentityBPS, types.DefaultIdentityBPS, types.DefaultIdentityBPS})
+		for i, bps := range []int64{4 * types.DefaultIdentityBPS, 0} {
+			update := types.LeasePolicyUpdate{IdentityKey: identities[i].Key(), BPS: &bps}
+			if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, update, headers, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, types.DefaultIdentityBPS})
+	})
+
+	t.Run("survive restart and reset", func(t *testing.T) {
+		defaultBPS := 2 * types.DefaultIdentityBPS
+		ctx, base, client, checkLimits := startPhase(t, defaultBPS)
+		checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
+
+		// Conflicting operations must preserve both saved and live policy.
+		zero := int64(0)
+		conflict := types.LeasePolicyUpdate{IdentityKey: identities[0].Key(), BPS: &zero, ResetBPS: true}
+		err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, conflict, headers, nil)
+		if apiErr, ok := errors.AsType[*types.APIRequestError](err); !ok || apiErr.StatusCode != http.StatusBadRequest {
+			t.Fatalf("conflicting bandwidth update: %v", err)
+		}
+		checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
+
+		for _, tenant := range identities[:2] {
+			update := types.LeasePolicyUpdate{IdentityKey: tenant.Key(), ResetBPS: true}
+			if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, update, headers, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		checkLimits([]int64{int64(defaultBPS), int64(defaultBPS), int64(defaultBPS)})
+	})
+
+	t.Run("restore inheritance after restart", func(t *testing.T) {
+		defaultBPS := 3 * types.DefaultIdentityBPS
+		_, _, _, checkLimits := startPhase(t, defaultBPS)
+		checkLimits([]int64{int64(defaultBPS), int64(defaultBPS), int64(defaultBPS)})
+	})
+}
+
 // Exercise admin persistence and registration through the real relay binary.
 // A failed allow-side policy write must leave the existing denial effective.
 func TestRelayAccessPolicyTransaction(t *testing.T) {

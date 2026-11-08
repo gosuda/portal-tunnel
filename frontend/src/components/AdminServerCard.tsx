@@ -10,7 +10,7 @@ interface AdminServerCardProps {
   isSelected: boolean;
   onToggleSelect: (identityKey: string) => void;
   onBanStatusChange: (identityKey: string, isBan: boolean) => void | Promise<void>;
-  onBPSChange: (identityKey: string, bps: number) => void | Promise<void>;
+  onBPSChange: (identityKey: string, bps: number | null) => void | Promise<void>;
   onApproveStatusChange: (identityKey: string, approve: boolean) => void | Promise<void>;
   onDenyStatusChange: (identityKey: string, deny: boolean) => void | Promise<void>;
 }
@@ -280,6 +280,16 @@ export function AdminServerCard({
             />
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              className="cursor-pointer"
+              variant="secondary"
+              onClick={() => {
+                runAsyncAdminAction(() => onBPSChange(identityKey, null));
+                setShowBPSModal(false);
+              }}
+            >
+              Use relay default
+            </Button>
             <Button
               className="cursor-pointer"
               variant="secondary"

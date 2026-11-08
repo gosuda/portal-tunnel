@@ -81,17 +81,17 @@ portal expose 3000 --overlay
 
 ### 2. 使用本地 AI Agent 插件
 
-本仓库为 Codex、Claude Code 和 Cursor 提供了内置 `portal-deploy` 插件（包含 `portal-expose` 和 `portal-connect` 技能）：
+本仓库为 Codex、Claude Code 和 Cursor 提供了两个插件：`portal-tunnel`（包含 `portal-expose` 和 `portal-connect` 技能，用于发布和访问服务）和 `portal-relay`（用于运行中继）：
 
 ```bash
 # GitHub CLI
-gh skill install gosuda/portal-tunnel portal-deploy/portal-expose
+gh skill install gosuda/portal-tunnel portal-tunnel/portal-expose
 
 # skills CLI
 npx skills add gosuda/portal-tunnel --skill portal-expose
 ```
 
-对你的 Agent 说：*“用 Portal 把 3000 端口上的应用公开并验证公共网址。”* 详见 [plugins/portal-deploy/README.md](plugins/portal-deploy/README.md)。
+对你的 Agent 说：*“用 Portal 把 3000 端口上的应用公开并验证公共网址。”* 详见 [plugins/portal-tunnel/README.md](plugins/portal-tunnel/README.md) 和 [plugins/portal-relay/README.md](plugins/portal-relay/README.md)。
 
 ### 3. 使用 Portal Agent 管理常驻隧道
 

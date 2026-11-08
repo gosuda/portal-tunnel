@@ -94,7 +94,7 @@ type blockedIdentity struct {
 	refusal  *apiError
 }
 
-func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority identity.Authority, tokenIssuer string) (*leaseRegistry, error) {
+func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority identity.Authority, tokenIssuer string, defaultIdentityBPS int64) (*leaseRegistry, error) {
 	if tokenAuthority == nil {
 		return nil, errLeaseTokenAuthorityIsRequired
 	}
@@ -116,7 +116,7 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
-		bps:            NewBPSManager(),
+		bps:            NewBPSManager(defaultIdentityBPS),
 		blocked:        make(map[types.ServiceIdentityKey]blockedIdentity),
 		udpPorts:       newPortPool(minPort, maxPort, defaultPortReservationGrace),
 		tcpPorts:       newPortPool(minPort, maxPort, defaultPortReservationGrace),

@@ -190,6 +190,26 @@ describe("useAdmin", () => {
     );
   });
 
+  it("resets a bandwidth override and refreshes the inherited limit", async () => {
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    const identityKey = "relay-1:0x00000000000000000000000000000000000000a1";
+    mockGet.mockResolvedValueOnce({
+      policy: buildSettings(),
+      leases: [{ ...buildLease("0x00000000000000000000000000000000000000A1"), bps: 1048576 }],
+    } as never);
+    await act(async () => {
+      await result.current.handleBPSChange(identityKey, null);
+    });
+
+    expect(mockPost).toHaveBeenCalledWith(RELAY_API_PATHS.policy.leases, {
+      identity_key: identityKey,
+      reset_bps: true,
+    });
+    expect(result.current.servers[0]?.bps).toBe(1048576);
+  });
+
   it("keeps loading false while refreshing bps in the background", async () => {
     let getCalls = 0;
     let resolveRefresh:

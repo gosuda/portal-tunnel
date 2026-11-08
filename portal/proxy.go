@@ -141,13 +141,15 @@ func closeWrite(conn net.Conn) {
 }
 
 type BPSManager struct {
+	defaultBPS       int64
 	identityBPS      *utils.Snapshot[map[types.ServiceIdentityKey]int64]
 	identityLimiters map[types.ServiceIdentityKey]*bpsLimiter
 	mu               sync.RWMutex
 }
 
-func NewBPSManager() *BPSManager {
+func NewBPSManager(defaultBPS int64) *BPSManager {
 	return &BPSManager{
+		defaultBPS:       defaultBPS,
 		identityBPS:      utils.NewSnapshot(map[types.ServiceIdentityKey]int64{}, maps.Clone[map[types.ServiceIdentityKey]int64]),
 		identityLimiters: make(map[types.ServiceIdentityKey]*bpsLimiter),
 	}
@@ -160,7 +162,10 @@ func (m *BPSManager) IdentityBPS(key types.ServiceIdentityKey) int64 {
 	if m.identityBPS == nil {
 		return 0
 	}
-	return m.identityBPS.Load()[key]
+	if bps, configured := m.identityBPS.Load()[key]; configured {
+		return bps
+	}
+	return m.defaultBPS
 }
 
 func (m *BPSManager) SetIdentityBPS(key types.ServiceIdentityKey, bps int64) {
@@ -171,21 +176,15 @@ func (m *BPSManager) SetIdentityBPS(key types.ServiceIdentityKey, bps int64) {
 	if m.identityBPS == nil {
 		return
 	}
-	if bps <= 0 {
-		m.identityBPS.UpdateCopy(func(limits *map[types.ServiceIdentityKey]int64) {
-			delete(*limits, key)
-		})
-		m.mu.Lock()
-		delete(m.identityLimiters, key)
-		m.mu.Unlock()
-		return
-	}
 	m.identityBPS.UpdateCopy(func(limits *map[types.ServiceIdentityKey]int64) {
 		if *limits == nil {
 			*limits = make(map[types.ServiceIdentityKey]int64)
 		}
-		(*limits)[key] = bps
+		(*limits)[key] = max(bps, 0)
 	})
+	if bps <= 0 {
+		m.ResetIdentityLimiter(key)
+	}
 }
 
 // ResetIdentityLimiter forgets ephemeral token state while preserving the
@@ -205,7 +204,7 @@ func (m *BPSManager) SetServiceIdentityBPSLimits(next map[types.ServiceIdentityK
 	}
 	limits := make(map[types.ServiceIdentityKey]int64, len(next))
 	for key, bps := range next {
-		if key.Valid() && bps > 0 {
+		if key.Valid() && bps >= 0 {
 			limits[key] = bps
 		}
 	}
@@ -216,7 +215,11 @@ func (m *BPSManager) SetServiceIdentityBPSLimits(next map[types.ServiceIdentityK
 	// Rates are read separately on every reservation. Keep accrued credit for
 	// identities that remain limited, just as individual rate updates do.
 	for key := range m.identityLimiters {
-		if limits[key] <= 0 {
+		bps, configured := limits[key]
+		if !configured {
+			bps = m.defaultBPS
+		}
+		if bps <= 0 {
 			delete(m.identityLimiters, key)
 		}
 	}
