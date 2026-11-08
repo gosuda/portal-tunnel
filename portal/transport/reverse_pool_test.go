@@ -35,7 +35,7 @@ func TestReserveOfferCommitsProtocolAckBeforeClaimMarker(t *testing.T) {
 	go func() {
 		conn, err := relay.Acquire(ctx)
 		if err == nil {
-			_ = WriteTLSStart(conn, [16]byte{})
+			_ = WriteTLSStart(conn, [16]byte{}, time.Time{})
 		}
 		claimed <- conn
 	}()
@@ -85,7 +85,7 @@ func TestTLSBindingFramingRoundTrip(t *testing.T) {
 			claimErr <- err
 			return
 		}
-		if err := WriteTLSStart(conn, binding); err != nil {
+		if err := WriteTLSStart(conn, binding, time.Time{}); err != nil {
 			_ = conn.Close()
 			claimErr <- err
 			return

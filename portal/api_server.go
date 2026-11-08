@@ -701,7 +701,8 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 					s.registry.bindings.Discard(binding)
 					return nil, err
 				}
-				if err := transport.WriteTLSStart(upstream, binding); err == nil {
+				deadline, _ := ctx.Deadline()
+				if err := transport.WriteTLSStart(upstream, binding, deadline); err == nil {
 					break
 				}
 				_ = upstream.Close()

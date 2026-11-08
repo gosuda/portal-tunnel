@@ -1176,7 +1176,10 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		binding := s.registry.bindings.Issue(record.id, helloSpan)
 		err = s.registry.activateBridge(record, bridge, session, nil)
 		if err == nil {
-			err = transport.WriteTLSStart(session, binding)
+			err = transport.WriteTLSStart(session, binding, deadline)
+		}
+		if err == nil && !time.Now().Before(deadline) {
+			err = context.DeadlineExceeded
 		}
 		if err == nil {
 			err = s.registry.activateBridge(record, bridge, session, conn)
