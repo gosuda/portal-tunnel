@@ -95,6 +95,7 @@ and adds:
 
 | Field | Type | Notes |
 |-------|------|-------|
+| `lease_id` | `string` | relay lease ID; unique per row, so HTTP replicas of one identity stay separate |
 | `identity_key` | `string` | normalized `name:address` key |
 | `address` | `string` | normalized Ethereum address |
 | `bps` | `number` | bytes per second limit, `0` means unlimited |

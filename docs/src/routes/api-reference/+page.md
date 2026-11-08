@@ -198,6 +198,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 
 | Field | Type |
 |-------|------|
+| `lease_id` | `string` |
 | `identity_key` | `string` |
 | `bps` | `number` |
 | `client_ip`, `reported_ip` | `string` |
