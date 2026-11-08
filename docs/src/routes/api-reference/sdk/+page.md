@@ -443,7 +443,7 @@ applications own their service-wide session and replay guarantees.
 
 This is connection distribution within one relay, not cross-relay failover.
 Ready streams indicate tunnel availability, not application health. If no replica
-is ready, the incoming connection waits for a refilled stream on one live
+is ready, the incoming connection waits for a refilled stream on any live
 replica until the claim deadline, then fails. Connections already carrying traffic
 are not migrated or replayed after a client fails.
 

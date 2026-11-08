@@ -290,8 +290,9 @@ reverse streams. The registry serializes selection, comparing each lease's last
 selection order only against its siblings. The reverse pool supports immediate
 claims so a lost readiness race can try another candidate. Attempts share a claim
 deadline and visit each ready replica at most once; when none is ready, ingress
-waits on one live replica for a refilled stream until that deadline, as an
-exclusive lease does. A bridge initially owns only
+waits briefly on one live replica, then rescans all of them, until that
+deadline. A crashed client keeps its lease until expiry, so one wait target
+never holds the whole deadline. A bridge initially owns only
 the reverse stream, taking the inbound connection after TLS framing succeeds and
 admission is rechecked. Each attempt has its own lease-bound TLS signing binding;
 application traffic is never replayed onto another replica.

@@ -52,6 +52,7 @@ var (
 
 const (
 	defaultClaimTimeout          = 10 * time.Second
+	replicaWaitSlice             = 250 * time.Millisecond
 	defaultClientHelloWait       = 2 * time.Second
 	defaultControlBodyLimit      = 4 << 20
 	reverseOfferAdmissionWorkers = 16
@@ -1109,7 +1110,6 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	if replica {
 		tried = make(map[string]bool)
 	}
-	waiting := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1117,18 +1117,22 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		if !time.Now().Before(deadline) {
 			return context.DeadlineExceeded
 		}
+		// waitUntil is zero while ready replicas are tried without waiting.
+		var waitUntil time.Time
 		if replica {
 			next := s.registry.selectReplica(key, tried, true)
 			if next == nil {
-				// No replica is ready: wait on one live replica under the same
-				// deadline, as an exclusive lease waits for its client to refill.
-				if waiting {
-					return errLeaseNotFound
-				}
+				// No untried replica is ready. Wait one slice on a live replica,
+				// then rescan all of them: a crashed client keeps its lease until
+				// expiry, so one wait target must not hold the whole deadline.
 				if next = s.registry.selectReplica(key, nil, false); next == nil {
 					return errLeaseNotFound
 				}
-				waiting = true
+				clear(tried)
+				waitUntil = time.Now().Add(replicaWaitSlice)
+				if waitUntil.After(deadline) {
+					waitUntil = deadline
+				}
 			}
 			record = next
 			tried[record.id] = true
@@ -1137,14 +1141,23 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		// Losing one candidate must leave it available to another replica.
 		bridge, err := s.registry.admitBridge(ctx, record, nil)
 		if err != nil {
-			if replica {
-				continue
+			if !replica {
+				return err
 			}
-			return err
+			// A failed wait still lasts its slice, so an unusable wait
+			// target cannot turn the rescan into a busy loop.
+			if !waitUntil.IsZero() && !utils.SleepOrDone(ctx, time.Until(waitUntil)) {
+				return ctx.Err()
+			}
+			continue
 		}
-		claimCtx, cancel := context.WithDeadline(bridge.ctx, deadline)
+		claimDeadline := deadline
+		if !waitUntil.IsZero() {
+			claimDeadline = waitUntil
+		}
+		claimCtx, cancel := context.WithDeadline(bridge.ctx, claimDeadline)
 		var session net.Conn
-		if replica && !waiting {
+		if replica && waitUntil.IsZero() {
 			session, err = record.reverse.TryAcquire(claimCtx)
 		} else {
 			session, err = record.reverse.Acquire(claimCtx)
@@ -1152,10 +1165,13 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		cancel()
 		if err != nil || session == nil {
 			record.releaseBridge(bridge)
-			if replica {
-				continue
+			if !replica {
+				return fmt.Errorf("acquire lease connection: %w", err)
 			}
-			return fmt.Errorf("acquire lease connection: %w", err)
+			if !waitUntil.IsZero() && !utils.SleepOrDone(ctx, time.Until(waitUntil)) {
+				return ctx.Err()
+			}
+			continue
 		}
 		binding := s.registry.bindings.Issue(record.id, helloSpan)
 		err = s.registry.activateBridge(record, bridge, session, nil)
