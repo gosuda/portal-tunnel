@@ -31,6 +31,36 @@ func TestRelayDashboardMode(t *testing.T) {
 	}
 }
 
+func TestDashboardDisconnectFollowsMembershipRatherThanReadiness(t *testing.T) {
+	for _, tunnelState := range []string{"running", "stopped", "retrying"} {
+		for _, relayState := range []sdk.RelayState{sdk.RelayReady, sdk.RelayConnecting, sdk.RelayFailed} {
+			t.Run(tunnelState+"/"+string(relayState), func(t *testing.T) {
+				theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+				model := newAgentDashboardModel("config.toml", "state", theme)
+				model.status = AgentStatusResponse{Tunnels: []AgentTunnelStatus{{
+					ID: "web", State: tunnelState,
+					Relays: []AgentRelayStatus{{RelayURL: "https://relay.example", State: relayState}},
+				}}}
+				_, command := model.disconnectSelectedRelay()
+				want := tunnelState == "running"
+				if (command != nil) != want {
+					t.Fatalf("disconnect action available=%v, want %v", command != nil, want)
+				}
+				view := model.renderRelaysSection(100, 10)
+				clickable := false
+				for _, region := range view.regions {
+					if region.action == agentDashboardActionDisconnectRelay {
+						clickable = true
+					}
+				}
+				if clickable != want {
+					t.Fatalf("disconnect button available=%v, want %v", clickable, want)
+				}
+			})
+		}
+	}
+}
+
 func TestRelayDashboardVersion(t *testing.T) {
 	if got := relayDashboardVersion(AgentRelayStatus{Version: " v2.4.1 "}); got != "v2.4.1" {
 		t.Fatalf("version = %q, want the trimmed version", got)
