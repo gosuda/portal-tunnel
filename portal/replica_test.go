@@ -91,11 +91,13 @@ func TestReplicaChurnPreservesSharedBandwidthCredit(t *testing.T) {
 		if wait := limiter.reserve(10, 100); wait != 100*time.Millisecond {
 			t.Fatalf("initial credit: %v", wait)
 		}
+		// A second of refill credit survives only if the limiter is kept.
+		<-time.After(time.Second)
 		_, second := registerHTTPReplica(t, registry, identity)
 		first.ExpiresAt = time.Now().Add(-time.Second)
 		registry.cleanupExpired(time.Now())
 		_, limiter = registry.bps.identityLimiter(key)
-		if wait := limiter.reserve(10, 100); wait != 200*time.Millisecond {
+		if wait := limiter.reserve(10, 100); wait != 0 {
 			t.Fatalf("replica churn reset shared credit: %v", wait)
 		}
 		if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: second.AccessToken}); err != nil {
