@@ -280,8 +280,9 @@ peer. Portal trusts the *first* entry, so a request carrying
 `X-Forwarded-For: 10.0.0.9` from the Internet arrives as `10.0.0.9, <real>` and
 is read as `10.0.0.9`. The client picks its own address: it escapes source rate
 limits, and with `TUNNEL_SOURCE_CIDRS` set it can register tunnels from outside
-the list. `$remote_addr` has already
-been restored from the PROXY header, so it is both correct and unspoofable.
+the list. Set `X-Real-IP` the same way, because Portal reads it when
+`X-Forwarded-For` is absent. `$remote_addr` has already been restored from the
+PROXY header, so it is both correct and unspoofable.
 
 Enable `TRUST_PROXY_HEADERS` and set `TRUSTED_PROXY_CIDRS` to **the proxy's own
 address as a `/32`** (`/128` for IPv6). An empty allowlist trusts no proxies,
