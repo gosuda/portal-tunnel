@@ -149,5 +149,5 @@ func (c Config) hasHTTP() bool {
 	if c.Replica || c.Serve != "" || c.Cache != nil {
 		return true
 	}
-	return len(c.HTTPRoutes) > 0 || !c.AuthConfig.IsZero() || len(c.StripRequestHeaders) > 0
+	return len(c.HTTPRoutes) > 0 || !c.IsZero() || len(c.StripRequestHeaders) > 0
 }
