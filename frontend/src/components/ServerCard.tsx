@@ -94,7 +94,8 @@ export function ServerCard({
     try {
       const currentVote = server.reputation?.viewer_vote;
       const nextVote: ReputationVoteAction = currentVote === targetVote ? "clear" : targetVote;
-      await onVote(server.id, nextVote);
+      const targetHost = server.id || server.reputation?.hostname || "";
+      await onVote(targetHost, nextVote);
     } catch (err) {
       console.error("Failed to vote from card", err);
     } finally {
@@ -241,9 +242,11 @@ export function ServerCard({
                 aria-pressed={server.reputation?.viewer_vote === "up"}
                 title={`Recommend: ${server.reputation?.up ?? 0}`}
                 className={clsx(
-                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors",
-                  onVote ? "cursor-pointer hover:bg-secondary hover:text-foreground" : "cursor-default",
-                  server.reputation?.viewer_vote === "up" && "bg-primary/15 text-primary font-semibold"
+                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
+                  onVote ? "cursor-pointer" : "cursor-default",
+                  server.reputation?.viewer_vote === "up"
+                    ? "bg-primary text-primary-foreground shadow-xs font-semibold hover:bg-primary/90"
+                    : "hover:bg-secondary hover:text-foreground"
                 )}
               >
                 <ThumbsUp className="size-3.5 shrink-0" />
@@ -260,9 +263,11 @@ export function ServerCard({
                 aria-pressed={server.reputation?.viewer_vote === "down"}
                 title={`Do not recommend: ${server.reputation?.down ?? 0}`}
                 className={clsx(
-                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors",
-                  onVote ? "cursor-pointer hover:bg-secondary hover:text-foreground" : "cursor-default",
-                  server.reputation?.viewer_vote === "down" && "bg-destructive/15 text-destructive font-semibold"
+                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
+                  onVote ? "cursor-pointer" : "cursor-default",
+                  server.reputation?.viewer_vote === "down"
+                    ? "bg-destructive text-destructive-foreground shadow-xs font-semibold hover:bg-destructive/90"
+                    : "hover:bg-secondary hover:text-foreground"
                 )}
               >
                 <ThumbsDown className="size-3.5 shrink-0" />
@@ -282,7 +287,7 @@ export function ServerCard({
                 }}
                 aria-label="Comments"
                 title={`Comments: ${server.reputation?.comments ?? 0}`}
-                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
               >
                 <MessageSquare className="size-3.5 shrink-0" />
                 <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
