@@ -212,7 +212,7 @@ describe("ServerCard comments interaction", () => {
   });
 
   it("toggles description disclosure via touch-accessible Info button without navigating", () => {
-    const { onOpenComments } = renderCardWithComments();
+    renderCardWithComments();
     const infoButton = screen.getByRole("button", { name: "Show description" });
     expect(infoButton.getAttribute("aria-expanded")).toBe("false");
 
