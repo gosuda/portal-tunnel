@@ -578,7 +578,7 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 		}
 		return challenge, registry.refuseChallengeOverBudget(leaseIdentity.ServiceKey(), challenge.ChallengeID, from)
 	}
-	register := func(name string, from netip.Addr, access types.LeaseAccess, revision uint64) (types.Identity, types.RegisterResponse) {
+	register := func(name string, from netip.Addr, access types.LeaseAccess, revision uint64) (types.Identity, *leaseRecord, types.RegisterResponse) {
 		t.Helper()
 		leaseIdentity := newTestLeaseIdentity(t, name)
 		registry.setIdentityAccess(leaseIdentity.ServiceKey(), access, revision)
@@ -602,10 +602,10 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(record.Close)
-		return leaseIdentity, registered
+		return leaseIdentity, record, registered
 	}
-	first, firstLease := register("first", source, types.LeasePending, 1)
-	second, _ := register("second", source, types.LeaseDenied, 2)
+	first, _, firstLease := register("first", source, types.LeasePending, 1)
+	second, secondRecord, _ := register("second", source, types.LeaseDenied, 2)
 	register("approved", source, types.LeaseRoutable, 3) // an approved lease neither counts nor waits
 
 	newcomer := newTestLeaseIdentity(t, "third")
@@ -627,7 +627,7 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: firstLease.AccessToken, TTL: 60}, other, nil); err != nil {
 		t.Fatal(err)
 	}
-	registry.Touch(second.ServiceKey(), second.id, other, time.Now())
+	registry.Touch(second.ServiceKey(), secondRecord.id, other, time.Now())
 	if _, err := ask(newcomer, source); !errors.Is(err, errUnapprovedLeaseLimit) {
 		t.Fatalf("a renew from elsewhere freed a slot: %v", err)
 	}

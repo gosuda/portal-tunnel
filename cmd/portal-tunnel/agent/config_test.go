@@ -141,6 +141,11 @@ id = "udp"
 target = "127.0.0.1:19132"
 udp = true
 udp_addr = "127.0.0.1:19133"
+
+[[tunnels]]
+id = "replica"
+target = "127.0.0.1:3004"
+replica = true
 `
 
 // Saving the config after any dashboard action rewrites the whole file, so
