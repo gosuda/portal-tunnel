@@ -67,7 +67,7 @@ func TestDatagramSessionReconnectPreservesLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	received, err := types.DecodeDatagram(data)
+	received, err := decodeDatagram(data)
 	if err != nil || received.FlowID != frame.FlowID || string(received.Payload) != string(frame.Payload) {
 		t.Fatalf("reconnected reply: %+v %v", received, err)
 	}

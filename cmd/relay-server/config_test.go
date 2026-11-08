@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/portal"
 )
 
 // writeEnvFile writes lines to a temporary env file and returns its path.
@@ -43,12 +43,12 @@ func resolveWithEnvFile(t *testing.T, path string) appConfig {
 
 func TestHTTPRedirectEnvironment(t *testing.T) {
 	cfg := resolveWithEnvFile(t, writeEnvFile(t,
-		types.HTTPRedirectEnabledEnv+"=true", "HTTP_REDIRECT_ADDR=127.0.0.1:18080", "HTTP_REDIRECT_HSTS=true"))
+		"HTTP_REDIRECT_ENABLED=true", "HTTP_REDIRECT_ADDR=127.0.0.1:18080", "HTTP_REDIRECT_HSTS=true"))
 	if !cfg.Relay.HTTPRedirect.Enabled || cfg.Relay.HTTPRedirect.Addr != "127.0.0.1:18080" || !cfg.Relay.HTTPRedirect.HSTS {
 		t.Fatalf("redirect environment not resolved: %+v", cfg)
 	}
 	cfg = resolveWithEnvFile(t, writeEnvFile(t))
-	if cfg.Relay.HTTPRedirect.Enabled || cfg.Relay.HTTPRedirect.HSTS || cfg.Relay.HTTPRedirect.Addr != types.DefaultHTTPRedirectAddr {
+	if cfg.Relay.HTTPRedirect.Enabled || cfg.Relay.HTTPRedirect.HSTS || cfg.Relay.HTTPRedirect.Addr != portal.DefaultHTTPRedirectAddr {
 		t.Fatalf("unexpected redirect defaults: %+v", cfg)
 	}
 }

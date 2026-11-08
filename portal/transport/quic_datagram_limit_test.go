@@ -27,11 +27,11 @@ func TestDatagramSessionMaximumPayloadAndFlowID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	received, err := types.DecodeDatagram(wire)
+	received, err := decodeDatagram(wire)
 	if err != nil || received.FlowID != frame.FlowID || !bytes.Equal(received.Payload, payload) {
 		t.Fatalf("maximum payload round trip: %+v, %v", received, err)
 	}
-	if err := client.SendDatagram(types.EncodeDatagram(frame.FlowID, payload)); err != nil {
+	if err := client.SendDatagram(encodeDatagram(frame.FlowID, payload)); err != nil {
 		t.Fatal(err)
 	}
 	received, err = session.Accept(ctx.Done())

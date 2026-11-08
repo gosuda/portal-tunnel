@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -16,6 +17,8 @@ var (
 	errQUICBackhaulConnectionIsRequired = errors.New("quic backhaul connection is required")
 	errQUICDatagramSupportRequired      = errors.New("QUIC DATAGRAM support required")
 	errUDPPayloadExceedsLimit           = errors.New("UDP payload exceeds limit")
+	errDatagramTooSmall                 = errors.New("datagram too small to decode")
+	errDatagramFlowIDOverflow           = errors.New("datagram flow ID overflows uint32")
 )
 
 var errNoConnection = errors.New("no quic backhaul connection registered")
@@ -114,7 +117,7 @@ func (s *DatagramSession) Send(flowID uint32, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return conn.SendDatagram(types.EncodeDatagram(flowID, payload))
+	return conn.SendDatagram(encodeDatagram(flowID, payload))
 }
 
 // SendFrame rejects replies belonging to a previous lease, including frames
@@ -132,7 +135,7 @@ func (s *DatagramSession) SendFrame(frame types.DatagramFrame) error {
 	}
 	// SendDatagram may block under backpressure. Keep the connection selected
 	// with the lease check, but let Clear/Close close it to interrupt the send.
-	return conn.SendDatagram(types.EncodeDatagram(frame.FlowID, frame.Payload))
+	return conn.SendDatagram(encodeDatagram(frame.FlowID, frame.Payload))
 }
 
 func (s *DatagramSession) datagramConnectionLocked(payload []byte) (*quic.Conn, error) {
@@ -211,7 +214,7 @@ func (s *DatagramSession) receiveLoop(conn *quic.Conn, leaseDone <-chan struct{}
 			return
 		}
 
-		frame, err := types.DecodeDatagram(data)
+		frame, err := decodeDatagram(data)
 		if err != nil {
 			continue
 		}
@@ -237,4 +240,29 @@ func (s *DatagramSession) receiveLoop(conn *quic.Conn, leaseDone <-chan struct{}
 			return
 		}
 	}
+}
+
+// encodeDatagram serialises a flow-framed datagram for transmission.
+func encodeDatagram(flowID uint32, payload []byte) []byte {
+	var buf [binary.MaxVarintLen32]byte
+	n := binary.PutUvarint(buf[:], uint64(flowID))
+	out := make([]byte, n+len(payload))
+	copy(out, buf[:n])
+	copy(out[n:], payload)
+	return out
+}
+
+// decodeDatagram deserialises a flow-framed datagram.
+func decodeDatagram(data []byte) (types.DatagramFrame, error) {
+	flowID, n := binary.Uvarint(data)
+	if n <= 0 {
+		return types.DatagramFrame{}, errDatagramTooSmall
+	}
+	if flowID > uint64(^uint32(0)) {
+		return types.DatagramFrame{}, errDatagramFlowIDOverflow
+	}
+	return types.DatagramFrame{
+		FlowID:  uint32(flowID),
+		Payload: data[n:],
+	}, nil
 }

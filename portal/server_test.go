@@ -150,7 +150,7 @@ func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
 func TestHTTPRedirectTargetValidation(t *testing.T) {
 	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:0", "https://relay.example:65536", "https://relay.example:bad", "https://relay.example:", "https:///missing-host", "https://./"} {
 		t.Run(target, func(t *testing.T) {
-			if _, err := NormalizeHTTPRedirectConfig(types.HTTPRedirectConfig{Enabled: true}, target); err == nil {
+			if _, err := NormalizeHTTPRedirectConfig(HTTPRedirectConfig{Enabled: true}, target); err == nil {
 				t.Fatal("NormalizeHTTPRedirectConfig() error = nil, want invalid redirect target rejection")
 			}
 		})
@@ -163,14 +163,14 @@ func TestHTTPRedirectTargetValidation(t *testing.T) {
 			scheme = "hTtPs"
 		}
 		t.Run(scheme, func(t *testing.T) {
-			cfg, err := NormalizeHTTPRedirectConfig(types.HTTPRedirectConfig{
+			cfg, err := NormalizeHTTPRedirectConfig(HTTPRedirectConfig{
 				Enabled: true,
 				HSTS:    hsts,
 			}, scheme+"://localhost:4017/base/?configured=discarded#fragment")
 			if err != nil {
 				t.Fatalf("NormalizeHTTPRedirectConfig() error = %v, want %q scheme accepted", err, scheme)
 			}
-			if !cfg.Enabled || cfg.Addr != types.DefaultHTTPRedirectAddr || cfg.HSTS != hsts {
+			if !cfg.Enabled || cfg.Addr != DefaultHTTPRedirectAddr || cfg.HSTS != hsts {
 				t.Fatalf("NormalizeHTTPRedirectConfig() cfg = %+v, want enabled config with default redirect address and hsts=%v", cfg, hsts)
 			}
 		})
@@ -419,7 +419,7 @@ func TestRelayHTTPRedirectListener(t *testing.T) {
 				PortalURL:     "https://localhost:4017/base/?configured=discarded#fragment",
 				StateDir:      t.TempDir(),
 				SNIListenAddr: sniAddr,
-				HTTPRedirect:  types.HTTPRedirectConfig{Enabled: true, Addr: redirectAddr, HSTS: hsts},
+				HTTPRedirect:  HTTPRedirectConfig{Enabled: true, Addr: redirectAddr, HSTS: hsts},
 			})
 			if err != nil {
 				t.Fatalf("create portal server: %v", err)
