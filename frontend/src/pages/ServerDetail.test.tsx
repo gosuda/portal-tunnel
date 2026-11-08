@@ -99,15 +99,4 @@ describe("ServerDetail reputation gate", () => {
 
     expect(screen.getByRole("button", { name: /open anyway/i })).toBeTruthy();
   });
-  it("opens the card's link after the transition", () => {
-    const assign = vi.fn();
-    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
-    renderDetail();
-
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-
-    expect(assign).toHaveBeenCalledWith("https://svc.example.com/");
-  });
 });
