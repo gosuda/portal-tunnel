@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -256,22 +255,5 @@ func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
 	}
 	if exposure.metadata.Description != "" || exposure.metadata.Tags[0] != "updated" || ln.metadataSnapshot().Tags[0] != "updated" {
 		t.Fatal("rejected metadata update changed exposure or listener metadata")
-	}
-}
-
-func TestExposureStartedAt(t *testing.T) {
-	t.Parallel()
-
-	explicitTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	var opts options
-	opt := WithStartedAt(explicitTime)
-	opt(&opts)
-	if !opts.StartedAt.Equal(explicitTime) {
-		t.Fatalf("WithStartedAt() = %v, want %v", opts.StartedAt, explicitTime)
-	}
-
-	exposure := &Exposure{startedAt: explicitTime}
-	if !exposure.StartedAt().Equal(explicitTime) {
-		t.Fatalf("exposure.StartedAt() = %v, want %v", exposure.StartedAt(), explicitTime)
 	}
 }

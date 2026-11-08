@@ -208,12 +208,6 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		cancel()
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
-	startedAt := cfg.StartedAt
-	if startedAt.IsZero() {
-		startedAt = time.Now().UTC()
-	} else {
-		startedAt = startedAt.UTC()
-	}
 	l := &listener{
 		cancel:        cancel,
 		doneCh:        listenerCtx.Done(),
@@ -226,7 +220,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
-		startedAt:     startedAt,
+		startedAt:     cfg.StartedAt,
 	}
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)

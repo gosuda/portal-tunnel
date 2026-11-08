@@ -39,6 +39,7 @@ const (
 	defaultRegisterChallengeOutstanding      = 256
 	defaultPortReservationGrace              = 5 * time.Minute
 	defaultIdleKeepalive                     = 15 * time.Second
+	maxClaimedStartedAge                     = 7 * 24 * time.Hour
 	defaultReadyQueueLimit                   = 8
 	defaultLeaseBridgeLimit                  = 128
 )
@@ -471,12 +472,12 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
+	// started_at is client-reported; bound it so it cannot claim unlimited uptime.
 	firstSeenAt := issuedAt
-	if !req.StartedAt.IsZero() {
-		if req.StartedAt.After(issuedAt) {
-			firstSeenAt = issuedAt
-		} else {
-			firstSeenAt = req.StartedAt.UTC()
+	if !req.StartedAt.IsZero() && req.StartedAt.Before(issuedAt) {
+		firstSeenAt = req.StartedAt.UTC()
+		if floor := issuedAt.Add(-maxClaimedStartedAge); firstSeenAt.Before(floor) {
+			firstSeenAt = floor
 		}
 	}
 

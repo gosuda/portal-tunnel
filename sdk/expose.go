@@ -176,7 +176,6 @@ type options struct {
 	BanMITM    bool
 	Overlay    bool
 	Metadata   types.LeaseMetadata
-	StartedAt  time.Time
 
 	discoveryEnabled bool
 	maxActiveRelays  int
@@ -217,12 +216,6 @@ func WithOverlay() Option {
 // WithMetadata sets the initial lease metadata.
 func WithMetadata(metadata types.LeaseMetadata) Option {
 	return func(opts *options) { opts.Metadata = metadata.Copy() }
-}
-
-// WithStartedAt sets the original startup time of this exposure.
-// When zero, Expose defaults to the time Expose was called.
-func WithStartedAt(startedAt time.Time) Option {
-	return func(opts *options) { opts.StartedAt = startedAt }
 }
 
 // WithDiscovery enables discovery-driven relay membership. When enabled,
@@ -326,18 +319,11 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		return nil, errPortalSDKLeastOneInitialRelay
 	}
 
-	startedAt := cfg.StartedAt
-	if startedAt.IsZero() {
-		startedAt = time.Now().UTC()
-	} else {
-		startedAt = startedAt.UTC()
-	}
-
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
 		cancel:         cancel,
 		done:           exposureCtx.Done(),
-		startedAt:      startedAt,
+		startedAt:      time.Now().UTC(),
 		identity:       identity,
 		options:        cfg,
 		metadata:       cfg.Metadata.Copy(),
@@ -549,14 +535,6 @@ func (e *Exposure) closed() bool {
 	default:
 		return false
 	}
-}
-
-// StartedAt reports the time when this exposure was started.
-func (e *Exposure) StartedAt() time.Time {
-	if e == nil {
-		return time.Time{}
-	}
-	return e.startedAt
 }
 
 func (e *Exposure) Addr() net.Addr {

@@ -1493,4 +1493,18 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 	if record4.FirstSeenAt.Before(beforeReg) || record4.FirstSeenAt.After(afterReg) {
 		t.Fatalf("FirstSeenAt for future StartedAt was %v, want clamped between %v and %v", record4.FirstSeenAt, beforeReg, afterReg)
 	}
+
+	// 5. StartedAt older than maxClaimedStartedAge is bounded, so a client cannot claim unlimited uptime
+	oldID := newTestLeaseIdentity(t, "ancient-started")
+	record5, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:  oldID,
+		StartedAt: time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC),
+	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() ancient error = %v", err)
+	}
+	floor := time.Now().UTC().Add(-maxClaimedStartedAge - time.Minute)
+	if record5.FirstSeenAt.Before(floor) {
+		t.Fatalf("FirstSeenAt for ancient StartedAt = %v, want no earlier than %v", record5.FirstSeenAt, floor)
+	}
 }
