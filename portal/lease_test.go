@@ -1465,17 +1465,43 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 		t.Fatalf("FirstSeenAt after reconnect without started_at = %v, want %v", record2.FirstSeenAt, clientStartedAt)
 	}
 
-	// 3. Re-registration with a newer StartedAt (e.g. process restart) updates FirstSeenAt
-	newStartedAt := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
-	record3, _, err := registry.Register(types.RegisterChallengeRequest{
-		Identity:  id,
-		StartedAt: newStartedAt,
+	// 3. A live replacement keeps relay-observed continuity past the 7-day
+	// claim bound, whether or not the client sends started_at.
+	observedAt := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
+	registry.mu.Lock()
+	record2.FirstSeenAt = observedAt
+	registry.mu.Unlock()
+	for _, startedAt := range []time.Time{{}, clientStartedAt, time.Now().UTC().Add(-2 * time.Minute)} {
+		record3, _, err := registry.Register(types.RegisterChallengeRequest{
+			Identity:  id,
+			StartedAt: startedAt,
+		}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatalf("Register() live replacement error = %v", err)
+		}
+		if !record3.FirstSeenAt.Equal(observedAt) {
+			t.Fatalf("FirstSeenAt after live replacement with started_at %v = %v, want %v", startedAt, record3.FirstSeenAt, observedAt)
+		}
+	}
+
+	// An expired record still in the registry is not live continuity, so a
+	// client without started_at starts over at registration time.
+	registry.mu.Lock()
+	for _, existing := range registry.records {
+		if existing != nil && existing.ServiceKey() == id.ServiceKey() {
+			existing.ExpiresAt = time.Now().Add(-time.Second)
+		}
+	}
+	registry.mu.Unlock()
+	beforeExpired := time.Now().UTC().Truncate(time.Second)
+	expiredRecord, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: id,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
-		t.Fatalf("Register() restart error = %v", err)
+		t.Fatalf("Register() after expiry error = %v", err)
 	}
-	if !record3.FirstSeenAt.Equal(newStartedAt) {
-		t.Fatalf("FirstSeenAt after restart with new started_at = %v, want %v", record3.FirstSeenAt, newStartedAt)
+	if expiredRecord.FirstSeenAt.Before(beforeExpired) {
+		t.Fatalf("FirstSeenAt after expired replacement = %v, want no earlier than %v", expiredRecord.FirstSeenAt, beforeExpired)
 	}
 
 	// 4. StartedAt in the future is clamped to token issuance time

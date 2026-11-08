@@ -472,7 +472,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
-	// started_at is client-reported; bound it so it cannot claim unlimited uptime.
+	// first_seen_at is relay-observed lease continuity. The client-reported
+	// started_at is only a bounded hint for a lease the relay has not seen yet;
+	// a live replacement below keeps the earlier observed value.
 	firstSeenAt := issuedAt
 	if !req.StartedAt.IsZero() && req.StartedAt.Before(issuedAt) {
 		firstSeenAt = req.StartedAt.UTC()
@@ -594,7 +596,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	r.cache.Register(record.cacheLease(), req)
 	if replacedIndex >= 0 {
-		if req.StartedAt.IsZero() && !replaced.FirstSeenAt.IsZero() {
+		if !replaced.isExpired(now) && !replaced.FirstSeenAt.IsZero() && replaced.FirstSeenAt.Before(record.FirstSeenAt) {
 			record.FirstSeenAt = replaced.FirstSeenAt
 		}
 		r.bps.ResetIdentityLimiter(identityKey)

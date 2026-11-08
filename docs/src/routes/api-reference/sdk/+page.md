@@ -79,7 +79,7 @@ which are configured locally by the tunnel process.
 | `ttl` | `number` | no | Requested seconds; non-positive values use 120, maximum 600. Larger values return HTTP 400. |
 | `udp_enabled` | `boolean` | no | request UDP transport |
 | `tcp_enabled` | `boolean` | no | request dedicated TCP port |
-| `started_at` | `string` | no | Client-reported tunnel start time (RFC 3339). The relay uses it as `first_seen_at`, clamped to no later than registration and no earlier than 7 days before it. When omitted, a live replaced lease keeps its `first_seen_at`. |
+| `started_at` | `string` | no | Client-reported tunnel start time (RFC 3339). `first_seen_at` is relay-observed lease continuity: for a lease the relay has not seen, it uses `started_at`, clamped to no later than registration and no earlier than 7 days before it. A registration that replaces a live lease keeps the earlier `first_seen_at`. |
 | `cache` | `boolean` | no | Explicitly permit static storage and relay TLS termination; default `false` |
 | `cache_ttl` | `number` | no | Requested offline seconds; `0` uses relay policy, positive values are clamped |
 
