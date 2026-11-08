@@ -130,7 +130,7 @@ func (c Config) Spec() (Spec, error) {
 		spec.Transport.UDP = &UDPConfig{Target: c.UDPAddr}
 	}
 	auth := c.AuthConfig
-	if c.Replica || c.Serve != "" || len(c.HTTPRoutes) > 0 || !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) > 0 {
+	if c.hasHTTP() {
 		spec.HTTP = &HTTPConfig{
 			Serve:               c.Serve,
 			Routes:              c.HTTPRoutes,
@@ -143,4 +143,11 @@ func (c Config) Spec() (Spec, error) {
 		}
 	}
 	return spec, spec.Validate()
+}
+
+func (c Config) hasHTTP() bool {
+	if c.Replica || c.Serve != "" || c.Cache != nil {
+		return true
+	}
+	return len(c.HTTPRoutes) > 0 || !c.AuthConfig.IsZero() || len(c.StripRequestHeaders) > 0
 }
