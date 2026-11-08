@@ -52,6 +52,18 @@ describe("filter reset", () => {
   });
 });
 
+describe("default order", () => {
+  it("opens in the order resetFilters returns to", () => {
+    const { result } = renderHook(() => useList({ servers: [server("a")] }));
+    const initial = result.current.sortBy;
+    act(() => {
+      result.current.handleSortByChange("name-desc");
+      result.current.resetFilters();
+    });
+    expect(result.current.sortBy).toBe(initial);
+  });
+});
+
 describe("recommendation sorting", () => {
   it("orders by recommendation count, then name and hostname, treating missing votes as zero", () => {
     const servers = [

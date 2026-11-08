@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_SORT } from "@/types/filters";
 import { SidebarNav, type SidebarNavProps, type SidebarVariant } from "./SidebarNav";
 
 vi.mock("@/components/TunnelCommandModal", () => ({
@@ -11,7 +12,7 @@ function renderNav(variant: SidebarVariant, overrides: Partial<SidebarNavProps> 
     variant,
     browseView: "home",
     status: "all",
-    sortBy: "default",
+    sortBy: DEFAULT_SORT,
     favorites: 3,
     onBrowseViewChange: vi.fn(),
     onSortByChange: vi.fn(),
@@ -40,5 +41,9 @@ describe("SidebarNav", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Most recommended/ }));
     expect(props.onBrowseViewChange).toHaveBeenCalledWith("home");
     expect(props.onSortByChange).toHaveBeenCalledWith("recommended");
+  });
+  it("marks Home current on the first load", () => {
+    renderNav("full");
+    expect(screen.getByRole("button", { name: /^Home/ }).getAttribute("aria-current")).toBe("page");
   });
 });

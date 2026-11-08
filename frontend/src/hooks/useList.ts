@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { SortOption, StatusFilter } from "@/types/filters";
+import { DEFAULT_SORT, type SortOption, type StatusFilter } from "@/types/filters";
 import type { BaseServer } from "@/lib/server";
 
 export interface UseListOptions<T extends BaseServer> {
@@ -49,7 +49,7 @@ export function useList<T extends BaseServer>({
 }: UseListOptions<T>): UseListReturn<T> {
   const [searchQuery, setSearchQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
-  const [sortBy, setSortBy] = useState<SortOption>("default");
+  const [sortBy, setSortBy] = useState<SortOption>(DEFAULT_SORT);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const availableTags = useMemo(() => {
     const counts = new Map<string, number>();
@@ -168,7 +168,7 @@ export function useList<T extends BaseServer>({
 
   const clearTags = () => setSelectedTags([]);
 
-  const resetFilters = (nextSortBy: SortOption = "default") => {
+  const resetFilters = (nextSortBy: SortOption = DEFAULT_SORT) => {
     setSearchQuery("");
     setStatus("all");
     setSortBy(nextSortBy);
