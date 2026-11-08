@@ -148,9 +148,12 @@ registration is needed.
 | `is_approved` | `boolean` | approve or revoke explicit approval |
 | `is_denied` | `boolean` | deny or remove denial; `true` also revokes approval |
 | `bps` | `number` | set an individual stream bytes-per-second override; `0` explicitly permits unlimited traffic; omitting the field leaves its setting unchanged |
+| `reset_bps` | `boolean` | `true` deletes the individual override and restores the relay default; cannot be combined with `bps` |
 
 Lease policy updates persist to `policy.json` and return `{}` on success.
 Identities without an individual override inherit `DEFAULT_IDENTITY_BPS`
 (default `1048576`). Saved positive limits and explicit zero overrides take
 precedence when the relay restarts with a different default. The budget is
 shared across the identity's stream connections and both directions.
+Use **Use relay default** in the dashboard's BPS settings to remove an override.
+The reset persists, so subsequent relay defaults apply after restart too.

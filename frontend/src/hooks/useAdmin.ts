@@ -256,9 +256,14 @@ export function useAdmin(enabled = true) {
   const handleBanStatus = (identityKey: string, isBan: boolean) =>
     runAdminAction(() => updateLeasePolicy(identityKey, { is_banned: isBan }));
 
-  const handleBPSChange = async (identityKey: string, bps: number) => {
+  const handleBPSChange = async (identityKey: string, bps: number | null) => {
     if (!identityKey) {
       throw new Error("Missing lease identity");
+    }
+
+    if (bps === null) {
+      await runAdminAction(() => updateLeasePolicy(identityKey, { reset_bps: true }));
+      return;
     }
 
     const normalizedBPS = Math.max(0, Math.trunc(bps));

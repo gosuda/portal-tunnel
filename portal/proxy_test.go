@@ -35,6 +35,47 @@ func TestIdentityBPSDefaultAndOverrides(t *testing.T) {
 	}
 }
 
+// Concurrent stream consumers share one identity budget, while another
+// identity retains its own budget. The clock advances without wall-time waits.
+func TestConcurrentStreamsShareDefaultIdentityBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewBPSManager(100)
+		shared := types.NewServiceIdentityKey("shared", "address")
+		other := types.NewServiceIdentityKey("other", "address")
+		type completion struct {
+			key     types.ServiceIdentityKey
+			elapsed time.Duration
+		}
+		done := make(chan completion, 3)
+		start := time.Now()
+		for _, key := range []types.ServiceIdentityKey{shared, shared, other} {
+			go func() {
+				for remaining := 50; remaining > 0; {
+					n, err := manager.ThrottleIdentityBPS(t.Context(), key, remaining)
+					if err != nil || n <= 0 || n > remaining {
+						t.Errorf("stream throttle returned %d bytes: %v", n, err)
+						break
+					}
+					remaining -= n
+				}
+				done <- completion{key: key, elapsed: time.Since(start)}
+			}()
+		}
+		var sharedElapsed time.Duration
+		for range 3 {
+			finished := <-done
+			if finished.key == shared {
+				sharedElapsed = max(sharedElapsed, finished.elapsed)
+			} else if finished.elapsed != 500*time.Millisecond {
+				t.Errorf("independent identity's 50 bytes took %v, want 500ms", finished.elapsed)
+			}
+		}
+		if sharedElapsed != time.Second {
+			t.Fatalf("two streams' combined 100 bytes took %v, want 1s", sharedElapsed)
+		}
+	})
+}
+
 // Reapplying unrelated policy must not discard a default-limited identity's
 // accrued credit; the identity has no entry in the override map.
 func TestDefaultBPSRetainsCreditAcrossPolicyUpdates(t *testing.T) {

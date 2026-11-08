@@ -160,7 +160,8 @@ func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Co
 }
 
 // Defaults apply without per-identity setup. Saved rate increases and explicit
-// unlimited overrides survive restart with a different default.
+// unlimited overrides survive restart with a different default. Resetting either
+// override restores inheritance, including after another restart.
 func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
 	stateDir := t.TempDir()
 	identities := make([]types.Identity, 3)
@@ -171,7 +172,7 @@ func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for phase, defaultBPS := range []int{types.DefaultIdentityBPS, 2 * types.DefaultIdentityBPS} {
+	for phase, defaultBPS := range []int{types.DefaultIdentityBPS, 2 * types.DefaultIdentityBPS, 3 * types.DefaultIdentityBPS} {
 		t.Run(fmt.Sprintf("start-%d", phase), func(t *testing.T) {
 			ctx, base, client := startPolicyRelay(t, stateDir, "--default-identity-bps", strconv.Itoa(defaultBPS))
 			for _, tenant := range identities {
@@ -213,7 +214,28 @@ func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
 					}
 				}
 			}
-			checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
+			if phase < 2 {
+				checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
+			}
+			if phase == 1 {
+				// Conflicting operations must preserve both saved and live policy.
+				zero := int64(0)
+				conflict := types.LeasePolicyUpdate{IdentityKey: identities[0].Key(), BPS: &zero, ResetBPS: true}
+				err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, conflict, headers, nil)
+				if apiErr, ok := errors.AsType[*types.APIRequestError](err); !ok || apiErr.StatusCode != http.StatusBadRequest {
+					t.Fatalf("conflicting bandwidth update: %v", err)
+				}
+				checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
+				for _, tenant := range identities[:2] {
+					update := types.LeasePolicyUpdate{IdentityKey: tenant.Key(), ResetBPS: true}
+					if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, update, headers, nil); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if phase > 0 {
+				checkLimits([]int64{int64(defaultBPS), int64(defaultBPS), int64(defaultBPS)})
+			}
 		})
 	}
 }

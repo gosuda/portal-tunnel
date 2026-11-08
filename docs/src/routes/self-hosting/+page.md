@@ -204,6 +204,9 @@ Individual settings persist in `policy.json` and override the relay default
 after reconnects and restarts. Setting an identity to `0` explicitly permits
 unlimited traffic; identities without a saved override inherit the current
 startup default. Setting `DEFAULT_IDENTITY_BPS=0` makes that default unlimited.
+Choose **Use relay default** in BPS settings to remove an individual override
+and resume inheritance. The admin API exposes the same operation with
+`{"identity_key":"name:address","reset_bps":true}` at `/api/policy/leases`.
 
 This limits forwarded streams, not UDP datagrams, cache responses, total relay
 bandwidth, or cumulative traffic volume. Programs embedding `portal.Server`

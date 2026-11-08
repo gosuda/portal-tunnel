@@ -155,6 +155,7 @@ export type ReputationVoteResponse = ReputationSummary;
 export interface LeasePolicyUpdate {
   identity_key: string;
   bps?: number;
+  reset_bps?: boolean;
   is_approved?: boolean;
   is_banned?: boolean;
   is_denied?: boolean;

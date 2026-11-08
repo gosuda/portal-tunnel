@@ -331,13 +331,20 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
 			return
 		}
-		if update.IsBanned == nil && update.IsApproved == nil && update.IsDenied == nil && update.BPS == nil {
+		if update.IsBanned == nil && update.IsApproved == nil && update.IsDenied == nil && update.BPS == nil && !update.ResetBPS {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease policy update is empty")
+			return
+		}
+		if update.ResetBPS && update.BPS != nil {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps and reset_bps are mutually exclusive")
 			return
 		}
 		if update.IsApproved != nil && update.IsDenied != nil && *update.IsApproved && *update.IsDenied {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease cannot be approved and denied")
 			return
+		}
+		if update.ResetBPS {
+			delete(next.IdentityBPS, key)
 		}
 		if update.BPS != nil {
 			if *update.BPS < 0 {
