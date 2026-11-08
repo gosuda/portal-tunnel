@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -168,7 +169,7 @@ func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTP
 			return HTTPRedirectConfig{}, errHTTPRedirectPortalURLPortMust
 		}
 	}
-	cfg.Addr = utils.StringOrDefault(strings.TrimSpace(cfg.Addr), DefaultHTTPRedirectAddr)
+	cfg.Addr = cmp.Or(strings.TrimSpace(cfg.Addr), DefaultHTTPRedirectAddr)
 	host, port, err := net.SplitHostPort(cfg.Addr)
 	if err != nil {
 		return HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR must be a host:port address: %w", err)
@@ -245,7 +246,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
 	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
-	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
+	cfg.SNIListenAddr = cmp.Or(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
 	return cfg, nil
 }
 

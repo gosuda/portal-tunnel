@@ -17,9 +17,9 @@ func TestNewHTTPClientOwnsItsMutableState(t *testing.T) {
 	a := NewHTTPClient(WithHTTPTLSConfig(original))
 	b := NewHTTPClient()
 
-	ta := mustTransportOf(a)
-	tb := mustTransportOf(b)
-	if ta == tb || ta == baseTransport || ta == mustTransportOf(DefaultHTTPClient) {
+	ta := a.Transport.(*http.Transport)
+	tb := b.Transport.(*http.Transport)
+	if ta == tb || ta == baseTransport || ta == DefaultHTTPClient.Transport.(*http.Transport) {
 		t.Fatal("NewHTTPClient() returned a client sharing a *http.Transport")
 	}
 

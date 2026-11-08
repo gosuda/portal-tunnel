@@ -549,10 +549,3 @@ func IntOrDefault(v, fallback int) int {
 	}
 	return fallback
 }
-
-func StringOrDefault(v, fallback string) string {
-	if v != "" {
-		return v
-	}
-	return fallback
-}

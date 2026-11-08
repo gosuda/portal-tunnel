@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -244,7 +245,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	}
 	runtime := &Runtime{Identity: listenerIdentity, Exposure: exposure, target: spec.Transport.Target}
 	if spec.Transport.UDP != nil {
-		runtime.udpTarget = utils.StringOrDefault(spec.Transport.UDP.Target, spec.Transport.Target)
+		runtime.udpTarget = cmp.Or(spec.Transport.UDP.Target, spec.Transport.Target)
 	}
 	if spec.HTTP == nil {
 		return runtime, nil

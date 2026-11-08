@@ -43,13 +43,6 @@ func NewHTTPClient(options ...HTTPClientOption) *http.Client {
 	return client
 }
 
-// mustTransportOf returns c.Transport as *http.Transport.
-// Panics if c.Transport is nil or not *http.Transport — only safe for clients
-// created by NewHTTPClient, whose Transport is always a fresh *http.Transport.
-func mustTransportOf(c *http.Client) *http.Transport {
-	return c.Transport.(*http.Transport)
-}
-
 func WithHTTPTimeout(timeout time.Duration) HTTPClientOption {
 	return func(c *http.Client) {
 		c.Timeout = timeout
@@ -59,16 +52,16 @@ func WithHTTPTimeout(timeout time.Duration) HTTPClientOption {
 func WithHTTPTLSConfig(tlsConfig *tls.Config) HTTPClientOption {
 	return func(c *http.Client) {
 		if tlsConfig == nil {
-			mustTransportOf(c).TLSClientConfig = nil
+			c.Transport.(*http.Transport).TLSClientConfig = nil
 			return
 		}
-		mustTransportOf(c).TLSClientConfig = tlsConfig.Clone()
+		c.Transport.(*http.Transport).TLSClientConfig = tlsConfig.Clone()
 	}
 }
 
 func WithoutHTTP2() HTTPClientOption {
 	return func(c *http.Client) {
-		mustTransportOf(c).ForceAttemptHTTP2 = false
+		c.Transport.(*http.Transport).ForceAttemptHTTP2 = false
 	}
 }
 

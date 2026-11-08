@@ -63,7 +63,7 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 		WithoutHTTP2(),
 		WithHTTPTimeout(timeout),
 	)
-	return rawTLSConfig, httpClient, mustTransportOf(httpClient), nil
+	return rawTLSConfig, httpClient, httpClient.Transport.(*http.Transport), nil
 }
 
 // FetchEndpointCertificateChain returns the certificate chain presented by endpoint.

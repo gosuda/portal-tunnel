@@ -313,7 +313,7 @@ func (m agentDashboardModel) settingsChanged(tunnel AgentTunnelStatus) bool {
 	if err != nil {
 		return true
 	}
-	hide, err := strconv.ParseBool(utils.StringOrDefault(strings.TrimSpace(m.metadataHide.Value()), "false"))
+	hide, err := strconv.ParseBool(cmp.Or(strings.TrimSpace(m.metadataHide.Value()), "false"))
 	if err != nil {
 		return true
 	}
