@@ -12,11 +12,21 @@ import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes, isReputationWarning } from "@/utils/reputation";
 
+export interface ConstellationData {
+  nebulaHue: number;
+  nebulaCx: number;
+  nebulaCy: number;
+  bgStars: { cx: number; cy: number; r: number; opacity: number }[];
+  stars: { x: number; y: number; r: number; opacity: number; isPrimary: boolean }[];
+  lines: { x1: number; y1: number; x2: number; y2: number; opacity: number }[];
+}
+
 /**
- * Canonical Ethereum Blockies generator (https://github.com/ethereum/blockies).
- * Creates an 8x8 symmetric matrix of HSL color values seeded from the input string.
+ * Deterministic Night Sky Constellation Generator.
+ * Transforms an identity address or name into a celestial constellation map
+ * across a deep midnight sky with connected starlight paths.
  */
-export function createBlockiesData(seed: string): string[][] {
+export function createConstellationData(seed: string): ConstellationData {
   const normalizedSeed = seed.toLowerCase().trim();
   const randseed = new Int32Array(4);
   for (let i = 0; i < normalizedSeed.length; i += 1) {
@@ -32,85 +42,276 @@ export function createBlockiesData(seed: string): string[][] {
     return (randseed[3] >>> 0) / ((1 << 31) >>> 0);
   }
 
-  function createColor(): string {
-    const h = Math.floor(rand() * 360);
-    const s = Math.floor(rand() * 60 + 40);
-    const l = Math.floor((rand() + rand() + rand() + rand()) * 25);
-    return `hsl(${h}, ${s}%, ${l}%)`;
+  // 1. Faint cosmic nebula cloud in deep space (subtle deep sapphire to slate indigo, hue 205-240)
+  const nebulaHue = Math.floor(205 + rand() * 35);
+  const nebulaCx = Math.floor(90 + rand() * 140);
+  const nebulaCy = Math.floor(45 + rand() * 90);
+
+  // 2. Faint background starfield (20 to 28 tiny background pinpricks)
+  const bgCount = 20 + Math.floor(rand() * 9);
+  const bgStars: { cx: number; cy: number; r: number; opacity: number }[] = [];
+  for (let i = 0; i < bgCount; i += 1) {
+    bgStars.push({
+      cx: Math.round(rand() * 320 * 10) / 10,
+      cy: Math.round(rand() * 180 * 10) / 10,
+      r: Math.round((0.5 + rand() * 0.7) * 10) / 10,
+      opacity: Math.round((0.15 + rand() * 0.35) * 100) / 100,
+    });
   }
 
-  // Canonical ethereum/blockies order: color (primary) -> bgcolor -> spotcolor
-  const color = createColor();
-  const bgcolor = createColor();
-  const spotcolor = createColor();
+  // 3. Main constellation star nodes (6 to 8 stars)
+  const starCount = 6 + Math.floor(rand() * 3);
+  const candidateStars: { x: number; y: number; r: number; opacity: number }[] = [];
 
-  const size = 8;
-  const dataWidth = Math.ceil(size / 2);
-  const mirrorWidth = size - dataWidth;
+  const minDistance = 42;
+  const minDistanceSq = minDistance * minDistance;
 
-  const grid: string[][] = [];
+  for (let attempt = 0; attempt < 120 && candidateStars.length < starCount; attempt += 1) {
+    const x = Math.round((45 + rand() * 230) * 10) / 10;
+    const y = Math.round((30 + rand() * 120) * 10) / 10;
 
-  for (let y = 0; y < size; y += 1) {
-    const row: number[] = [];
-    for (let x = 0; x < dataWidth; x += 1) {
-      row[x] = Math.floor(rand() * 2.3);
+    let tooClose = false;
+    for (const existing of candidateStars) {
+      const dx = existing.x - x;
+      const dy = existing.y - y;
+      if (dx * dx + dy * dy < minDistanceSq) {
+        tooClose = true;
+        break;
+      }
     }
-    const r = row.slice(0, mirrorWidth).reverse();
-    const fullRow = row.concat(r);
 
-    grid.push(
-      fullRow.map((val) => {
-        if (val === 1) return color;
-        if (val === 2) return spotcolor;
-        return bgcolor;
-      })
-    );
+    if (!tooClose) {
+      candidateStars.push({
+        x,
+        y,
+        r: Math.round((1.6 + rand() * 1.5) * 10) / 10,
+        opacity: Math.round((0.85 + rand() * 0.15) * 100) / 100,
+      });
+    }
   }
 
-  return grid;
+  // Mark top 2 brightest stars as primary with diffraction cross flares
+  const sortedIndices = candidateStars
+    .map((s, idx) => ({ r: s.r, idx }))
+    .sort((a, b) => b.r - a.r);
+  const primarySet = new Set(sortedIndices.slice(0, 2).map((item) => item.idx));
+
+  const stars = candidateStars.map((s, idx) => ({
+    ...s,
+    isPrimary: primarySet.has(idx),
+  }));
+
+  // 4. Connect stars using Minimum Spanning Tree (MST) so it forms a single elegant constellation
+  const n = stars.length;
+  const inTree = new Set<number>([0]);
+  const edges: [number, number][] = [];
+
+  while (inTree.size < n) {
+    let bestDist = Infinity;
+    let bestU = -1;
+    let bestV = -1;
+
+    for (const u of inTree) {
+      for (let v = 0; v < n; v += 1) {
+        if (!inTree.has(v)) {
+          const dx = stars[u].x - stars[v].x;
+          const dy = stars[u].y - stars[v].y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < bestDist) {
+            bestDist = distSq;
+            bestU = u;
+            bestV = v;
+          }
+        }
+      }
+    }
+
+    if (bestU !== -1 && bestV !== -1) {
+      inTree.add(bestV);
+      edges.push([bestU, bestV]);
+    } else {
+      break;
+    }
+  }
+
+  // Add 1 extra nearest-neighbor edge if distance < 85px to create occasional closed loop
+  if (n >= 4) {
+    let extraDist = Infinity;
+    let extraU = -1;
+    let extraV = -1;
+    for (let u = 0; u < n; u += 1) {
+      for (let v = u + 1; v < n; v += 1) {
+        const alreadyConnected = edges.some(
+          ([a, b]) => (a === u && b === v) || (a === v && b === u)
+        );
+        if (!alreadyConnected) {
+          const dx = stars[u].x - stars[v].x;
+          const dy = stars[u].y - stars[v].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 85 && dist < extraDist) {
+            extraDist = dist;
+            extraU = u;
+            extraV = v;
+          }
+        }
+      }
+    }
+    if (extraU !== -1 && extraV !== -1 && rand() > 0.3) {
+      edges.push([extraU, extraV]);
+    }
+  }
+
+  const lines = edges.map(([u, v]) => ({
+    x1: stars[u].x,
+    y1: stars[u].y,
+    x2: stars[v].x,
+    y2: stars[v].y,
+    opacity: Math.round((0.26 + rand() * 0.16) * 100) / 100,
+  }));
+
+  return {
+    nebulaHue,
+    nebulaCx,
+    nebulaCy,
+    bgStars,
+    stars,
+    lines,
+  };
 }
 
 export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
-  const patternId = useId();
   const seed = (server.address || server.name || server.id || "portal").trim();
-  const grid = useMemo(() => createBlockiesData(seed), [seed]);
-  const isTransport = Boolean(server.tcpAddr || server.udpAddr);
+  const data = useMemo(() => createConstellationData(seed), [seed]);
+  const nebulaId = useId();
+  const skyGradId = useId();
+  const starGlowId = useId();
 
   return (
     <div
-      className={clsx(
-        "absolute inset-0 flex items-center justify-center bg-secondary/60 dark:bg-[#0c1017] select-none overflow-hidden transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.02]",
-        isTransport ? "pb-12" : ""
-      )}
+      className="absolute inset-0 select-none overflow-hidden bg-[#040711] transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.02]"
       aria-hidden="true"
     >
-      {/* Subtle Engineering Dot Grid Wallpaper */}
       <svg
-        className="pointer-events-none absolute inset-0 h-full w-full opacity-40 dark:opacity-25"
+        viewBox="0 0 320 180"
+        className="h-full w-full object-cover"
+        preserveAspectRatio="xMidYMid slice"
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          <pattern id={patternId} width="20" height="20" patternUnits="userSpaceOnUse">
-            <circle cx="2" cy="2" r="1" fill="currentColor" className="text-foreground/20 dark:text-white/20" />
-          </pattern>
-        </defs>
-        <rect width="100%" height="100%" fill={`url(#${patternId})`} />
-      </svg>
+          {/* Deep Midnight Sky Gradient */}
+          <linearGradient id={skyGradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#040711" />
+            <stop offset="48%" stopColor="#081020" />
+            <stop offset="100%" stopColor="#0c172e" />
+          </linearGradient>
 
-      {/* Centered 96x96px App Icon Badge */}
-      <div className="relative z-10 size-24 shrink-0 rounded-2xl overflow-hidden shadow-lg border border-black/10 dark:border-white/15 transition-transform duration-300 motion-safe:group-hover:scale-105">
-        <svg
-          viewBox="0 0 8 8"
-          className="h-full w-full"
-          shapeRendering="crispEdges"
-        >
-          {grid.map((row, y) =>
-            row.map((fill, x) => (
-              <rect key={`${x}-${y}`} x={x} y={y} width={1} height={1} fill={fill} />
-            ))
-          )}
-        </svg>
-      </div>
+          {/* Deep Space Cosmic Nebula Cloud */}
+          <radialGradient id={nebulaId} cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor={`hsl(${data.nebulaHue}, 50%, 28%)`} stopOpacity="0.32" />
+            <stop offset="60%" stopColor={`hsl(${data.nebulaHue}, 45%, 16%)`} stopOpacity="0.12" />
+            <stop offset="100%" stopColor="#040711" stopOpacity="0" />
+          </radialGradient>
+
+          {/* Starlight Glow Flare */}
+          <radialGradient id={starGlowId} cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
+            <stop offset="35%" stopColor="#bae6fd" stopOpacity="0.4" />
+            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        {/* 1. Base Deep Night Sky */}
+        <rect width="320" height="180" fill={`url(#${skyGradId})`} />
+
+        {/* 2. Soft Ambient Cosmic Nebula */}
+        <ellipse
+          cx={data.nebulaCx}
+          cy={data.nebulaCy}
+          rx={150}
+          ry={95}
+          fill={`url(#${nebulaId})`}
+        />
+
+        {/* 3. Delicate Background Starfield */}
+        <g fill="#f8fafc">
+          {data.bgStars.map((s, idx) => (
+            <circle
+              key={`bg-${idx}`}
+              cx={s.cx}
+              cy={s.cy}
+              r={s.r}
+              opacity={s.opacity}
+            />
+          ))}
+        </g>
+
+        {/* 4. Constellation Lines (Starlight connecting paths) */}
+        <g stroke="#bae6fd" strokeWidth="1" strokeLinecap="round">
+          {data.lines.map((line, idx) => (
+            <line
+              key={`line-${idx}`}
+              x1={line.x1}
+              y1={line.y1}
+              x2={line.x2}
+              y2={line.y2}
+              strokeOpacity={line.opacity}
+            />
+          ))}
+        </g>
+
+        {/* 5. Constellation Stars */}
+        {data.stars.map((star, idx) => (
+          <g key={`star-${idx}`}>
+            {/* Primary star aura & lens flare diffraction cross */}
+            {star.isPrimary && (
+              <>
+                <circle
+                  cx={star.x}
+                  cy={star.y}
+                  r={star.r * 2.8}
+                  fill={`url(#${starGlowId})`}
+                  opacity="0.4"
+                />
+                <line
+                  x1={star.x - star.r * 3.5}
+                  y1={star.y}
+                  x2={star.x + star.r * 3.5}
+                  y2={star.y}
+                  stroke="#ffffff"
+                  strokeWidth="0.65"
+                  strokeOpacity="0.65"
+                />
+                <line
+                  x1={star.x}
+                  y1={star.y - star.r * 3.5}
+                  x2={star.x}
+                  y2={star.y + star.r * 3.5}
+                  stroke="#ffffff"
+                  strokeWidth="0.65"
+                  strokeOpacity="0.65"
+                />
+              </>
+            )}
+
+            {/* Star outer ring */}
+            <circle
+              cx={star.x}
+              cy={star.y}
+              r={star.r + 0.6}
+              fill="#bae6fd"
+              opacity="0.35"
+            />
+
+            {/* Star luminous core */}
+            <circle
+              cx={star.x}
+              cy={star.y}
+              r={star.r}
+              fill="#ffffff"
+            />
+          </g>
+        ))}
+      </svg>
     </div>
   );
 }
