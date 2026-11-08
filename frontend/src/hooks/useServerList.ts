@@ -47,7 +47,8 @@ function collectReputation(
 }
 
 export function useServerList() {
-  const [commentServer, setCommentServer] = useState<BaseServer | null>(null);
+  // The app whose comments are open, by id, so the panel follows each poll.
+  const [commentServerId, setCommentServerId] = useState<string | null>(null);
   const [browseView, setBrowseView] = useState<BrowseView>("home");
   const [showHidden, setShowHidden] = useState(false);
   const isDesktop = useMediaQuery(DESKTOP_QUERY);
@@ -202,8 +203,11 @@ export function useServerList() {
 
   return {
     ...list,
-    commentServer: commentServer ? servers.find((server) => server.id === commentServer.id) ?? commentServer : null,
-    setCommentServer,
+    // null once the app leaves the directory, which closes the panel.
+    commentServer: servers.find((server) => server.id === commentServerId) ?? null,
+    toggleComments: (server: BaseServer) =>
+      setCommentServerId((current) => (current === server.id ? null : server.id)),
+    closeComments: () => setCommentServerId(null),
     browseView,
     favorites,
     showHidden,
