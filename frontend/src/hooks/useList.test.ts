@@ -50,6 +50,16 @@ describe("filter reset", () => {
       "newest", "middle", "old",
     ]);
   });
+
+  it("keeps stable order by name and id when firstSeen is identical regardless of lastUpdated", () => {
+    const servers = [
+      { ...server("b", undefined, "Beta"), firstSeen: "2026-01-01T00:00:00Z", lastUpdated: "2026-01-01T00:05:00Z" },
+      { ...server("a", undefined, "Alpha"), firstSeen: "2026-01-01T00:00:00Z", lastUpdated: "2026-01-01T00:01:00Z" },
+    ];
+    const { result } = renderHook(() => useList({ servers }));
+
+    expect(result.current.filteredServers.map(({ id }) => id)).toEqual(["a", "b"]);
+  });
 });
 
 describe("default order", () => {

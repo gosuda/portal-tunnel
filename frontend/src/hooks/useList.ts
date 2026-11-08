@@ -139,12 +139,12 @@ export function useList<T extends BaseServer>({
         case "default":
           return (a: T, b: T) =>
             parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
-            parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0) ||
+            a.name.localeCompare(b.name) ||
             a.id.localeCompare(b.id);
         default:
           return (a: T, b: T) =>
             parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
-            parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0) ||
+            a.name.localeCompare(b.name) ||
             a.id.localeCompare(b.id);
       }
     };
