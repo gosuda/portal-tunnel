@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "portal-relay",
+  "version": "0.2.0",
+  "description": "Deploy, operate, and diagnose a self-hosted Portal relay, on any Linux host or through Oracle Cloud, Hetzner Cloud, AWS, and Cloudflare DNS.",
+  "author": {
+    "name": "gosuda",
+    "url": "https://github.com/gosuda"
+  },
+  "homepage": "https://github.com/gosuda/portal-tunnel/tree/main/plugins/portal-relay",
+  "repository": "https://github.com/gosuda/portal-tunnel",
+  "license": "MIT",
+  "keywords": ["portal", "relay", "self-host", "dns", "docker-compose", "game-hosting", "oracle-cloud", "hetzner", "aws", "cloudflare", "admin"]
+}

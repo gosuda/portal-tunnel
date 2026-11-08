@@ -1,14 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "portal-deploy",
-  "version": "0.1.0",
-  "description": "Safely expose, verify, and reach apps published through Portal tunnels.",
+  "version": "0.2.0",
+  "description": "Deprecated: split into portal-tunnel and portal-relay. Contains only redirect skills.",
   "author": {
     "name": "gosuda",
     "url": "https://github.com/gosuda"
   },
-  "homepage": "https://github.com/gosuda/portal-tunnel/tree/main/plugins/portal-deploy",
+  "homepage": "https://github.com/gosuda/portal-tunnel/tree/main/plugins/portal-tunnel#migrating-from-portal-deploy",
   "repository": "https://github.com/gosuda/portal-tunnel",
   "license": "MIT",
-  "keywords": ["portal", "tunnel", "deploy", "preview", "localhost", "expose", "connect", "x402"]
+  "keywords": ["portal", "deprecated"]
 }

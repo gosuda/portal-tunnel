@@ -1,0 +1,4 @@
+interface:
+  display_name: "Portal Relay on Hetzner Cloud"
+  short_description: "Create a Hetzner host for a Portal relay"
+  default_prompt: "Use $portal-relay-hetzner to plan a Hetzner Cloud server for a Portal relay, then deploy it with $portal-relay after I approve the plan."

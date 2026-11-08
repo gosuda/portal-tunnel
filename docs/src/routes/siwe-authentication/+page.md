@@ -5,7 +5,7 @@ description: Let only chosen people open a tunnel, with Portal credential links,
 
 # Application Access Authentication
 
-> **Maintainer note**: the method table, allowlist forms, session lifetime, secret handling, and verification steps on this page are mirrored in the agent skill reference at `plugins/portal-deploy/skills/portal-expose/references/application-auth.md`. When sign-in behavior changes, update both files. This page is the human-facing source; the reference is the agent-facing copy.
+> **Maintainer note**: the method table, allowlist forms, session lifetime, secret handling, and verification steps on this page are mirrored in the agent skill reference at `plugins/portal-tunnel/skills/portal-expose/references/application-auth.md`. When sign-in behavior changes, update both files. This page is the human-facing source; the reference is the agent-facing copy.
 
 Without `--auth`, anyone who learns a tunnel's hostname can open the app. Portal
 can ask visitors to sign in first. The check runs inside the `portal` process on
@@ -30,7 +30,7 @@ existing configs keep working. Setting both keys is refused. `email` takes only
 
 [Check that sign-in is on](#check-that-sign-in-is-on) once the tunnel runs. An AI
 coding agent that follows the `portal-expose` skill reads the same steps in
-[`application-auth.md`](https://github.com/gosuda/portal-tunnel/blob/main/plugins/portal-deploy/skills/portal-expose/references/application-auth.md).
+[`application-auth.md`](https://github.com/gosuda/portal-tunnel/blob/main/plugins/portal-tunnel/skills/portal-expose/references/application-auth.md).
 
 SIWE is also used separately for:
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Administer a Portal Relay"
+  short_description: "Approve, deny, and limit relay leases"
+  default_prompt: "Use $portal-relay-admin to list the leases on my Portal relay and their approval state, without printing the admin token."

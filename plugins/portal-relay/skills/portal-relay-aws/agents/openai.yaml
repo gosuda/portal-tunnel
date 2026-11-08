@@ -1,0 +1,4 @@
+interface:
+  display_name: "Portal Relay on AWS"
+  short_description: "Create an EC2 or Lightsail relay host"
+  default_prompt: "Use $portal-relay-aws to plan an EC2 or Lightsail host for a Portal relay, then deploy it with $portal-relay after I approve the plan."
