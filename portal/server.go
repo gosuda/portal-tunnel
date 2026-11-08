@@ -43,6 +43,7 @@ var (
 	errStateDirectoryIsRequired                  = errors.New("state directory is required")
 	errRootHostIsRequired                        = errors.New("root host is required")
 	errTransportMaxLeasesMustNonNegative         = errors.New("transport max leases must be non-negative")
+	errUnapprovedLeaseLimitNegative              = errors.New("unapproved leases per source must be non-negative")
 	errTransportEnablementRequiresLeasePortRange = errors.New("transport enablement requires a lease port range")
 	errEnablingUDPRequiresRelayRestart           = errors.New("enabling udp requires a relay restart")
 	errServerAlreadyStarted                      = errors.New("server already started")
@@ -196,7 +197,7 @@ func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTP
 // side-effect-free invariants required before runtime resources are created.
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.UnapprovedLeasesPerSource < 0 {
-		return ServerConfig{}, errors.New("unapproved leases per source must be non-negative")
+		return ServerConfig{}, errUnapprovedLeaseLimitNegative
 	}
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
@@ -283,8 +284,12 @@ func (cfg ServerConfig) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases in
 	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
 		return errTransportMaxLeasesMustNonNegative
 	}
-	if (udpEnabled || tcpEnabled) && (cfg.MinPort <= 0 || cfg.MaxPort <= 0 || cfg.MinPort > 65535 || cfg.MaxPort > 65535 || cfg.MinPort > cfg.MaxPort) {
-		return errTransportEnablementRequiresLeasePortRange
+	if udpEnabled || tcpEnabled {
+		minInRange := cfg.MinPort > 0 && cfg.MinPort <= 65535
+		maxInRange := cfg.MaxPort > 0 && cfg.MaxPort <= 65535
+		if !minInRange || !maxInRange || cfg.MinPort > cfg.MaxPort {
+			return errTransportEnablementRequiresLeasePortRange
+		}
 	}
 	return nil
 }
