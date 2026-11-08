@@ -135,34 +135,34 @@ export function ServerCard({
 
   const cardBody = (
     <article className="relative w-full min-w-0">
-      {/* 1. macOS Safari Window Frame */}
-      <div className="relative flex flex-col w-full overflow-hidden rounded-2xl border border-black/10 dark:border-white/10 bg-card shadow-[0_10px_30px_-5px_rgba(0,0,0,0.08),0_4px_12px_rgba(0,0,0,0.03)] dark:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.06)] transition-all duration-300 ease-out group-hover:-translate-y-1 group-hover:shadow-[0_20px_40px_-10px_rgba(0,0,0,0.15)] dark:group-hover:shadow-[0_28px_56px_-12px_rgba(0,0,0,0.75)]">
-        {/* Safari Toolbar Header */}
-        <div className="relative flex h-8.5 w-full items-center gap-3 border-b border-black/[0.08] dark:border-white/[0.08] bg-gradient-to-b from-neutral-100/95 via-neutral-150/90 to-neutral-200/85 dark:from-neutral-800/95 dark:via-neutral-850/90 dark:to-neutral-900/90 px-3.5 py-1.5 backdrop-blur-md select-none">
-          {/* Top highlight specular rim (1px inner bevel) */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/50 dark:bg-white/15" />
-
-          {/* Left section: macOS Traffic Lights */}
+      {/* 1. macOS Safari Window Frame (Direction B: Safari Compact Tab) */}
+      <div className="relative flex flex-col w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-card shadow-2xs transition-all duration-300 ease-out group-hover:-translate-y-0.5 group-hover:border-border group-hover:shadow-md">
+        {/* Safari Compact Toolbar Header */}
+        <div className="relative flex h-7.5 w-full items-center gap-2 border-b border-border/50 dark:border-white/10 bg-muted/60 dark:bg-neutral-900/60 px-3 py-1 backdrop-blur-xs select-none">
+          {/* Left section: macOS Traffic Lights (refined monochrome, blooms to color on card hover) */}
           <div className="flex items-center gap-1.5 shrink-0" aria-hidden="true">
-            <span className="size-2.5 rounded-full bg-[#FF5F56] border border-[#E0443E]/70 shadow-[inset_0_1px_1px_rgba(255,255,255,0.45)]" />
-            <span className="size-2.5 rounded-full bg-[#FFBD2E] border border-[#DEA123]/70 shadow-[inset_0_1px_1px_rgba(255,255,255,0.45)]" />
-            <span className="size-2.5 rounded-full bg-[#27C93F] border border-[#1AAB29]/70 shadow-[inset_0_1px_1px_rgba(255,255,255,0.45)]" />
+            <span className="size-2 rounded-full bg-foreground/20 transition-colors duration-200 group-hover:bg-[#FF5F56]" />
+            <span className="size-2 rounded-full bg-foreground/20 transition-colors duration-200 group-hover:bg-[#FFBD2E]" />
+            <span className="size-2 rounded-full bg-foreground/20 transition-colors duration-200 group-hover:bg-[#27C93F]" />
           </div>
 
-          {/* Center/Full section: Expanded URL Omnibar */}
+          {/* Center section: Slim Capsule Omnibar (Safari Compact Tab) */}
           <div
-            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-black/[0.08] dark:border-white/[0.1] bg-white/80 dark:bg-black/35 px-2.5 py-1 text-[11px] text-muted-foreground shadow-[inset_0_1px_2px_rgba(0,0,0,0.04)] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] transition-colors group-hover:border-black/15 dark:group-hover:border-white/20"
+            className="mx-auto flex max-w-[85%] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border border-border/60 dark:border-white/10 bg-background/70 dark:bg-black/30 px-2.5 py-0.5 text-[11px] shadow-2xs transition-colors duration-200 group-hover:border-border group-hover:bg-background/95"
             title={displayUrl}
           >
             {isTransportService ? (
               <Terminal className="size-2.5 shrink-0 text-muted-foreground/70" />
             ) : (
-              <Lock className="size-2.5 shrink-0 text-muted-foreground/60" />
+              <Lock className="size-2.5 shrink-0 text-muted-foreground/60 transition-colors group-hover:text-emerald-500" />
             )}
-            <span className="truncate text-[11px] font-medium tracking-tight text-foreground/85">
+            <span className="truncate font-mono text-[11px] font-medium tracking-tight text-foreground/80 group-hover:text-foreground">
               {displayUrl}
             </span>
           </div>
+
+          {/* Right dummy spacer matching traffic lights width for optical centering */}
+          <div className="w-8 shrink-0" aria-hidden="true" />
         </div>
 
         {/* Viewport / Thumbnail Container (16:9 aspect ratio) */}
