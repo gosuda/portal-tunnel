@@ -1,7 +1,14 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { BadgeDollarSign, Info, MessageSquare, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import {
+  BadgeDollarSign,
+  Lock,
+  MessageSquare,
+  Terminal,
+  ThumbsDown,
+  ThumbsUp,
+} from "lucide-react";
 import type { BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
@@ -20,6 +27,10 @@ function pickPlaceholderThumbnail(seed: string): string {
     hash = (hash * 33 + seed.charCodeAt(i)) >>> 0;
   }
   return PLACEHOLDER_THUMBNAILS[hash % PLACEHOLDER_THUMBNAILS.length];
+}
+
+function formatDisplayUrl({ tcpAddr, udpAddr, dns, id }: BaseServer): string {
+  return tcpAddr ? `tcp://${tcpAddr}` : udpAddr ? `udp://${udpAddr}` : dns || id || "";
 }
 
 interface ServerCardProps {
@@ -46,7 +57,6 @@ export function ServerCard({
   // The thumbnail that failed to load; a new thumbnail URL gets its own try.
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const [isVoting, setIsVoting] = useState(false);
-  const [showDetails, setShowDetails] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
   const hasDetails = Boolean(description || (tags && tags.length > 0));
   const effectiveThumbnail = failedThumbnail === thumbnail ? "" : thumbnail.trim();
@@ -85,6 +95,8 @@ export function ServerCard({
     return `${seconds}s ago`;
   }, [firstSeen]);
 
+  const displayUrl = useMemo(() => formatDisplayUrl(server), [server]);
+
   const handleVote = async (event: React.MouseEvent, targetVote: "up" | "down") => {
     event.preventDefault();
     event.stopPropagation();
@@ -104,149 +116,137 @@ export function ServerCard({
 
   const cardBody = (
     <article className="relative w-full min-w-0">
-      {/* 1. Thumbnail Container (16:9 aspect ratio) */}
-      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted">
-        <img
-          src={resolvedThumbnail}
-          alt=""
-          loading="lazy"
-          className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
-          onError={effectiveThumbnail ? () => setFailedThumbnail(thumbnail) : undefined}
-        />
-
-        {/* Top-right custom action overlay */}
-        {action && (
-          <div className="pointer-events-auto absolute top-2.5 right-2.5 z-30">
-            {action}
+      {/* 1. macOS Safari Window Frame */}
+      <div className="relative flex flex-col w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-card shadow-2xs transition-all duration-300 ease-out group-hover:-translate-y-0.5 group-hover:border-border group-hover:shadow-md">
+        {/* Safari Compact Toolbar Header */}
+        <div className="relative flex h-7.5 w-full items-center gap-2 border-b border-border/50 dark:border-white/10 bg-muted/60 dark:bg-neutral-900/60 px-3 py-1 backdrop-blur-xs select-none">
+          {/* Left section: macOS Traffic Lights (refined monochrome, blooms to color on card hover) */}
+          <div className="flex items-center gap-1.5 shrink-0" aria-hidden="true">
+            <span className="size-2 rounded-full bg-foreground/20 transition-colors duration-200 group-hover:bg-[#FF5F56]" />
+            <span className="size-2 rounded-full bg-foreground/20 transition-colors duration-200 group-hover:bg-[#FFBD2E]" />
+            <span className="size-2 rounded-full bg-foreground/20 transition-colors duration-200 group-hover:bg-[#27C93F]" />
           </div>
-        )}
-        {server.reputation && isHiddenByVotes(server.reputation.up, server.reputation.down) && (
-          <span className="absolute top-2.5 right-2.5 rounded bg-black/80 px-2 py-0.5 text-xs text-white">
-            Hidden by downvotes
-          </span>
-        )}
 
-        {/* Payment badge */}
-        {showPaymentBadge && (
-          <span
-            className={clsx(
-              "absolute inline-flex max-w-[80%] items-center gap-1 rounded bg-black/80 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-xs",
-              isTransportService ? "top-2.5 left-2.5" : "bottom-2.5 left-2.5"
-            )}
-          >
-            <BadgeDollarSign className="size-3.5 shrink-0 text-emerald-400" />
-            <span className="truncate">{effectivePaymentLabel}</span>
-          </span>
-        )}
-
-        {/* Online LIVE badge */}
-        {online && !isTransportService && (
-          <span className="absolute bottom-2.5 right-2.5 inline-flex items-center gap-1.5 rounded bg-black/80 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-400 backdrop-blur-xs">
-            <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            LIVE
-          </span>
-        )}
-
-        {/* Touch / Click Disclosure Toggle Button */}
-        {hasDetails && (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setShowDetails((prev) => !prev);
-            }}
-            aria-label={showDetails ? "Hide description" : "Show description"}
-            aria-expanded={showDetails}
-            title={showDetails ? "Hide description" : "Show description"}
-            className={clsx(
-              "pointer-events-auto absolute z-30 flex size-7 items-center justify-center rounded-full text-white/90 backdrop-blur-md transition-all active:scale-95 cursor-pointer shadow-xs",
-              isTransportService && showPaymentBadge ? "top-2.5 left-28" : "top-2.5 left-2.5",
-              showDetails
-                ? "bg-black/90 text-white ring-1 ring-white/30"
-                : "bg-black/60 hover:bg-black/80 hover:text-white"
-            )}
-          >
-            {showDetails ? (
-              <X className="size-3.5 shrink-0" />
-            ) : (
-              <Info className="size-3.5 shrink-0" />
-            )}
-          </button>
-        )}
-
-        {/* Description overlay on hover, focus-within, or touch disclosure */}
-        {hasDetails && (
+          {/* Center section: Slim Capsule Omnibar (Safari Compact Tab) */}
           <div
-            onClick={
-              showDetails
-                ? (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setShowDetails(false);
-                  }
-                : undefined
-            }
-            className={clsx(
-              "absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 transition-opacity duration-200",
-              isTransportService ? "pb-16" : "",
-              showDetails
-                ? "pointer-events-auto opacity-100 cursor-pointer"
-                : "pointer-events-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-            )}
+            className="mx-auto flex max-w-[85%] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/75 dark:bg-black/35 px-2.5 py-0.5 text-[12px] shadow-2xs transition-colors duration-200 group-hover:border-black/15 dark:group-hover:border-white/20 group-hover:bg-white/95 dark:group-hover:bg-black/55"
+            title={displayUrl}
           >
-            {description && (
-              <>
-                <div className="mb-1 flex items-center justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-white/60">
-                    Description
-                  </span>
-                  {showDetails && (
-                    <span className="text-[10px] text-white/50">Tap to close</span>
-                  )}
-                </div>
-                <p className="line-clamp-4 text-xs leading-relaxed text-white/95 whitespace-pre-wrap break-words">
-                  {description}
-                </p>
-              </>
+            {isTransportService ? (
+              <Terminal className="size-2.5 shrink-0 text-neutral-400 dark:text-neutral-500" />
+            ) : (
+              <Lock className="size-2.5 shrink-0 text-neutral-400 dark:text-neutral-500 transition-colors group-hover:text-neutral-600 dark:group-hover:text-neutral-300" />
             )}
-            {tags && tags.length > 0 && (
-              <div className={clsx("flex flex-wrap gap-1", description ? "mt-2" : "")}>
-                {tags.slice(0, 4).map((tag) => (
-                  <span
-                    key={tag}
-                    className="rounded bg-white/20 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-xs"
-                  >
-                    #{tag}
-                  </span>
-                ))}
-              </div>
-            )}
+            <span className="truncate [font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,sans-serif] text-[12px] font-normal tracking-normal text-neutral-700 dark:text-neutral-300 transition-colors group-hover:text-neutral-900 dark:group-hover:text-neutral-100">
+              {displayUrl}
+            </span>
           </div>
-        )}
 
-        {/* Raw transport endpoints (TCP / UDP) */}
-        {isTransportService && (
-          <div className="absolute inset-x-2.5 bottom-2.5 space-y-1 rounded-lg border border-white/10 bg-black/80 p-2 backdrop-blur-md">
-            {endpoints.map((endpoint) => (
-              <div key={endpoint.protocol} className="flex min-w-0 items-center gap-2">
-                <code
-                  className="min-w-0 flex-1 truncate font-mono text-xs text-white/90"
-                  title={endpoint.address}
-                >
-                  {endpoint.address}
-                </code>
-                <button
-                  type="button"
-                  onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
-                  className="pointer-events-auto relative z-30 shrink-0 rounded bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                >
-                  {copiedProtocol === endpoint.protocol ? "Copied!" : `Copy ${endpoint.protocol}`}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+          {/* Right dummy spacer matching traffic lights width for optical centering */}
+          <div className="w-8 shrink-0" aria-hidden="true" />
+        </div>
+
+        {/* Viewport / Thumbnail Container (16:9 aspect ratio) */}
+        <div className="relative aspect-video w-full overflow-hidden bg-muted">
+          <img
+            src={resolvedThumbnail}
+            alt=""
+            loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
+            onError={effectiveThumbnail ? () => setFailedThumbnail(thumbnail) : undefined}
+          />
+
+          {/* Top-right custom action overlay */}
+          {action && (
+            <div className="pointer-events-auto absolute top-2.5 right-2.5 z-30">
+              {action}
+            </div>
+          )}
+          {server.reputation && isHiddenByVotes(server.reputation.up, server.reputation.down) && (
+            <span className="absolute top-2.5 right-2.5 rounded bg-black/80 px-2 py-0.5 text-xs text-white">
+              Hidden by downvotes
+            </span>
+          )}
+
+          {/* Payment badge */}
+          {showPaymentBadge && (
+            <span
+              className={clsx(
+                "absolute inline-flex max-w-[80%] items-center gap-1 rounded bg-black/80 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-xs",
+                isTransportService ? "top-2.5 left-2.5" : "bottom-2.5 left-2.5"
+              )}
+            >
+              <BadgeDollarSign className="size-3.5 shrink-0 text-emerald-400" />
+              <span className="truncate">{effectivePaymentLabel}</span>
+            </span>
+          )}
+
+          {/* Online LIVE badge */}
+          {online && !isTransportService && (
+            <span className="absolute bottom-2.5 right-2.5 inline-flex items-center gap-1.5 rounded bg-black/80 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-400 backdrop-blur-xs">
+              <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              LIVE
+            </span>
+          )}
+
+          {/* Description overlay on hover or focus-within */}
+          {hasDetails && (
+            <div
+              className={clsx(
+                "pointer-events-none absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100",
+                isTransportService ? (endpoints.length > 1 ? "pb-24" : "pb-18") : ""
+              )}
+            >
+              {description && (
+                <>
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-white/60">
+                      Description
+                    </span>
+                  </div>
+                  <p className="line-clamp-4 text-xs leading-relaxed text-white/95 whitespace-pre-wrap break-words">
+                    {description}
+                  </p>
+                </>
+              )}
+              {tags && tags.length > 0 && (
+                <div className={clsx("flex flex-wrap gap-1", description ? "mt-2" : "")}>
+                  {tags.slice(0, 4).map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded bg-white/20 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-xs"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Raw transport endpoints (TCP / UDP) */}
+          {isTransportService && (
+            <div className="pointer-events-auto absolute inset-x-2.5 bottom-2.5 z-30 space-y-1 rounded-lg border border-white/10 bg-black/85 p-2 backdrop-blur-md shadow-xs">
+              {endpoints.map((endpoint) => (
+                <div key={endpoint.protocol} className="flex min-w-0 items-center gap-2">
+                  <code
+                    className="min-w-0 flex-1 truncate font-mono text-xs text-white/90"
+                    title={endpoint.address}
+                  >
+                    {endpoint.address}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
+                    className="pointer-events-auto relative z-30 shrink-0 rounded bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary cursor-pointer active:scale-95"
+                  >
+                    {copiedProtocol === endpoint.protocol ? "Copied!" : `Copy ${endpoint.protocol}`}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 2. Details Container: Title/Metadata + Southeast Actions (Up, Down, Comments) */}
