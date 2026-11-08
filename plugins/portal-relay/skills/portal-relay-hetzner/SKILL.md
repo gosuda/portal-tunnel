@@ -6,7 +6,7 @@ license: MIT
 
 # Portal relay on Hetzner Cloud
 
-This skill creates and opens the host. `portal-relay` deploys the relay on it. Follow `references/provider-contract.md` in the `portal-relay` skill (https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-relay/skills/portal-relay/references/provider-contract.md) for the phase order, credential rules, and approval rules. This file adds only what is specific to Hetzner Cloud.
+This skill creates and opens the host. `portal-relay` deploys the relay on it. Follow [`../portal-relay/references/provider-contract.md`](../portal-relay/references/provider-contract.md) (the `portal-relay` skill's contract in this same plugin; the path is relative to this file, so it matches the installed version and needs no network) for the phase order, credential rules, and approval rules. This file adds only what is specific to Hetzner Cloud.
 
 ## Preflight
 

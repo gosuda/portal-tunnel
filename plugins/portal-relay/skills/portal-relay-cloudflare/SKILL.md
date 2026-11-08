@@ -6,7 +6,7 @@ license: MIT
 
 # Portal relay DNS on Cloudflare
 
-Cloudflare is the **parent** DNS provider here, not the host. The relay serves its own subdomain from embedded DNS; this skill writes only the parent-zone records that point to it. Follow `references/provider-contract.md` in the `portal-relay` skill (https://raw.githubusercontent.com/gosuda/portal-tunnel/main/plugins/portal-relay/skills/portal-relay/references/provider-contract.md) for the phase order, credential rules, and approval rules. Take the record layout and DNSSEC facts from `portal-relay` and the [Embedded DNS reference](https://gosuda.github.io/portal-tunnel/configuration#embedded-dns).
+Cloudflare is the **parent** DNS provider here, not the host. The relay serves its own subdomain from embedded DNS; this skill writes only the parent-zone records that point to it. Follow [`../portal-relay/references/provider-contract.md`](../portal-relay/references/provider-contract.md) (the `portal-relay` skill's contract in this same plugin; the path is relative to this file, so it matches the installed version and needs no network) for the phase order, credential rules, and approval rules. Take the record layout and DNSSEC facts from `portal-relay` and the [Embedded DNS reference](https://gosuda.github.io/portal-tunnel/configuration#embedded-dns).
 
 ## Records this skill may change
 
