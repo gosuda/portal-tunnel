@@ -1,106 +1,101 @@
-@import url("https://fonts.bunny.net/css?family=manrope:500,600,700,800|open-sans:400,500,600,700&display=swap");
+@import url("https://fonts.bunny.net/css?family=inter:400,500,600,700,800&display=swap");
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-family-display: "Manrope", sans-serif;
-  --font-family-sans: "Open Sans", sans-serif;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --radius: 0.5rem;
-  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
+  --breakpoint-nav: 1140px;
+  --spacing-header: 40px;
+  --spacing-sidebar: 289px;
+
+  --color-surface-0: var(--surface-0);
+  --color-surface-100: var(--surface-100);
+  --color-surface-200: var(--surface-200);
+  --color-surface-300: var(--surface-300);
+  --color-content: var(--content);
+  --color-content-emphasis: var(--content-emphasis);
+  --color-content-muted: var(--content-muted);
+  --color-stroke: var(--stroke);
+  --color-state-hover: var(--state-hover);
+  --color-scrim: var(--scrim);
   --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-green-status: var(--green-status);
-  --color-text-muted: var(--text-muted);
+  --color-primary-content: var(--primary-content);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-focus: var(--focus);
+
+  --ease-out-soft: cubic-bezier(0, 0, 0, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+:root {
+  --surface-0: #ffffff;
+  --surface-100: #f7f7f8;
+  --surface-200: #ffffff;
+  --surface-300: #f7f7f8;
+  --content: #494d5a;
+  --content-emphasis: #202227;
+  --content-muted: #6a6f81;
+  --stroke: rgba(27, 37, 75, 0.12);
+  --state-hover: rgba(27, 37, 75, 0.08);
+  --state-press: rgba(27, 37, 75, 0.12);
+  --scrim: rgba(10, 10, 14, 0.5);
+  --primary: #335fff;
+  --primary-content: #ffffff;
+  --success: #39c582;
+  --warning: #f2ba2a;
+  --danger: #df281f;
+  --focus: #335fff;
+  color-scheme: light;
+}
+
+.dark {
+  --surface-0: #121215;
+  --surface-100: #191a1f;
+  --surface-200: #202227;
+  --surface-300: #272930;
+  --content: #d5d7dd;
+  --content-emphasis: #f7f7f8;
+  --content-muted: #bcbec8;
+  --stroke: rgba(208, 217, 251, 0.12);
+  --state-hover: rgba(208, 217, 251, 0.08);
+  --state-press: rgba(208, 217, 251, 0.12);
+  --scrim: rgba(10, 10, 14, 0.75);
+  --primary: #335fff;
+  --primary-content: #ffffff;
+  --success: #39c582;
+  --warning: #f2ba2a;
+  --danger: #df281f;
+  --focus: #ffffff;
+  color-scheme: dark;
 }
 
 @layer base {
-  :root {
-    --background: oklch(97% 0.005 250);
-    --foreground: oklch(25% 0.02 250);
-    --card: oklch(100% 0 0);
-    --card-foreground: oklch(25% 0.02 250);
-    --popover: oklch(100% 0 0);
-    --popover-foreground: oklch(25% 0.02 250);
-    --primary: oklch(50% 0.1 195);
-    --primary-foreground: oklch(100% 0 0);
-    --secondary: oklch(92% 0.01 250);
-    --secondary-foreground: oklch(45% 0.02 250);
-    --muted: oklch(95% 0.005 250);
-    --muted-foreground: oklch(55% 0.03 250);
-    --accent: oklch(92% 0.01 250);
-    --accent-foreground: oklch(25% 0.02 250);
-    --destructive: oklch(55% 0.2 25);
-    --destructive-foreground: oklch(100% 0 0);
-    --border: oklch(90% 0.01 250);
-    --input: oklch(95% 0.005 250);
-    --ring: oklch(50% 0.1 195);
-
-    --green-status: oklch(55% 0.16 150);
-    --text-muted: oklch(55% 0.03 250);
-
-    /* Directory backdrop colors are RGB triplets for configurable alpha. */
-    --stage-bg: 238 244 250;
-    --stage-bg-edge: 247 249 252;
-    --stage-accent: 15 118 110;
-  }
-
-  .dark {
-    --background: #030e1e;
-    --foreground: #f8fafc;
-    --card: #0b192c;
-    --card-foreground: #f8fafc;
-    --popover: #0b192c;
-    --popover-foreground: #f8fafc;
-    --primary: #46efe4;
-    --primary-foreground: #031322;
-    --secondary: #10233a;
-    --secondary-foreground: #f8fafc;
-    --muted: #0e1e33;
-    --muted-foreground: #8fa3b8;
-    --accent: #132a44;
-    --accent-foreground: #f8fafc;
-    --destructive: oklch(62% 0.22 25);
-    --destructive-foreground: oklch(98% 0 0);
-    --border: rgba(148, 163, 184, 0.16);
-    --input: #081525;
-    --ring: #46efe4;
-
-    --green-status: #10b981;
-    --text-muted: #8fa3b8;
-
-    --stage-bg: 4 20 40;
-    --stage-bg-edge: 2 11 24;
-    --stage-accent: 94 252 232;
-  }
-
   * {
-    border-color: var(--border);
+    border-color: var(--stroke);
   }
 
-  html {
-    background-color: var(--background);
-    color-scheme: light;
+  body {
+    min-height: 100vh;
+    background: var(--surface-0);
+    color: var(--content);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 3px;
   }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -108,112 +103,57 @@
       scroll-behavior: smooth;
     }
   }
-
-  body {
-    min-height: 100vh;
-    background: var(--background);
-    color: var(--foreground);
-    font-family: var(--font-family-sans);
-  }
-
-  input,
-  textarea,
-  select {
-    font-family: var(--font-family-sans);
-  }
-
-  .dark {
-    color-scheme: dark;
-  }
-
-  .dark body {
-    background: var(--background);
-  }
-
-  h1,
-  h2,
-  h3,
-  h4,
-  h5,
-  h6 {
-    font-family: var(--font-family-display);
-    letter-spacing: 0;
-  }
-
-  button {
-    font-family: var(--font-family-display);
-  }
-
-  a {
-    color: inherit;
-  }
 }
 
-/* Live app motion, owned by ServerListView: cards stay hidden until it sets
-   data-revealed as they scroll into view (screen only, so printing shows every
-   card), and reorder transitions use this timing. */
-@media screen and (prefers-reduced-motion: no-preference) {
-  #live-servers [data-reveal]:not([data-revealed]) {
-    opacity: 0;
-  }
-
-  ::view-transition-group(*.live-app) {
-    animation-duration: 280ms;
-    animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
-  }
-}
-
-@layer base {
-  :where(a, button, input, select, textarea):focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 3px;
-  }
-}
-/* Keep the original Portal palette and atmosphere around the directory. */
-.portal-browser {
-  background:
-    linear-gradient(180deg, rgb(var(--stage-bg)) 0, rgb(var(--stage-bg-edge)) 420px, var(--background) 900px);
-}
-.portal-nav-item {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 1rem;
-  border-radius: 0.625rem;
-  padding: 0.75rem;
-  font-size: 0.875rem;
-  text-align: left;
+@utility interactive {
+  position: relative;
+  isolation: isolate;
   cursor: pointer;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    transition: background-color 100ms linear;
+  }
+
+  &:hover::before {
+    background-color: var(--state-hover);
+  }
+
+  &:active::before {
+    background-color: var(--state-press);
+  }
+
+  &:disabled,
+  &[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.5;
+
+    &::before {
+      background-color: transparent;
+    }
+  }
 }
 
-.portal-nav-item > span:first-of-type {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.portal-nav-item > svg {
-  flex-shrink: 0;
+@utility no-scrollbar {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
-.portal-nav-item:hover,
-.portal-nav-item[aria-current="page"] {
-  background: var(--secondary);
-}
-
-.portal-nav-item[aria-current="page"] {
-  font-weight: 600;
-}
-
-.portal-category {
-  flex-shrink: 0;
-  cursor: pointer;
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.portal-category:hover {
-  filter: brightness(0.92);
-}
+@utility type-heading-large { font-size: 28px; line-height: 36px; font-weight: 700; }
+@utility type-heading-small { font-size: 20px; line-height: 28px; font-weight: 700; }
+@utility type-title-large { font-size: 16px; line-height: 22px; font-weight: 700; }
+@utility type-title-medium { font-size: 14px; line-height: 20px; font-weight: 700; }
+@utility type-title-small { font-size: 12px; line-height: 18px; font-weight: 700; }
+@utility type-label-large { font-size: 16px; line-height: 16px; font-weight: 600; }
+@utility type-label-medium { font-size: 14px; line-height: 14px; font-weight: 600; }
+@utility type-body-medium { font-size: 14px; line-height: 20px; font-weight: 400; }
+@utility type-body-small { font-size: 12px; line-height: 18px; font-weight: 400; }
+@utility type-caption-large { font-size: 14px; line-height: 20px; font-weight: 600; }

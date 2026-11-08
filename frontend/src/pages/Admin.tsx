@@ -1,108 +1,56 @@
-import { SsgoiTransition } from "@ssgoi/react";
-import { AdminHeader } from "@/components/AdminHeader";
+import type { ReactNode } from "react";
+import { AlertCircle, Home, LogOut, ShieldCheck } from "lucide-react";
+import { AdminConsole } from "@/components/admin/AdminConsole";
+import { AdminSkeleton, StateMessage } from "@/components/admin/AdminStates";
+import { RelayVersion } from "@/components/admin/RelayVersion";
+import { SignInCard } from "@/components/admin/SignInCard";
+import { AppShell, SidebarItem, SidebarSection } from "@/components/shell/AppShell";
+import { Button } from "@/components/ui/button";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useAuth } from "@/hooks/useAuth";
-import { AdminServerList } from "@/components/AdminServerList";
+import { ROUTE_PATHS } from "@/lib/apiPaths";
 
 export function Admin() {
-  // One sign-in state for the page; the header signs in and out through it.
-  const auth = useAuth();
-  const { isAuthenticated, isLoading: authLoading } = auth;
+  const { isAuthenticated, isLoading, login, logout } = useAuth();
+  const admin = useAdmin(isAuthenticated);
+  const empty = admin.servers.length === 0;
 
-  const {
-    servers,
-    filteredServers,
-    availableTags,
-    searchQuery,
-    status,
-    sortBy,
-    selectedTags,
-    banFilter,
-    approvalMode,
-    udpSettings,
-    tcpPortSettings,
-    policySaving,
-    loading,
-    error,
-    handleSearchChange,
-    handleStatusChange,
-    handleSortByChange,
-    handleTagToggle,
-    handleBanFilterChange,
-    handleBanStatus,
-    handleBPSChange,
-    handleApprovalModeChange,
-    handleUDPSettingsChange,
-    handleTCPPortSettingsChange,
-    handleApproveStatus,
-    handleDenyStatus,
-    handleBulkApprove,
-    handleBulkDeny,
-    handleBulkBan,
-  } = useAdmin(isAuthenticated);
-
-  if (authLoading) {
-    return <div className="p-8 text-foreground">Checking authentication...</div>;
-  }
-
-  if (!isAuthenticated) {
-    return (
-      <SsgoiTransition id="admin">
-        <div className="relative flex min-h-screen w-full flex-col bg-background">
-          <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
-            <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-              <AdminHeader auth={auth} />
-            </div>
-          </div>
-          <main className="mx-auto flex w-full max-w-6xl flex-1 items-center justify-center px-6 py-16">
-            <div className="rounded-lg border border-border bg-card px-6 py-5 text-center text-sm text-muted-foreground shadow-sm">
-              Enter the admin token from the header to view admin controls.
-            </div>
-          </main>
-        </div>
-      </SsgoiTransition>
+  let body: ReactNode;
+  if (isLoading || (isAuthenticated && admin.loading && empty)) {
+    body = <AdminSkeleton />;
+  } else if (!isAuthenticated) {
+    body = <SignInCard login={login} />;
+  } else if (admin.error && empty) {
+    body = (
+      <StateMessage icon={<AlertCircle />} title="Couldn't load admin data">
+        {admin.error}
+      </StateMessage>
     );
-  }
-
-  if (loading && servers.length === 0) {
-    return <div className="p-8 text-foreground">Loading...</div>;
-  }
-  if (error && servers.length === 0) {
-    return <div className="p-8 text-red-500">Error: {error}</div>;
+  } else {
+    body = <AdminConsole {...admin} />;
   }
 
   return (
-    <SsgoiTransition id="admin">
-      <AdminServerList
-        title="PORTAL ADMIN"
-        searchQuery={searchQuery}
-        status={status}
-        sortBy={sortBy}
-        selectedTags={selectedTags}
-        availableTags={availableTags}
-        filteredServers={filteredServers}
-        onSearchChange={handleSearchChange}
-        onStatusChange={handleStatusChange}
-        onSortByChange={handleSortByChange}
-        onTagToggle={handleTagToggle}
-        banFilter={banFilter}
-        approvalMode={approvalMode}
-        udpSettings={udpSettings}
-        tcpPortSettings={tcpPortSettings}
-        policySaving={policySaving}
-        onBanFilterChange={handleBanFilterChange}
-        onBanStatusChange={handleBanStatus}
-        onBPSChange={handleBPSChange}
-        onApprovalModeChange={handleApprovalModeChange}
-        onUDPSettingsChange={handleUDPSettingsChange}
-        onTCPPortSettingsChange={handleTCPPortSettingsChange}
-        onApproveStatusChange={handleApproveStatus}
-        onDenyStatusChange={handleDenyStatus}
-        onBulkApprove={handleBulkApprove}
-        onBulkDeny={handleBulkDeny}
-        onBulkBan={handleBulkBan}
-        auth={auth}
-      />
-    </SsgoiTransition>
+    <AppShell
+      actions={
+        isAuthenticated ? (
+          <Button variant="ghost" aria-label="Sign out" onClick={() => void logout()}>
+            <LogOut className="size-5" aria-hidden />
+            <span className="hidden sm:inline">Sign out</span>
+          </Button>
+        ) : undefined
+      }
+      sidebar={
+        <>
+          <SidebarSection>
+            <SidebarItem icon={<Home />} label="Directory" href={ROUTE_PATHS.home} />
+            <SidebarItem icon={<ShieldCheck />} label="Admin" current />
+          </SidebarSection>
+          <RelayVersion />
+        </>
+      }
+    >
+      <div className="mx-auto w-full max-w-[2400px] px-4 pb-12 md:px-6">{body}</div>
+    </AppShell>
   );
 }

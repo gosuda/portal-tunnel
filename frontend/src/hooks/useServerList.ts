@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BrowseView } from "@/types/filters";
 import { useList } from "@/hooks/useList";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { leaseToServer, type BaseServer } from "@/lib/server";
 import { apiClient } from "@/lib/apiClient";
 import { isHiddenByVotes } from "@/utils/reputation";
@@ -15,7 +14,6 @@ import type {
   ReputationVoteResponse,
 } from "@/types/api";
 
-const DESKTOP_QUERY = "(min-width: 1280px)";
 const POLL_INTERVAL_MS = 1500;
 
 function normalizeHostname(hostname: string): string {
@@ -52,15 +50,7 @@ export function useServerList() {
   const [commentServerId, setCommentServerId] = useState<string | null>(null);
   const [browseView, setBrowseView] = useState<BrowseView>("home");
   const [showHidden, setShowHidden] = useState(false);
-  const isDesktop = useMediaQuery(DESKTOP_QUERY);
-  // The sidebar opens on desktop and closes on mobile, and follows the
-  // breakpoint when it is crossed; in between, the visitor toggles it.
-  const [sidebarOpen, setSidebarOpen] = useState(isDesktop);
-  const [sidebarBreakpoint, setSidebarBreakpoint] = useState(isDesktop);
-  if (sidebarBreakpoint !== isDesktop) {
-    setSidebarBreakpoint(isDesktop);
-    setSidebarOpen(isDesktop);
-  }
+
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     stale: true,
@@ -214,16 +204,11 @@ export function useServerList() {
     showHidden,
     setShowHidden,
     hiddenCount,
-    sidebarOpen,
-    setSidebarOpen,
     filteredServers: browseView === "favorites"
       ? list.filteredServers.filter((server) => server.reputation?.viewer_vote === "up")
       : list.filteredServers,
     handleBrowseViewChange: (view: BrowseView) => {
       setBrowseView(view);
-      if (!isDesktop) {
-        setSidebarOpen(false);
-      }
       list.resetFilters();
     },
     // null means unavailable; an empty array is an authoritative empty snapshot.

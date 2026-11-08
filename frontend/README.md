@@ -8,9 +8,8 @@ React + TypeScript frontend for relay server discovery and onboarding.
 - TypeScript
 - Vite 7
 - Tailwind CSS 4
-- shadcn/ui (Radix-based)
 - Lucide React
-- @ssgoi/react
+- Radix Dialog (the only headless primitive; everything else is Tailwind + tokens)
 - React Compiler (`babel-plugin-react-compiler`, enabled in `vite.config.ts`)
 
 ## Core Behavior
@@ -123,7 +122,18 @@ Relay server exposes:
 
 - Relay path constants are owned by Go (`types/paths.go`) and mirrored in `src/lib/apiPaths.ts` for browser calls.
 - Frontend API wire types live in `src/types/api.ts`.
-- Radix Select values cannot be empty strings. Use stable values such as `"all"` and `"default"`.
+- UI is built on role-based design tokens in `src/index.css`; components pick a role, never a hue, so light and dark differ only there.
+  - Roles: `surface-0..300` stack backgrounds (0 is the page, 300 the most raised), `content`, `content-emphasis` and `content-muted` color text and icons, `stroke` draws hairlines, and `state-hover` and `state-press` are translucent overlays rather than solid fills.
+  - Hover and press come from the `interactive` state-layer utility: a translucent overlay painted between an element's own background and its content.
+  - Spacing is Tailwind's 4px scale. `type-*` utilities give one class per type role (weight, size, line height).
+  - `AppShell` fixes a 40px header and a 289px sidebar that docks at the `nav` breakpoint (1140px) and slides over the page below it. Any element carrying `data-nav-close` inside the sidebar closes the drawer.
+- Browser storage can be unavailable in restricted contexts. The theme, the recently opened apps (`portal.recentApps`, newest first) and the `isPush` flag all ignore a failed read or write and carry on without it.
+- Opening a flagged app (`/server/:id`) relies on the card passing its directory entry as router state. A direct visit has none and goes back to the directory, as does an unflagged app, which opens its service directly.
+- `isPush` lives in session storage so it stays with one tab: a service opened in one tab never sends another tab's detail page back to the directory. It is set right before the page leaves for the service, and on returning (Back or a bfcache restore) the page goes to the directory instead of opening the service again.
+- `WebAppLink` is for web apps only; a raw TCP or UDP app has no link and shows its endpoints with copy buttons instead.
+- `src/lib/signinCopy.json` carries the texts of the Go sign-in pages. `sdk/appauth/signin_page_test.go` fails when a page and the file differ. OIDC and SAML leave for the provider at once and have no page of their own, so the Launch App preview only says where the visitor is sent.
+- Live regions that announce text (the allow-list notices and the "Not ready to copy" notice in Launch App) stay mounted even when empty, because a region only announces text that appears inside it.
+- Admin actions in `useAdmin` record their own failure in `error`; components only track that an action is running (`useBusy`).
 
 ## Recommendations
 
@@ -134,8 +144,8 @@ into public votes.
 
 ## App Comments
 
-The card's **Comments** action opens a separate right panel while the directory
-remains usable. Comments are anonymous (displayed as Guest) and shared by
+The card's **Comments** action opens a right sheet (bottom sheet on narrow
+screens). Comments are anonymous (displayed as Guest) and shared by
 visitors of the same relay. Opening another app starts a separate draft.
 
 `GET /api/comments?hostname=...` reads a public app's thread and

@@ -1,15 +1,11 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import type { ReputationSummary } from "@/types/api";
 import { ServerDetail } from "./ServerDetail";
 
-// The gate behavior is what matters here; the transition wrapper is a
-// passthrough so tests do not depend on ssgoi's browser internals.
-vi.mock("@ssgoi/react", () => ({
-  SsgoiTransition: ({ children }: { children?: ReactNode }) => <>{children}</>,
-}));
+const LEFT_FOR_SERVICE_KEY = "isPush";
 
 const FLAGGED: ReputationSummary = {
   hostname: "svc.example.com",
@@ -33,21 +29,23 @@ const SERVER_STATE = {
 
 function renderDetail(reputation?: ReputationSummary) {
   return render(
-    <MemoryRouter
-      initialEntries={[
-        "/",
-        {
-          pathname: "/server/svc.example.com",
-          state: { ...SERVER_STATE, reputation },
-        },
-      ]}
-      initialIndex={1}
-    >
-      <Routes>
-        <Route path="/" element={<div>directory</div>} />
-        <Route path="/server/:id" element={<ServerDetail />} />
-      </Routes>
-    </MemoryRouter>
+    <ThemeProvider>
+      <MemoryRouter
+        initialEntries={[
+          "/",
+          {
+            pathname: "/server/svc.example.com",
+            state: { ...SERVER_STATE, reputation },
+          },
+        ]}
+        initialIndex={1}
+      >
+        <Routes>
+          <Route path="/" element={<div>directory</div>} />
+          <Route path="/server/:id" element={<ServerDetail />} />
+        </Routes>
+      </MemoryRouter>
+    </ThemeProvider>
   );
 }
 
@@ -62,16 +60,14 @@ describe("ServerDetail reputation gate", () => {
     vi.useRealTimers();
   });
 
-  it("renders the warning gate for flagged services instead of auto-opening", () => {
+  it("renders the warning gate for flagged services without leaving for the service", () => {
     renderDetail(FLAGGED);
 
     act(() => {
       vi.advanceTimersByTime(1500);
     });
 
-    // The auto-open writes this flag right before navigating; it must
-    // stay unset while the gate holds the visitor.
-    expect(sessionStorage.getItem("isPush")).toBeNull();
+    expect(sessionStorage.getItem(LEFT_FOR_SERVICE_KEY)).toBeNull();
     expect(screen.getByText(/negative community ratings/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /open anyway/i })).toBeTruthy();
   });
@@ -81,20 +77,20 @@ describe("ServerDetail reputation gate", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /open anyway/i }));
 
-    expect(sessionStorage.getItem("isPush")).toBe("true");
-    expect(localStorage.getItem("isPush")).toBeNull();
+    expect(sessionStorage.getItem(LEFT_FOR_SERVICE_KEY)).toBe("true");
+    expect(localStorage.getItem(LEFT_FOR_SERVICE_KEY)).toBeNull();
   });
 
   it("returns to the directory when this tab already left for the service", () => {
-    sessionStorage.setItem("isPush", "true");
+    sessionStorage.setItem(LEFT_FOR_SERVICE_KEY, "true");
     renderDetail();
 
     expect(screen.getByText("directory")).toBeTruthy();
-    expect(sessionStorage.getItem("isPush")).toBeNull();
+    expect(sessionStorage.getItem(LEFT_FOR_SERVICE_KEY)).toBeNull();
   });
 
   it("ignores a flag left in local storage by another tab", () => {
-    localStorage.setItem("isPush", "true");
+    localStorage.setItem(LEFT_FOR_SERVICE_KEY, "true");
     renderDetail(FLAGGED);
 
     expect(screen.getByRole("button", { name: /open anyway/i })).toBeTruthy();

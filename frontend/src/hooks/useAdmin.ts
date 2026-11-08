@@ -380,3 +380,6 @@ export function useAdmin(enabled = true) {
     handleBulkBan,
   };
 }
+
+/** Everything the admin page needs from useAdmin; the console is prop-drilled from it. */
+export type AdminState = ReturnType<typeof useAdmin>;

@@ -1,4 +1,3 @@
-import { Ssgoi } from "@ssgoi/react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -7,12 +6,8 @@ import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <ThemeProvider>
-    <Ssgoi config={{}}>
-      <div style={{ position: "relative", minHeight: "100vh" }}>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
-      </div>
-    </Ssgoi>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
   </ThemeProvider>
 );

@@ -4,9 +4,23 @@ import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import type { AppComment, CommentListResponse, ReputationVoteAction, VoteCommentRequest } from "@/types/api";
 
+export interface ServerComments {
+  comments: AppComment[];
+  draft: string;
+  setDraft: (draft: string) => void;
+  loading: boolean;
+  pending: "post" | "delete" | null;
+  votingCommentId: string | null;
+  error: string;
+  refresh: () => Promise<void>;
+  submit: () => Promise<void>;
+  remove: (id: string) => Promise<void>;
+  voteComment: (id: string, vote: ReputationVoteAction) => Promise<void>;
+}
+
 // Mounted once per selected app by ServerList, so closing or switching panels
 // discards that app's draft and cannot apply an old request to a new thread.
-export function useServerComments(server: BaseServer) {
+export function useServerComments(server: BaseServer): ServerComments {
   const [comments, setComments] = useState<AppComment[]>([]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);

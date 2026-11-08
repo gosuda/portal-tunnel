@@ -1,26 +1,21 @@
-import { SsgoiTransition } from "@ssgoi/react";
 import { useEffect } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { AlertTriangle, ThumbsDown, ThumbsUp } from "lucide-react";
+import { ArrowLeft, ExternalLink, Home, ShieldAlert, ThumbsDown, ThumbsUp } from "lucide-react";
+import { AppShell, SidebarItem } from "@/components/shell/AppShell";
 import { Button } from "@/components/ui/button";
+import { ROUTE_PATHS } from "@/lib/apiPaths";
 import type { BaseServer } from "@/lib/server";
 import { isReputationWarning } from "@/utils/reputation";
 
-// Set right before this page leaves for the service. Session storage keeps it
-// to this tab, so a service opened in one tab does not bounce another tab's
-// detail page back to the directory.
 const LEFT_FOR_SERVICE_KEY = "isPush";
 
 function leaveForService(url: string): void {
   try {
     sessionStorage.setItem(LEFT_FOR_SERVICE_KEY, "true");
-  } catch {
-    // Storage can be unavailable in restricted contexts; open the service anyway.
-  }
+  } catch {}
   window.location.assign(url);
 }
 
-/** Whether this tab left for a service from here; reading clears it. */
 function consumeLeftForService(): boolean {
   try {
     const left = sessionStorage.getItem(LEFT_FOR_SERVICE_KEY) === "true";
@@ -31,91 +26,78 @@ function consumeLeftForService(): boolean {
   }
 }
 
+function useReturnHomeAfterLeavingForService(): void {
+  const navigate = useNavigate();
+  useEffect(() => {
+    const returnHome = () => {
+      if (consumeLeftForService()) navigate(ROUTE_PATHS.home, { replace: true });
+    };
+    returnHome();
+    window.addEventListener("pageshow", returnHome);
+    return () => window.removeEventListener("pageshow", returnHome);
+  }, [navigate]);
+}
+
 export function ServerDetail() {
   const location = useLocation();
   const navigate = useNavigate();
-  // The card passes its directory entry; a direct visit has none.
   const server = location.state as BaseServer | null;
 
-  const showGate = isReputationWarning(server?.reputation);
+  const isFlagged = isReputationWarning(server?.reputation);
 
-  // Coming back to this page after it opened the service (Back, or a bfcache
-  // restore) returns to the directory instead of opening the service again.
-  useEffect(() => {
-    const handlePageShow = () => {
-      if (consumeLeftForService()) {
-        navigate("/", { replace: true });
-      }
-    };
-    window.addEventListener("pageshow", handlePageShow);
-    return () => window.removeEventListener("pageshow", handlePageShow);
-  }, [navigate]);
+  useReturnHomeAfterLeavingForService();
 
-  useEffect(() => {
-    if (consumeLeftForService()) {
-      navigate("/", { replace: true });
-    }
-  }, [navigate]);
-
-  // Only flagged cards link here; unflagged cards open the service directly.
-  if (!server || !showGate) {
-    return <Navigate to="/" replace />;
+  if (!server || !isFlagged) {
+    return <Navigate to={ROUTE_PATHS.home} replace />;
   }
 
-  const { id, reputation } = server;
-
-  const openService = () => leaveForService(server.link);
-
-  const handleBack = () => {
-    navigate(-1);
-  };
+  const { reputation } = server;
 
   return (
-    <SsgoiTransition id={`/server/${id}`}>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-6 backdrop-blur-sm md:p-12">
-        <div className="w-full max-w-2xl bg-card border border-border p-8 md:p-10 rounded-xl shadow-2xl flex flex-col gap-5 items-start text-start">
-          <div className="flex items-center gap-3 text-amber-600 dark:text-amber-300">
-            <AlertTriangle className="size-7 shrink-0" />
-            <h1 className="font-display text-xl font-bold leading-tight">
+    <AppShell sidebar={<SidebarItem icon={<Home className="size-5" />} label="Home" href={ROUTE_PATHS.home} />}>
+      <div className="mx-auto flex w-full max-w-[2400px] justify-center px-4 pb-12 pt-8 md:px-6 md:pt-16">
+        <section aria-labelledby="gate-title" className="flex w-full max-w-xl flex-col gap-5 rounded-lg border border-stroke bg-surface-100 p-6 md:p-8">
+          <div className="flex items-center gap-3 text-warning">
+            <ShieldAlert className="size-8 shrink-0" />
+            <h1 id="gate-title" className="text-xl font-bold leading-tight text-content-emphasis">
               Community ratings warning
             </h1>
           </div>
-          <p className="text-text-muted leading-relaxed">
-            This service has received a high proportion of negative
-            community ratings. This is community feedback only — Portal has
-            not independently reviewed this service.
+          <div className="min-w-0">
+            <p className="truncate font-semibold text-content-emphasis">{server.name}</p>
+            <p className="truncate text-xs text-content-muted">{server.dns}</p>
+          </div>
+          <p className="text-content">
+            This service has received a high proportion of negative community ratings. This is community feedback
+            only — Portal has not independently reviewed this service.
           </p>
           {reputation && (
-            <div className="flex flex-wrap items-center gap-4 text-sm font-medium">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md bg-surface-200 px-4 py-3 text-sm font-semibold text-content-emphasis">
               <span className="flex items-center gap-1.5">
                 <ThumbsUp className="size-4 text-primary" />
                 {reputation.up} recommend
               </span>
               <span className="flex items-center gap-1.5">
-                <ThumbsDown className="size-4 text-red-500" />
+                <ThumbsDown className="size-4 text-danger" />
                 {reputation.down} do not recommend
               </span>
-              {typeof reputation.total === "number" && (
-                <span className="text-text-muted">
-                  {reputation.total} ratings so far
-                </span>
-              )}
+              <span className="font-normal text-content-muted">
+                {reputation.total} ratings so far · {Math.round((reputation.down * 100) / reputation.total)}% negative
+              </span>
             </div>
           )}
-          <div className="flex gap-3 w-full">
-            <Button
-              variant="secondary"
-              onClick={handleBack}
-              className="cursor-pointer"
-            >
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <Button onClick={() => navigate(-1)}>
+              <ArrowLeft className="size-4" />
               Back
             </Button>
-            <Button onClick={openService} className="cursor-pointer">
+            <Button variant="primary" onClick={() => leaveForService(server.link)}>
               Open anyway
+              <ExternalLink className="size-4" />
             </Button>
           </div>
-        </div>
+        </section>
       </div>
-    </SsgoiTransition>
+    </AppShell>
   );
 }

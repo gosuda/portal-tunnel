@@ -7,7 +7,7 @@ import {
   type PropsWithChildren,
 } from "react";
 
-export type Theme = "light" | "dark";
+type Theme = "light" | "dark";
 
 const DEFAULT_THEME: Theme = "dark";
 const THEME_STORAGE_KEY = "theme";
@@ -67,9 +67,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const updateTheme = (nextTheme: Theme) => {
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
-    } catch {
-      // Ignore storage failures and still apply the theme locally.
-    }
+    } catch {}
 
     startTransition(() => {
       setThemeState(nextTheme);

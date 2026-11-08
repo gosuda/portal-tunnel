@@ -1,57 +1,44 @@
-import * as React from "react"
-import { Slot } from "@radix-ui/react-slot"
-import { cva, type VariantProps } from "class-variance-authority"
+import type { ButtonHTMLAttributes } from "react";
+import { cn } from "@/lib/utils";
 
-import { cn } from "@/lib/utils"
+const VARIANTS = {
+  primary: "bg-primary text-primary-content font-semibold",
+  secondary: "bg-surface-300 text-content-emphasis font-semibold",
+  ghost: "bg-transparent text-content-emphasis",
+  danger: "bg-danger text-white font-semibold",
+} as const;
 
-const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
-  {
-    variants: {
-      variant: {
-        default:
-          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
-        destructive:
-          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
-        outline:
-          "border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground",
-        secondary:
-          "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 hover:underline",
-      },
-      size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-10 rounded-md px-8",
-        icon: "h-9 w-9",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-      size: "default",
-    },
-  }
-)
+const SIZES = {
+  sm: "h-8 gap-1.5 px-3 text-sm rounded-md",
+  md: "h-10 gap-2 px-4 text-sm rounded-md",
+  lg: "h-12 gap-2 px-6 text-base rounded-lg",
+} as const;
 
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
-  asChild?: boolean
+interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: keyof typeof VARIANTS;
+  size?: keyof typeof SIZES;
 }
 
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
-    const Comp = asChild ? Slot : "button"
-    return (
-      <Comp
-        className={cn(buttonVariants({ variant, size, className }))}
-        ref={ref}
-        {...props}
-      />
-    )
-  }
-)
-Button.displayName = "Button"
+export function Button({ variant = "secondary", size = "md", className, type = "button", ...props }: ButtonProps) {
+  return (
+    <button
+      type={type}
+      className={cn("interactive inline-flex shrink-0 items-center justify-center whitespace-nowrap", VARIANTS[variant], SIZES[size], className)}
+      {...props}
+    />
+  );
+}
 
-export { Button, buttonVariants }
+interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  "aria-label": string;
+}
+
+export function IconButton({ className, type = "button", ...props }: IconButtonProps) {
+  return (
+    <button
+      type={type}
+      className={cn("interactive inline-flex size-8 shrink-0 items-center justify-center rounded-full text-content-emphasis", className)}
+      {...props}
+    />
+  );
+}
