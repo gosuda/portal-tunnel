@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Chip, ChipField, Notice, TUNNEL_FORM_STYLES } from "@/components/TunnelFormParts";
+import { Chip, ChipField, Notice, TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { ALLOW_COPY, FieldIssues } from "./authShared";
 import {
   addAuthAllow,
@@ -19,7 +19,6 @@ export function AllowList({
 }) {
   const inputId = useId();
   const [draft, setDraft] = useState("");
-  const s = TUNNEL_FORM_STYLES;
   const method = auth.method;
   if (method === "none") {
     return null;

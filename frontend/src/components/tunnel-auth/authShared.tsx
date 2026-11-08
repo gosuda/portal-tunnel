@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Notice, TUNNEL_FORM_STYLES } from "@/components/TunnelFormParts";
+import { Notice, TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { useCopy } from "@/hooks/useCopy";
 import { cn } from "@/lib/utils";
 import {
@@ -169,7 +169,6 @@ export function MethodCard({
   method: MethodChoice;
   radio: RadioOptionProps;
 }) {
-  const s = TUNNEL_FORM_STYLES;
   const Icon = method.icon;
   const selected = radio["aria-checked"];
   return (
@@ -231,7 +230,6 @@ export function CopyLine({
   label: string;
 }) {
   const { copiedKey, copy } = useCopy();
-  const s = TUNNEL_FORM_STYLES;
   const copied = copiedKey !== null;
 
   return (
@@ -262,7 +260,7 @@ export function CopyLine({
 }
 
 const FIELD_INPUT_CLASS = cn(
-  TUNNEL_FORM_STYLES.input,
+  s.input,
   "h-9 font-mono text-[13px] read-only:opacity-70"
 );
 
@@ -294,7 +292,7 @@ export function TextField({
   const id = useId();
   return (
     <div className="space-y-1.5">
-      <label htmlFor={id} className={TUNNEL_FORM_STYLES.label}>
+      <label htmlFor={id} className={s.label}>
         {label}
         {optional && (
           <>
@@ -339,7 +337,6 @@ export function SecretPrompt({
   copyLabel: string;
   os: TunnelCommandOS;
 }) {
-  const s = TUNNEL_FORM_STYLES;
   return (
     <div className="space-y-1.5">
       <p className={s.label}>{title}</p>
@@ -374,7 +371,7 @@ export function RegisterNote({
   children: ReactNode;
 }) {
   return (
-    <p className={TUNNEL_FORM_STYLES.help}>
+    <p className={s.help}>
       {listed
         ? "These are for the short URL on each relay in the command. "
         : name === "" &&

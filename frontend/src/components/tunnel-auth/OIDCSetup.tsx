@@ -7,7 +7,7 @@ import {
   TextField,
   useRadioGroup,
 } from "./authShared";
-import { TUNNEL_FORM_STYLES } from "@/components/TunnelFormParts";
+import { TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { AUTH_CALLBACK_PATH } from "@/lib/apiPaths";
 import { cn } from "@/lib/utils";
 import {
@@ -35,7 +35,6 @@ export function OIDCSetup({
   name: string;
   os: TunnelCommandOS;
 }) {
-  const s = TUNNEL_FORM_STYLES;
   const isGoogle = auth.oidcIssuer === GOOGLE_OIDC_ISSUER;
   const providers = useRadioGroup(
     PROVIDERS.map((provider) => provider.id),

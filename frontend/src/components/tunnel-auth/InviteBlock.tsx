@@ -6,7 +6,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Notice, TUNNEL_FORM_STYLES } from "@/components/TunnelFormParts";
+import { Notice, TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { CopyLine, EXPIRY_CHOICES, TextField } from "./authShared";
 import { cn } from "@/lib/utils";
 import {
@@ -28,7 +28,6 @@ export function InviteBlock({
   os: TunnelCommandOS;
 }) {
   const expiresId = useId();
-  const s = TUNNEL_FORM_STYLES;
   const [address, setAddress] = useState("");
   const [subject, setSubject] = useState("");
   const [expires, setExpires] = useState("720h");

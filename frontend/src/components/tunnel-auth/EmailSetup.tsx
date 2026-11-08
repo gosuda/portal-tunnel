@@ -1,5 +1,5 @@
 import { SecretPrompt, TextField } from "./authShared";
-import { TUNNEL_FORM_STYLES } from "@/components/TunnelFormParts";
+import { TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import type {
   TunnelAuthIssue,
   TunnelAuthOptions,
@@ -17,7 +17,6 @@ export function EmailSetup({
   issues: TunnelAuthIssue[];
   os: TunnelCommandOS;
 }) {
-  const s = TUNNEL_FORM_STYLES;
 
   return (
     <div className="space-y-4">
