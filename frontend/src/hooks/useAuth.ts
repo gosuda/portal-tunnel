@@ -54,15 +54,14 @@ async function fetchAuthState(): Promise<AuthState> {
   }
 }
 
+/** The admin sign-in state and its actions; one owner per page. */
+export type AdminAuth = ReturnType<typeof useAuth>;
+
 export function useAuth() {
   const [authState, setAuthState] = useState<AuthState>({
     isAuthenticated: false,
     isLoading: true,
   });
-
-  const checkAuth = async () => {
-    setAuthState(await fetchAuthState());
-  };
 
   useEffect(() => {
     void (async () => {
@@ -115,6 +114,5 @@ export function useAuth() {
     isLoading: authState.isLoading,
     login,
     logout,
-    checkAuth,
   };
 }

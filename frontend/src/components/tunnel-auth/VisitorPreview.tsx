@@ -1,4 +1,4 @@
-import { TUNNEL_FORM_STYLES } from "@/components/TunnelFormParts";
+import { TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { Badge } from "./authShared";
 import signinCopy from "@/lib/signinCopy.json";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,6 @@ export function VisitorPreview({
   relayURL: string;
   name: string;
 }) {
-  const s = TUNNEL_FORM_STYLES;
   const hostname =
     buildServiceStatusHostname(relayURL, name) || "your-name.relay";
   let issuerHost = "your provider";

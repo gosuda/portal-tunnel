@@ -3,12 +3,8 @@ import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { ReputationSummary } from "@/types/api";
-
-// Directory presentation policy; the relay only stores vote aggregates.
-function isReputationWarning(summary: ReputationSummary | undefined): boolean {
-  return summary !== undefined && summary.total >= 5 && summary.down >= 3 && summary.down * 100 >= summary.total * 70;
-}
+import type { BaseServer } from "@/lib/server";
+import { isReputationWarning } from "@/utils/reputation";
 
 // Set right before this page leaves for the service. Session storage keeps it
 // to this tab, so a service opened in one tab does not bounce another tab's
@@ -35,24 +31,11 @@ function consumeLeftForService(): boolean {
   }
 }
 
-interface ServerDetailState {
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  thumbnail: string;
-  owner: string;
-  online: boolean;
-  serverUrl: string;
-  paymentEnabled?: boolean;
-  paymentLabel?: string;
-  reputation?: ReputationSummary;
-}
-
 export function ServerDetail() {
   const location = useLocation();
   const navigate = useNavigate();
-  const server = location.state as ServerDetailState | null;
+  // The card passes its directory entry; a direct visit has none.
+  const server = location.state as BaseServer | null;
 
   const showGate = isReputationWarning(server?.reputation);
 
@@ -82,7 +65,7 @@ export function ServerDetail() {
       return;
     }
     // Open the service once the hero transition has played.
-    const timer = setTimeout(() => leaveForService(server.serverUrl), 500);
+    const timer = setTimeout(() => leaveForService(server.link), 500);
     return () => clearTimeout(timer);
   }, [server, navigate, showGate]);
 
@@ -106,7 +89,7 @@ export function ServerDetail() {
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
 
-  const openService = () => leaveForService(server.serverUrl);
+  const openService = () => leaveForService(server.link);
 
   const handleBack = () => {
     navigate(-1);

@@ -1,5 +1,5 @@
 import { CopyLine, RegisterNote, TextField } from "./authShared";
-import { TUNNEL_FORM_STYLES } from "@/components/TunnelFormParts";
+import { TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { AUTH_SAML_ACS_PATH, AUTH_SAML_METADATA_PATH } from "@/lib/apiPaths";
 import {
   buildAuthRedirectURLs,
@@ -22,7 +22,6 @@ export function SAMLSetup({
   discovery: boolean;
   name: string;
 }) {
-  const s = TUNNEL_FORM_STYLES;
   const acsURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_SAML_ACS_PATH);
   const metadataURLs = buildAuthRedirectURLs(relayUrls, name, AUTH_SAML_METADATA_PATH);
 

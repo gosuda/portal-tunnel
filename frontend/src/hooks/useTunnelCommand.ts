@@ -1,5 +1,6 @@
 import { useMemo, useState, type ChangeEvent } from "react";
 import { useCopy } from "@/hooks/useCopy";
+import { readCurrentOrigin } from "@/lib/origin";
 import { normalizeExposeName } from "@/lib/exposeName";
 import { classifyShareInput } from "@/lib/shareLink";
 import {
@@ -10,16 +11,6 @@ import {
 } from "@/lib/tunnelCommand";
 
 export const DEFAULT_HOST = "3000";
-
-const FALLBACK_ORIGIN = "https://localhost";
-
-export function readCurrentOrigin(): string {
-  if (typeof window !== "undefined") {
-    return window.location.origin;
-  }
-
-  return FALLBACK_ORIGIN;
-}
 
 interface TunnelCommandExtras {
   relayUrls?: string[];
@@ -103,14 +94,10 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   };
 
   return {
-    currentOrigin,
-    relayUrls: commandOptions.relayUrls,
-    discovery: commandOptions.discovery,
     target,
     setTarget,
     name,
     copied: copiedKey !== null,
-    os,
     effectiveName,
     auth,
     setAuth,

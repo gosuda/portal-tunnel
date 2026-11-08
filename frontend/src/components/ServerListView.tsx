@@ -9,7 +9,7 @@ import { SidebarNav } from "@/components/SidebarNav";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { useCopy } from "@/hooks/useCopy";
 import type { BaseServer } from "@/lib/server";
-import type { BrowseView, SortOption, StatusFilter } from "@/types/filters";
+import type { BrowseView, SortOption } from "@/types/filters";
 import { matchesMedia } from "@/hooks/useMediaQuery";
 import { useRelayDiscovery } from "@/hooks/useRelayDiscovery";
 import { ROUTE_PATHS } from "@/lib/apiPaths";
@@ -38,6 +38,28 @@ function animateReorder(update: () => void, maxCards: number): void {
     return;
   }
   document.startViewTransition(() => flushSync(update));
+}
+
+/** The heading over the app grid: the view, then a search, then the order. */
+export function appListTitle(browseView: BrowseView, searchQuery: string, sortBy: SortOption): string {
+  if (browseView === "favorites") return "Favorites";
+  if (searchQuery.trim() !== "") return `Results for ${searchQuery}`;
+  if (sortBy === "recommended") return "Most recommended";
+  return "Home";
+}
+
+/** Why the grid is empty: still connecting, filtered out, or nothing there yet. */
+export function emptyListMessage(
+  browseView: BrowseView,
+  connecting: boolean,
+  filtered: boolean
+): { title: string; body: string } {
+  if (connecting) return { title: "Finding live apps", body: "Waiting for this relay to respond." };
+  if (filtered) return { title: "No results found", body: "Try another search or change your filters." };
+  if (browseView === "favorites") {
+    return { title: "Keep your favorite apps here", body: "Recommend an app to find it here later." };
+  }
+  return { title: "No apps are live yet", body: "Create a tunnel to share your first app." };
 }
 
 interface LiveAppCardProps {
@@ -70,7 +92,6 @@ interface ServerListViewProps {
   onBrowseViewChange: (view: BrowseView) => void;
   title?: string;
   searchQuery: string;
-  status: StatusFilter;
   sortBy: SortOption;
   selectedTags: string[];
   availableTags: string[];
@@ -95,7 +116,6 @@ export function ServerListView({
   onBrowseViewChange,
   title = "PORTAL",
   searchQuery,
-  status,
   sortBy,
   selectedTags,
   availableTags,
@@ -122,7 +142,7 @@ export function ServerListView({
 
   const gridRef = useRef<HTMLDivElement>(null);
   const hasActiveFilters =
-    searchQuery.trim() !== "" || status !== "all" || selectedTags.length > 0;
+    searchQuery.trim() !== "" || selectedTags.length > 0;
   // leases is null before the relay first answers and after a failed poll; an
   // active filter explains an empty list either way.
   const showConnecting = leases === null && !hasActiveFilters;
@@ -176,6 +196,7 @@ export function ServerListView({
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
 
   const isAppView = browseView === "home" || browseView === "favorites";
+  const emptyMessage = emptyListMessage(browseView, showConnecting, hasActiveFilters);
 
   return (
     <div className="portal-browser relative isolate min-h-screen text-foreground" onKeyDown={(event) => { if (event.key === "Escape") onSidebarOpenChange(false); }}>
@@ -216,7 +237,7 @@ export function ServerListView({
 
       {sidebarOpen && <button type="button" aria-label="Close navigation" onClick={() => onSidebarOpenChange(false)} className="fixed inset-x-0 top-[116px] bottom-0 z-40 bg-black/40 md:top-16 xl:hidden" />}
       <aside id="portal-navigation" aria-label="Navigation" className={`fixed top-[116px] bottom-0 left-0 z-40 flex w-[min(240px,calc(100vw-3rem))] flex-col overflow-y-auto border-r border-border bg-background/85 px-3 backdrop-blur-xl pb-6 pt-3 md:top-16 ${sidebarOpen ? "translate-x-0 visible" : "-translate-x-full invisible"}`}>
-        <SidebarNav variant="full" browseView={browseView} status={status} sortBy={sortBy} favorites={favorites} onBrowseViewChange={onBrowseViewChange} onSortByChange={onSortByChange} />
+        <SidebarNav variant="full" browseView={browseView} sortBy={sortBy} favorites={favorites} onBrowseViewChange={onBrowseViewChange} onSortByChange={onSortByChange} />
       </aside>
 
       {!sidebarOpen && (
@@ -225,7 +246,7 @@ export function ServerListView({
           aria-label="Mini Navigation"
           className="fixed top-[116px] bottom-0 left-0 z-40 hidden w-[72px] flex-col items-center overflow-y-auto border-r border-border bg-background/85 px-1.5 py-3 backdrop-blur-xl md:top-16 xl:flex"
         >
-          <SidebarNav variant="mini" browseView={browseView} status={status} sortBy={sortBy} favorites={favorites} onBrowseViewChange={onBrowseViewChange} onSortByChange={onSortByChange} />
+          <SidebarNav variant="mini" browseView={browseView} sortBy={sortBy} favorites={favorites} onBrowseViewChange={onBrowseViewChange} onSortByChange={onSortByChange} />
         </aside>
       )}
 
@@ -241,7 +262,7 @@ export function ServerListView({
             <div className="px-4 lg:px-8">
               <div className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <h1 className="text-xl font-bold">
-                  {browseView === "favorites" ? "Favorites" : searchQuery.trim() ? `Results for ${searchQuery}` : sortBy === "recommended" ? "Most recommended" : status === "online" ? "Live now" : browseView === "home" ? "Home" : "Discover apps"}
+                  {appListTitle(browseView, searchQuery, sortBy)}
                 </h1>
                 <p role="status" className="text-xs text-muted-foreground">{showConnecting ? "Connecting to relay..." : `${filteredServers.length.toLocaleString()} apps${paymentAppCount ? ` / ${paymentAppCount} paid` : ""}`}</p>
                 {(hiddenCount > 0 || showHidden) && <button type="button" aria-pressed={showHidden} onClick={() => onShowHiddenChange(!showHidden)} className="ml-auto rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground">{showHidden ? "Hide downvoted apps" : `Show hidden apps (${hiddenCount})`}</button>}
@@ -253,8 +274,8 @@ export function ServerListView({
               ) : (
                 <div className="mx-auto flex min-h-[55vh] max-w-md flex-col items-center justify-center gap-3 px-4 text-center">
                   {browseView === "favorites" ? <Star className="mb-2 size-12 text-muted-foreground" /> : <Search className="mb-2 size-12 text-muted-foreground" />}
-                  <h2 className="text-xl font-semibold">{showConnecting ? "Finding live apps" : hasActiveFilters ? "No results found" : browseView === "favorites" ? "Keep your favorite apps here" : "No apps are live yet"}</h2>
-                  <p className="text-sm leading-6 text-muted-foreground">{showConnecting ? "Waiting for this relay to respond." : hasActiveFilters ? "Try another search or change your filters." : browseView === "favorites" ? "Recommend an app to find it here later." : "Create a tunnel to share your first app."}</p>
+                  <h2 className="text-xl font-semibold">{emptyMessage.title}</h2>
+                  <p className="text-sm leading-6 text-muted-foreground">{emptyMessage.body}</p>
                 </div>
               )}
             </div>

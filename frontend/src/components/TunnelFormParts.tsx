@@ -30,6 +30,8 @@ export const TUNNEL_FORM_STYLES = {
   warn: "text-amber-700 dark:text-amber-400",
 } as const;
 
+const s = TUNNEL_FORM_STYLES;
+
 export function Notice({
   tone,
   children,
@@ -37,12 +39,11 @@ export function Notice({
   tone: "error" | "warn";
   children: ReactNode;
 }) {
-  const styles = TUNNEL_FORM_STYLES;
   return (
     <p
       className={cn(
         "flex items-start gap-1.5 text-xs leading-5",
-        tone === "error" ? styles.error : styles.warn
+        tone === "error" ? s.error : s.warn
       )}
     >
       <TriangleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -67,14 +68,13 @@ export function Chip({
   removeDisabled?: boolean;
   onRemove: () => void;
 }) {
-  const styles = TUNNEL_FORM_STYLES;
   return (
-    <span className={cn(styles.chip, invalid && "ring-1 ring-destructive")}>
+    <span className={cn(s.chip, invalid && "ring-1 ring-destructive")}>
       {kind && (
         <span
           className={cn(
             "text-[10px] font-semibold uppercase",
-            invalid ? styles.error : "text-primary"
+            invalid ? s.error : "text-primary"
           )}
         >
           {kind}
@@ -88,7 +88,7 @@ export function Chip({
         disabled={removeDisabled}
         className={cn(
           "ml-1 rounded-sm p-0.5",
-          removeDisabled ? "cursor-not-allowed opacity-40" : styles.chipRemove
+          removeDisabled ? "cursor-not-allowed opacity-40" : s.chipRemove
         )}
       >
         <X className="h-3 w-3" />
@@ -119,9 +119,8 @@ export function ChipField({
   onCommit: () => void;
   onRemoveLast: () => void;
 }) {
-  const styles = TUNNEL_FORM_STYLES;
   return (
-    <div className={styles.chipField}>
+    <div className={s.chipField}>
       {chips}
       <input
         id={id}
@@ -142,7 +141,7 @@ export function ChipField({
         spellCheck={false}
         className={cn(
           "min-w-[140px] flex-1 bg-transparent text-sm outline-none",
-          styles.chipInput
+          s.chipInput
         )}
       />
     </div>

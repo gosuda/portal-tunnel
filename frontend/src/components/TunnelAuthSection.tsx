@@ -1,4 +1,4 @@
-import { TUNNEL_FORM_STYLES } from "@/components/TunnelFormParts";
+import { TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { cn } from "@/lib/utils";
 import {
   buildTunnelPreviewURL,
@@ -41,7 +41,6 @@ export function TunnelAuthSection({
   name,
   os,
 }: TunnelAuthSectionProps) {
-  const s = TUNNEL_FORM_STYLES;
   const patch = (next: Partial<TunnelAuthOptions>) =>
     onChange({ ...auth, ...next });
   // Each method reads its own kind of entry, so a list does not carry over.

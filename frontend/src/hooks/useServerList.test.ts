@@ -111,4 +111,35 @@ describe("useServerList public snapshot", () => {
     expect(apiClient.get).toHaveBeenCalledTimes(2);
     unmount();
   });
+  it("keeps the open comments on the app's latest entry and closes them when it leaves", async () => {
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({ leases: [lease] })
+      .mockResolvedValueOnce({ leases: [{ ...lease, ready: 1 }] })
+      .mockResolvedValueOnce({ leases: [] });
+    const { result, unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+
+    act(() => result.current.toggleComments(result.current.filteredServers[0]));
+    expect(result.current.commentServer?.online).toBe(false);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(result.current.commentServer?.online).toBe(true);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(result.current.commentServer).toBeNull();
+    unmount();
+  });
+
+  it("closes the comments when the same app is toggled again", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ leases: [lease] });
+    const { result, unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+    const app = result.current.filteredServers[0];
+
+    act(() => result.current.toggleComments(app));
+    act(() => result.current.toggleComments(app));
+
+    expect(result.current.commentServer).toBeNull();
+    unmount();
+  });
 });

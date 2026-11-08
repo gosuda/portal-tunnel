@@ -6,7 +6,7 @@ import {
   Chip,
   ChipField,
   Notice,
-  TUNNEL_FORM_STYLES,
+  TUNNEL_FORM_STYLES as s,
 } from "@/components/TunnelFormParts";
 import { cn } from "@/lib/utils";
 import {
@@ -17,9 +17,9 @@ import {
 } from "@/lib/tunnelCommand";
 import {
   DEFAULT_HOST,
-  readCurrentOrigin,
   useTunnelCommand,
 } from "@/hooks/useTunnelCommand";
+import { readCurrentOrigin } from "@/lib/origin";
 import type { ShareKind } from "@/lib/shareLink";
 
 const TARGET_KIND_LABEL: Record<ShareKind, string> = {
@@ -32,7 +32,7 @@ const TARGET_PLACEHOLDER = "Port, URL, or file path";
 
 export function TunnelCommandForm() {
   const inputId = useId();
-  const [tunnelTarget, setTunnelTarget] = useState<TunnelCommandOS>("unix");
+  const [os, setOS] = useState<TunnelCommandOS>("unix");
   const currentOrigin = readCurrentOrigin();
 
   const [relayUrls, setRelayUrls] = useState<string[]>(() => [
@@ -62,7 +62,6 @@ export function TunnelCommandForm() {
     setTarget,
     name,
     copied,
-    os,
     effectiveName,
     auth,
     setAuth,
@@ -78,7 +77,7 @@ export function TunnelCommandForm() {
     thumbnailURL: normalizedThumbnailURL,
     enableUDP,
     udpPort,
-    os: tunnelTarget,
+    os,
   });
   const udpBlocked = authBlocksUDP(auth);
 
@@ -106,7 +105,6 @@ export function TunnelCommandForm() {
 
   // Shared text and input styles come from the table; the classes below are
   // this form's own layout.
-  const formStyles = TUNNEL_FORM_STYLES;
   const inlineFieldClass = "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-secondary/60";
   const inlineInputClass = "h-9 border-0 bg-transparent px-3 text-sm font-semibold text-foreground placeholder:text-text-muted shadow-none focus-visible:ring-0 dark:text-zinc-100 dark:placeholder:text-zinc-500";
   const osGroupClass = "flex rounded-md bg-border p-1 dark:bg-secondary/60";
@@ -123,18 +121,18 @@ export function TunnelCommandForm() {
   return (
     <div className="space-y-4 py-1">
       <div className="space-y-2">
-        <label className={formStyles.section}>Platform</label>
+        <label className={s.section}>Platform</label>
         <div className={osGroupClass}>
           <button
             type="button"
-            onClick={() => setTunnelTarget("unix")}
+            onClick={() => setOS("unix")}
             className={osButtonClass(os === "unix")}
           >
             Linux / macOS
           </button>
           <button
             type="button"
-            onClick={() => setTunnelTarget("windows")}
+            onClick={() => setOS("windows")}
             className={osButtonClass(os === "windows")}
           >
             Windows
@@ -144,7 +142,7 @@ export function TunnelCommandForm() {
 
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <label htmlFor={`${inputId}-host`} className={formStyles.section}>
+          <label htmlFor={`${inputId}-host`} className={s.section}>
             Target
           </label>
           {target.trim() !== "" && (
@@ -183,7 +181,7 @@ export function TunnelCommandForm() {
       <div className="space-y-2">
         <label
           htmlFor={`${inputId}-name`}
-          className={formStyles.section}
+          className={s.section}
         >
           Name <span className="ml-1 text-xs font-normal text-muted-foreground">optional</span>
         </label>
@@ -200,7 +198,7 @@ export function TunnelCommandForm() {
       </div>
 
       <div className="space-y-2">
-        <label className={formStyles.section}>
+        <label className={s.section}>
           Generated Command
         </label>
         <div>
@@ -241,7 +239,7 @@ export function TunnelCommandForm() {
         {showAdvanced && (
           <div className="mt-3 space-y-4 rounded-md border border-border bg-muted/45 px-4 py-4 dark:border-white/8 dark:bg-background/70">
             <div className="space-y-2">
-              <p className={formStyles.section}>Access</p>
+              <p className={s.section}>Access</p>
               <TunnelAuthSection
                 auth={auth}
                 onChange={setAuth}
@@ -269,7 +267,7 @@ export function TunnelCommandForm() {
             </label>
 
             <div className="space-y-2">
-              <label className={formStyles.section}>Relay URLs</label>
+              <label className={s.section}>Relay URLs</label>
               <ChipField
                 draft={urlInput}
                 placeholder="Relay URL (press Enter)"
@@ -310,7 +308,7 @@ export function TunnelCommandForm() {
                 <span>
                   Enable UDP transport
                   {udpBlocked && (
-                    <span className={cn("block", formStyles.help)}>
+                    <span className={cn("block", s.help)}>
                       Not available with sign-in: Portal can only check
                       visitors on web traffic.
                     </span>
@@ -325,9 +323,9 @@ export function TunnelCommandForm() {
                     value={udpPort}
                     onChange={(event) => setUDPPort(event.target.value)}
                     placeholder={target.trim() || DEFAULT_HOST}
-                    className={formStyles.input}
+                    className={s.input}
                   />
-                  <p className={formStyles.help}>
+                  <p className={s.help}>
                     Local UDP port to forward. Defaults to the same as Target.
                   </p>
                 </div>
@@ -347,7 +345,7 @@ export function TunnelCommandForm() {
                 value={thumbnailURL}
                 onChange={(event) => setThumbnailURL(event.target.value)}
                 placeholder="https://cdn.example.com/thumb.png"
-                className={formStyles.input}
+                className={s.input}
               />
               {normalizedThumbnailURL && (
                 <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-background dark:border-white/10 dark:bg-background">

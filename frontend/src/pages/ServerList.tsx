@@ -9,13 +9,13 @@ import type { ReputationVoteAction } from "@/types/api";
 export function ServerList() {
   const {
     commentServer,
-    setCommentServer,
+    toggleComments,
+    closeComments,
     browseView,
     sidebarOpen,
     setSidebarOpen,
     handleBrowseViewChange,
     searchQuery,
-    status,
     sortBy,
     selectedTags,
     availableTags,
@@ -41,7 +41,6 @@ export function ServerList() {
         onBrowseViewChange={handleBrowseViewChange}
         leases={leases}
         searchQuery={searchQuery}
-        status={status}
         sortBy={sortBy}
         selectedTags={selectedTags}
         availableTags={availableTags}
@@ -54,16 +53,14 @@ export function ServerList() {
         onSortByChange={handleSortByChange}
         onTagToggle={handleTagToggle}
         onClearTags={clearTags}
-        onOpenComments={(server) =>
-          setCommentServer((current) => (current?.id === server.id ? null : server))
-        }
+        onOpenComments={toggleComments}
         onVote={onVote}
       />
       {commentServer && (
         <CommentsThread
           key={commentServer.id}
           server={commentServer}
-          onClose={() => setCommentServer(null)}
+          onClose={closeComments}
           onVoteApp={onVote}
         />
       )}

@@ -293,7 +293,7 @@ type AuthAllowCheck =
  * email would mail a link to any address, so the tunnel refuses to start oidc,
  * saml or email without an allowlist.
  */
-export function needsAllowlist(method: TunnelAuthMethod): boolean {
+function needsAllowlist(method: TunnelAuthMethod): boolean {
   return method === "oidc" || method === "saml" || method === "email";
 }
 

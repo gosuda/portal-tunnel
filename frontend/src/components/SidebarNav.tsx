@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { BookOpen, Github, Globe, Home, ShieldCheck, Star, Terminal, ThumbsUp, type LucideIcon } from "lucide-react";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { ROUTE_PATHS } from "@/lib/apiPaths";
-import type { BrowseView, SortOption, StatusFilter } from "@/types/filters";
+import { DEFAULT_SORT, type BrowseView, type SortOption } from "@/types/filters";
 
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
 const DOCS_URL = "https://gosuda.github.io/portal-tunnel";
@@ -13,7 +13,6 @@ export type SidebarVariant = "full" | "mini";
 export interface SidebarNavProps {
   variant: SidebarVariant;
   browseView: BrowseView;
-  status: StatusFilter;
   sortBy: SortOption;
   favorites: number;
   onBrowseViewChange: (view: BrowseView) => void;
@@ -104,7 +103,6 @@ function NavGroup({
 export function SidebarNav({
   variant,
   browseView,
-  status,
   sortBy,
   favorites,
   onBrowseViewChange,
@@ -115,7 +113,7 @@ export function SidebarNav({
     {
       icon: Home,
       label: "Home",
-      current: browseView === "home" && status === "all" && sortBy === "default",
+      current: browseView === "home" && sortBy === DEFAULT_SORT,
       onClick: () => onBrowseViewChange("home"),
     },
     {

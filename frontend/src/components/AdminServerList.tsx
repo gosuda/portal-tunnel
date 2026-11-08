@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { AdminServerCard } from "@/components/AdminServerCard";
 import { TagCombobox } from "@/components/TagCombobox";
 import type { AdminServer, ApprovalMode, PortSettings } from "@/hooks/useAdmin";
+import type { AdminAuth } from "@/hooks/useAuth";
 import type { BanFilter, SortOption, StatusFilter } from "@/types/filters";
 import { StatusSelect } from "@/components/select/StatusSelect";
 import { BanStatusButtons } from "@/components/button/BanStatusButtons";
@@ -51,7 +52,7 @@ interface AdminServerListProps {
   onBulkApprove: (identityKeys: string[]) => void | Promise<void>;
   onBulkDeny: (identityKeys: string[]) => void | Promise<void>;
   onBulkBan: (identityKeys: string[]) => void | Promise<void>;
-  onAuthChange: () => void | Promise<void>;
+  auth: AdminAuth;
 }
 export function AdminServerList({
   title = "PORTAL ADMIN",
@@ -81,7 +82,7 @@ export function AdminServerList({
   onBulkApprove,
   onBulkDeny,
   onBulkBan,
-  onAuthChange,
+  auth,
 }: AdminServerListProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [selectedIdentityKeys, setSelectedIdentityKeys] = useState<Set<string>>(new Set());
@@ -268,10 +269,7 @@ export function AdminServerList({
       <div className="flex h-full grow flex-col">
         <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
           <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-            <AdminHeader
-              title={title}
-              onAuthChange={onAuthChange}
-            />
+            <AdminHeader title={title} auth={auth} />
             <div className="flex items-center gap-2">
               <div className="flex-1">{searchBar}</div>
             </div>

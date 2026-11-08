@@ -5,11 +5,9 @@ import { useAuth } from "@/hooks/useAuth";
 import { AdminServerList } from "@/components/AdminServerList";
 
 export function Admin() {
-  const {
-    isAuthenticated,
-    isLoading: authLoading,
-    checkAuth,
-  } = useAuth();
+  // One sign-in state for the page; the header signs in and out through it.
+  const auth = useAuth();
+  const { isAuthenticated, isLoading: authLoading } = auth;
 
   const {
     servers,
@@ -43,10 +41,6 @@ export function Admin() {
     handleBulkBan,
   } = useAdmin(isAuthenticated);
 
-  const handleAuthChange = async () => {
-    await checkAuth();
-  };
-
   if (authLoading) {
     return <div className="p-8 text-foreground">Checking authentication...</div>;
   }
@@ -57,10 +51,7 @@ export function Admin() {
         <div className="relative flex min-h-screen w-full flex-col bg-background">
           <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
             <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-              <AdminHeader
-                title="PORTAL ADMIN"
-                onAuthChange={handleAuthChange}
-              />
+              <AdminHeader auth={auth} />
             </div>
           </div>
           <main className="mx-auto flex w-full max-w-6xl flex-1 items-center justify-center px-6 py-16">
@@ -110,7 +101,7 @@ export function Admin() {
         onBulkApprove={handleBulkApprove}
         onBulkDeny={handleBulkDeny}
         onBulkBan={handleBulkBan}
-        onAuthChange={handleAuthChange}
+        auth={auth}
       />
     </SsgoiTransition>
   );

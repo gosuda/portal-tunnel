@@ -2,23 +2,23 @@ import { useEffect, useState } from "react";
 import { KeyRound, Loader2, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
-import { useAuth } from "@/hooks/useAuth";
+import type { AdminAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import type { DomainResponse } from "@/types/api";
 
 interface AdminHeaderProps {
   title?: string;
-  onAuthChange?: () => void | Promise<void>;
+  auth: AdminAuth;
 }
 
 export function AdminHeader({
   title = "PORTAL ADMIN",
-  onAuthChange,
+  auth,
 }: AdminHeaderProps) {
   const [releaseVersion, setReleaseVersion] = useState("");
   const [ensVerified, setENSVerified] = useState(false);
-  const { isAuthenticated, isLoading, login, logout } = useAuth();
+  const { isAuthenticated, isLoading, login, logout } = auth;
   const [adminToken, setAdminToken] = useState("");
   const [authError, setAuthError] = useState("");
 
@@ -30,13 +30,11 @@ export function AdminHeader({
       return;
     }
     setAdminToken("");
-    await onAuthChange?.();
   };
 
   const handleLogout = async () => {
     setAuthError("");
     await logout();
-    await onAuthChange?.();
   };
 
   useEffect(() => {

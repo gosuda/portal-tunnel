@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useList } from "@/hooks/useList";
 import { leaseToServer, type BaseServer } from "@/lib/server";
 import type { BanFilter } from "@/types/filters";
@@ -141,51 +141,47 @@ export function useAdmin(enabled = true) {
     setPolicySettings(state.settings);
   };
 
-  const fetchData = async () => {
-    setError("");
+  // Each load takes a number; only the latest may apply its result, so a
+  // refresh after an action and the first load cannot overwrite each other,
+  // and nothing applies after unmount.
+  const loadGeneration = useRef(0);
 
+  /** Reads the policy state; showLoading puts the page in its loading state. */
+  const reload = async (showLoading: boolean) => {
+    const generation = ++loadGeneration.current;
+    setError("");
+    if (showLoading) {
+      setLoading(true);
+    }
     try {
       const state = await loadPolicyState();
-      applyPolicyState(state);
+      if (generation === loadGeneration.current) {
+        applyPolicyState(state);
+      }
     } catch (err: unknown) {
-      setError(toAdminErrorMessage(err, "Failed to load admin data"));
+      if (generation === loadGeneration.current) {
+        setError(toAdminErrorMessage(err, "Failed to load admin data"));
+      }
+    } finally {
+      if (generation === loadGeneration.current) {
+        setLoading(false);
+      }
     }
   };
 
-  useEffect(() => {
-    let mounted = true;
-    if (!enabled) {
+  const loadOnEnable = useEffectEvent(() => {
+    if (enabled) {
+      void reload(true);
+    } else {
       setError("");
       setLoading(false);
-      return () => {
-        mounted = false;
-      };
     }
+  });
 
-    const loadInitialData = async () => {
-      setError("");
-      setLoading(true);
-      try {
-        const state = await loadPolicyState();
-        if (!mounted) {
-          return;
-        }
-        applyPolicyState(state);
-      } catch (err: unknown) {
-        if (!mounted) {
-          return;
-        }
-        setError(toAdminErrorMessage(err, "Failed to load admin data"));
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    };
-
-    void loadInitialData();
+  useEffect(() => {
+    loadOnEnable();
     return () => {
-      mounted = false;
+      loadGeneration.current += 1;
     };
   }, [enabled]);
 
@@ -213,7 +209,7 @@ export function useAdmin(enabled = true) {
     setError("");
     try {
       await action();
-      await fetchData();
+      await reload(false);
     } catch (err: unknown) {
       const message = toAdminErrorMessage(err, "Action failed");
       console.error(err);
