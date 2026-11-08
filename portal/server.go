@@ -283,7 +283,7 @@ func (cfg ServerConfig) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases in
 	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
 		return errTransportMaxLeasesMustNonNegative
 	}
-	if (udpEnabled || tcpEnabled) && !(cfg.MinPort > 0 && cfg.MaxPort > 0 && cfg.MinPort <= 65535 && cfg.MaxPort <= 65535 && cfg.MinPort <= cfg.MaxPort) {
+	if (udpEnabled || tcpEnabled) && (cfg.MinPort <= 0 || cfg.MaxPort <= 0 || cfg.MinPort > 65535 || cfg.MaxPort > 65535 || cfg.MinPort > cfg.MaxPort) {
 		return errTransportEnablementRequiresLeasePortRange
 	}
 	return nil
