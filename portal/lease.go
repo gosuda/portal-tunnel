@@ -39,6 +39,7 @@ const (
 	defaultRegisterChallengeOutstanding      = 256
 	defaultPortReservationGrace              = 5 * time.Minute
 	defaultIdleKeepalive                     = 15 * time.Second
+	maxClaimedStartedAge                     = 7 * 24 * time.Hour
 	defaultReadyQueueLimit                   = 8
 	defaultLeaseBridgeLimit                  = 128
 )
@@ -465,6 +466,16 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
+	// first_seen_at is relay-observed lease continuity. The client-reported
+	// started_at is only a bounded hint for a lease the relay has not seen yet;
+	// a live replacement below keeps the earlier observed value.
+	firstSeenAt := issuedAt
+	if !req.StartedAt.IsZero() && req.StartedAt.Before(issuedAt) {
+		firstSeenAt = req.StartedAt.UTC()
+		if floor := issuedAt.Add(-maxClaimedStartedAge); firstSeenAt.Before(floor) {
+			firstSeenAt = floor
+		}
+	}
 
 	record := &leaseRecord{
 		Identity:          leaseIdentity,
@@ -474,7 +485,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		Metadata:          req.Metadata.Copy(),
 		Overlay:           req.Overlay,
 		ExpiresAt:         expiresAt,
-		FirstSeenAt:       issuedAt,
+		FirstSeenAt:       firstSeenAt,
 		LastSeenAt:        issuedAt,
 		sourceAddr:        sourceAddr,
 		registerSource:    sourceAddr,
@@ -579,6 +590,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	r.cache.Register(record.cacheLease(), req)
 	if replacedIndex >= 0 {
+		if !replaced.isExpired(now) && !replaced.FirstSeenAt.IsZero() && replaced.FirstSeenAt.Before(record.FirstSeenAt) {
+			record.FirstSeenAt = replaced.FirstSeenAt
+		}
 		r.bps.ResetIdentityLimiter(identityKey)
 		r.records[replacedIndex] = record
 	} else {

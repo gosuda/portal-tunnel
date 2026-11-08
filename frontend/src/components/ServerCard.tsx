@@ -5,7 +5,7 @@ import { BadgeDollarSign, Info, MessageSquare, ThumbsDown, ThumbsUp, X } from "l
 import type { BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
-import { isHiddenByVotes } from "@/utils/reputation";
+import { isHiddenByVotes, isReputationWarning } from "@/utils/reputation";
 
 const PLACEHOLDER_THUMBNAILS = [
   "/placeholders/aurora-peaks.svg",
@@ -103,7 +103,7 @@ export function ServerCard({
   };
 
   const cardBody = (
-    <article data-hero-key={`server-bg-${serverId}`} className="relative w-full min-w-0">
+    <article className="relative w-full min-w-0">
       {/* 1. Thumbnail Container (16:9 aspect ratio) */}
       <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted">
         <img
@@ -358,7 +358,8 @@ export function ServerCard({
     </article>
   );
 
-  const detailPath = serverId
+  const isWarning = isReputationWarning(server.reputation);
+  const detailPath = isWarning && serverId
     ? `/server/${encodeURIComponent(serverId)}`
     : (server.link || "#");
 
@@ -366,12 +367,20 @@ export function ServerCard({
     <div className="group relative" title={description || undefined}>
       {cardBody}
       {isNavigable && (
-        <Link
-          to={detailPath}
-          state={server}
-          aria-label={`Open ${name}`}
-          className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-        />
+        isWarning ? (
+          <Link
+            to={detailPath}
+            state={server}
+            aria-label={`Open ${name}`}
+            className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          />
+        ) : (
+          <a
+            href={server.link || "#"}
+            aria-label={`Open ${name}`}
+            className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          />
+        )
       )}
     </div>
   );

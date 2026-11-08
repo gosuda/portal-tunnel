@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Search, X, Star, Menu, Plus } from "lucide-react";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
-import { HeroBackdropSVG } from "@/components/DirectoryBackdrop";
 import { PublicRelaysSection } from "@/components/PublicRelaysSection";
 import { ServerCard } from "@/components/ServerCard";
 import { SidebarNav } from "@/components/SidebarNav";
@@ -200,9 +199,6 @@ export function ServerListView({
 
   return (
     <div className="portal-browser relative isolate min-h-screen text-foreground" onKeyDown={(event) => { if (event.key === "Escape") onSidebarOpenChange(false); }}>
-      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[520px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_50%,transparent)]">
-        <div className="absolute inset-x-0 top-0 flex justify-center"><HeroBackdropSVG /></div>
-      </div>
       <a href="#portal-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[70] focus:rounded-md focus:bg-foreground focus:px-4 focus:py-2 focus:text-background">Skip to content</a>
       <header className="sticky top-0 z-50 grid h-[116px] grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2 border-b border-border bg-background/80 px-4 py-2 backdrop-blur-xl md:h-16 md:grid-cols-[auto_minmax(0,1fr)_auto] md:gap-x-6 lg:px-6">
         <div className="flex items-center gap-3">

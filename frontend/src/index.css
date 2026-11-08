@@ -62,10 +62,7 @@
     /* Directory backdrop colors are RGB triplets for configurable alpha. */
     --stage-bg: 238 244 250;
     --stage-bg-edge: 247 249 252;
-    --stage-star: 148 163 184;
     --stage-accent: 15 118 110;
-    --stage-accent-2: 3 105 161;
-    --stage-glow: 0.55;
   }
 
   .dark {
@@ -94,10 +91,7 @@
 
     --stage-bg: 4 20 40;
     --stage-bg-edge: 2 11 24;
-    --stage-star: 224 242 254;
     --stage-accent: 94 252 232;
-    --stage-accent-2: 56 189 248;
-    --stage-glow: 1;
   }
 
   * {
@@ -117,10 +111,7 @@
 
   body {
     min-height: 100vh;
-    background:
-      radial-gradient(circle at top center, oklch(75% 0.14 195 / 0.16), transparent 36%),
-      radial-gradient(circle at 12% 18%, oklch(60% 0.2 35 / 0.08), transparent 22%),
-      linear-gradient(180deg, oklch(100% 0 0) 0%, oklch(97% 0.005 250) 54%, oklch(95% 0.005 250) 100%);
+    background: var(--background);
     color: var(--foreground);
     font-family: var(--font-family-sans);
   }
@@ -181,8 +172,6 @@
 /* Keep the original Portal palette and atmosphere around the directory. */
 .portal-browser {
   background:
-    radial-gradient(ellipse 340px 48px at 58% 100%, rgb(var(--stage-accent) / calc(0.22 * var(--stage-glow))), transparent 100%),
-    radial-gradient(ellipse at 70% 0%, rgb(var(--stage-accent-2) / 0.12), transparent 45%),
     linear-gradient(180deg, rgb(var(--stage-bg)) 0, rgb(var(--stage-bg-edge)) 420px, var(--background) 900px);
 }
 .portal-nav-item {

@@ -135,10 +135,11 @@ type Exposure struct {
 	cancel context.CancelFunc
 	done   <-chan struct{}
 
-	identity types.Identity
-	options  options
-	metadata types.LeaseMetadata
-	cache    *cache.Source
+	startedAt time.Time
+	identity  types.Identity
+	options   options
+	metadata  types.LeaseMetadata
+	cache     *cache.Source
 
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
@@ -322,6 +323,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	exposure := &Exposure{
 		cancel:         cancel,
 		done:           exposureCtx.Done(),
+		startedAt:      time.Now().UTC(),
 		identity:       identity,
 		options:        cfg,
 		metadata:       cfg.Metadata.Copy(),
@@ -1228,6 +1230,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			TCPEnabled: e.options.TCPEnabled,
 			BanMITM:    e.options.BanMITM,
 			Metadata:   e.metadata.Copy(),
+			StartedAt:  e.startedAt,
 		})
 		if err != nil {
 			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err})

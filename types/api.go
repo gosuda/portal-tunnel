@@ -81,6 +81,7 @@ type RegisterChallengeRequest struct {
 	TTL                    int           `json:"ttl,omitempty"` // Non-positive values default to 120 seconds; maximum 600.
 	UDPEnabled             bool          `json:"udp_enabled,omitempty"`
 	TCPEnabled             bool          `json:"tcp_enabled,omitempty"`
+	StartedAt              time.Time     `json:"started_at,omitempty"`
 }
 
 type RegisterChallengeResponse struct {

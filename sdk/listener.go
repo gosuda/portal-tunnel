@@ -76,6 +76,7 @@ type listenerConfig struct {
 	TCPEnabled bool
 	BanMITM    bool
 	Metadata   types.LeaseMetadata
+	StartedAt  time.Time
 }
 
 type listenerStatus struct {
@@ -165,6 +166,8 @@ type listener struct {
 	doneCh    <-chan struct{}
 	closeOnce sync.Once
 
+	startedAt time.Time
+
 	metadataMu        sync.RWMutex
 	metadata          types.LeaseMetadata
 	identity          types.Identity
@@ -217,6 +220,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
+		startedAt:     cfg.StartedAt,
 	}
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
@@ -1275,6 +1279,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		TTL:                    int(defaultLeaseTTL / time.Second),
 		UDPEnabled:             l.udpEnabled,
 		TCPEnabled:             l.tcpEnabled,
+		StartedAt:              l.startedAt,
 	}
 	l.cache.ConfigureRegistration(&registerReq)
 	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))

@@ -1427,3 +1427,108 @@ func (i testRelayIntermediate) issue(t *testing.T, host string, extra ...*x509.C
 	}
 	return &acme.TLSMaterial{CertPEM: certPEM, Certificate: certificate}
 }
+
+func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	id := newTestLeaseIdentity(t, "started-at")
+	clientStartedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+
+	// 1. Initial registration with explicit StartedAt sets FirstSeenAt to StartedAt
+	record1, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:  id,
+		StartedAt: clientStartedAt,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if !record1.FirstSeenAt.Equal(clientStartedAt) {
+		t.Fatalf("FirstSeenAt = %v, want %v", record1.FirstSeenAt, clientStartedAt)
+	}
+
+	leases := registry.PublicLeases(time.Now())
+	if len(leases) != 1 || !leases[0].FirstSeenAt.Equal(clientStartedAt) {
+		t.Fatalf("PublicLeases() first_seen_at = %v, want %v", leases[0].FirstSeenAt, clientStartedAt)
+	}
+
+	// 2. Re-registration without StartedAt preserves existing record's FirstSeenAt
+	record2, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: id,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() reconnect error = %v", err)
+	}
+	if !record2.FirstSeenAt.Equal(clientStartedAt) {
+		t.Fatalf("FirstSeenAt after reconnect without started_at = %v, want %v", record2.FirstSeenAt, clientStartedAt)
+	}
+
+	// 3. A live replacement keeps relay-observed continuity past the 7-day
+	// claim bound, whether or not the client sends started_at.
+	observedAt := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
+	registry.mu.Lock()
+	record2.FirstSeenAt = observedAt
+	registry.mu.Unlock()
+	for _, startedAt := range []time.Time{{}, clientStartedAt, time.Now().UTC().Add(-2 * time.Minute)} {
+		record3, _, err := registry.Register(types.RegisterChallengeRequest{
+			Identity:  id,
+			StartedAt: startedAt,
+		}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatalf("Register() live replacement error = %v", err)
+		}
+		if !record3.FirstSeenAt.Equal(observedAt) {
+			t.Fatalf("FirstSeenAt after live replacement with started_at %v = %v, want %v", startedAt, record3.FirstSeenAt, observedAt)
+		}
+	}
+
+	// An expired record still in the registry is not live continuity, so a
+	// client without started_at starts over at registration time.
+	registry.mu.Lock()
+	for _, existing := range registry.records {
+		if existing != nil && existing.ServiceKey() == id.ServiceKey() {
+			existing.ExpiresAt = time.Now().Add(-time.Second)
+		}
+	}
+	registry.mu.Unlock()
+	beforeExpired := time.Now().UTC().Truncate(time.Second)
+	expiredRecord, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: id,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() after expiry error = %v", err)
+	}
+	if expiredRecord.FirstSeenAt.Before(beforeExpired) {
+		t.Fatalf("FirstSeenAt after expired replacement = %v, want no earlier than %v", expiredRecord.FirstSeenAt, beforeExpired)
+	}
+
+	// 4. StartedAt in the future is clamped to token issuance time
+	futureID := newTestLeaseIdentity(t, "future-started")
+	futureStartedAt := time.Now().UTC().Add(10 * time.Minute)
+	beforeReg := time.Now().UTC().Truncate(time.Second)
+	record4, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:  futureID,
+		StartedAt: futureStartedAt,
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() future error = %v", err)
+	}
+	afterReg := time.Now().UTC().Add(time.Second)
+	if record4.FirstSeenAt.Before(beforeReg) || record4.FirstSeenAt.After(afterReg) {
+		t.Fatalf("FirstSeenAt for future StartedAt was %v, want clamped between %v and %v", record4.FirstSeenAt, beforeReg, afterReg)
+	}
+
+	// 5. StartedAt older than maxClaimedStartedAge is bounded, so a client cannot claim unlimited uptime
+	oldID := newTestLeaseIdentity(t, "ancient-started")
+	record5, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:  oldID,
+		StartedAt: time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC),
+	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() ancient error = %v", err)
+	}
+	floor := time.Now().UTC().Add(-maxClaimedStartedAge - time.Minute)
+	if record5.FirstSeenAt.Before(floor) {
+		t.Fatalf("FirstSeenAt for ancient StartedAt = %v, want no earlier than %v", record5.FirstSeenAt, floor)
+	}
+}
