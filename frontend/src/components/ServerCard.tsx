@@ -29,24 +29,8 @@ function pickPlaceholderThumbnail(seed: string): string {
   return PLACEHOLDER_THUMBNAILS[hash % PLACEHOLDER_THUMBNAILS.length];
 }
 
-function formatDisplayUrl(server: BaseServer): string {
-  const { tcpAddr, udpAddr, dns, link, id } = server;
-  if (tcpAddr && udpAddr) return `tcp://${tcpAddr}`;
-  if (tcpAddr) return `tcp://${tcpAddr}`;
-  if (udpAddr) return `udp://${udpAddr}`;
-
-  if (link) {
-    try {
-      if (link.startsWith("http://") || link.startsWith("https://")) {
-        const parsed = new URL(link);
-        const path = parsed.pathname === "/" ? "" : parsed.pathname;
-        return `${parsed.host}${path}`;
-      }
-    } catch {
-      // Ignore URL parsing errors for relative paths
-    }
-  }
-  return dns || id || "";
+function formatDisplayUrl({ tcpAddr, udpAddr, dns, id }: BaseServer): string {
+  return tcpAddr ? `tcp://${tcpAddr}` : udpAddr ? `udp://${udpAddr}` : dns || id || "";
 }
 
 interface ServerCardProps {
@@ -132,7 +116,7 @@ export function ServerCard({
 
   const cardBody = (
     <article className="relative w-full min-w-0">
-      {/* 1. macOS Safari Window Frame (Direction B: Safari Compact Tab) */}
+      {/* 1. macOS Safari Window Frame */}
       <div className="relative flex flex-col w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-card shadow-2xs transition-all duration-300 ease-out group-hover:-translate-y-0.5 group-hover:border-border group-hover:shadow-md">
         {/* Safari Compact Toolbar Header */}
         <div className="relative flex h-7.5 w-full items-center gap-2 border-b border-border/50 dark:border-white/10 bg-muted/60 dark:bg-neutral-900/60 px-3 py-1 backdrop-blur-xs select-none">

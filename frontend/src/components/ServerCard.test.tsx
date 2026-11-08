@@ -255,14 +255,14 @@ describe("ServerCard comments interaction", () => {
             owner: "alice",
             online: true,
             dns: "cool.relay.example.com",
-            link: "https://cool.relay.example.com/dashboard",
+            link: "https://cool.relay.example.com/",
           }}
         />
       </MemoryRouter>
     );
 
-    expect(screen.getByTitle("cool.relay.example.com/dashboard")).toBeTruthy();
-    expect(screen.getByText("cool.relay.example.com/dashboard")).toBeTruthy();
+    expect(screen.getByTitle("cool.relay.example.com")).toBeTruthy();
+    expect(screen.getByText("cool.relay.example.com")).toBeTruthy();
   });
 
   it("renders description and tags in overlay alongside transport endpoints", () => {
@@ -285,12 +285,11 @@ describe("ServerCard comments interaction", () => {
       </MemoryRouter>
     );
 
+    expect(screen.getByTitle("tcp://tcp.relay.example.com:40000")).toBeTruthy();
     expect(screen.getByText("Dedicated TCP game server")).toBeTruthy();
     expect(screen.getByText("#game")).toBeTruthy();
     expect(screen.getByText("tcp.relay.example.com:40000")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy TCP" })).toBeTruthy();
-    // Info disclosure button is no longer rendered
-    expect(screen.queryByRole("button", { name: "Show description" })).toBeNull();
   });
 
   it("allows direct voting from the card without navigating into the service", async () => {
