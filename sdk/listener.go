@@ -81,15 +81,16 @@ type listenerConfig struct {
 }
 
 type listenerStatus struct {
-	state     RelayState
-	failure   RelayFailure
-	approval  RelayApproval
-	err       error
-	publicURL string
-	aliasURL  string
-	udpAddr   string
-	tcpAddr   string
-	version   string
+	state      RelayState
+	failure    RelayFailure
+	approval   RelayApproval
+	err        error
+	publicURL  string
+	aliasURL   string
+	aliasEpoch string
+	udpAddr    string
+	tcpAddr    string
+	version    string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -353,12 +354,13 @@ func (l *listener) reportAvailable() {
 		udpAddr = lease.udpAddr
 	}
 	l.report(listenerStatus{
-		state:     state,
-		publicURL: l.publicURLForLease(lease),
-		aliasURL:  l.aliasURLForLease(lease),
-		udpAddr:   udpAddr,
-		tcpAddr:   lease.tcpAddr,
-		version:   l.api.relayReleaseVersion(),
+		state:      state,
+		publicURL:  l.publicURLForLease(lease),
+		aliasURL:   l.aliasURLForLease(lease),
+		aliasEpoch: lease.aliasEpoch,
+		udpAddr:    udpAddr,
+		tcpAddr:    lease.tcpAddr,
+		version:    l.api.relayReleaseVersion(),
 	})
 }
 
@@ -481,6 +483,7 @@ type listenerSnapshot struct {
 	// aliasHostname is the <name>.<root> alias when the relay granted it
 	// to this lease, else empty. The relay keeps it for the lease lifetime.
 	aliasHostname string
+	aliasEpoch    string
 	udpAddr       string
 	tcpAddr       string
 	accessToken   string
@@ -1322,6 +1325,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	next := listenerSnapshot{
 		hostname:       canonicalHostname,
 		aliasHostname:  resp.Hostname,
+		aliasEpoch:     resp.AliasEpoch,
 		udpAddr:        resp.UDPAddr,
 		tcpAddr:        resp.TCPAddr,
 		accessToken:    resp.AccessToken,

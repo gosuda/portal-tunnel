@@ -9,11 +9,10 @@
 // a replayed token within its TTL re-authenticates the same wallet,
 // which cannot create a new identity or bypass signature verification,
 // so replay tracking — and the global capacity failure mode it would
-// reintroduce — is deliberately omitted. Each authenticator generates
-// its challenge-signing key at construction, so issued challenges are
-// bound to the authenticator instance: recreating it invalidates
-// outstanding challenges. Source IP addresses and
-// relay connection identities are deliberately not used to rate-limit
+// reintroduce — is deliberately omitted. By default each authenticator generates
+// its challenge-signing key at construction. Services can instead provide a
+// shared key so outstanding challenges survive replica rotation. Source IP
+// addresses and relay connection identities are deliberately not used to rate-limit
 // issuance: neither is a trustworthy browser identity through relay
 // transport, so limiting on them would only block the wrong clients.
 package identity
@@ -33,7 +32,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-var errWalletAuthRequiresLeastOneAllowed = errors.New("wallet auth requires at least one allowed address")
+var (
+	errWalletAuthRequiresLeastOneAllowed = errors.New("wallet auth requires at least one allowed address")
+	errWalletAuthChallengeKeyTooShort    = errors.New("wallet auth challenge key must be at least 32 bytes")
+)
 
 const (
 	// siweChallengeTTL bounds how long a wallet has to sign its challenge.
@@ -53,6 +55,10 @@ var (
 
 // SIWEAuthConfig configures the authenticator.
 type SIWEAuthConfig struct {
+	// ChallengeKey lets instances of one service verify each other's challenges.
+	// Leave empty for instance-bound challenges. Use a domain-separated secret
+	// of at least 32 bytes, shared only by the authenticators in that service.
+	ChallengeKey     []byte
 	AllowedAddresses []string
 	AllowAnyAddress  bool
 	Statement        string
@@ -91,14 +97,17 @@ type siweChallengePayload struct {
 }
 
 // NewSIWEAuthenticator validates the configuration and returns an authenticator.
-// The challenge-signing key is generated fresh per authenticator and never
-// crosses the package boundary, so issued challenges are bound to the
-// authenticator instance: recreating it invalidates outstanding
-// challenges.
+// Without ChallengeKey it generates a fresh key, binding outstanding challenges
+// to this instance. A supplied key is copied and remains private to the instance.
 func NewSIWEAuthenticator(cfg SIWEAuthConfig) (*SIWEAuthenticator, error) {
-	key := make([]byte, siweChallengeKeyLength)
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("generate wallet auth challenge key: %w", err)
+	key := append([]byte(nil), cfg.ChallengeKey...)
+	if len(key) == 0 {
+		key = make([]byte, siweChallengeKeyLength)
+		if _, err := rand.Read(key); err != nil {
+			return nil, fmt.Errorf("generate wallet auth challenge key: %w", err)
+		}
+	} else if len(key) < siweChallengeKeyLength {
+		return nil, errWalletAuthChallengeKeyTooShort
 	}
 	addresses, err := NormalizeEVMAddresses(cfg.AllowedAddresses)
 	if err != nil {
@@ -118,6 +127,18 @@ func NewSIWEAuthenticator(cfg SIWEAuthConfig) (*SIWEAuthenticator, error) {
 		challengePrefix: strings.TrimSpace(cfg.ChallengePrefix),
 		key:             key,
 	}, nil
+}
+
+// ForBinding scopes challenges to an additional ownership boundary, such as
+// an alias generation. It leaves the authenticator unchanged and does not
+// retain state. An empty binding preserves the unbound challenge format.
+func (a *SIWEAuthenticator) ForBinding(binding string) *SIWEAuthenticator {
+	if a == nil || binding == "" {
+		return a
+	}
+	bound := *a
+	bound.key = a.sign([]byte("siwe-challenge-binding:" + binding))
+	return &bound
 }
 
 // NormalizeEVMAddresses canonicalizes configured wallet addresses and

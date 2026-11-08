@@ -271,10 +271,16 @@ unregister, signing, reverse admission, and activity updates. Exclusive registra
 replaces all records of that identity; a replica cannot join a live exclusive lease
 or retained cache entry. Replica requests reject dedicated TCP/UDP ports, relay
 cache, and overlay.
-The CLI and agent also reject the built-in application auth gate and paid Nano
-routes for replicas. Their login challenges, email links, alias session epochs,
-and payment consumption cannot safely follow connection rotation across
-independent clients. SDK embedders own the compatibility of their HTTP handlers.
+Alias ownership has a relay-issued epoch shared by all live leases of that
+identity. Adding or replacing a lease preserves it while ownership is continuous;
+releasing the alias changes it on the next registration. Application sessions and
+login state bind to the epoch. Older relays without epochs retain the SDK's local
+alias lifetime fallback. SIWE challenges use an identity-derived, domain-separated
+key and are scoped to the alias epoch, allowing another replica to verify them.
+The CLI and agent support SIWE, credential and OIDC authentication with replicas.
+Email links, SAML assertions and paid Nano routes still require a single consumption
+owner, so those combinations are rejected. SDK embedders own handler compatibility
+and must pass relay-issued alias epochs to application auth.
 One identity holds at most 16 live replicas; further replica registrations are
 refused as rate limited. Identity policy and bandwidth credit survive until the
 last lease is removed. Registration of a replica does not suspend its siblings.

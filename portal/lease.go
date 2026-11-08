@@ -601,6 +601,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 				record.FirstSeenAt = existing.FirstSeenAt
 			}
 		}
+		if existingKey == identityKey && existing.Hostname != "" && existing.Hostname == record.Hostname {
+			record.AliasEpoch = existing.AliasEpoch
+		}
 		if existingKey != identityKey {
 			if existing.datagram != nil {
 				udpLeases++
@@ -629,6 +632,11 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		r.mu.Unlock()
 		r.rollbackRecord(record)
 		return nil, types.RegisterResponse{}, errReplicaLimit
+	}
+	if record.Hostname == "" {
+		record.AliasEpoch = ""
+	} else if record.AliasEpoch == "" {
+		record.AliasEpoch = utils.RandomID("alias_")
 	}
 	if record.datagram != nil {
 		if max := r.udpMaxLeases; max > 0 && udpLeases >= max {
@@ -687,6 +695,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	resp := types.RegisterResponse{
 		Identity:          record.Identity,
 		Hostname:          record.Hostname,
+		AliasEpoch:        record.AliasEpoch,
 		CanonicalHostname: record.CanonicalHostname,
 		ExpiresAt:         record.ExpiresAt,
 		AccessToken:       accessToken,

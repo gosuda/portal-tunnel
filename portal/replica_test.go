@@ -58,6 +58,51 @@ func TestReplicaLeaseLifecycleIsIndependent(t *testing.T) {
 	}
 }
 
+func TestAliasEpochFollowsOwnershipRatherThanLeases(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "alias-epoch")
+	_, first := registerHTTPReplica(t, registry, owner)
+	_, second := registerHTTPReplica(t, registry, owner)
+	if first.AliasEpoch == "" || second.AliasEpoch != first.AliasEpoch {
+		t.Fatal("replicas must share an alias ownership epoch")
+	}
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: first.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+	_, replacement, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.AliasEpoch != first.AliasEpoch {
+		t.Fatal("replacing a live lease changed uninterrupted ownership")
+	}
+	other := newTestLeaseIdentity(t, owner.Name)
+	_, fallback, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true, AllowCanonicalFallback: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.Hostname != "" || fallback.AliasEpoch != "" {
+		t.Fatal("a canonical fallback claimed alias ownership")
+	}
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: replacement.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+	_, next := registerHTTPReplica(t, registry, owner)
+	if next.AliasEpoch == "" || next.AliasEpoch == first.AliasEpoch {
+		t.Fatal("releasing and reclaiming an alias reused its epoch")
+	}
+	// Expiry also ends ownership, even before background cleanup removes records.
+	for _, record := range registry.records {
+		if record.ServiceKey() == owner.ServiceKey() {
+			record.ExpiresAt = time.Now().Add(-time.Minute)
+		}
+	}
+	_, afterExpiry := registerHTTPReplica(t, registry, owner)
+	if afterExpiry.AliasEpoch == "" || afterExpiry.AliasEpoch == next.AliasEpoch {
+		t.Fatal("expired ownership survived re-registration")
+	}
+}
+
 func TestExclusiveRegistrationReplacesAllReplicas(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	identity := newTestLeaseIdentity(t, "exclusive")

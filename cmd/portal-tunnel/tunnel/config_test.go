@@ -104,7 +104,7 @@ func TestReplicaConfigResolvesHTTPAndRejectsUnsupportedModes(t *testing.T) {
 	}
 }
 
-func TestReplicaRejectsBuiltInApplicationAuth(t *testing.T) {
+func TestReplicaAuthCompatibility(t *testing.T) {
 	for _, auth := range []appauth.Config{
 		{Provider: appauth.ProviderSIWE},
 		{Provider: appauth.ProviderCredential},
@@ -118,8 +118,10 @@ func TestReplicaRejectsBuiltInApplicationAuth(t *testing.T) {
 				t.Fatalf("exclusive auth config rejected: %v", err)
 			}
 			cfg.Replica = true
-			if _, err := cfg.Spec(); !errors.Is(err, errReplicaApplicationAuth) {
-				t.Fatalf("replica auth config: got %v, want incompatible-auth error", err)
+			_, err := cfg.Spec()
+			reject := auth.Provider == appauth.ProviderEmail || auth.Provider == appauth.ProviderSAML
+			if reject && !errors.Is(err, errReplicaApplicationAuth) || !reject && err != nil {
+				t.Fatalf("replica %s config: got %v, want rejection=%v", auth.Provider, err, reject)
 			}
 		})
 	}

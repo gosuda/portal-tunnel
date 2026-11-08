@@ -113,6 +113,7 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 | `identity` | `Identity` | normalized lease identity |
 | `hostname` | `string` | friendly hostname; empty when a client that allows canonical fallback finds the friendly name owned by another identity |
 | `canonical_hostname` | `string` | relay-derived identity-bound hostname used by the SDK |
+| `alias_epoch` | `string` | optional alias ownership generation shared by replicas; omitted without a friendly alias or on older relays |
 | `expires_at` | `string` | lease expiry |
 | `access_token` | `string` | token for renew, unregister, signer access, and direct datagram backhaul |
 | `reverse_endpoint` | `ReverseEndpoint` | URL, opaque reverse-only capability, and expiry for `/sdk/connect` |
@@ -423,16 +424,22 @@ downgrade between domain lookup and challenge issuance cannot silently switch
 the request to exclusive registration.
 
 Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with replica
-mode. The CLI and agent also reject built-in application authentication and
-paid Nano routes with replica mode. SIWE challenges and email links are bound
-to one authenticator, alias session lifetimes follow each exposure's own hold,
-and Nano payment proofs are consumed only within one gateway process. Identical
-identity keys and configuration do not share that state across replicas.
+mode. Built-in application authentication supports SIWE, credentials and OIDC
+when all replicas share the complete identity (including `TokenSecret`) and
+provider settings. SIWE challenges and sessions can be verified by another replica.
 
-SDK embedders own handler compatibility: `WithReplicas()` does not synchronize
-application sessions or payment consumption. Do not compose it with
-`sdk/appauth` or independent Nano payment gates. An upstream application must
-provide its own service-wide session and replay protection.
+The relay returns `alias_epoch` on registration. `RelayStatus.AliasEpoch` identifies
+continuous alias ownership across replicas and lease replacements. SDK embedders
+must pass it as `appauth.PublicHost.Epoch` for the alias, together with the current
+public host list. It supersedes the `Since` fallback used with older relays. An
+alias ownership change invalidates earlier sessions and login state; adding a
+replica does not. The canonical host needs no epoch.
+
+The CLI and agent reject email/SAML authentication and paid Nano routes with
+replicas: email link redemption, SAML assertion consumption and Nano payment-proof
+consumption are local to each gateway. SDK embedders must not compose independent
+instances of those gates with `WithReplicas()`. Custom handlers and upstream
+applications own their service-wide session and replay guarantees.
 
 This is connection distribution within one relay, not cross-relay failover.
 Ready streams indicate tunnel availability, not application health. If no replica
@@ -517,12 +524,16 @@ settings ends the sessions that the old settings made.
 
 These do not survive a rebuild:
 
-- A SIWE login in progress: the wallet signs again.
 - The list of SAML assertions already used. An assertion still valid could be presented once more.
 - Email links that were mailed and not used: the visitor asks for a new one.
 - Sessions on an alias, when `PublicHosts` gives its `Since`: a new exposure holds
   the alias anew, and another identity may have held it in between. Sessions on
   `PublicURL` are not affected.
+
+SIWE logins in progress survive a rebuild with the same identity. With relay-issued
+alias epochs, alias sessions and login state also survive a rebuild while ownership
+is continuous. Changing an epoch ends them. Upgrading an alias from the older
+`Since` contract to epochs requires signing in again once.
 
 Store an identity with `identity.Marshal`, not `json.Marshal`. `json.Marshal`
 leaves out the `TokenSecret`. `New` refuses an identity without one, but
@@ -543,8 +554,9 @@ hosts.
 `Config.PublicHosts` lists the hosts the application holds now. Set it whenever the
 gate serves an exposure. The `email` provider needs it, and `New` refuses `email`
 without one. With it, the gate answers `421` to a request for any other host. A
-session or a sign-in on a host with a `Since` must also be newer than `Since`, so
-neither carries over from an earlier hold of an alias. Credentials are not dated,
+session or sign-in on a host with an `Epoch` must carry that epoch. Without one,
+the `Since` cutoff applies, so neither carries over from an earlier hold of an
+alias. Credentials are not dated,
 because they have to outlive a restart, so issue them for `PublicURL`. Without
 `PublicHosts`, the gate believes the `Host` of a request:
 
@@ -555,7 +567,7 @@ func publicHosts(exposure *sdk.Exposure) func() []appauth.PublicHost {
 		for _, relay := range exposure.Relays() {
 			hosts = append(hosts,
 				appauth.PublicHost{URL: relay.PublicURL},
-				appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
+				appauth.PublicHost{URL: relay.AliasURL, Epoch: relay.AliasEpoch, Since: relay.AliasSince})
 		}
 		return hosts
 	}
@@ -570,6 +582,7 @@ not combine them:
 
 - `sdk.WithStaticRelayCache`: the relay serves the cached site without calling your handler.
 - `sdk.WithTCP` and `sdk.WithUDP`: connections and datagrams do not pass through an `http.Handler`.
+- `sdk.WithReplicas` with email or SAML: their one-time consumption records are instance-local.
 
 A session is also tied to the origin of the application. A request with a session
 cookie and an `Origin` of another origin gets `403` for a protocol upgrade and for

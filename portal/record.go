@@ -28,6 +28,7 @@ type leaseRecord struct {
 	registerSource    netip.Addr
 	ReportedIP        string
 	Hostname          string
+	AliasEpoch        string
 	CanonicalHostname string
 	Metadata          types.LeaseMetadata
 	Overlay           bool

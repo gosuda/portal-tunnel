@@ -95,8 +95,12 @@ type RelayStatus struct {
 	// origin. The RelayReady rule is for display only: show the alias only
 	// while State is RelayReady.
 	AliasURL string
-	// AliasSince is when this exposure came to hold AliasURL, zero without one.
-	// Another identity may have held the name before that.
+	// AliasEpoch is the relay-issued alias ownership generation, shared by replicas.
+	// Empty means the relay predates ownership generations; AliasSince then
+	// supplies a conservative local lifetime for application authentication.
+	AliasEpoch string
+	// AliasSince dates a local alias hold on relays without AliasEpoch.
+	// It is zero when AliasEpoch is available or there is no alias.
 	AliasSince time.Time
 	UDPAddr    string
 	TCPAddr    string
@@ -189,8 +193,9 @@ type Option func(*options)
 // WithReplicas joins independent HTTP leases sharing this service's identity key.
 // Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with it.
 // Handler state is not shared: embedders must provide their own service-wide
-// login and payment replay guarantees. The built-in appauth gate and the CLI's
-// Nano payment gate do not support this topology.
+// login and payment replay guarantees. Built-in appauth supports SIWE, credentials
+// and OIDC with relay-issued alias epochs; email, SAML and the CLI's Nano payment
+// gate require a single consumption owner and do not support replica rotation.
 func WithReplicas() Option {
 	return func(opts *options) { opts.Replica = true }
 }
@@ -699,10 +704,14 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		status.TCPAddr = update.tcpAddr
 	}
 	switch {
-	case status.AliasURL == "":
+	case status.AliasURL == "" || update.aliasEpoch != "":
 		status.AliasSince = time.Time{}
-	case status.AliasURL != previous.AliasURL:
+	case status.AliasURL != previous.AliasURL || previous.AliasEpoch != "":
 		status.AliasSince = time.Now()
+	}
+	status.AliasEpoch = ""
+	if status.AliasURL != "" {
+		status.AliasEpoch = update.aliasEpoch
 	}
 	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
 	if !relayStatusEqual(previous, status) {
@@ -808,6 +817,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 	return a.RelayURL == b.RelayURL &&
 		a.PublicURL == b.PublicURL &&
 		a.AliasURL == b.AliasURL &&
+		a.AliasEpoch == b.AliasEpoch &&
 		a.UDPAddr == b.UDPAddr &&
 		a.TCPAddr == b.TCPAddr &&
 		a.Version == b.Version &&

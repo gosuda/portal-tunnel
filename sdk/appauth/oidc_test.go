@@ -960,6 +960,32 @@ func completeOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP) *h
 	return rec
 }
 
+func TestOIDCReplicaCallbackRespectsAliasEpoch(t *testing.T) {
+	idp := newOIDCTestIdP(t, nil)
+	first, second := newOIDCTestGate(t, idp), newOIDCTestGate(t, idp)
+	first.publicHosts = func() []PublicHost {
+		return []PublicHost{{URL: "https://app.example", Epoch: "one", Since: time.Now().Add(time.Hour)}}
+	}
+	epoch := "one"
+	second.publicHosts = func() []PublicHost {
+		return []PublicHost{{URL: "https://app.example", Epoch: epoch, Since: time.Now().Add(2 * time.Hour)}}
+	}
+	login := startOIDCLogin(t, first, idp, "app.example", types.PathApplicationAuthLogin)
+	rec := httptest.NewRecorder()
+	second.ServeHTTP(rec, login.callbackRequest(t, second, nil))
+	assertOIDCCallback(t, rec, http.StatusSeeOther)
+	if rec.Header().Get("Location") != "/" {
+		t.Fatalf("callback on a sibling failed: %s", rec.Body)
+	}
+	login = startOIDCLogin(t, first, idp, "app.example", types.PathApplicationAuthLogin)
+	epoch = "two"
+	rec = httptest.NewRecorder()
+	second.ServeHTTP(rec, login.callbackRequest(t, second, nil))
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "invalid or expired oidc login state") {
+		t.Fatalf("callback from earlier alias ownership: %d %s", rec.Code, rec.Body)
+	}
+}
+
 // ageOIDCKeys makes the cached key set look two refresh intervals old.
 func ageOIDCKeys(gate *applicationAuth) {
 	gate.oidc.jwks.mu.Lock()

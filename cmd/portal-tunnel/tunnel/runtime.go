@@ -37,7 +37,7 @@ var (
 	errStripRequestHeaderXForwardedProto       = errors.New(`strip request header "X-Forwarded-Proto" is not supported: RunHTTP always overwrites it with the trusted https value`)
 	errCasperPaymentsRequireAnAsset            = errors.New("casper payments require an asset")
 	errReplicaRequiresHTTP                     = errors.New("replicas require HTTP without dedicated TCP/UDP ports, relay cache, or overlay")
-	errReplicaApplicationAuth                  = errors.New("replicas cannot use built-in application auth: login state and alias session lifetimes are not shared between replicas")
+	errReplicaApplicationAuth                  = errors.New("replicas cannot use email or SAML authentication: one-time login consumption is local to each gateway")
 	errReplicaNanoPayments                     = errors.New("replicas cannot use Nano payments: payment proof consumption is local to each gateway")
 )
 
@@ -107,9 +107,6 @@ func (spec Spec) Validate() error {
 		}
 		if spec.HTTP.Cache != nil {
 			return errReplicaRequiresHTTP
-		}
-		if spec.HTTP.Auth != nil {
-			return errReplicaApplicationAuth
 		}
 	}
 	target := strings.TrimSpace(spec.Transport.Target)
@@ -186,6 +183,10 @@ func (spec Spec) Validate() error {
 	if auth := httpConfig.Auth; auth != nil {
 		if err := appauth.Validate(*auth); err != nil {
 			return err
+		}
+		provider := strings.ToLower(strings.TrimSpace(auth.Provider))
+		if spec.Transport.Replica && (provider == appauth.ProviderEmail || provider == appauth.ProviderSAML) {
+			return errReplicaApplicationAuth
 		}
 	}
 	return nil
@@ -316,7 +317,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 func (runtime *Runtime) publicHosts() []appauth.PublicHost {
 	var hosts []appauth.PublicHost
 	for _, relay := range runtime.Exposure.Relays() {
-		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
+		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.AliasURL, Epoch: relay.AliasEpoch, Since: relay.AliasSince})
 	}
 	return hosts
 }
