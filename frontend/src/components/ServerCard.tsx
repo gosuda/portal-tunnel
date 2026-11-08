@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
 import {
@@ -12,19 +12,107 @@ import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes, isReputationWarning } from "@/utils/reputation";
 
-const PLACEHOLDER_THUMBNAILS = [
-  "/placeholders/aurora-peaks.svg",
-  "/placeholders/twilight-watchtower.svg",
-  "/placeholders/nebula-fjord.svg",
-  "/placeholders/synth-horizon.svg",
-] as const;
-
-function pickPlaceholderThumbnail(seed: string): string {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = (hash * 33 + seed.charCodeAt(i)) >>> 0;
+/**
+ * Canonical Ethereum Blockies generator (https://github.com/ethereum/blockies).
+ * Creates an 8x8 symmetric matrix of HSL color values seeded from the input string.
+ */
+export function createBlockiesData(seed: string): string[][] {
+  const normalizedSeed = seed.toLowerCase().trim();
+  const randseed = new Int32Array(4);
+  for (let i = 0; i < normalizedSeed.length; i += 1) {
+    randseed[i % 4] = ((randseed[i % 4] << 5) - randseed[i % 4]) + normalizedSeed.charCodeAt(i);
   }
-  return PLACEHOLDER_THUMBNAILS[hash % PLACEHOLDER_THUMBNAILS.length];
+
+  function rand(): number {
+    const t = randseed[0] ^ (randseed[0] << 11);
+    randseed[0] = randseed[1];
+    randseed[1] = randseed[2];
+    randseed[2] = randseed[3];
+    randseed[3] = (randseed[3] ^ (randseed[3] >> 19)) ^ t ^ (t >> 8);
+    return (randseed[3] >>> 0) / ((1 << 31) >>> 0);
+  }
+
+  function createColor(): string {
+    const h = Math.floor(rand() * 360);
+    const s = Math.floor(rand() * 60 + 40);
+    const l = Math.floor((rand() + rand() + rand() + rand()) * 25);
+    return `hsl(${h}, ${s}%, ${l}%)`;
+  }
+
+  // Canonical ethereum/blockies order: color (primary) -> bgcolor -> spotcolor
+  const color = createColor();
+  const bgcolor = createColor();
+  const spotcolor = createColor();
+
+  const size = 8;
+  const dataWidth = Math.ceil(size / 2);
+  const mirrorWidth = size - dataWidth;
+
+  const grid: string[][] = [];
+
+  for (let y = 0; y < size; y += 1) {
+    const row: number[] = [];
+    for (let x = 0; x < dataWidth; x += 1) {
+      row[x] = Math.floor(rand() * 2.3);
+    }
+    const r = row.slice(0, mirrorWidth).reverse();
+    const fullRow = row.concat(r);
+
+    grid.push(
+      fullRow.map((val) => {
+        if (val === 1) return color;
+        if (val === 2) return spotcolor;
+        return bgcolor;
+      })
+    );
+  }
+
+  return grid;
+}
+
+export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
+  const patternId = useId();
+  const seed = (server.address || server.name || server.id || "portal").trim();
+  const grid = useMemo(() => createBlockiesData(seed), [seed]);
+  const isTransport = Boolean(server.tcpAddr || server.udpAddr);
+
+  return (
+    <div
+      className={clsx(
+        "absolute inset-0 flex items-center justify-center bg-secondary/60 dark:bg-[#0c1017] select-none overflow-hidden transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.02]",
+        isTransport ? "pb-12" : ""
+      )}
+      aria-hidden="true"
+    >
+      {/* Subtle Engineering Dot Grid Wallpaper */}
+      <svg
+        className="pointer-events-none absolute inset-0 h-full w-full opacity-40 dark:opacity-25"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <defs>
+          <pattern id={patternId} width="20" height="20" patternUnits="userSpaceOnUse">
+            <circle cx="2" cy="2" r="1" fill="currentColor" className="text-foreground/20 dark:text-white/20" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill={`url(#${patternId})`} />
+      </svg>
+
+      {/* Centered 96x96px App Icon Badge */}
+      <div className="relative z-10 size-24 shrink-0 rounded-2xl overflow-hidden shadow-lg border border-black/10 dark:border-white/15 transition-transform duration-300 motion-safe:group-hover:scale-105">
+        <svg
+          viewBox="0 0 8 8"
+          className="h-full w-full"
+          shapeRendering="crispEdges"
+        >
+          {grid.map((row, y) =>
+            row.map((fill, x) => (
+              <rect key={`${x}-${y}`} x={x} y={y} width={1} height={1} fill={fill} />
+            ))
+          )}
+        </svg>
+      </div>
+    </div>
+  );
 }
 
 interface ServerCardProps {
@@ -54,8 +142,6 @@ export function ServerCard({
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
   const hasDetails = Boolean(description || (tags && tags.length > 0));
   const effectiveThumbnail = failedThumbnail === thumbnail ? "" : thumbnail.trim();
-  const resolvedThumbnail =
-    effectiveThumbnail || pickPlaceholderThumbnail(name || serverId);
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
@@ -91,13 +177,17 @@ export function ServerCard({
     <article className="relative w-full min-w-0">
       {/* 1. Thumbnail Container (16:9 aspect ratio) */}
       <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-muted shadow-2xs transition-all duration-300 ease-out group-hover:scale-[1.02] group-hover:border-border group-hover:shadow-md">
-        <img
-          src={resolvedThumbnail}
-          alt=""
-          loading="lazy"
-          className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
-          onError={effectiveThumbnail ? () => setFailedThumbnail(thumbnail) : undefined}
-        />
+        {effectiveThumbnail ? (
+          <img
+            src={effectiveThumbnail}
+            alt=""
+            loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
+            onError={() => setFailedThumbnail(thumbnail)}
+          />
+        ) : (
+          <DefaultServerThumbnail server={server} />
+        )}
 
         {/* Top-right custom action overlay */}
         {action && (

@@ -16,6 +16,7 @@ export interface BaseServer {
   online: boolean;
   dns: string;
   link: string;
+  address?: string;
   tcpAddr?: string;
   udpAddr?: string;
   lastUpdated?: string;
@@ -49,6 +50,7 @@ export function leaseToServer(row: Lease): BaseServer {
     online: (row.ready || 0) > 0,
     dns: publicHostname,
     link: !tcpAddr && !udpAddr && publicHostname ? `https://${publicHostname}/` : "",
+    address: row.address,
     tcpAddr: tcpAddr || undefined,
     udpAddr: udpAddr || undefined,
     lastUpdated: row.last_seen_at || undefined,
