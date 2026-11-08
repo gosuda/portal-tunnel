@@ -32,7 +32,7 @@ Cloudflare cannot delegate a subdomain of a zone on a partial (CNAME) setup. Glu
 
 ## Plan and apply
 
-1. Read existing records with `GET /zones/<zone_id>/dns_records?name=<name>` for each name in the table and show the planned create, update, or no-op for each, with current values.
+1. Read existing records with `GET /zones/<zone_id>/dns_records?name=<name>` for each name in the table and show the planned create, update, or no-op for each, with current values. Before any write, save a rollback record per name: the record `id`, the action (`created`, `updated`, or `unchanged`), and for an update the full previous record (`type`, `content` or `data`, `ttl`, `proxied`). Updates use `PATCH /zones/<zone_id>/dns_records/<id>` on that same `id`, never a delete and re-create.
 2. After approval, create the NS and glue records with `POST /zones/<zone_id>/dns_records` (`{"type": "NS", "name": "relay.example.com", "content": "ns.relay.example.com"}` and `{"type": "A", "name": "ns.relay.example.com", "content": "<ip>", "proxied": false}`).
 3. Verify the delegation (below) before the DS step. Publishing a DS for a zone that does not answer yet makes validating resolvers fail for the whole subdomain.
 4. Create the DS with `{"type": "DS", "name": "relay.example.com", "data": {"key_tag": <tag>, "algorithm": 13, "digest_type": 2, "digest": "<hex>"}}`, copying every field exactly from the relay's `ds_record` log line. That line is in zone-file form, `relay.example.com. <ttl> IN DS <key tag> <algorithm> <digest type> <digest>`; the embedded DNS uses algorithm `13` and digest type `2`. A DS only builds a chain of trust when DNSSEC is active on the Cloudflare zone; if it is not, report that and let the user decide whether to enable it.
@@ -45,6 +45,14 @@ Cloudflare cannot delegate a subdomain of a zone on a partial (CNAME) setup. Glu
 
 ## Hand off
 
-Report each record created or changed with its previous value, the DNSSEC state of the parent zone, and rollback: delete the DS first, then the NS and glue records. Deleting only the NS while a DS remains breaks validation.
+Report each record with its action and previous value, and the DNSSEC state of the parent zone.
+
+Rollback uses the saved rollback record, never a blanket delete:
+
+- A record this workflow **created**: `DELETE /zones/<zone_id>/dns_records/<id>`.
+- A record this workflow **updated**: `PATCH` the same `id` back to its saved previous value. Do not delete it; the old delegation or glue may still be in use.
+- An **unchanged** record: leave it alone.
+
+Keep DNSSEC safe while rolling back. Undo the DS first: delete a created DS, or restore an updated DS to its previous value. Then undo the NS and glue changes. If the restored DS does not match the key that the restored NS target serves, say so and do not restore both blindly; a DS that points to the wrong key breaks validation for the whole subdomain, and so does a DS left in place after its NS is removed.
 
 Portal can also use Cloudflare as its ACME DNS provider (`ACME_DNS_PROVIDER=cloudflare` with `CLOUDFLARE_TOKEN`) instead of embedded DNS. That is a relay configuration choice with different records, covered by the configuration reference, not by this skill.
