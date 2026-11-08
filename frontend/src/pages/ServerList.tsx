@@ -57,6 +57,7 @@ export function ServerList() {
         onOpenComments={(server) =>
           setCommentServer((current) => (current?.id === server.id ? null : server))
         }
+        onVote={onVote}
       />
       {commentServer && (
         <CommentsThread

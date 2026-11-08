@@ -13,7 +13,7 @@ import type { BrowseView, SortOption, StatusFilter } from "@/types/filters";
 import { matchesMedia } from "@/hooks/useMediaQuery";
 import { useRelayDiscovery } from "@/hooks/useRelayDiscovery";
 import { ROUTE_PATHS } from "@/lib/apiPaths";
-import type { Lease } from "@/types/api";
+import type { Lease, ReputationVoteAction } from "@/types/api";
 
 // A card fades up the first time it comes into view on this page load; cards
 // that return through filters or a remount appear in place.
@@ -85,6 +85,7 @@ interface ServerListViewProps {
   onTagToggle: (tag: string) => void;
   onClearTags: () => void;
   onOpenComments: (server: BaseServer) => void;
+  onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
 }
 
 export function ServerListView({
@@ -109,6 +110,7 @@ export function ServerListView({
   onTagToggle,
   onClearTags,
   onOpenComments,
+  onVote,
 }: ServerListViewProps) {
   const { copiedKey: copiedRelayURL, copy: copyRelayURL } = useCopy(1500);
   const {
@@ -246,7 +248,7 @@ export function ServerListView({
               </div>
               {filteredServers.length > 0 ? (
                 <div ref={gridRef} className="grid grid-cols-1 gap-x-4 gap-y-10 min-[600px]:grid-cols-2 min-[1150px]:grid-cols-3 min-[1600px]:grid-cols-4 min-[2000px]:grid-cols-5">
-                  {filteredServers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} /></LiveAppCard>)}
+                  {filteredServers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} onVote={onVote} /></LiveAppCard>)}
                 </div>
               ) : (
                 <div className="mx-auto flex min-h-[55vh] max-w-md flex-col items-center justify-center gap-3 px-4 text-center">

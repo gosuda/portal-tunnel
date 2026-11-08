@@ -176,4 +176,33 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByText("A cool sandbox game")).toBeTruthy();
     expect(screen.queryByLabelText(/Actions for/i)).toBeNull();
   });
+
+  it("allows direct voting from the card without navigating into the service", () => {
+    const onVote = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "srv-1",
+            name: "minecraft",
+            description: "",
+            tags: [],
+            thumbnail: "",
+            owner: "",
+            online: true,
+            dns: "minecraft.relay.example.com",
+            link: "/server/srv-1",
+            reputation: REPUTATION,
+          }}
+          onVote={onVote}
+        />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Recommend app" }));
+    expect(onVote).toHaveBeenCalledWith("srv-1", "up");
+
+    fireEvent.click(screen.getByRole("button", { name: "Do not recommend app" }));
+    expect(onVote).toHaveBeenCalledWith("srv-1", "down");
+  });
 });

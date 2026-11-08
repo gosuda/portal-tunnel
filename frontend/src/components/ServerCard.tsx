@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import clsx from "clsx";
 import { BadgeDollarSign, MessageSquare, ThumbsDown, ThumbsUp } from "lucide-react";
 import type { BaseServer } from "@/lib/server";
+import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes } from "@/utils/reputation";
 
@@ -27,6 +28,7 @@ interface ServerCardProps {
   children?: ReactNode;
   navigable?: boolean;
   onOpenComments?: (server: BaseServer) => void;
+  onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
 }
 
 export function ServerCard({
@@ -35,12 +37,14 @@ export function ServerCard({
   children,
   navigable = true,
   onOpenComments,
+  onVote,
 }: ServerCardProps) {
   const {
     id: serverId, name, description, tags, thumbnail, owner, online,
     firstSeen, tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
   } = server;
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const [isVoting, setIsVoting] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
   const effectiveThumbnail = thumbnailFailed ? "" : thumbnail.trim();
   const resolvedThumbnail =
@@ -81,6 +85,22 @@ export function ServerCard({
     if (minutes > 0) return `${minutes}m ago`;
     return `${seconds}s ago`;
   }, [firstSeen]);
+
+  const handleVote = async (event: React.MouseEvent, targetVote: "up" | "down") => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!onVote || isVoting) return;
+    setIsVoting(true);
+    try {
+      const currentVote = server.reputation?.viewer_vote;
+      const nextVote: ReputationVoteAction = currentVote === targetVote ? "clear" : targetVote;
+      await onVote(server.id, nextVote);
+    } catch (err) {
+      console.error("Failed to vote from card", err);
+    } finally {
+      setIsVoting(false);
+    }
+  };
 
   const cardBody = (
     <article data-hero-key={`server-bg-${serverId}`} className="relative w-full min-w-0">
@@ -210,33 +230,47 @@ export function ServerCard({
           </div>
 
           {/* Southeast actions: Upvotes, Downvotes, Comments */}
-          <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-2">
-            <span
-              className={clsx(
-                "inline-flex items-center gap-1 text-[11px] font-medium transition-colors",
-                server.reputation?.viewer_vote === "up"
-                  ? "text-primary font-semibold"
-                  : "text-muted-foreground"
-              )}
-              title={`Recommend: ${server.reputation?.up ?? 0}`}
-            >
-              <ThumbsUp className="size-3" />
-              <span>{server.reputation?.up ?? 0}</span>
-            </span>
+          <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5">
+            {/* Rating Pill: [ 👍 12 | 👎 3 ] */}
+            <div className="inline-flex h-7 items-center rounded-lg border border-border/70 bg-secondary/50 p-0.5 text-xs text-muted-foreground shadow-2xs backdrop-blur-xs">
+              <button
+                type="button"
+                onClick={(e) => void handleVote(e, "up")}
+                disabled={!onVote || isVoting}
+                aria-label="Recommend app"
+                aria-pressed={server.reputation?.viewer_vote === "up"}
+                title={`Recommend: ${server.reputation?.up ?? 0}`}
+                className={clsx(
+                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors",
+                  onVote ? "cursor-pointer hover:bg-secondary hover:text-foreground" : "cursor-default",
+                  server.reputation?.viewer_vote === "up" && "bg-primary/15 text-primary font-semibold"
+                )}
+              >
+                <ThumbsUp className="size-3.5 shrink-0" />
+                <span className="tabular-nums">{server.reputation?.up ?? 0}</span>
+              </button>
 
-            <span
-              className={clsx(
-                "inline-flex items-center gap-1 text-[11px] font-medium transition-colors",
-                server.reputation?.viewer_vote === "down"
-                  ? "text-destructive font-semibold"
-                  : "text-muted-foreground"
-              )}
-              title={`Do not recommend: ${server.reputation?.down ?? 0}`}
-            >
-              <ThumbsDown className="size-3" />
-              <span>{server.reputation?.down ?? 0}</span>
-            </span>
+              <div className="my-1 h-3 w-px bg-border/70" />
 
+              <button
+                type="button"
+                onClick={(e) => void handleVote(e, "down")}
+                disabled={!onVote || isVoting}
+                aria-label="Do not recommend app"
+                aria-pressed={server.reputation?.viewer_vote === "down"}
+                title={`Do not recommend: ${server.reputation?.down ?? 0}`}
+                className={clsx(
+                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors",
+                  onVote ? "cursor-pointer hover:bg-secondary hover:text-foreground" : "cursor-default",
+                  server.reputation?.viewer_vote === "down" && "bg-destructive/15 text-destructive font-semibold"
+                )}
+              >
+                <ThumbsDown className="size-3.5 shrink-0" />
+                <span className="tabular-nums">{server.reputation?.down ?? 0}</span>
+              </button>
+            </div>
+
+            {/* Comments Button: [ 💬 5 ] */}
             {onOpenComments ? (
               <button
                 type="button"
@@ -248,18 +282,18 @@ export function ServerCard({
                 }}
                 aria-label="Comments"
                 title={`Comments: ${server.reputation?.comments ?? 0}`}
-                className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-secondary/40 px-1.5 py-0.5 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-secondary hover:text-foreground"
+                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
               >
-                <MessageSquare className="size-3" />
-                <span>{server.reputation?.comments ?? 0}</span>
+                <MessageSquare className="size-3.5 shrink-0" />
+                <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
               </button>
             ) : (
               <span
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground"
+                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs"
                 title={`Comments: ${server.reputation?.comments ?? 0}`}
               >
-                <MessageSquare className="size-3" />
-                <span>{server.reputation?.comments ?? 0}</span>
+                <MessageSquare className="size-3.5 shrink-0" />
+                <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
               </span>
             )}
           </div>
