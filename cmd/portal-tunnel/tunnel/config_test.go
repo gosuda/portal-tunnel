@@ -2,12 +2,27 @@ package tunnel
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
+
+// An explicit blank method must not become an empty list, which charges every
+// method rather than rejecting the invalid payment configuration.
+func TestConfigSpecRejectsBlankPaymentMethods(t *testing.T) {
+	for _, methods := range [][]string{{""}, {" "}, {"GET", " "}} {
+		cfg := Config{HTTPRoutes: []HTTPRoute{{
+			Prefix: "/paid", Upstream: "127.0.0.1:3000", Amount: "0.01", Methods: methods,
+		}}}
+		cfg.PayTo = "recipient"
+		if _, err := cfg.Spec(); err == nil || !strings.Contains(err.Error(), "payment method is required") {
+			t.Errorf("methods %q: Spec() error = %v, want a blank-method error", methods, err)
+		}
+	}
+}
 
 func TestConfigSpecModes(t *testing.T) {
 	const wallet = "0x0000000000000000000000000000000000000001"
@@ -203,8 +218,8 @@ func TestConfigSpecResolvesComponents(t *testing.T) {
 			check: func(t *testing.T, spec Spec) {
 				wantRoutes := []HTTPRoute{{Prefix: "/paid", Upstream: "127.0.0.1:3001", Methods: []string{"GET", "POST"}, Amount: "0.01"}}
 				wantPayment := gateway.X402Config{PayTo: "0x1234", Network: "sui:testnet", Endpoints: []string{"https://rpc.example"}, FacilitatorToken: "token"}
-				if !reflect.DeepEqual(spec.HTTP.Routes, wantRoutes) || !reflect.DeepEqual(spec.HTTP.Payment.X402Config, wantPayment) || spec.HTTP.Auth != nil {
-					t.Fatalf("routes = %+v, payment = %+v, auth = %+v", spec.HTTP.Routes, spec.HTTP.Payment.X402Config, spec.HTTP.Auth)
+				if !reflect.DeepEqual(spec.HTTP.Routes, wantRoutes) || !reflect.DeepEqual(spec.HTTP.Payment, wantPayment) || spec.HTTP.Auth != nil {
+					t.Fatalf("routes = %+v, payment = %+v, auth = %+v", spec.HTTP.Routes, spec.HTTP.Payment, spec.HTTP.Auth)
 				}
 			},
 		},

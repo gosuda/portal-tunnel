@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -304,18 +303,9 @@ func agentDashboardParseAddRoutePayment(value string) ([]string, string, error) 
 		return nil, amount, nil
 	}
 
-	methods := []string(nil)
-	for rawMethod := range strings.SplitSeq(methodPart, ",") {
-		method := strings.ToUpper(strings.TrimSpace(rawMethod))
-		if method == "" {
-			return nil, "", fmt.Errorf("payment method is required")
-		}
-		if !slices.Contains(methods, method) {
-			methods = append(methods, method)
-		}
-	}
-	if len(methods) == 0 {
-		return nil, "", fmt.Errorf("payment methods are required before ':'")
+	methods, err := gateway.NormalizePaymentMethods(strings.Split(methodPart, ","))
+	if err != nil {
+		return nil, "", err
 	}
 	return methods, amount, nil
 }

@@ -323,6 +323,9 @@ with a status LED, explained in the legend beside the panes:
 | `[!]` | error |
 
 The bar at the bottom lists the keys that work in the active pane and state.
+Relay connect/disconnect commands require a running tunnel and apply to its
+current exposure. They survive metadata updates and adding or deleting other
+tunnels, but reset to the saved relay settings when that tunnel restarts.
 Terminals such as macOS Terminal often keep function keys for themselves, so
 every function key has a letter or key alias:
 

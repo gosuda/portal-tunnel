@@ -28,6 +28,7 @@ var (
 	errTargetCannotCombinedHTTPRoutes     = errors.New("target cannot be combined with http_routes")
 	errMaxActiveRelaysCannotNegative      = errors.New("max_active_relays cannot be negative")
 	errTunnelIDIsRequired                 = errors.New("tunnel id is required")
+	errTunnelIsNotRunning                 = errors.New("tunnel is not running")
 )
 
 const managedTunnelRetryInterval = 30 * time.Second
@@ -142,9 +143,7 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 	if req.Empty() {
 		return errTunnelUpdateRequiresLeastOneField
 	}
-	updateMetadata := req.Metadata != nil && !req.Metadata.Empty()
-	updateMaxActiveRelays := req.MaxActiveRelays != nil
-	if err := m.updateTunnelConfig(id, func(tunnel *TunnelConfig) error {
+	return m.updateTunnelConfig(id, func(tunnel *TunnelConfig) error {
 		if req.MaxActiveRelays != nil {
 			if *req.MaxActiveRelays <= 0 {
 				return errMaxActiveRelaysMustPositiveInteger
@@ -169,18 +168,7 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 			}
 		}
 		return req.applyAuth(&tunnel.AuthConfig)
-	}); err != nil {
-		return err
-	}
-
-	id = strings.TrimSpace(id)
-	m.mu.RLock()
-	tunnel := m.tunnels[id]
-	m.mu.RUnlock()
-	if tunnel == nil {
-		return fmt.Errorf("tunnel %q not found", id)
-	}
-	return tunnel.UpdateSettings(updateMetadata, updateMaxActiveRelays)
+	})
 }
 
 func (m *manager) AddTunnel(req AgentTunnelRequest) error {
@@ -272,39 +260,7 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 	if reflect.DeepEqual(before, cfg.Tunnels[index]) {
 		return nil
 	}
-	cfg.sourcePath = path
-	if err := cfg.normalize(path); err != nil {
-		return err
-	}
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	if err := writeConfigDocument(path, mode, cfg); err != nil {
-		return err
-	}
-
-	nextTunnelCfg := cfg.Tunnels[index]
-	m.mu.Lock()
-	m.cfg = cfg
-	rootCtx := m.rootCtx
-	tunnel := m.tunnels[id]
-	if tunnel != nil {
-		tunnel.mu.Lock()
-		tunnel.cfg = nextTunnelCfg
-		tunnel.mu.Unlock()
-	}
-	m.mu.Unlock()
-
-	// The sign-in gate is built when the runtime starts, so a changed gate
-	// takes effect by restarting this tunnel the way ApplyConfig restarts a
-	// changed one; the other tunnels are left alone. The tunnel starts again
-	// from its saved config, which drops relays connected to it at runtime.
-	if tunnel == nil || reflect.DeepEqual(before.AuthConfig, nextTunnelCfg.AuthConfig) {
-		return nil
-	}
-	_ = tunnel.Stop(context.Background())
-	tunnel.Start(rootCtx)
-	return nil
+	return m.writeConfigAndApply(path, mode, cfg)
 }
 
 func (m *manager) DeleteTunnel(id string) error {
@@ -357,10 +313,10 @@ func (m *manager) writeConfigAndApply(path string, mode os.FileMode, cfg Config)
 	if err := writeConfigDocument(path, mode, cfg); err != nil {
 		return err
 	}
-	return m.ApplyConfig(cfg)
+	return m.applyConfig(cfg)
 }
 
-func (m *manager) ApplyConfig(cfg Config) error {
+func (m *manager) applyConfig(cfg Config) error {
 	m.mu.Lock()
 	m.cfg = cfg
 	rootCtx := m.rootCtx
@@ -382,7 +338,16 @@ func (m *manager) ApplyConfig(cfg Config) error {
 		previous := tunnel.cfg
 		if !reflect.DeepEqual(previous, tunnelCfg) {
 			tunnel.cfg = tunnelCfg
-			toUpdate = append(toUpdate, tunnel)
+			// Metadata and the discovery cap can change on the current exposure.
+			// All other settings are assembled when the runtime starts.
+			previous.LeaseMetadata = tunnelCfg.LeaseMetadata
+			previous.MaxActiveRelays = tunnelCfg.MaxActiveRelays
+			if reflect.DeepEqual(previous, tunnelCfg) {
+				toUpdate = append(toUpdate, tunnel)
+			} else {
+				toStop = append(toStop, tunnel)
+				toStart = append(toStart, tunnel)
+			}
 		}
 		tunnel.mu.Unlock()
 		delete(next, id)
@@ -394,13 +359,17 @@ func (m *manager) ApplyConfig(cfg Config) error {
 	}
 	m.mu.Unlock()
 
-	for _, tunnel := range append(toStop, toUpdate...) {
+	for _, tunnel := range toStop {
 		_ = tunnel.Stop(context.Background())
 	}
-	for _, tunnel := range append(toStart, toUpdate...) {
+	for _, tunnel := range toStart {
 		tunnel.Start(rootCtx)
 	}
-	return nil
+	var err error
+	for _, tunnel := range toUpdate {
+		err = errors.Join(err, tunnel.updateSettings())
+	}
+	return err
 }
 
 func (m *manager) Snapshot() AgentStatusResponse {
@@ -480,44 +449,26 @@ func (t *managedTunnel) Stop(ctx context.Context) error {
 }
 
 func (t *managedTunnel) ConnectRelay(relayURL string) error {
-	relayURL, err := utils.NormalizeRelayURL(relayURL)
-	if err != nil {
-		return err
-	}
-	t.mu.Lock()
-	if !slices.Contains(t.cfg.RelayURLs, relayURL) {
-		t.cfg.RelayURLs = append(t.cfg.RelayURLs, relayURL)
-	}
+	t.mu.RLock()
 	runtime := t.runtime
-	t.mu.Unlock()
+	t.mu.RUnlock()
 	if runtime == nil {
-		return nil
+		return errTunnelIsNotRunning
 	}
 	return runtime.Exposure.AddRelay(relayURL)
 }
 
 func (t *managedTunnel) DisconnectRelay(relayURL string) error {
-	relayURL, err := utils.NormalizeRelayURL(relayURL)
-	if err != nil {
-		return err
-	}
-	t.mu.Lock()
-	next := make([]string, 0, len(t.cfg.RelayURLs))
-	for _, existing := range t.cfg.RelayURLs {
-		if existing != relayURL {
-			next = append(next, existing)
-		}
-	}
-	t.cfg.RelayURLs = next
+	t.mu.RLock()
 	runtime := t.runtime
-	t.mu.Unlock()
+	t.mu.RUnlock()
 	if runtime == nil {
-		return nil
+		return errTunnelIsNotRunning
 	}
 	return runtime.Exposure.RemoveRelay(relayURL)
 }
 
-func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays bool) error {
+func (t *managedTunnel) updateSettings() error {
 	t.mu.RLock()
 	runtime := t.runtime
 	cfg := t.cfg
@@ -525,16 +476,14 @@ func (t *managedTunnel) UpdateSettings(updateMetadata, updateMaxActiveRelays boo
 	if runtime == nil {
 		return nil
 	}
-	// The config passed validation before it was saved.
-	spec, _ := cfg.Spec()
-	var err error
-	if updateMetadata {
-		err = errors.Join(err, runtime.Exposure.UpdateMetadata(spec.Metadata))
+	spec, err := cfg.Spec()
+	if err != nil {
+		return err
 	}
-	if updateMaxActiveRelays {
-		err = errors.Join(err, runtime.Exposure.SetMaxActiveRelays(spec.Relays.MaxActive))
-	}
-	return err
+	return errors.Join(
+		runtime.Exposure.UpdateMetadata(spec.Metadata),
+		runtime.Exposure.SetMaxActiveRelays(spec.Relays.MaxActive),
+	)
 }
 
 func (t *managedTunnel) Snapshot() AgentTunnelStatus {

@@ -12,7 +12,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	facilitatorclient "github.com/gosuda/x402-facilitator/api/client"
 	x402http "github.com/gosuda/x402-facilitator/resource/http"
@@ -48,8 +47,8 @@ const (
 	suiMainnetNetwork = "sui:mainnet"
 	suiTestnetNetwork = "sui:testnet"
 
-	// defaultMaxTimeoutSeconds is published when a paid route leaves the
-	// contract timeout unset; the upstream x402 gates default to the same.
+	// defaultMaxTimeoutSeconds is the published payment lifetime, matching
+	// the upstream x402 gates' default.
 	defaultMaxTimeoutSeconds = 60
 )
 
@@ -74,15 +73,6 @@ func (c X402Config) Normalize() X402Config {
 	c.Endpoints = utils.CompactStrings(c.Endpoints)
 	c.FacilitatorToken = strings.TrimSpace(c.FacilitatorToken)
 	return c
-}
-
-// X402Payment adds gateway-only composition controls to X402Config.
-type X402Payment struct {
-	X402Config
-	MaxTimeoutSeconds   int
-	RequestTimeout      time.Duration
-	ResourceDescription string
-	ResourceMimeType    string
 }
 
 // X402PreparePath is the gateway-owned path for the /x402/prepare endpoint.
@@ -181,14 +171,14 @@ func isValidHeaderName(name string) bool {
 // returned handler also serves the shared x402 client and prepare endpoints
 // when at least one route is paid; a fully unpaid gateway passes those paths
 // through to the routes like any other path.
-func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Handler, error) {
+func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (http.Handler, error) {
 	if len(routes) == 0 {
 		return nil, errLeastOneHTTPRouteRequired
 	}
 	contract.PayTo = strings.TrimSpace(contract.PayTo)
 
 	sdkConfigs := make([]sdk.HTTPRouteConfig, 0, len(routes))
-	policies := make([]routePolicy, 0, len(routes))
+	policies := make(map[string]*routePolicy, len(routes))
 	servesX402 := false
 	// Nano block hashes are single-use only within one facilitator's claim
 	// set, so every Nano route of this gateway shares one facilitator.
@@ -198,7 +188,6 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 		if prefix != "" && strings.HasPrefix(prefix, "/") {
 			prefix = utils.NormalizeURLPath(prefix)
 		}
-		policy := routePolicy{prefix: prefix}
 		sdkConfigs = append(sdkConfigs, sdk.HTTPRouteConfig{
 			Prefix:      prefix,
 			Upstream:    route.Upstream,
@@ -211,13 +200,12 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 			if len(route.Methods) > 0 {
 				return nil, fmt.Errorf("http route %q payment methods require amount", prefix)
 			}
-			policies = append(policies, policy)
 			continue
 		}
 		if contract.PayTo == "" {
 			return nil, fmt.Errorf("http route %q amount requires x402 pay-to", prefix)
 		}
-		methods, err := normalizedPaymentMethods(route.Methods)
+		methods, err := NormalizePaymentMethods(route.Methods)
 		if err != nil {
 			return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 		}
@@ -228,15 +216,8 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 		paid.prefix = prefix
 		paid.methods = paymentMethodSet(methods)
 		servesX402 = true
-		policies = append(policies, *paid)
+		policies[prefix] = paid
 	}
-
-	sort.Slice(policies, func(i, j int) bool {
-		if len(policies[i].prefix) == len(policies[j].prefix) {
-			return policies[i].prefix < policies[j].prefix
-		}
-		return len(policies[i].prefix) > len(policies[j].prefix)
-	})
 
 	routed, err := sdk.NewHTTPRoutes(sdkConfigs)
 	if err != nil {
@@ -254,9 +235,8 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Payment) (http.Ha
 // composePaidRoute builds the payment layer for one paid route: the settling
 // gate and, for Sui routes, the shared-prepare delegate. The underlying
 // facilitators live as long as the gateway — the gateway owns the composition
-// for its whole process lifetime, so no per-route Close is wired (the same
-// lifetime the previous portal/x402 composition had).
-func composePaidRoute(prefix, amount string, contract X402Payment, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
+// for its whole process lifetime, so no per-route Close is wired.
+func composePaidRoute(prefix, amount string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	switch {
 	case network == "" || network == suiMainnetNetwork || network == suiTestnetNetwork:
@@ -270,7 +250,7 @@ func composePaidRoute(prefix, amount string, contract X402Payment, nano **nanofa
 	}
 }
 
-func composeSuiRoute(prefix, amount string, contract X402Payment) (*routePolicy, error) {
+func composeSuiRoute(prefix, amount string, contract X402Config) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	if network == "" {
 		if contract.Testnet {
@@ -297,14 +277,12 @@ func composeSuiRoute(prefix, amount string, contract X402Payment) (*routePolicy,
 		Asset:             asset,
 		Amount:            atomic,
 		PayTo:             payTo,
-		MaxTimeoutSeconds: orDefaultMaxTimeout(contract),
+		MaxTimeoutSeconds: defaultMaxTimeoutSeconds,
 		Extra: map[string]any{
 			"asset":               "USDC",
 			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
 		},
 	}
-	resourceDescription := strings.TrimSpace(contract.ResourceDescription)
-	resourceMimeType := cmp.Or(strings.TrimSpace(contract.ResourceMimeType), "text/html")
 	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, firstEndpoint(contract.Endpoints), "", suifacilitator.SuiFacilitatorOptions{
 		GaslessStablecoinTypes: []string{asset},
 	})
@@ -318,24 +296,18 @@ func composeSuiRoute(prefix, amount string, contract X402Payment) (*routePolicy,
 		// it carries the route prefix rather than a per-request URL; the
 		// prepare delegate below keeps the per-request absolute URL.
 		Resource: &facilitatortypes.ResourceInfo{
-			URL:         prefix,
-			Description: resourceDescription,
-			MimeType:    resourceMimeType,
+			URL:      prefix,
+			MimeType: "text/html",
 		},
-		// Zero lets the gate apply its own settle deadline instead of the
-		// previous unbounded settlement.
-		RequestTimeout: contract.RequestTimeout,
 	})
 	if err != nil {
 		return nil, err
 	}
 	preparer, err := suihttp.NewPreparer(suihttp.Config{
-		Requirements:        requirements,
-		ResourcePath:        prefix,
-		ResourceDescription: resourceDescription,
-		ResourceMimeType:    resourceMimeType,
-		Endpoints:           contract.Endpoints,
-		RequestTimeout:      contract.RequestTimeout,
+		Requirements:     requirements,
+		ResourcePath:     prefix,
+		ResourceMimeType: "text/html",
+		Endpoints:        contract.Endpoints,
 	})
 	if err != nil {
 		return nil, err
@@ -343,7 +315,7 @@ func composeSuiRoute(prefix, amount string, contract X402Payment) (*routePolicy,
 	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate, preparer: preparer}, nil
 }
 
-func composeCasperRoute(prefix, amount string, contract X402Payment) (*routePolicy, error) {
+func composeCasperRoute(prefix, amount string, contract X402Config) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	if network == "" {
 		if contract.Testnet {
@@ -376,7 +348,7 @@ func composeCasperRoute(prefix, amount string, contract X402Payment) (*routePoli
 		Asset:             asset,
 		Amount:            motes.String(),
 		PayTo:             payTo,
-		MaxTimeoutSeconds: orDefaultMaxTimeout(contract),
+		MaxTimeoutSeconds: defaultMaxTimeoutSeconds,
 		Extra: map[string]any{
 			"asset":               casperscheme.WCSPRSymbol,
 			"assetTransferMethod": "casper-cep18-transfer",
@@ -388,10 +360,9 @@ func composeCasperRoute(prefix, amount string, contract X402Payment) (*routePoli
 		return nil, err
 	}
 	gate, err := x402http.New(x402http.Config{
-		Requirements:   requirements,
-		Facilitator:    facilitator,
-		Resource:       &facilitatortypes.ResourceInfo{URL: prefix, MimeType: "text/html"},
-		RequestTimeout: contract.RequestTimeout,
+		Requirements: requirements,
+		Facilitator:  facilitator,
+		Resource:     &facilitatortypes.ResourceInfo{URL: prefix, MimeType: "text/html"},
 	})
 	if err != nil {
 		return nil, err
@@ -404,7 +375,7 @@ func composeCasperRoute(prefix, amount string, contract X402Payment) (*routePoli
 // the block on independent RPC nodes (the --x402-endpoint values, or the
 // facilitator's public defaults) and claims each block hash once. The first
 // Nano route creates the gateway's shared facilitator in *nano.
-func composeNanoRoute(prefix, amount, network string, contract X402Payment, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
+func composeNanoRoute(prefix, amount, network string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
 	payTo := normalizeNanoAddress(contract.PayTo)
 	if payTo == "" {
 		return nil, errX402XnoPaymentRequiresChecksummedNano
@@ -439,7 +410,7 @@ func composeNanoRoute(prefix, amount, network string, contract X402Payment, nano
 		Asset:             nanoscheme.AssetXNO,
 		Amount:            raw,
 		PayTo:             payTo,
-		MaxTimeoutSeconds: orDefaultMaxTimeout(contract),
+		MaxTimeoutSeconds: defaultMaxTimeoutSeconds,
 		Extra: map[string]any{
 			"asset":               nanoscheme.AssetXNO,
 			"assetTransferMethod": "nano-native-send",
@@ -447,10 +418,9 @@ func composeNanoRoute(prefix, amount, network string, contract X402Payment, nano
 		},
 	}
 	gate, err := x402http.New(x402http.Config{
-		Requirements:   requirements,
-		Facilitator:    *nano,
-		Resource:       &facilitatortypes.ResourceInfo{URL: prefix, MimeType: "text/html"},
-		RequestTimeout: contract.RequestTimeout,
+		Requirements: requirements,
+		Facilitator:  *nano,
+		Resource:     &facilitatortypes.ResourceInfo{URL: prefix, MimeType: "text/html"},
 	})
 	if err != nil {
 		return nil, err
@@ -538,7 +508,7 @@ func isDecimalDigits(value string) bool {
 // newCasperFacilitatorClient delegates Casper verify/settle to the hosted
 // CSPR.cloud x402 facilitator (or a configured endpoint): Casper has no Go
 // chain SDK, so the remote HTTP facilitator is the settlement backend.
-func newCasperFacilitatorClient(contract X402Payment) (*facilitatorclient.Client, error) {
+func newCasperFacilitatorClient(contract X402Config) (*facilitatorclient.Client, error) {
 	endpoint := cmp.Or(firstEndpoint(contract.Endpoints), casperscheme.DefaultFacilitatorURL)
 	token := strings.TrimSpace(contract.FacilitatorToken)
 	if token == "" && strings.EqualFold(strings.TrimRight(endpoint, "/"), casperscheme.DefaultFacilitatorURL) {
@@ -580,13 +550,6 @@ func firstEndpoint(endpoints []string) string {
 		}
 	}
 	return ""
-}
-
-func orDefaultMaxTimeout(contract X402Payment) int {
-	if contract.MaxTimeoutSeconds <= 0 {
-		return defaultMaxTimeoutSeconds
-	}
-	return contract.MaxTimeoutSeconds
 }
 
 // canonicalRequirements returns the gate-canonical published contract: the
@@ -631,7 +594,7 @@ func (p *routePolicy) paidMethod(method string) bool {
 
 type httpGateway struct {
 	routes     *sdk.HTTPRoutes
-	policies   []routePolicy
+	policies   map[string]*routePolicy
 	servesX402 bool
 	clientJS   http.Handler
 }
@@ -662,11 +625,15 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if policy := g.matchPolicy(path); policy.paidMethod(r.Method) {
-		policy.gate.Wrap(g.routes).ServeHTTP(w, r)
+	prefix, handler := g.routes.Match(path)
+	if handler == nil {
+		http.NotFound(w, r)
 		return
 	}
-	g.routes.ServeHTTP(w, r)
+	if policy := g.policies[prefix]; policy.paidMethod(r.Method) {
+		handler = policy.gate.Wrap(handler)
+	}
+	handler.ServeHTTP(w, r)
 }
 
 func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
@@ -691,7 +658,8 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 		method = raw
 	}
 
-	policy := g.matchPolicy(path)
+	prefix, _ := g.routes.Match(path)
+	policy := g.policies[prefix]
 	if policy == nil {
 		http.NotFound(w, r)
 		return
@@ -708,17 +676,6 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 	// there is no server-built transaction to prepare: the prepare endpoint
 	// answers with the route's challenge instead.
 	g.writeRouteChallenge(w, r, policy)
-}
-
-// matchPolicy selects the same longest canonical prefix as the SDK router.
-func (g *httpGateway) matchPolicy(path string) *routePolicy {
-	for i := range g.policies {
-		policy := &g.policies[i]
-		if policy.prefix == "/" || path == policy.prefix || strings.HasPrefix(path, policy.prefix+"/") {
-			return policy
-		}
-	}
-	return nil
 }
 
 // writeRouteChallenge answers a Casper or Nano prepare request with the
@@ -752,12 +709,12 @@ func (g *httpGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(raw)
 }
 
-// normalizedPaymentMethods canonicalizes configured payment methods: trimmed,
+// NormalizePaymentMethods canonicalizes configured payment methods: trimmed,
 // uppercased, de-duplicated, and ordered for deterministic publication. A
 // blank method is a configuration error rather than an omission: an empty
 // method list pays every method, so dropping a blank entry would widen the
 // payment gate instead of narrowing it.
-func normalizedPaymentMethods(methods []string) ([]string, error) {
+func NormalizePaymentMethods(methods []string) ([]string, error) {
 	set := make(map[string]struct{}, len(methods))
 	for _, raw := range methods {
 		method := strings.ToUpper(strings.TrimSpace(raw))

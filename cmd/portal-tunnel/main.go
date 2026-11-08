@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,6 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
@@ -40,8 +40,6 @@ var (
 	errSubjectIsRequired                   = errors.New("--subject is required")
 	errExpiresMustBePositive               = errors.New("--expires must be positive")
 	errPaymentAmountIsRequired             = errors.New("payment amount is required")
-	errPaymentMethodIsRequired             = errors.New("payment method is required")
-	errPaymentMethodsAreRequiredBefore     = errors.New("payment methods are required before ':'")
 	errNoRelayURLsConfigured               = errors.New("no relay URLs configured")
 )
 
@@ -344,18 +342,10 @@ func parseHTTPRoutePayment(value string) ([]string, string, error) {
 	}
 	methods := []string(nil)
 	if hasMethods {
-		for rawMethod := range strings.SplitSeq(methodPart, ",") {
-			method := strings.ToUpper(strings.TrimSpace(rawMethod))
-			if method == "" {
-				return nil, "", errPaymentMethodIsRequired
-			}
-			exists := slices.Contains(methods, method)
-			if !exists {
-				methods = append(methods, method)
-			}
-		}
-		if len(methods) == 0 {
-			return nil, "", errPaymentMethodsAreRequiredBefore
+		var err error
+		methods, err = gateway.NormalizePaymentMethods(strings.Split(methodPart, ","))
+		if err != nil {
+			return nil, "", err
 		}
 	}
 	return methods, amount, nil

@@ -47,6 +47,12 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   agent saves a `Config` as the user set it, plus the tunnel ID and identity path
   that it pins.
 
+  The agent manager owns saved tunnel settings and uses one save-and-apply path
+  for additions, updates, and deletions. Metadata and the discovery cap update
+  the current exposure; other changed settings restart that tunnel. Runtime
+  relay connect/disconnect commands belong to the current SDK exposure and do
+  not change the saved settings or the manager's configuration comparison.
+
 - `portal/discovery`: provides blind collaborator relay selection for `sdk.Exposure`.
   Relay selection returns public relay priorities; Portal does not construct an
   ordered list of intermediate relays. Explicit relay URLs, transport eligibility,

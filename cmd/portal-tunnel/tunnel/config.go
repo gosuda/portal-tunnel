@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -67,10 +68,14 @@ func (c *Config) Normalize() error {
 	if c.HTTPRoutes != nil {
 		routes := make([]HTTPRoute, 0, len(c.HTTPRoutes))
 		for _, route := range c.HTTPRoutes {
+			methods, err := gateway.NormalizePaymentMethods(route.Methods)
+			if err != nil {
+				return fmt.Errorf("HTTP route %q: %w", route.Prefix, err)
+			}
 			routes = append(routes, HTTPRoute{
 				Prefix:   strings.TrimSpace(route.Prefix),
 				Upstream: strings.TrimSpace(route.Upstream),
-				Methods:  normalizeHTTPMethods(route.Methods),
+				Methods:  methods,
 				Amount:   strings.TrimSpace(route.Amount),
 			})
 		}
@@ -91,17 +96,6 @@ func (c *Config) Normalize() error {
 	}
 	c.X402Config = c.X402Config.Normalize()
 	return nil
-}
-
-func normalizeHTTPMethods(methods []string) []string {
-	var out []string
-	for _, method := range methods {
-		method = strings.ToUpper(strings.TrimSpace(method))
-		if method != "" && !slices.Contains(out, method) {
-			out = append(out, method)
-		}
-	}
-	return out
 }
 
 // Spec resolves c into the runtime description of the tunnel: it normalizes c,
@@ -134,7 +128,7 @@ func (c Config) Spec() (Spec, error) {
 			Serve:               c.Serve,
 			Routes:              c.HTTPRoutes,
 			StripRequestHeaders: c.StripRequestHeaders,
-			Payment:             gateway.X402Payment{X402Config: c.X402Config},
+			Payment:             c.X402Config,
 			Cache:               c.Cache,
 		}
 		if !auth.IsZero() {
