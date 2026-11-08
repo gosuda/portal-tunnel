@@ -1,19 +1,26 @@
 package policy
 
-import (
-	"fmt"
+import "fmt"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
-)
+// PreAuthConfig configures the relay's pre-auth request budgets and endpoint costs.
+type PreAuthConfig struct {
+	SourcePerMinute int
+	SourceBurst     int
+	GlobalPerMinute int
+	GlobalBurst     int
+	ChallengeCost   int
+	AnnounceCost    int
+	RegisterCost    int
+}
 
-func DefaultPreAuthConfig() types.PreAuthConfig {
+func DefaultPreAuthConfig() PreAuthConfig {
 	// 600 units/minute permits about 100 complete registrations/minute;
 	// the 200-unit burst permits about 33 simultaneous startups. Operators
 	// should tune this aggregate work budget to their relay capacity.
-	return types.PreAuthConfig{SourcePerMinute: 10, SourceBurst: 100, GlobalPerMinute: 600, GlobalBurst: 200, ChallengeCost: 1, AnnounceCost: 2, RegisterCost: 5}
+	return PreAuthConfig{SourcePerMinute: 10, SourceBurst: 100, GlobalPerMinute: 600, GlobalBurst: 200, ChallengeCost: 1, AnnounceCost: 2, RegisterCost: 5}
 }
 
-func NormalizePreAuthConfig(c *types.PreAuthConfig) error {
+func NormalizePreAuthConfig(c *PreAuthConfig) error {
 	defaults := DefaultPreAuthConfig()
 	for _, field := range []struct {
 		value    *int

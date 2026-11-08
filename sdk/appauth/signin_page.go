@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // The sign-in pages share one shell, so every method looks like Portal and a new
@@ -127,7 +129,7 @@ const signinCredentialBody = `<section data-view="form"><h1 tabindex="-1">Sign i
 ` + signinCommonViews
 
 const signinCredentialScript = `const input=document.querySelector('#credential'),hint=document.querySelector('#hint');
-const redeem=async()=>{const credential=input.value.trim();hint.hidden=credential!=='';if(!credential){input.focus();return}show('checking');try{const r=await post('/_portal/auth/redeem',{credential});if(r.status===401){show('invalid');return}if(!r.ok){fail(r.data.error);return}done()}catch(e){fail()}};
+const redeem=async()=>{const credential=input.value.trim();hint.hidden=credential!=='';if(!credential){input.focus();return}show('checking');try{const r=await post('` + types.PathApplicationAuthRedeem + `',{credential});if(r.status===401){show('invalid');return}if(!r.ok){fail(r.data.error);return}done()}catch(e){fail()}};
 document.querySelector('#signin').addEventListener('click',redeem);
 const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('credential')){input.value=fragment.get('credential');history.replaceState(null,'',location.pathname+location.search);redeem()}`
 
@@ -141,9 +143,9 @@ const signinWalletScript = `const short=(a)=>a.length>12?a.slice(0,6)+'\u2026'+a
 const connect=async(fresh)=>{if(!window.ethereum){show('none');return}show('signing');try{
 if(fresh){try{await window.ethereum.request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]})}catch(e){}}
 const accounts=await window.ethereum.request({method:'eth_requestAccounts'});const address=accounts&&accounts[0];if(!address)throw new Error('The wallet did not provide an account.');
-const c=await post('/_portal/auth/challenge',{address});if(c.status===401){document.querySelector('#who').textContent=short(address);show('denied');return}if(!c.ok)throw new Error(c.data.error||'Could not create a sign-in challenge.');
+const c=await post('` + types.PathApplicationAuthChallenge + `',{address});if(c.status===401){document.querySelector('#who').textContent=short(address);show('denied');return}if(!c.ok)throw new Error(c.data.error||'Could not create a sign-in challenge.');
 const signature=await window.ethereum.request({method:'personal_sign',params:[c.data.message,address]});
-const v=await post('/_portal/auth/verify',{challenge_id:c.data.challenge_id,message:c.data.message,signature});if(!v.ok)throw new Error(v.data.error||'The signature could not be verified.');done();
+const v=await post('` + types.PathApplicationAuthVerify + `',{challenge_id:c.data.challenge_id,message:c.data.message,signature});if(!v.ok)throw new Error(v.data.error||'The signature could not be verified.');done();
 }catch(e){if(e&&e.code===4001){show('form');return}fail(e&&e.message)}};
 document.addEventListener('click',(e)=>{const b=e.target.closest('[data-connect]');if(b)connect(b.dataset.connect==='fresh')});`
 
@@ -165,8 +167,8 @@ const signinEmailBody = `<section data-view="form"><h1 tabindex="-1">Sign in wit
 
 const signinEmailScript = `const input=document.querySelector('#email'),hint=document.querySelector('#hint'),hintMsg=document.querySelector('#hint-msg');
 const warn=(message)=>{hintMsg.textContent=message;hint.hidden=false;show('form');input.focus()};
-document.querySelector('#email-form').addEventListener('submit',async(e)=>{e.preventDefault();const email=input.value.trim();hint.hidden=true;if(!email){warn('Enter your email address first.');return}show('sending');try{const r=await post('/_portal/auth/email/request',{email,next:next()});if(r.status===400){warn('Enter a valid email address.');return}if(!r.ok){fail(r.data.error);return}document.querySelector('#to').textContent=email;show('sent')}catch(e){fail()}});
-const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('email_token')){const token=fragment.get('email_token');history.replaceState(null,'',location.pathname+location.search);show('confirm');document.querySelector('#redeem').addEventListener('click',()=>{show('checking');post('/_portal/auth/email/redeem',{token}).then((r)=>{if(r.status===401){show('invalid');return}if(!r.ok){fail(r.data.error);return}done(r.data.next)},()=>fail())})}`
+document.querySelector('#email-form').addEventListener('submit',async(e)=>{e.preventDefault();const email=input.value.trim();hint.hidden=true;if(!email){warn('Enter your email address first.');return}show('sending');try{const r=await post('` + types.PathApplicationAuthEmailRequest + `',{email,next:next()});if(r.status===400){warn('Enter a valid email address.');return}if(!r.ok){fail(r.data.error);return}document.querySelector('#to').textContent=email;show('sent')}catch(e){fail()}});
+const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('email_token')){const token=fragment.get('email_token');history.replaceState(null,'',location.pathname+location.search);show('confirm');document.querySelector('#redeem').addEventListener('click',()=>{show('checking');post('` + types.PathApplicationAuthEmailRedeem + `',{token}).then((r)=>{if(r.status===401){show('invalid');return}if(!r.ok){fail(r.data.error);return}done(r.data.next)},()=>fail())})}`
 
 // An OIDC or SAML login leaves for the provider at once, so its only screens
 // are the ways it can come back without a session. They are rendered by the

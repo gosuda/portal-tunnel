@@ -51,7 +51,7 @@ func TestRelayDatagramAdmissionPreservesEstablishedFlows(t *testing.T) {
 	if !ok {
 		t.Fatal("first flow rejected")
 	}
-	for port := 2; port <= types.DefaultUDPNewFlowBurst; port++ {
+	for port := 2; port <= defaultUDPNewFlowBurst; port++ {
 		if _, _, ok := d.touchFlow(netip.AddrPortFrom(addr.Addr(), uint16(port)), now); !ok {
 			t.Fatalf("flow %d within burst rejected", port)
 		}
@@ -62,7 +62,7 @@ func TestRelayDatagramAdmissionPreservesEstablishedFlows(t *testing.T) {
 	if got, fresh, ok := d.touchFlow(addr, now); !ok || fresh || got != first {
 		t.Fatal("established flow rejected by new-flow budget")
 	}
-	for port := types.DefaultUDPNewFlowBurst + 1; port <= types.DefaultUDPMaxFlows; port++ {
+	for port := defaultUDPNewFlowBurst + 1; port <= types.DefaultUDPMaxFlows; port++ {
 		now = now.Add(time.Second)
 		if _, _, ok := d.touchFlow(netip.AddrPortFrom(addr.Addr(), uint16(port)), now); !ok {
 			t.Fatalf("flow %d below capacity rejected", port)

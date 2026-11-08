@@ -65,18 +65,6 @@ type Identity struct {
 	TokenSecret    string `json:"-"`
 }
 
-func (i Identity) Copy() Identity {
-	return Identity{
-		Name:           i.Name,
-		Address:        i.Address,
-		PublicKey:      i.PublicKey,
-		PrivateKey:     i.PrivateKey,
-		Mnemonic:       i.Mnemonic,
-		DerivationPath: i.DerivationPath,
-		TokenSecret:    i.TokenSecret,
-	}
-}
-
 // ServiceIdentityKey is the comparable in-process identity of a service.
 // String serialization belongs at API, persistence, token, and log boundaries.
 type ServiceIdentityKey struct {
@@ -112,25 +100,6 @@ func (k ServiceIdentityKey) String() string {
 		return ""
 	}
 	return k.name + IdentityKeySeparator + k.address
-}
-
-// CanonicalIdentityKey returns the canonical identity key for the given name
-// and address: both parts are canonicalized, the result is "" when both parts
-// are empty, and "name:address" (or ":address" when name is empty) otherwise.
-func CanonicalIdentityKey(name, address string) string {
-	return NewServiceIdentityKey(name, address).String()
-}
-
-// ParseIdentityKey parses a raw identity key in "name:address" or ":address"
-// form and returns its canonical form. The key is split on the first separator
-// and both parts are canonicalized; parsing fails when the raw value does not
-// contain exactly one separator or the address is empty after canonicalization.
-func ParseIdentityKey(raw string) (string, error) {
-	key, err := ParseServiceIdentityKey(raw)
-	if err != nil {
-		return "", err
-	}
-	return key.String(), nil
 }
 
 func (i Identity) ServiceKey() ServiceIdentityKey {
@@ -255,8 +224,9 @@ type DeleteCommentRequest struct {
 	ID       string `json:"id"`
 }
 
-type VoteCommentRequest struct {
+// VoteRequest targets an app, or one of its comments when ID is required by the route.
+type VoteRequest struct {
 	Hostname string `json:"hostname"`
-	ID       string `json:"id"`
+	ID       string `json:"id,omitempty"`
 	Vote     string `json:"vote"`
 }

@@ -194,9 +194,21 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRenew, types.RenewRequest{AccessToken: leases[0].AccessToken, TTL: 60}, nil, &renewal); err != nil {
 		t.Fatalf("tenant saturation blocked fresh root TLS/renew: %v", err)
 	}
-	h := &tcpLeaseHarness{t: t, server: server, client: client, base: base, lease: leases[8], carrier: "native"}
-	reverse := h.openReverse()
-	defer reverse.Close()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+types.PathSDKConnect, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(types.HeaderReverseCapability, leases[8].ReverseEndpoint.Capability)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "raw")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("tenant saturation blocked reverse authentication: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("reverse authentication under saturation = %d, want 101", response.StatusCode)
+	}
 	if time.Since(fillStarted) >= 10*time.Second {
 		t.Fatal("control-plane assertion exceeded the reverse-wait budget")
 	}

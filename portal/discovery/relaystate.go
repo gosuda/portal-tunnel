@@ -38,37 +38,37 @@ const (
 	AnnounceMaxValidity = 24 * time.Hour
 )
 
-// RelayTrust classifies whether this relay has directly verified a pool
+// relayTrust classifies whether this relay has directly verified a pool
 // entry or only received its descriptor from untrusted input. Verifying a
 // relay never verifies the other relays its discovery response mentions;
 // those are admitted as candidates like any other untrusted descriptor.
-type RelayTrust uint8
+type relayTrust uint8
 
 const (
-	// RelayCandidate marks a descriptor admitted from untrusted input.
+	// relayCandidate marks a descriptor admitted from untrusted input.
 	// Candidates remain refresh-poll targets, but they are excluded from
 	// Descriptors(), automatic route selection, and this relay's own gossip
 	// output until promoted.
-	RelayCandidate RelayTrust = iota
+	relayCandidate relayTrust = iota
 
-	// RelayVerified marks a relay whose own URL this relay polled directly
+	// relayVerified marks a relay whose own URL this relay polled directly
 	// and which served a validly signed self-descriptor. Verified entries
 	// are globally discoverable and automatically selectable.
-	RelayVerified
+	relayVerified
 )
 
-type PercentileTracker struct {
+type percentileTracker struct {
 	samples []float64
 }
 
-func (pt *PercentileTracker) Add(rtt time.Duration) {
+func (pt *percentileTracker) add(rtt time.Duration) {
 	pt.samples = append(pt.samples, float64(rtt))
 	if len(pt.samples) > 100 { // Keep last 100 samples
 		pt.samples = pt.samples[1:]
 	}
 }
 
-func (pt *PercentileTracker) Get(p float64) time.Duration {
+func (pt *percentileTracker) get(p float64) time.Duration {
 	if len(pt.samples) == 0 {
 		return 0
 	}
@@ -95,15 +95,15 @@ func (pt *PercentileTracker) Get(p float64) time.Duration {
 	return time.Duration(value)
 }
 
-type RelayState struct {
+type relayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
 	// Trust classifies how the entry entered the set. Descriptors from
 	// untrusted input (/discovery/announce or gossiped discovery
-	// content) are admitted as RelayCandidate and stay out of Descriptors()
+	// content) are admitted as relayCandidate and stay out of Descriptors()
 	// and automatic route selection until a direct authoritative probe of
-	// that exact relay promotes them to RelayVerified.
-	Trust  RelayTrust
+	// that exact relay promotes them to relayVerified.
+	Trust  relayTrust
 	Banned bool
 	// recovery budget. Dead relays are excluded from route planning and relay
 	// listings but stay in the set: the refresher keeps probing them and a
@@ -113,7 +113,7 @@ type RelayState struct {
 
 	DiscoveryRTT   time.Duration
 	DiscoveryRTTAt time.Time
-	RTTTracker     PercentileTracker
+	RTTTracker     percentileTracker
 
 	discoveryFailures      int
 	activeFailures         int
@@ -128,7 +128,7 @@ const (
 )
 
 // effectiveRTT computes the relay's RTT with a virtual latency penalty applied for active and discovery failures.
-func (state RelayState) effectiveRTT() time.Duration {
+func (state relayState) effectiveRTT() time.Duration {
 	rtt := state.DiscoveryRTT
 	failures := state.activeFailures + state.discoveryFailures
 	if failures > 0 {
@@ -141,10 +141,10 @@ func (state RelayState) effectiveRTT() time.Duration {
 	return rtt
 }
 
-// Pressure measures observed tail latency inflation relative to the median.
-func (state RelayState) Pressure() float64 {
-	p50 := float64(state.RTTTracker.Get(0.50))
-	p90 := float64(state.RTTTracker.Get(0.90))
+// pressure measures observed tail latency inflation relative to the median.
+func (state relayState) pressure() float64 {
+	p50 := float64(state.RTTTracker.get(0.50))
+	p90 := float64(state.RTTTracker.get(0.90))
 
 	if p50 > 0 && p90 > p50 {
 		return (p90 - p50) / p50
@@ -152,15 +152,15 @@ func (state RelayState) Pressure() float64 {
 	return 0
 }
 
-func newRelayState(relayURL string) RelayState {
-	return RelayState{
+func newRelayState(relayURL string) relayState {
+	return relayState{
 		Descriptor: types.RelayDescriptor{
 			APIHTTPSAddr: relayURL,
 		},
 	}
 }
 
-func (state RelayState) hasObservedDescriptor() bool {
+func (state relayState) hasObservedDescriptor() bool {
 	return !state.LastSeenAt.IsZero()
 }
 
@@ -184,7 +184,7 @@ type routeState struct {
 	SelectionKey []byte
 }
 
-func (state RelayState) supportsRequiredTransports(routeState routeState, now time.Time) bool {
+func (state relayState) supportsRequiredTransports(routeState routeState, now time.Time) bool {
 	if !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) {
 		return true
 	}

@@ -2,25 +2,42 @@ package types
 
 import (
 	"encoding/binary"
-	"errors"
 	"time"
 )
 
+// Reverse stream activation markers precede application traffic.
 const (
-	DefaultUDPFlowIdleTimeout   = 5 * time.Minute
-	DefaultUDPMaxFlows          = 1024
-	DefaultUDPNewFlowsPerSecond = 64
-	DefaultUDPNewFlowBurst      = 128
+	ReverseMarkerKeepalive = 0x00
+	ReverseMarkerRawStart  = 0x01
+	ReverseMarkerTLSStart  = 0x02
+	// TLSBindingSize binds one reverse connection to keyless transcript signing.
+	TLSBindingSize = 16
+)
+
+const (
+	QUICBackhaulALPN        = "portal-tunnel"
+	KeylessRelayKeyID       = "relay-cert"
+	OverlayCapabilityPrefix = "ov1"
+	OverlayStreamPort       = "4017"
+)
+
+// Overlay reverse-offer responses. Older peers treat pending and denied as unavailable.
+const (
+	OverlayStatusUnavailable = byte(0)
+	OverlayStatusAccepted    = byte(1)
+	OverlayStatusCapacity    = byte(2)
+	OverlayStatusPending     = byte(3)
+	OverlayStatusDenied      = byte(4)
+)
+
+const (
+	DefaultUDPFlowIdleTimeout = 5 * time.Minute
+	DefaultUDPMaxFlows        = 1024
 	// QUICInitialPacketSize is the backhaul packet size and its lower limit.
 	QUICInitialPacketSize = 1280
 	// quic-go v0.59.0 reserves 37 bytes from the packet size for DATAGRAM
 	// overhead. Reserve the largest flow-ID varint as well (1238-byte payload).
 	MaxUDPPayloadSize = QUICInitialPacketSize - 37 - binary.MaxVarintLen32
-)
-
-var (
-	errDatagramTooSmall       = errors.New("datagram too small to decode")
-	errDatagramFlowIDOverflow = errors.New("datagram flow ID overflows uint32")
 )
 
 // DatagramFrame carries one relayed datagram.
@@ -35,29 +52,4 @@ type DatagramFrame struct {
 	// LeaseDone identifies local lease ownership; it is never encoded on wire.
 	// Preserve it when replying to an accepted frame.
 	LeaseDone <-chan struct{} `json:"-"`
-}
-
-// EncodeDatagram serialises a flow-framed datagram for transmission.
-func EncodeDatagram(flowID uint32, payload []byte) []byte {
-	var buf [binary.MaxVarintLen32]byte
-	n := binary.PutUvarint(buf[:], uint64(flowID))
-	out := make([]byte, n+len(payload))
-	copy(out, buf[:n])
-	copy(out[n:], payload)
-	return out
-}
-
-// DecodeDatagram deserialises a flow-framed datagram.
-func DecodeDatagram(data []byte) (DatagramFrame, error) {
-	flowID, n := binary.Uvarint(data)
-	if n <= 0 {
-		return DatagramFrame{}, errDatagramTooSmall
-	}
-	if flowID > uint64(^uint32(0)) {
-		return DatagramFrame{}, errDatagramFlowIDOverflow
-	}
-	return DatagramFrame{
-		FlowID:  uint32(flowID),
-		Payload: data[n:],
-	}, nil
 }

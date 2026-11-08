@@ -392,7 +392,7 @@ func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{RelayURL: relayURL, Hostname: tenantHostname, AccessToken: "access-token"})
+	tenantTLS, err := keyless.NewClient(t.Context(), keyless.ClientConfig{RelayURL: relayURL, Hostname: tenantHostname, AccessToken: "access-token"})
 	if err != nil {
 		t.Fatalf("keyless.NewClient() error = %v", err)
 	}

@@ -67,7 +67,7 @@ func TestDatagramSessionReconnectPreservesLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	received, err := types.DecodeDatagram(data)
+	received, err := decodeDatagram(data)
 	if err != nil || received.FlowID != frame.FlowID || string(received.Payload) != string(frame.Payload) {
 		t.Fatalf("reconnected reply: %+v %v", received, err)
 	}
@@ -148,7 +148,7 @@ func newAuthTestConnections(t *testing.T, configs ...*quic.Config) (*quic.Conn, 
 	if len(configs) > 0 {
 		clientConfig = configs[0]
 	}
-	client, err := quic.DialAddr(ctx, listener.Addr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{quicBackhaulALPN}}, clientConfig)
+	client, err := quic.DialAddr(ctx, listener.Addr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{types.QUICBackhaulALPN}}, clientConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

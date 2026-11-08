@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestReadRawStartSkipsKeepaliveAndPreservesPayload(t *testing.T) {
@@ -40,7 +42,7 @@ func TestReadRawStartSkipsKeepaliveAndPreservesPayload(t *testing.T) {
 }
 
 func TestReadStartRejectsMalformedFraming(t *testing.T) {
-	for _, frame := range [][]byte{{0xff}, {markerTLSStart, 1, 2}} {
+	for _, frame := range [][]byte{{0xff}, {types.ReverseMarkerTLSStart, 1, 2}} {
 		relay, client := net.Pipe()
 		go func() { _, _ = relay.Write(frame); _ = relay.Close() }()
 		if _, err := ReadStart(context.Background(), client, time.Second); err == nil {

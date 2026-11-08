@@ -48,7 +48,7 @@ func TestColludingGossipCannotReplaceLocalRelayEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	selected := set.SelectRelays(routeState{})
+	selected := set.selectRelays(routeState{})
 	if len(selected) != 2 || !slices.Contains(selected, healthy) || !slices.Contains(selected, reporter) {
 		t.Fatalf("gossip manufactured selectable relays or excluded the healthy peer: %v", selected)
 	}
@@ -351,9 +351,9 @@ func TestInsertCandidatePerIdentityCapKeepsVerifiedEntries(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	verifiedURL := "https://verified.example"
-	set.relays[verifiedURL] = RelayState{
+	set.relays[verifiedURL] = relayState{
 		Descriptor: mustSignedDescriptor(t, owner, verifiedURL, now),
-		Trust:      RelayVerified,
+		Trust:      relayVerified,
 		LastSeenAt: now,
 	}
 	for i := range MaxAnnouncedRelaysPerIdentity * 2 {
@@ -365,7 +365,7 @@ func TestInsertCandidatePerIdentityCapKeepsVerifiedEntries(t *testing.T) {
 	}
 
 	verified, ok := set.relays[verifiedURL]
-	if !ok || verified.Trust != RelayVerified {
+	if !ok || verified.Trust != relayVerified {
 		t.Fatal("directly verified entry must survive the identity cap")
 	}
 }
@@ -409,17 +409,17 @@ func TestFilterCandidatePoolExcludesCandidatesUntilVerified(t *testing.T) {
 	signing := mustSigningIdentity(t)
 	other := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	candidate := RelayState{
+	candidate := relayState{
 		Descriptor: mustSignedDescriptor(t, signing, "https://candidate.example", now),
 		LastSeenAt: now,
 	}
-	verified := RelayState{
+	verified := relayState{
 		Descriptor: mustSignedDescriptor(t, other, "https://verified-candidate.example", now),
-		Trust:      RelayVerified,
+		Trust:      relayVerified,
 		LastSeenAt: now,
 	}
 
-	pool := filterCandidatePool([]RelayState{candidate, verified}, routeState{}, now)
+	pool := filterCandidatePool([]relayState{candidate, verified}, routeState{}, now)
 	if len(pool) != 1 || pool[0].Descriptor.APIHTTPSAddr != "https://verified-candidate.example" {
 		t.Fatalf("filterCandidatePool() = %v, want only the verified entry", pool)
 	}
@@ -603,8 +603,8 @@ func TestTrustDoesNotTransferAcrossIdentityTakeover(t *testing.T) {
 	if !ok {
 		t.Fatal("replacement descriptor must be stored")
 	}
-	if state.Trust != RelayCandidate {
-		t.Fatalf("trust = %v, want RelayCandidate after a cross-identity takeover", state.Trust)
+	if state.Trust != relayCandidate {
+		t.Fatalf("trust = %v, want relayCandidate after a cross-identity takeover", state.Trust)
 	}
 	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
 		if desc.APIHTTPSAddr == relayURL {
@@ -626,22 +626,22 @@ func TestBootstrapCandidateDescriptorStaysHidden(t *testing.T) {
 	if !ok || !state.Bootstrap {
 		t.Fatal("bootstrap pin must survive a candidate insert at the same URL")
 	}
-	if state.Trust != RelayCandidate {
-		t.Fatalf("trust = %v, want RelayCandidate for a squatted bootstrap descriptor", state.Trust)
+	if state.Trust != relayCandidate {
+		t.Fatalf("trust = %v, want relayCandidate for a squatted bootstrap descriptor", state.Trust)
 	}
 	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
 		if desc.APIHTTPSAddr == bootstrapURL {
 			t.Fatal("candidate descriptor squatted on a bootstrap URL must stay out of Descriptors()")
 		}
 	}
-	if pool := filterCandidatePool([]RelayState{state}, routeState{}, now); len(pool) != 0 {
+	if pool := filterCandidatePool([]relayState{state}, routeState{}, now); len(pool) != 0 {
 		t.Fatalf("filterCandidatePool() = %v, want the squatted bootstrap excluded", pool)
 	}
 
 	// URL-only bootstrap entries remain eligible as a public relay fallback.
 	urlOnly := newRelayState("https://bootstrap-fallback.example")
 	urlOnly.Bootstrap = true
-	if pool := filterCandidatePool([]RelayState{urlOnly}, routeState{}, now); len(pool) != 1 {
+	if pool := filterCandidatePool([]relayState{urlOnly}, routeState{}, now); len(pool) != 1 {
 		t.Fatal("URL-only bootstrap entry must remain a single-hop fallback candidate")
 	}
 

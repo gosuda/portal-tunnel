@@ -85,7 +85,8 @@ type pinnedChain struct {
 // NewClient creates one lease-scoped tenant TLS client. It resolves and pins
 // the relay certificate chain, verifies the chain covers the lease hostname,
 // and wires the remote transcript signer to the relay's /v1/sign endpoint.
-func NewClient(config ClientConfig) (*Client, error) {
+// ctx controls initialization; subsequent operations use their own contexts.
+func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	normalizedRelayURL, err := utils.NormalizeRelayURL(config.RelayURL)
 	if err != nil {
 		return nil, err
@@ -100,7 +101,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return nil, errRelayHostnameIsRequired
 	}
 
-	chainPEM, err := relayChain(context.Background(), normalizedRelayURL, serverName)
+	chainPEM, err := relayChain(ctx, normalizedRelayURL, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
@@ -135,7 +136,7 @@ func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
 		Endpoint:   c.relayURL,
 		ServerName: c.serverName,
-		KeyID:      relayKeyID,
+		KeyID:      types.KeylessRelayKeyID,
 		RootCAPEM:  chainPEM,
 		Headers:    c.headers,
 	})
@@ -145,7 +146,7 @@ func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 	server, err := t13server.NewServer(t13server.Config{
 		CertPEM:          chainPEM,
 		NextProtos:       []string{"http/1.1"},
-		KeyID:            relayKeyID,
+		KeyID:            types.KeylessRelayKeyID,
 		TranscriptSigner: remoteSigner,
 	})
 	if err != nil {
@@ -244,7 +245,7 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 // any more, as when a renewal comes from another issuer. Both are cured by
 // pinning the chain the relay serves now.
 func pinIsStale(err error) bool {
-	if strings.Contains(err.Error(), unknownCertificateMessage) {
+	if strings.Contains(err.Error(), types.KeylessUnknownCertificateMessage) {
 		return true
 	}
 	_, verification := errors.AsType[*tls.CertificateVerificationError](err)
@@ -274,15 +275,6 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 		return nil, fmt.Errorf("tenant tls handshake: %w", err)
 	}
 	return conn, nil
-}
-
-// ExportsKeyingMaterial reports whether terminated tenant connections can
-// export TLS keying material for the SDK's MITM responder probe. The
-// t13server terminator exposes the RFC 8446 Section 7.5 exporter on every
-// post-handshake conn, so the capability holds
-// whenever the tenant TLS server exists.
-func (c *Client) ExportsKeyingMaterial() bool {
-	return c.pinned() != nil
 }
 
 // RelayCertPool returns the pinned relay certificate chain as a verification

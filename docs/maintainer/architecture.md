@@ -23,11 +23,16 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   integration owns authentication and reverse-stream fallback. SDK exposures own
   source lifecycle, and listeners supply current transport and lease credentials.
 
+- `sdk/staticsite`: owns local static file serving, root-confined file access,
+  and SPA fallback. SDK routes and embedders use its HTTP handler. Shared path
+  resolution remains in `utils`; `portal/cache` owns immutable snapshots,
+  cached-content serving, and origin fallback.
+
 - `sdk/appauth`: owns the application sign-in gate, its providers, and its
   sessions. It is public API for programs that embed the SDK, and the CLI uses
   the same package. It stays apart from `sdk` so that `sdk` and its WASM build do
-  not depend on OIDC and SAML libraries. `internal/siweauth` is the SIWE code it
-  shares with the agent.
+  not depend on OIDC and SAML libraries. `portal/identity` owns the SIWE message
+  and wallet challenge code it shares with the agent.
 
 - `cmd/portal-tunnel/tunnel`: owns the tunnel configuration of the CLI and the
   agent. `tunnel.Config` holds what the user set through `portal expose` flags, a
@@ -129,7 +134,25 @@ when the source changes. IPv6 addresses are not aggregated by prefix. New
 cookie-free voters in a service's ledger spend ten additional source/global
 admission tokens; existing voters spend only the HTTP request budget. Invalid
 sources cannot create voters. This counts voter credentials, not authenticated
-people, and preserves existing signed cookies and the persisted ledger format.
+people, and preserves existing signed cookies.
+
+`policy.ReputationStore` owns app votes, comments, comment votes, and voter
+identification under one lock. All mutations atomically replace `reputation.json`
+before publishing the new in-memory state. App votes and comment threads remain
+keyed by stable app identity; comment deletion requires a separate author token.
+Comments persist only their ID, text, and creation time; vote counts, viewer votes,
+and deletion permission are projected from the ledgers and current requester.
+Loading rejects malformed app vote entries and ledgers beyond their capacity
+before rewriting the state file.
+On loading an older reputation file, the store imports the sibling `comments.json`
+and persists the combined state. The old file remains untouched and is ignored
+after import, even when all comments have since been deleted. Existing endpoint
+paths, response shapes, and per-action admission budgets remain unchanged.
+Both vote URLs use one HTTP handler and the store's `Vote` operation. An optional
+comment ID selects a comment within the app; the comment route requires it.
+Target-specific capacity and admission checks precede the shared vote mutation
+and commit. The API builds app summaries or reads the comment list after voting;
+the store's vote operation does not construct comment-list responses.
 
 The relay hands root/API and cache TLS connections from its SNI ingress directly
 to the API server, preserving the original socket peer without a local TCP hop.

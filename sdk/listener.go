@@ -51,7 +51,7 @@ const (
 	defaultHandshakeTimeout = 30 * time.Second
 	defaultLeaseTTL         = 2 * time.Minute
 	defaultRenewBefore      = 30 * time.Second
-	defaultReadyTarget      = 2
+	defaultReadyTarget      = 8
 	defaultRetryWait        = 3 * time.Second
 	// defaultChainCheckInterval bounds how often a lease asks the relay whether
 	// its pinned certificate chain is still the one served. A replaced relay
@@ -172,7 +172,6 @@ type listener struct {
 	warnOverlayDirect sync.Once
 	udpEnabled        bool
 	tcpEnabled        bool
-	banMITM           bool
 	cache             *cache.Source
 
 	accepted      chan net.Conn
@@ -210,12 +209,11 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		cancel:        cancel,
 		doneCh:        listenerCtx.Done(),
 		metadata:      cfg.Metadata.Copy(),
-		identity:      cfg.Identity.Copy(),
+		identity:      cfg.Identity,
 		overlay:       cfg.Overlay,
 		statusUpdates: make(chan listenerStatus),
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
-		banMITM:       cfg.BanMITM,
 		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
@@ -1268,17 +1266,6 @@ func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Cli
 	return true
 }
 
-// ensureMITMProbeSupport rejects a registration whose tenant TLS stack
-// cannot deliver the requested MITM self-probe. Honoring ban-mitm silently
-// would advertise protection that never runs; a terminal failure drops this
-// relay and lets the exposure fall back to one that can honor the option.
-func (l *listener) ensureMITMProbeSupport(exporterCapable bool) error {
-	if !l.banMITM || exporterCapable {
-		return nil
-	}
-	return fmt.Errorf("%w: mitm self-probe requested (--ban-mitm) but this relay's tenant tls stack does not export keying material; remove the ban-mitm option to expose without probe protection", errRelayIncompatible)
-}
-
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	registerReq := types.RegisterChallengeRequest{
 		AllowCanonicalFallback: true,
@@ -1306,7 +1293,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 			Message: "relay did not enable required udp support",
 		}
 	}
-	tenantTLS, err := keyless.NewClient(keyless.ClientConfig{
+	tenantTLS, err := keyless.NewClient(ctx, keyless.ClientConfig{
 		RelayURL:    l.api.relayURL.String(),
 		Hostname:    canonicalHostname,
 		AccessToken: resp.AccessToken,
@@ -1315,14 +1302,6 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
 	}
-	exporterCapable := tenantTLS.ExportsKeyingMaterial()
-	if err := l.ensureMITMProbeSupport(exporterCapable); err != nil {
-		_ = tenantTLS.Close()
-		_ = l.api.unregister(context.Background(), resp.AccessToken)
-		return err
-	}
-	l.mitmManager.setResponderCapable(exporterCapable)
-
 	if ctx.Err() != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		_ = tenantTLS.Close()

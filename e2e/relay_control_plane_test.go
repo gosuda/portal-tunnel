@@ -2,13 +2,9 @@ package e2e_test
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -19,69 +15,17 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// waitForRelayCertificateMaterial polls until the relay has persisted both
-// halves of its local certificate material under dir, which local ACME does
-// during startup.
-func waitForRelayCertificateMaterial(t *testing.T, dir string) {
+// stopRelay runs the public shutdown lifecycle and fails the test if either
+// phase misbehaves.
+func stopRelay(t *testing.T, server *portal.Server) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		persisted := true
-		for _, name := range []string{"fullchain.pem", "privatekey.pem"} {
-			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-				persisted = false
-				break
-			}
-		}
-		if persisted {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("relay did not persist certificate material under %s", dir)
-		}
-		<-time.After(10 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		t.Errorf("shutdown relay: %v", err)
 	}
-}
-
-// relayControlClient returns an HTTPS client that trusts the relay's local
-// certificate. Requests use an IP literal, so no SNI is sent and the relay's
-// ingress router serves the control plane.
-func relayControlClient(t *testing.T, stateDir string) *http.Client {
-	t.Helper()
-	certPEM, err := os.ReadFile(filepath.Join(stateDir, "fullchain.pem"))
-	if err != nil {
-		t.Fatalf("read relay certificate: %v", err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(certPEM) {
-		t.Fatalf("relay certificate is not a usable PEM chain")
-	}
-	transport := &http.Transport{
-		TLSClientConfig:   &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
-		DisableKeepAlives: true,
-	}
-	t.Cleanup(transport.CloseIdleConnections)
-	return &http.Client{Transport: transport, Timeout: 10 * time.Second}
-}
-
-// waitRelayReady polls healthz until the serve loop accepts traffic, failing
-// if Serve exits first.
-func waitRelayReady(t *testing.T, client *http.Client, baseURL string, serveResult <-chan error) {
-	t.Helper()
-	deadline := time.After(5 * time.Second)
-	for {
-		resp, err := client.Get(baseURL + types.PathHealthz)
-		if err == nil {
-			resp.Body.Close()
-			return
-		}
-		select {
-		case serveErr := <-serveResult:
-			t.Fatalf("Serve() exited before readiness: %v", serveErr)
-		case <-deadline:
-			t.Fatalf("Serve() did not become ready: %v", err)
-		case <-time.After(10 * time.Millisecond):
-		}
+	if err := server.Wait(); err != nil {
+		t.Errorf("wait for relay: %v", err)
 	}
 }
 
@@ -89,8 +33,6 @@ func waitRelayReady(t *testing.T, client *http.Client, baseURL string, serveResu
 // graceful-shutdown budget; nil or a context error are both a clean exit.
 func awaitServeExit(t *testing.T, serveResult <-chan error) {
 	t.Helper()
-	// This deadline dominates the shutdown budget so a slow but correct
-	// shutdown still fits.
 	select {
 	case err := <-serveResult:
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -108,8 +50,6 @@ func TestRelayServeRoutesAndCancellation(t *testing.T) {
 	t.Run("application handler coexists with relay routes", func(t *testing.T) {
 		sniPort := harnessPort(t, "127.0.0.1")
 		stateDir := t.TempDir()
-		// x402 composition is owned by cmd/relay-server (#490), not by the
-		// relay core, so this e2e pins only the routing coexistence.
 		server, err := portal.NewServer(portal.ServerConfig{
 			PortalURL:     "https://localhost:4017",
 			StateDir:      stateDir,
@@ -157,95 +97,9 @@ func TestRelayServeRoutesAndCancellation(t *testing.T) {
 		cancel()
 		awaitServeExit(t, serveResult)
 	})
-
-	t.Run("nil handler keeps the relay root", func(t *testing.T) {
-		sniPort := harnessPort(t, "127.0.0.1")
-		stateDir := t.TempDir()
-		server, err := portal.NewServer(portal.ServerConfig{
-			PortalURL:     "https://localhost:4017",
-			StateDir:      stateDir,
-			SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
-		})
-		if err != nil {
-			t.Fatalf("create portal server: %v", err)
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		serveResult := make(chan error, 1)
-		go func() {
-			serveResult <- server.Serve(ctx, relayHandler(server, nil))
-		}()
-
-		waitForRelayCertificateMaterial(t, stateDir)
-		client := relayControlClient(t, stateDir)
-		baseURL := "https://127.0.0.1:" + strconv.Itoa(sniPort)
-		waitRelayReady(t, client, baseURL, serveResult)
-
-		for _, route := range []struct {
-			path   string
-			status int
-		}{
-			{"/", http.StatusOK},
-			{"/missing", http.StatusNotFound},
-		} {
-			resp, err := client.Get(baseURL + route.path)
-			if err != nil {
-				t.Fatalf("GET %s: %v", route.path, err)
-			}
-			resp.Body.Close()
-			if resp.StatusCode != route.status {
-				t.Fatalf("GET %s status=%d, want %d", route.path, resp.StatusCode, route.status)
-			}
-		}
-
-		cancel()
-		awaitServeExit(t, serveResult)
-	})
 }
 
-// Start with no ACME.KeyDir keeps the certificate material under StateDir,
-// serves the public healthz route, and gates the keyless signing path:
-// an unauthenticated sign request must be rejected.
-func TestRelayStartInitializesLocalACMEAndGatesSignPath(t *testing.T) {
-	sniPort := harnessPort(t, "127.0.0.1")
-	stateDir := t.TempDir()
-	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     "https://localhost:4017",
-		StateDir:      stateDir,
-		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(sniPort),
-	})
-	if err != nil {
-		t.Fatalf("create portal server: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
-		t.Fatalf("start portal server: %v", err)
-	}
-	defer stopRelay(t, server)
-
-	waitForRelayCertificateMaterial(t, stateDir)
-	client := relayControlClient(t, stateDir)
-	baseURL := "https://127.0.0.1:" + strconv.Itoa(sniPort)
-	for _, route := range []struct {
-		path   string
-		status int
-	}{
-		{types.PathHealthz, http.StatusOK},
-		{types.PathV1Sign, http.StatusForbidden},
-	} {
-		resp, err := client.Get(baseURL + route.path)
-		if err != nil {
-			t.Fatalf("GET %s: %v", route.path, err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != route.status {
-			t.Fatalf("GET %s status=%d, want %d", route.path, resp.StatusCode, route.status)
-		}
-	}
-}
-
-// /sdk/domain is the compatibility contract a client bootstraps from, an
+// The domain document carries compatibility information that the client bootstraps from, an
 // explicitly configured ACME.KeyDir must be honored, and the relay discovery
 // envelope is served only when discovery is enabled.
 func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {

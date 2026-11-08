@@ -2,7 +2,6 @@ package utils
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (
@@ -189,25 +186,6 @@ func SanitizeReportedIP(raw string) string {
 		return ""
 	}
 	return ip.Unmap().String()
-}
-
-// FetchRelayVersion calls GET /sdk/domain on a relay and returns its release version.
-// Returns an empty string on any error (timeout, unreachable, bad response).
-func FetchRelayVersion(ctx context.Context, relayURL string) string {
-	client := NewHTTPClient(WithHTTPTimeout(3 * time.Second))
-	resp, err := httpDo(ctx, client, http.MethodGet, relayURL+types.PathSDKDomain, nil, nil)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	var envelope types.APIEnvelope[types.DomainResponse]
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || !envelope.OK {
-		return ""
-	}
-	return envelope.Data.ReleaseVersion
 }
 
 // The non-public exceptions to Go's IsGlobalUnicast and IsPrivate checks

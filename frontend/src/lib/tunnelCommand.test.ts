@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { AUTH_CALLBACK_PATH, AUTH_SAML_ACS_PATH } from "@/lib/apiPaths";
 import ruleVectors from "@/lib/authRuleVectors.json";
 import {
-  AUTH_CALLBACK_PATH,
-  AUTH_SAML_ACS_PATH,
   DEFAULT_TUNNEL_AUTH,
   addAuthAllow,
   applicationAuthHost,

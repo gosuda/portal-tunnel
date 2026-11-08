@@ -16,7 +16,6 @@ import (
 var errIdentityTokenSecretIsRequired = errors.New("identity token secret is required")
 
 func ensureTokenSecret(identity types.Identity) (types.Identity, error) {
-	identity = identity.Copy()
 	identity.TokenSecret = strings.TrimSpace(identity.TokenSecret)
 	if identity.TokenSecret != "" {
 		return identity, nil

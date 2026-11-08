@@ -113,6 +113,16 @@ func backhaulSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
 	return netip.PrefixFrom(addr, 64).Masked(), true
 }
 
+const DefaultHTTPRedirectAddr = ":80"
+
+// HTTPRedirectConfig controls the optional canonical-portal HTTP listener.
+// The zero value disables redirects and HSTS; an empty Addr defaults to :80.
+type HTTPRedirectConfig struct {
+	Enabled bool
+	Addr    string
+	HSTS    bool
+}
+
 type ServerConfig struct {
 	Cache            cache.Config
 	IVNPConfigPath   string
@@ -121,7 +131,7 @@ type ServerConfig struct {
 	Bootstraps       []string
 	DiscoveryEnabled bool
 	SNIPort          int
-	HTTPRedirect     types.HTTPRedirectConfig
+	HTTPRedirect     HTTPRedirectConfig
 	SNIListenAddr    string
 	MinPort          int
 	MaxPort          int
@@ -137,46 +147,46 @@ type ServerConfig struct {
 
 // NormalizeHTTPRedirectConfig validates redirect settings without resolving names
 // or binding sockets. Listener availability is checked only when the server starts.
-func NormalizeHTTPRedirectConfig(cfg types.HTTPRedirectConfig, portalURL string) (types.HTTPRedirectConfig, error) {
+func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTPRedirectConfig, error) {
 	if !cfg.Enabled {
 		return cfg, nil
 	}
 	target, err := url.Parse(strings.TrimSpace(portalURL))
 	if err != nil {
-		return types.HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
+		return HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
 	}
 	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
-		return types.HTTPRedirectConfig{}, errHTTPRedirectRequiresPortalURLAbsolute
+		return HTTPRedirectConfig{}, errHTTPRedirectRequiresPortalURLAbsolute
 	}
 	if port := target.Port(); port != "" {
 		n, err := strconv.Atoi(port)
 		if err != nil {
-			return types.HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectPortalURLPortMust, err)
+			return HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectPortalURLPortMust, err)
 		}
 		if n < 1 || n > 65535 {
-			return types.HTTPRedirectConfig{}, errHTTPRedirectPortalURLPortMust
+			return HTTPRedirectConfig{}, errHTTPRedirectPortalURLPortMust
 		}
 	}
-	cfg.Addr = utils.StringOrDefault(strings.TrimSpace(cfg.Addr), types.DefaultHTTPRedirectAddr)
+	cfg.Addr = utils.StringOrDefault(strings.TrimSpace(cfg.Addr), DefaultHTTPRedirectAddr)
 	host, port, err := net.SplitHostPort(cfg.Addr)
 	if err != nil {
-		return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR must be a host:port address: %w", err)
+		return HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR must be a host:port address: %w", err)
 	}
 	if strings.ContainsAny(host, " \t\r\n/#?@\\") {
-		return types.HTTPRedirectConfig{}, errHTTPRedirectHTTPRedirectAddrHas
+		return HTTPRedirectConfig{}, errHTTPRedirectHTTPRedirectAddrHas
 	}
 	if strings.Contains(host, ":") {
 		if _, err := netip.ParseAddr(host); err != nil {
-			return types.HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR has an invalid IP address: %w", err)
+			return HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR has an invalid IP address: %w", err)
 		}
 	}
 	n, err := strconv.Atoi(port)
 	if err != nil {
-		return types.HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectHTTPRedirectAddrPort, err)
+		return HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectHTTPRedirectAddrPort, err)
 	}
 	if n < 0 || n > 65535 {
-		return types.HTTPRedirectConfig{}, errHTTPRedirectHTTPRedirectAddrPort
+		return HTTPRedirectConfig{}, errHTTPRedirectHTTPRedirectAddrPort
 	}
 	return cfg, nil
 }
@@ -835,7 +845,7 @@ func (s *Server) RelayIdentity() identity.RelayIdentity {
 	if s == nil {
 		return identity.RelayIdentity{}
 	}
-	return s.identity.Copy()
+	return s.identity
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {

@@ -30,8 +30,8 @@ import (
 
 const (
 	samlTestHost       = "app.example"
-	samlTestACSURL     = "https://" + samlTestHost + applicationAuthSAMLACSPath
-	samlTestAudience   = "https://" + samlTestHost + applicationAuthSAMLMetadataPath
+	samlTestACSURL     = "https://" + samlTestHost + types.PathApplicationAuthSAMLACS
+	samlTestAudience   = "https://" + samlTestHost + types.PathApplicationAuthSAMLMetadata
 	samlTestAssertNS   = "urn:oasis:names:tc:SAML:2.0:assertion"
 	samlTestProtocolNS = "urn:oasis:names:tc:SAML:2.0:protocol"
 )
@@ -366,7 +366,7 @@ func TestApplicationAuthSAMLLogin(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/reports?year=2026", nil))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != applicationAuthLoginPath+"?next="+url.QueryEscape("/reports?year=2026") {
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != types.PathApplicationAuthLogin+"?next="+url.QueryEscape("/reports?year=2026") {
 		t.Fatalf("unauthenticated GET = %d, %q", rec.Code, rec.Header().Get("Location"))
 	}
 
@@ -423,8 +423,8 @@ func TestApplicationAuthSAMLLandsOnNext(t *testing.T) {
 	idp := newSAMLTestIdP(t)
 	gate := newSAMLTestGate(t, idp, nil, nil)
 	for target, want := range map[string]string{
-		applicationAuthLoginPath + "?next=" + url.QueryEscape("/reports?year=2026"): "/reports?year=2026",
-		applicationAuthLoginPath + "?next=" + url.QueryEscape("//evil.example/"):    "/",
+		types.PathApplicationAuthLogin + "?next=" + url.QueryEscape("/reports?year=2026"): "/reports?year=2026",
+		types.PathApplicationAuthLogin + "?next=" + url.QueryEscape("//evil.example/"):    "/",
 	} {
 		login := startSAMLLogin(t, gate, target)
 		rec := login.post(gate, idp.encode(t, idp.validResponse(login)))
@@ -476,8 +476,8 @@ func TestApplicationAuthSAMLRefusals(t *testing.T) {
 		{"identity provider reports a failure", func(r *samlTestResponse) { r.status = "urn:oasis:names:tc:SAML:2.0:status:Responder" }},
 		{"audience of another service provider", func(r *samlTestResponse) { r.audience = "https://other.example/_portal/auth/saml/metadata" }},
 		{"no audience restriction", func(r *samlTestResponse) { r.audience = "" }},
-		{"recipient of another service provider", func(r *samlTestResponse) { r.recipient = "https://other.example" + applicationAuthSAMLACSPath }},
-		{"destination of another service provider", func(r *samlTestResponse) { r.destination = "https://other.example" + applicationAuthSAMLACSPath }},
+		{"recipient of another service provider", func(r *samlTestResponse) { r.recipient = "https://other.example" + types.PathApplicationAuthSAMLACS }},
+		{"destination of another service provider", func(r *samlTestResponse) { r.destination = "https://other.example" + types.PathApplicationAuthSAMLACS }},
 		{"no destination", func(r *samlTestResponse) { r.destination = "" }},
 		{"expired assertion", func(r *samlTestResponse) { r.notOnOrAfter = past }},
 		{"assertion without NotOnOrAfter", func(r *samlTestResponse) { r.notOnOrAfter = time.Time{} }},
@@ -493,7 +493,7 @@ func TestApplicationAuthSAMLRefusals(t *testing.T) {
 			t.Parallel()
 			idp := newSAMLTestIdP(t)
 			gate := newSAMLTestGate(t, idp, nil, nil)
-			login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+			login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 			response := idp.validResponse(login)
 			tt.change(&response)
 			assertSAMLACS(t, login.post(gate, idp.encode(t, response)), http.StatusUnauthorized)
@@ -504,7 +504,7 @@ func TestApplicationAuthSAMLRefusals(t *testing.T) {
 		t.Parallel()
 		idp := newSAMLTestIdP(t)
 		gate := newSAMLTestGate(t, idp, nil, nil)
-		login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+		login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 		encoded := idp.encode(t, idp.validResponse(login))
 		login.cookie = nil
 		assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
@@ -513,7 +513,7 @@ func TestApplicationAuthSAMLRefusals(t *testing.T) {
 		t.Parallel()
 		idp := newSAMLTestIdP(t)
 		gate := newSAMLTestGate(t, idp, nil, nil)
-		login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+		login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 		var state samlStateClaims
 		if err := decodeSignedApplicationAuthJSON(gate.saml.stateKey, login.cookie.Value, &state); err != nil {
 			t.Fatal(err)
@@ -532,12 +532,12 @@ func TestApplicationAuthSAMLRefusals(t *testing.T) {
 		idp := newSAMLTestIdP(t)
 		gate := newSAMLTestGate(t, idp, nil, nil)
 		rec := httptest.NewRecorder()
-		gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://other.example"+applicationAuthLoginPath, nil))
+		gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://other.example"+types.PathApplicationAuthLogin, nil))
 		cookies := rec.Result().Cookies()
 		if len(cookies) != 1 {
 			t.Fatalf("login cookies = %#v", cookies)
 		}
-		login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+		login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 		encoded := idp.encode(t, idp.validResponse(login))
 		login.cookie = cookies[0]
 		assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
@@ -561,7 +561,7 @@ func TestApplicationAuthSAMLAcceptsEitherSignature(t *testing.T) {
 			t.Parallel()
 			idp := newSAMLTestIdP(t)
 			gate := newSAMLTestGate(t, idp, nil, nil)
-			login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+			login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 			response := idp.validResponse(login)
 			change(&response)
 			assertSAMLACS(t, login.post(gate, idp.encode(t, response)), http.StatusSeeOther)
@@ -576,7 +576,7 @@ func TestApplicationAuthSAMLRefusesReplay(t *testing.T) {
 
 	idp := newSAMLTestIdP(t)
 	gate := newSAMLTestGate(t, idp, nil, nil)
-	login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+	login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 	encoded := idp.encode(t, idp.validResponse(login))
 	assertSAMLACS(t, login.post(gate, encoded), http.StatusSeeOther)
 	assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
@@ -651,7 +651,7 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 			gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) {
 				cfg.Allow, cfg.SAMLSubjectAttribute = tt.allow, tt.attribute
 			})
-			login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+			login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 			response := idp.validResponse(login)
 			if tt.change != nil {
 				tt.change(&response)
@@ -676,7 +676,7 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 		gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) {
 			cfg.Allow = []string{"alice@example.com", "bob@example.com"}
 		})
-		login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+		login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 		session := assertSAMLACS(t, login.post(gate, idp.encode(t, idp.validResponse(login))), http.StatusSeeOther)
 		for name, configure := range map[string]func(*Config){
 			"same settings": func(cfg *Config) {
@@ -704,7 +704,7 @@ func TestApplicationAuthSAMLFailureScreens(t *testing.T) {
 
 	idp := newSAMLTestIdP(t)
 	gate := newSAMLTestGate(t, idp, nil, nil)
-	login := startSAMLLogin(t, gate, applicationAuthLoginPath+"?next=%2Freports")
+	login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin+"?next=%2Freports")
 	response := idp.validResponse(login)
 	response.nameID = "bob@example.com"
 	req := httptest.NewRequest(http.MethodPost, samlTestACSURL, strings.NewReader(url.Values{"SAMLResponse": {idp.encode(t, response)}}.Encode()))
@@ -781,7 +781,7 @@ func TestApplicationAuthSAMLSessionLifetime(t *testing.T) {
 			t.Parallel()
 			idp := newSAMLTestIdP(t)
 			gate := newSAMLTestGate(t, idp, nil, nil)
-			login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+			login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 			response := idp.validResponse(login)
 			if tt.session != 0 {
 				response.sessionNotOnOrAfter = time.Now().Add(tt.session)
@@ -858,7 +858,7 @@ func TestSAMLPrincipalCarriesTheVouchedEmail(t *testing.T) {
 			t.Parallel()
 			idp := newSAMLTestIdP(t)
 			gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) { cfg.Allow = []string{tt.allow} })
-			login := startSAMLLogin(t, gate, applicationAuthLoginPath)
+			login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
 			response := idp.validResponse(login)
 			response.nameID = tt.nameID
 			session := assertSAMLACS(t, login.post(gate, idp.encode(t, response)), http.StatusSeeOther)

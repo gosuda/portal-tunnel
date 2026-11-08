@@ -35,7 +35,7 @@ func TestApplicationAuthRequiresLogin(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d; want %d", rec.Code, http.StatusSeeOther)
 	}
-	if location := rec.Header().Get("Location"); location != applicationAuthLoginPath+"?next=%2Fprivate%3Fq%3D1" {
+	if location := rec.Header().Get("Location"); location != types.PathApplicationAuthLogin+"?next=%2Fprivate%3Fq%3D1" {
 		t.Fatalf("Location = %q", location)
 	}
 
@@ -59,7 +59,7 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	}))
 
 	challengeBody, _ := json.Marshal(applicationAuthChallengeRequest{Address: wallet.Identity().Address})
-	challengeReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthChallengePath, bytes.NewReader(challengeBody))
+	challengeReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthChallenge, bytes.NewReader(challengeBody))
 	challengeReq.Header.Set("Origin", "https://app.example")
 	challengeRec := httptest.NewRecorder()
 	handler.ServeHTTP(challengeRec, challengeReq)
@@ -75,7 +75,7 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifyBody, _ := json.Marshal(applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature})
-	verifyReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthVerifyPath, bytes.NewReader(verifyBody))
+	verifyReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthVerify, bytes.NewReader(verifyBody))
 	verifyReq.Header.Set("Origin", "https://app.example")
 	verifyRec := httptest.NewRecorder()
 	handler.ServeHTTP(verifyRec, verifyReq)
@@ -109,8 +109,8 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 
 	// A verified challenge is a short-lived proof: replaying it
 	// re-authenticates the same wallet and issues a fresh session
-	// (siweauth keeps no replay state, issue #530).
-	replayReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthVerifyPath, bytes.NewReader(verifyBody))
+	// (SIWE challenges keep no replay state, issue #530).
+	replayReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthVerify, bytes.NewReader(verifyBody))
 	replayReq.Header.Set("Origin", "https://app.example")
 	replayRec := httptest.NewRecorder()
 	handler.ServeHTTP(replayRec, replayReq)
@@ -197,7 +197,7 @@ func TestApplicationAuthCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
-	req := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthRedeemPath, bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(body))
 	req.Header.Set("Origin", "https://app.example")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -263,7 +263,7 @@ func TestApplicationSessionRefusesOtherOrigins(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
-	redeem := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthRedeemPath, bytes.NewReader(body))
+	redeem := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(body))
 	redeem.Header.Set("Origin", "https://app.example")
 	redeemRec := httptest.NewRecorder()
 	handler.ServeHTTP(redeemRec, redeem)
@@ -400,7 +400,7 @@ func TestGateAnswersOnlyForHostsItHolds(t *testing.T) {
 			t.Fatalf("%s on a lost alias = %d; want 421", name, got)
 		}
 	}
-	if got := open(alias, applicationAuthLoginPath, func(*http.Request) {}); got != http.StatusMisdirectedRequest {
+	if got := open(alias, types.PathApplicationAuthLogin, func(*http.Request) {}); got != http.StatusMisdirectedRequest {
 		t.Fatalf("login page on a lost alias = %d; want 421", got)
 	}
 	if got := open(canonical, "/private", session(canonical, now)); got != http.StatusNoContent {
@@ -429,7 +429,7 @@ func TestLoginStateFromAnEarlierHoldIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	callback := func() *http.Request {
-		req := httptest.NewRequest(http.MethodGet, "https://"+alias+applicationAuthCallbackPath+"?state=state&code=code", nil)
+		req := httptest.NewRequest(http.MethodGet, "https://"+alias+types.PathApplicationAuthCallback+"?state=state&code=code", nil)
 		req.AddCookie(&http.Cookie{Name: applicationAuthOIDCStateCookie, Value: oidcState})
 		return req
 	}
@@ -439,7 +439,7 @@ func TestLoginStateFromAnEarlierHoldIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	acs := func() *http.Request {
-		req := httptest.NewRequest(http.MethodPost, "https://"+alias+applicationAuthSAMLACSPath, strings.NewReader("SAMLResponse=x"))
+		req := httptest.NewRequest(http.MethodPost, "https://"+alias+types.PathApplicationAuthSAMLACS, strings.NewReader("SAMLResponse=x"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.AddCookie(&http.Cookie{Name: applicationAuthSAMLStateCookie, Value: samlState})
 		return req
@@ -493,7 +493,7 @@ func TestSIWEChallengeFromAnEarlierHoldIsRefused(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		return rec
 	}
-	asked := post(applicationAuthChallengePath, applicationAuthChallengeRequest{Address: wallet.Identity().Address})
+	asked := post(types.PathApplicationAuthChallenge, applicationAuthChallengeRequest{Address: wallet.Identity().Address})
 	var challenge applicationAuthChallengeResponse
 	if err := json.NewDecoder(asked.Body).Decode(&challenge); err != nil {
 		t.Fatal(err)
@@ -505,11 +505,11 @@ func TestSIWEChallengeFromAnEarlierHoldIsRefused(t *testing.T) {
 	verify := applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature}
 
 	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: time.Now().UTC().Add(time.Minute)}})
-	if rec := post(applicationAuthVerifyPath, verify); rec.Code == http.StatusOK {
+	if rec := post(types.PathApplicationAuthVerify, verify); rec.Code == http.StatusOK {
 		t.Fatalf("a challenge from an earlier hold signed in: %s", rec.Body)
 	}
 	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: since}})
-	if rec := post(applicationAuthVerifyPath, verify); rec.Code != http.StatusOK {
+	if rec := post(types.PathApplicationAuthVerify, verify); rec.Code != http.StatusOK {
 		t.Fatalf("a challenge from this hold = %d: %s", rec.Code, rec.Body)
 	}
 }
@@ -629,7 +629,7 @@ func TestApplicationSessionFollowsTheHostNotItsSpelling(t *testing.T) {
 			t.Fatal(err)
 		}
 		body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
-		req := httptest.NewRequest(http.MethodPost, "https://"+host+applicationAuthRedeemPath, bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "https://"+host+types.PathApplicationAuthRedeem, bytes.NewReader(body))
 		req.Header.Set("Origin", "https://"+host)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -748,7 +748,7 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	redeemBody, _ := json.Marshal(applicationAuthRedeemRequest{Credential: aliceCredential})
-	redeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthRedeemPath, bytes.NewReader(redeemBody))
+	redeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(redeemBody))
 	redeemReq.Header.Set("Origin", "https://app.example")
 	redeemRec := httptest.NewRecorder()
 	initialGate.ServeHTTP(redeemRec, redeemReq)
@@ -770,7 +770,7 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 	}
 
 	// Revoked subject cannot redeem a credential.
-	revokedRedeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthRedeemPath, bytes.NewReader(redeemBody))
+	revokedRedeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(redeemBody))
 	revokedRedeemReq.Header.Set("Origin", "https://app.example")
 	revokedRedeemRec := httptest.NewRecorder()
 	revokedGate.ServeHTTP(revokedRedeemRec, revokedRedeemReq)
@@ -892,7 +892,7 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 	}
 
 	// 1. Login redirects to the OIDC provider with S256 PKCE challenge and sets state cookie.
-	loginReq := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath+"?next=%2Fdashboard", nil)
+	loginReq := httptest.NewRequest(http.MethodGet, "https://app.example"+types.PathApplicationAuthLogin+"?next=%2Fdashboard", nil)
 	loginRec := httptest.NewRecorder()
 	gate.ServeHTTP(loginRec, loginReq)
 	if loginRec.Code != http.StatusSeeOther {
@@ -918,7 +918,7 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 	}
 
 	// 2. Callback exchanges code + PKCE verifier, verifies ID token, and issues session cookie.
-	cbReq := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthCallbackPath+"?code=authcode&state="+url.QueryEscape(state), nil)
+	cbReq := httptest.NewRequest(http.MethodGet, "https://app.example"+types.PathApplicationAuthCallback+"?code=authcode&state="+url.QueryEscape(state), nil)
 	cbReq.AddCookie(stateCookies[0])
 	cbRec := httptest.NewRecorder()
 	gate.ServeHTTP(cbRec, cbReq)

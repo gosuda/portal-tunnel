@@ -27,7 +27,6 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -54,18 +53,7 @@ var (
 	errRequestMustContainOneJSONValue   = errors.New("request must contain one JSON value")
 )
 
-// ReservedPathPrefix is the path prefix the gate keeps for itself. A request for
-// one of its endpoints never reaches the application, so an application must not
-// serve its own routes under this prefix: a later release may add an endpoint.
-const ReservedPathPrefix = "/_portal/auth/"
-
 const (
-	applicationAuthLoginPath       = ReservedPathPrefix + "login"
-	applicationAuthChallengePath   = ReservedPathPrefix + "challenge"
-	applicationAuthVerifyPath      = ReservedPathPrefix + "verify"
-	applicationAuthRedeemPath      = ReservedPathPrefix + "redeem"
-	applicationAuthCallbackPath    = ReservedPathPrefix + "callback"
-	applicationAuthLogoutPath      = ReservedPathPrefix + "logout"
 	applicationAuthCookieName      = "__Host-portal_access"
 	applicationAuthOIDCStateCookie = "__Host-portal_oidc_state"
 	applicationAuthSessionTTL      = 24 * time.Hour
@@ -276,7 +264,7 @@ type applicationAuth struct {
 	tunnelIdentity  types.Identity
 	signingKey      []byte
 	credentialKey   []byte
-	siwe            *siweauth.Authenticator
+	siwe            *identity.SIWEAuthenticator
 	oidc            *oidcAuthenticator
 	saml            *samlAuthenticator
 	email           *emailAuthenticator
@@ -578,8 +566,8 @@ func isUnsafeRedirectRune(r rune) bool {
 
 // New wraps next in the sign-in gate. A request reaches next only when it carries
 // a valid session or credential, and the gate's endpoints under
-// ReservedPathPrefix are the only other paths it answers. New reads no network,
-// so a provider outage cannot keep it from building a gate: use Check to test the
+// types.PathApplicationAuthPrefix are the only other paths it answers.
+// New reads no network, so a provider outage cannot keep it from building a gate: use Check to test the
 // provider. A gate built from the same id, including its TokenSecret, and the same
 // provider settings accepts the sessions of an earlier gate; the allowlist is
 // checked again on every request.
@@ -596,7 +584,7 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
 	var (
-		siwe  *siweauth.Authenticator
+		siwe  *identity.SIWEAuthenticator
 		oidc  *oidcAuthenticator
 		saml  *samlAuthenticator
 		email *emailAuthenticator
@@ -611,7 +599,7 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 	allowAnySubject := settings.provider == ProviderSIWE || (settings.provider == ProviderCredential && len(settings.allowed) == 0)
 	switch settings.provider {
 	case ProviderSIWE:
-		siwe, err = siweauth.New(siweauth.Config{
+		siwe, err = identity.NewSIWEAuthenticator(identity.SIWEAuthConfig{
 			AllowedAddresses: settings.allowed,
 			AllowAnyAddress:  len(settings.allowed) == 0,
 			Statement:        "Sign in to this Portal application",
@@ -694,25 +682,25 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.URL.Path {
-	case applicationAuthLoginPath:
+	case types.PathApplicationAuthLogin:
 		a.serveLogin(w, r)
-	case applicationAuthChallengePath:
+	case types.PathApplicationAuthChallenge:
 		a.serveChallenge(w, r)
-	case applicationAuthVerifyPath:
+	case types.PathApplicationAuthVerify:
 		a.serveVerify(w, r)
-	case applicationAuthRedeemPath:
+	case types.PathApplicationAuthRedeem:
 		a.serveRedeem(w, r)
-	case applicationAuthCallbackPath:
+	case types.PathApplicationAuthCallback:
 		a.serveOIDCCallback(w, r)
-	case applicationAuthSAMLACSPath:
+	case types.PathApplicationAuthSAMLACS:
 		a.serveSAMLACS(w, r)
-	case applicationAuthSAMLMetadataPath:
+	case types.PathApplicationAuthSAMLMetadata:
 		a.serveSAMLMetadata(w, r)
-	case applicationAuthEmailRequestPath:
+	case types.PathApplicationAuthEmailRequest:
 		a.serveEmailRequest(w, r)
-	case applicationAuthEmailRedeemPath:
+	case types.PathApplicationAuthEmailRedeem:
 		a.serveEmailRedeem(w, r)
-	case applicationAuthLogoutPath:
+	case types.PathApplicationAuthLogout:
 		a.serveLogout(w, r)
 	default:
 		principal, ok := a.authenticate(r, credential)
@@ -981,7 +969,7 @@ func writeSigninFailurePage(w http.ResponseWriter, r *http.Request, status int, 
 	if page == signinProviderDeniedPage {
 		query.Set("prompt", accountChooserPrompt)
 	}
-	retry := applicationAuthLoginPath
+	retry := types.PathApplicationAuthLogin
 	if len(query) > 0 {
 		retry += "?" + query.Encode()
 	}
@@ -1066,7 +1054,7 @@ func (o *oidcAuthenticator) oauth2Config(doc oidcDiscoveryDocument, host string)
 	return oauth2.Config{
 		ClientID:     o.clientID,
 		ClientSecret: o.clientSecret,
-		RedirectURL:  "https://" + host + applicationAuthCallbackPath,
+		RedirectURL:  "https://" + host + types.PathApplicationAuthCallback,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:   doc.AuthorizationEndpoint,
 			TokenURL:  doc.TokenEndpoint,
@@ -1532,7 +1520,7 @@ func (a *applicationAuth) requireLogin(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || len(next) > applicationAuthNextLimit {
 			next = "/"
 		}
-		http.Redirect(w, r, applicationAuthLoginPath+"?next="+url.QueryEscape(next), http.StatusSeeOther)
+		http.Redirect(w, r, types.PathApplicationAuthLogin+"?next="+url.QueryEscape(next), http.StatusSeeOther)
 		return
 	}
 	a.writeJSONError(w, http.StatusUnauthorized, "authentication required")

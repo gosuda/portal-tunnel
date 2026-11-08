@@ -9,7 +9,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -274,7 +273,7 @@ func normalizeAllowed(provider string, values []string) ([]string, error) {
 	}
 	switch provider {
 	case ProviderSIWE:
-		return siweauth.NormalizeAddresses(values)
+		return identity.NormalizeEVMAddresses(values)
 	case ProviderCredential:
 		return normalizeSubjects(values)
 	case ProviderOIDC, ProviderSAML:
@@ -372,7 +371,7 @@ func CredentialRedeemURL(host, credential string) (string, error) {
 	if credential == "" {
 		return "", errApplicationCredentialIsRequired
 	}
-	return "https://" + host + applicationAuthLoginPath + "#credential=" + url.QueryEscape(credential), nil
+	return "https://" + host + types.PathApplicationAuthLogin + "#credential=" + url.QueryEscape(credential), nil
 }
 
 // normalizeHost returns the canonical name of an application: lower

@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -425,7 +426,7 @@ func runListCommand(args []string) error {
 	for i, u := range relayURLs {
 		go func(idx int, url string) {
 			defer wg.Done()
-			versions[idx] = utils.FetchRelayVersion(ctx, url)
+			versions[idx] = fetchRelayVersion(ctx, url)
 		}(i, u)
 	}
 	wg.Wait()
@@ -438,6 +439,28 @@ func runListCommand(args []string) error {
 		fmt.Fprintf(table, "%s\t%s\n", relayURL, ver)
 	}
 	return table.Flush()
+}
+
+// fetchRelayVersion returns an empty string when a relay's version is unavailable.
+func fetchRelayVersion(ctx context.Context, relayURL string) string {
+	client := utils.NewHTTPClient(utils.WithHTTPTimeout(3 * time.Second))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL+types.PathSDKDomain, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var envelope types.APIEnvelope[types.DomainResponse]
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || !envelope.OK {
+		return ""
+	}
+	return envelope.Data.ReleaseVersion
 }
 
 func printRootUsage(w io.Writer) {

@@ -63,7 +63,7 @@ type Manager struct {
 	cfg          Config
 	wg           sync.WaitGroup
 	commandMu    sync.RWMutex
-	dns          DNSProvider
+	dns          dnsProvider
 	startOnce    sync.Once
 	stopOnce     sync.Once
 	ensStatus    *utils.Snapshot[types.ENSStatus]

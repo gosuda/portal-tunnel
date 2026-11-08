@@ -9,6 +9,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestReserveOfferCommitsProtocolAckBeforeClaimMarker(t *testing.T) {
@@ -48,11 +50,11 @@ func TestReserveOfferCommitsProtocolAckBeforeClaimMarker(t *testing.T) {
 	}
 
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
-	var frame [1 + tlsBindingSize]byte
+	var frame [1 + types.TLSBindingSize]byte
 	if _, err := io.ReadFull(client, frame[:]); err != nil {
 		t.Fatalf("read claim frame: %v", err)
 	}
-	if frame[0] != markerTLSStart {
+	if frame[0] != types.ReverseMarkerTLSStart {
 		t.Fatalf("claim marker = %d", frame[0])
 	}
 	conn := <-claimed

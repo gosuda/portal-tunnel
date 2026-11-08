@@ -53,7 +53,7 @@ func (s *gatedServer) signIn(t *testing.T, subject string) *http.Cookie {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(map[string]string{"credential": credential})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.URL+appauth.ReservedPathPrefix+"redeem", strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.URL+types.PathApplicationAuthRedeem, strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestReservedPathsNeverReachTheApplication(t *testing.T) {
 	t.Parallel()
 
 	server := startGate(t, appauth.Config{Provider: appauth.ProviderCredential}, failOnReach(t))
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+appauth.ReservedPathPrefix+"login", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+types.PathApplicationAuthLogin, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

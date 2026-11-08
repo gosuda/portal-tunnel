@@ -26,20 +26,6 @@ const (
 // from every request it did not authenticate.
 var PortalIdentityHeaders = []string{HeaderPortalUser, HeaderPortalAuth, HeaderPortalProof}
 
-const (
-	DefaultHTTPRedirectAddr = ":80"
-	HTTPRedirectFeatureName = "http-redirect"
-	HTTPRedirectEnabledEnv  = "HTTP_REDIRECT_ENABLED"
-)
-
-// HTTPRedirectConfig controls the optional canonical-portal HTTP listener.
-// The zero value disables redirects and HSTS; an empty Addr defaults to :80.
-type HTTPRedirectConfig struct {
-	Enabled bool
-	Addr    string
-	HSTS    bool
-}
-
 var (
 	ReleaseVersion         string
 	SDKVersion             string

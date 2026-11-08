@@ -37,7 +37,7 @@ func normalizeOptionalName(raw string) (string, error) {
 // the name as a DNS label (or empty for the unnamed service) and the address
 // in EVM checksum form. It does not derive or verify key material.
 func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
-	normalized := identity.Copy()
+	normalized := identity
 
 	name, err := normalizeOptionalName(identity.Name)
 	if err != nil {
@@ -127,7 +127,7 @@ func Marshal(id types.Identity) ([]byte, error) {
 // identities (Resolve), relay identities, and local authorities share this
 // one derivation path; each applies its own naming and policy on top.
 func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
-	resolved := id.Copy()
+	resolved := id
 
 	resolved.Name = strings.TrimSpace(resolved.Name)
 	resolved.Address = strings.TrimSpace(resolved.Address)

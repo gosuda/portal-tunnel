@@ -6,17 +6,11 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// Reverse-session framing is shared by native and multiplexed connections.
-// TLS activation carries the binding required by transcript-signing requests.
-const (
-	markerKeepalive          = 0x00
-	markerRawStart           = 0x01
-	markerTLSStart           = 0x02
-	tlsBindingSize           = 16
-	defaultSessionWriteLimit = 5 * time.Second
-)
+const defaultSessionWriteLimit = 5 * time.Second
 
 // ReadStart skips keepalives and returns the TLS binding, or nil for raw
 // traffic. The caller retains conn; invalid or interrupted framing closes it.
@@ -43,14 +37,14 @@ func ReadStart(ctx context.Context, conn net.Conn, timeout time.Duration) (bindi
 			return nil, err
 		}
 		switch marker[0] {
-		case markerKeepalive:
+		case types.ReverseMarkerKeepalive:
 			continue
-		case markerTLSStart:
-			binding = make([]byte, tlsBindingSize)
+		case types.ReverseMarkerTLSStart:
+			binding = make([]byte, types.TLSBindingSize)
 			if _, err := io.ReadFull(conn, binding); err != nil {
 				return nil, err
 			}
-		case markerRawStart:
+		case types.ReverseMarkerRawStart:
 		default:
 			return nil, fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])
 		}
@@ -61,18 +55,18 @@ func ReadStart(ctx context.Context, conn net.Conn, timeout time.Duration) (bindi
 	}
 }
 
-func WriteTLSStart(conn net.Conn, binding [16]byte) error {
-	frame := [1 + tlsBindingSize]byte{markerTLSStart}
+func WriteTLSStart(conn net.Conn, binding [types.TLSBindingSize]byte) error {
+	frame := [1 + types.TLSBindingSize]byte{types.ReverseMarkerTLSStart}
 	copy(frame[1:], binding[:])
 	return writeStartFrame(conn, frame[:])
 }
 
 func WriteRawStart(conn net.Conn) error {
-	return writeStartFrame(conn, []byte{markerRawStart})
+	return writeStartFrame(conn, []byte{types.ReverseMarkerRawStart})
 }
 
 func WriteKeepalive(conn net.Conn) error {
-	return writeStartFrame(conn, []byte{markerKeepalive})
+	return writeStartFrame(conn, []byte{types.ReverseMarkerKeepalive})
 }
 
 func writeStartFrame(conn net.Conn, frame []byte) error {

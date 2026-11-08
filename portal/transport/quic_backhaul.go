@@ -20,7 +20,6 @@ import (
 var errQUICBackhaulAccessTokenRequired = errors.New("quic backhaul access token is required")
 
 const (
-	quicBackhaulALPN             = "portal-tunnel"
 	quicBackhaulControlTimeout   = 10 * time.Second
 	quicBackhaulControlBodyLimit = 4096
 )
@@ -278,7 +277,7 @@ func (c *QUICBackhaulControl) Reject(code, reason string) error {
 func quicBackhaulServerTLSConfig(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) *tls.Config {
 	return &tls.Config{
 		GetCertificate: getCertificate,
-		NextProtos:     []string{quicBackhaulALPN},
+		NextProtos:     []string{types.QUICBackhaulALPN},
 		MinVersion:     tls.VersionTLS13,
 	}
 }
@@ -286,13 +285,13 @@ func quicBackhaulServerTLSConfig(getCertificate func(*tls.ClientHelloInfo) (*tls
 func quicBackhaulClientTLSConfig(base *tls.Config) *tls.Config {
 	if base == nil {
 		return &tls.Config{
-			NextProtos: []string{quicBackhaulALPN},
+			NextProtos: []string{types.QUICBackhaulALPN},
 			MinVersion: tls.VersionTLS13,
 		}
 	}
 
 	cfg := base.Clone()
-	cfg.NextProtos = []string{quicBackhaulALPN}
+	cfg.NextProtos = []string{types.QUICBackhaulALPN}
 	if cfg.MinVersion == 0 || cfg.MinVersion < tls.VersionTLS13 {
 		cfg.MinVersion = tls.VersionTLS13
 	}

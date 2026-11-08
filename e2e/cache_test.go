@@ -27,6 +27,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/sdk/staticsite"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -46,7 +47,16 @@ func TestStalledMultipartUploadReleasesAdmission(t *testing.T) {
 	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { stopRelay(t, relay) })
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := relay.Shutdown(shutdownCtx); err != nil {
+			t.Errorf("shutdown relay: %v", err)
+		}
+		if err := relay.Wait(); err != nil {
+			t.Errorf("wait for relay shutdown: %v", err)
+		}
+	})
 	waitForRelayCertificateMaterial(t, stateDir)
 	client := relayControlClient(t, stateDir)
 	id, err := identity.Generate("stalled-cache")
@@ -161,7 +171,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	}
 	defer exposure.Close()
 	var originCalls atomic.Int32
-	static := utils.NewStaticSiteHandler("/", siteDir, "index.html")
+	static := staticsite.NewHandler("/", siteDir, "index.html")
 	go func() {
 		_ = sdk.RunHTTP(ctx, exposure, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			originCalls.Add(1)

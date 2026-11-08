@@ -30,12 +30,6 @@ type RelayIdentity struct {
 	types.Identity
 }
 
-func (i RelayIdentity) Copy() RelayIdentity {
-	return RelayIdentity{
-		Identity: i.Identity.Copy(),
-	}
-}
-
 // LoadOrCreateRelayIdentity loads the relay identity from path or creates it
 // during relay startup. The file is written by the relay itself, so a
 // loaded identity is trusted as-is; only the relay hostname is applied.

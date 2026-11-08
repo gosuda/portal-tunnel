@@ -98,7 +98,7 @@ func (z *fakeZone) EnsureDNSSEC(context.Context, string) (string, string, string
 	return "", "", "", nil
 }
 
-func newTestENSManager(cfg Config, dns DNSProvider) *Manager {
+func newTestENSManager(cfg Config, dns dnsProvider) *Manager {
 	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
 	return &Manager{
 		cfg:         cfg,

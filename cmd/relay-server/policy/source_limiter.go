@@ -5,13 +5,14 @@ import (
 	"net/netip"
 	"sync"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (
 	sourceLimiterPruneInterval = time.Minute
 	sourceLimiterIdleTTL       = 30 * time.Minute
+
+	preAuthLayerSource = "source"
+	preAuthLayerGlobal = "global"
 )
 
 // SourceLimiter owns weighted source and global admission budgets. State is
@@ -60,20 +61,20 @@ func (l *SourceLimiter) Allow(source netip.Addr, cost int) (time.Duration, strin
 	// Check global capacity before allocating memory for a new source.
 	if l.globalRate > 0 {
 		if retry := l.global.retry(now, l.globalRate, l.globalBurst, cost); retry > 0 {
-			return retry, types.PreAuthLayerGlobal
+			return retry, preAuthLayerGlobal
 		}
 	}
 	bucket := l.buckets[source]
 	if bucket == nil {
 		if len(l.buckets) >= l.maxBucketCount {
-			return sourceLimiterPruneInterval, types.PreAuthLayerSource
+			return sourceLimiterPruneInterval, preAuthLayerSource
 		}
 		bucket = &sourceBucket{tokens: l.burst, updatedAt: now}
 		l.buckets[source] = bucket
 	}
 	bucket.lastUsedAt = now
 	if retry := bucket.retry(now, l.ratePerMinute, l.burst, cost); retry > 0 {
-		return retry, types.PreAuthLayerSource
+		return retry, preAuthLayerSource
 	}
 	bucket.tokens -= float64(cost)
 	if l.globalRate > 0 {

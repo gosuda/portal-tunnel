@@ -13,6 +13,8 @@ import (
 	ksigner "github.com/gosuda/keyless_tls/relay/signer"
 	"github.com/gosuda/keyless_tls/relay/signrpc"
 	"golang.org/x/crypto/cryptobyte"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (
@@ -20,10 +22,6 @@ var (
 	errSigningKeyLookupIsRequired          = errors.New("signing key lookup is required")
 	errSigningRequestNotBoundVerifiedLease = errors.New("signing request is not bound to a verified lease")
 )
-
-// relayKeyID is the store key of the relay API listener certificate key.
-// Tenant handshakes address it explicitly in every TranscriptSignRequest.
-const relayKeyID = "relay-cert"
 
 const (
 	// handshakeTypeCertificate is the TLS handshake message type of Certificate.
@@ -33,14 +31,6 @@ const (
 	// full certificate chains, so the budget is generous but finite.
 	maxSignRequestBody = 512 << 10
 )
-
-// unknownCertificateMessage is the /v1/sign answer when the relay holds no key
-// for the certificate the tenant presents. The tenant's pinned chain is stale
-// then, and the Client reads this text to pin the chain the relay serves now.
-// pinIsStale matches the text on purpose, because the remote signer reports
-// only the message of a refusal and not its status: do not reword it without
-// updating pinIsStale and the tests that pin both.
-const unknownCertificateMessage = "relay does not hold the key of the presented certificate"
 
 type Signer struct {
 	service *ksigner.Service
@@ -84,14 +74,14 @@ type (
 type certificateKeys func(leafDER []byte) crypto.Signer
 
 func (keys certificateKeys) Signer(ctx context.Context, keyID string) (crypto.Signer, error) {
-	if keyID != relayKeyID {
+	if keyID != types.KeylessRelayKeyID {
 		return nil, fmt.Errorf("unknown key id: %s", keyID)
 	}
 	leaf, _ := ctx.Value(presentedLeafContextKey{}).([]byte)
 	if signer := keys(leaf); signer != nil {
 		return signer, nil
 	}
-	return nil, errors.New(unknownCertificateMessage)
+	return nil, errors.New(types.KeylessUnknownCertificateMessage)
 }
 
 // presentedLeaf returns the leaf certificate (DER) of a TLS 1.3 Certificate

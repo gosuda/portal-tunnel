@@ -47,6 +47,22 @@ const (
 var ReservedRootPrefixes = []string{PathAPIPrefix, PathSDKPrefix, PathDiscovery, PathV1Prefix}
 
 const (
+	// PathApplicationAuthPrefix is reserved by the application sign-in gate.
+	// Applications must not serve their own routes under it.
+	PathApplicationAuthPrefix       = "/_portal/auth/"
+	PathApplicationAuthLogin        = PathApplicationAuthPrefix + "login"
+	PathApplicationAuthChallenge    = PathApplicationAuthPrefix + "challenge"
+	PathApplicationAuthVerify       = PathApplicationAuthPrefix + "verify"
+	PathApplicationAuthRedeem       = PathApplicationAuthPrefix + "redeem"
+	PathApplicationAuthCallback     = PathApplicationAuthPrefix + "callback"
+	PathApplicationAuthLogout       = PathApplicationAuthPrefix + "logout"
+	PathApplicationAuthEmailRequest = PathApplicationAuthPrefix + "email/request"
+	PathApplicationAuthEmailRedeem  = PathApplicationAuthPrefix + "email/redeem"
+	PathApplicationAuthSAMLACS      = PathApplicationAuthPrefix + "saml/acs"
+	PathApplicationAuthSAMLMetadata = PathApplicationAuthPrefix + "saml/metadata"
+)
+
+const (
 	PathAgentPrefix        = "/agent"
 	PathAgentStatus        = PathAgentPrefix + "/status"
 	PathAgentShutdown      = PathAgentPrefix + "/shutdown"

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/siweauth"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -22,7 +22,7 @@ type walletAuthConfig struct {
 }
 
 type walletAuthenticator struct {
-	siwe *siweauth.Authenticator
+	siwe *identity.SIWEAuthenticator
 
 	mu       sync.Mutex
 	sessions map[string]walletAuthSession
@@ -34,7 +34,7 @@ type walletAuthSession struct {
 }
 
 func newWalletAuthenticator(cfg walletAuthConfig) (*walletAuthenticator, error) {
-	siwe, err := siweauth.New(siweauth.Config{
+	siwe, err := identity.NewSIWEAuthenticator(identity.SIWEAuthConfig{
 		AllowedAddresses: cfg.AllowedAddresses,
 		AllowAnyAddress:  cfg.AllowAnyAddress,
 		Statement:        cfg.Statement,
@@ -51,7 +51,7 @@ func newWalletAuthenticator(cfg walletAuthConfig) (*walletAuthenticator, error) 
 
 func (a *walletAuthenticator) issueChallenge(req types.WalletAuthChallengeRequest, domain, uri string, now time.Time) (types.WalletAuthChallengeResponse, error) {
 	if a == nil {
-		return types.WalletAuthChallengeResponse{}, siweauth.ErrUnauthorized
+		return types.WalletAuthChallengeResponse{}, identity.ErrSIWEUnauthorized
 	}
 	challenge, err := a.siwe.Issue(req.Address, domain, uri, now)
 	if err != nil {
@@ -66,7 +66,7 @@ func (a *walletAuthenticator) issueChallenge(req types.WalletAuthChallengeReques
 
 func (a *walletAuthenticator) login(req types.WalletAuthLoginRequest, domain string, now time.Time) (string, string, error) {
 	if a == nil {
-		return "", "", siweauth.ErrUnauthorized
+		return "", "", identity.ErrSIWEUnauthorized
 	}
 	// The control API is never served on an alias, so no hold dates its challenges.
 	address, err := a.siwe.Verify(req.ChallengeID, req.SIWEMessage, req.SIWESignature, domain, time.Time{}, now)

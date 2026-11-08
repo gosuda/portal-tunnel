@@ -430,7 +430,7 @@ principal, ok := appauth.PrincipalFromContext(r.Context())
 | `Principal` | `Provider`, `Subject`, and `Email`. `Subject` is the principal the allowlist checks: a wallet address, a credential subject, an email, or a `sub:` entry. `Email` is the address `oidc`, `saml`, or `email` vouches for, or empty. An OIDC email counts only with `email_verified`. |
 | `IssueCredential`, `CredentialRedeemURL` | Create a credential and its sign-in link for the `credential` provider. |
 | `ProviderTakesEmailList(provider)` | Reports whether a provider reads `Config.EmailList`. The others read `Config.Allow`. |
-| `ReservedPathPrefix` | `/_portal/auth/`. The gate answers its endpoints under this prefix, so serve none of your own routes there. A later release may add endpoints. |
+| `types.PathApplicationAuthPrefix` | `/_portal/auth/`. The gate answers its endpoints under this prefix, so serve none of your own routes there. A later release may add endpoints. |
 
 ### Keeping sessions across a rebuild
 
