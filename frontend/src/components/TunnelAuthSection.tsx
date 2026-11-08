@@ -25,12 +25,14 @@ import {
   TUNNEL_FORM_STYLES,
 } from "@/components/TunnelFormParts";
 import { useCopy } from "@/hooks/useCopy";
-import signinCopy from "@/lib/signinCopy.json";
-import { cn } from "@/lib/utils";
 import {
   AUTH_CALLBACK_PATH,
   AUTH_SAML_ACS_PATH,
   AUTH_SAML_METADATA_PATH,
+} from "@/lib/apiPaths";
+import signinCopy from "@/lib/signinCopy.json";
+import { cn } from "@/lib/utils";
+import {
   GOOGLE_OIDC_ISSUER,
   addAuthAllow,
   applicationAuthHost,
@@ -589,7 +591,7 @@ function OIDCSetup({
           URL after <code>service ready at</code>, and its short URL only if
           that relay granted the name. Register every address it prints that is
           not listed here, including the address-bound one: the address
-          followed by <code>/_portal/auth/callback</code>, without{" "}
+          followed by <code>{AUTH_CALLBACK_PATH}</code>, without{" "}
           <code>:443</code>.
           {discovery && (
             <>

@@ -52,7 +52,7 @@ type appConfig struct {
 	Relay             portal.ServerConfig
 	UDPEnabled        bool
 	TCPEnabled        bool
-	PreAuth           types.PreAuthConfig
+	PreAuth           policy.PreAuthConfig
 	ApprovalMode      string
 	TrustProxyHeaders bool
 	TrustedProxyCIDRs string

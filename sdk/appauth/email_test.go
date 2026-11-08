@@ -238,7 +238,7 @@ func TestEmailLoginLinkCreatesSessionOnce(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: " Alice@Example.com ", Next: "/inbox?view=all"})
+	rec := postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: " Alice@Example.com ", Next: "/inbox?view=all"})
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("request status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -256,7 +256,7 @@ func TestEmailLoginLinkCreatesSessionOnce(t *testing.T) {
 	if _, ok := parsed.Header["To"]; ok || strings.Contains(strings.ToLower(message.data), "alice@example.com") {
 		t.Fatalf("the address the visitor typed is part of the mail:\n%s", message.data)
 	}
-	if !strings.Contains(message.data, "https://"+emailTestHost+applicationAuthLoginPath+"#email_token=") {
+	if !strings.Contains(message.data, "https://"+emailTestHost+types.PathApplicationAuthLogin+"#email_token=") {
 		t.Fatalf("mail does not link to the login page of %s:\n%s", emailTestHost, message.data)
 	}
 	token := emailLinkToken(t, message)
@@ -264,7 +264,7 @@ func TestEmailLoginLinkCreatesSessionOnce(t *testing.T) {
 		t.Fatalf("token %q is not 256 random bits", token)
 	}
 
-	rec = postEmailJSON(gate, emailTestHost, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token})
+	rec = postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("redeem status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -288,7 +288,7 @@ func TestEmailLoginLinkCreatesSessionOnce(t *testing.T) {
 		t.Fatalf("session request = %d as %q via %q", rec.Code, upstreamUser, upstreamAuth)
 	}
 
-	rec = postEmailJSON(gate, emailTestHost, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token})
+	rec = postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token})
 	if rec.Code != http.StatusUnauthorized || len(rec.Result().Cookies()) != 0 {
 		t.Fatalf("second redeem status = %d with cookies %v; want 401 without a session", rec.Code, rec.Result().Cookies())
 	}
@@ -305,7 +305,7 @@ func TestEmailRequestAnswersAlikeForEveryAddress(t *testing.T) {
 
 	var answers []*httptest.ResponseRecorder
 	for _, address := range []string{"mallory@evil.example", "alice@example.com", "alice@example.com", "bob@team.example"} {
-		answers = append(answers, postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: address}))
+		answers = append(answers, postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: address}))
 	}
 	for i, rec := range answers {
 		first := answers[0]
@@ -344,7 +344,7 @@ func TestEmailRequestRefusesHeaderInjection(t *testing.T) {
 		applicationAuthEmailRequest{Email: "alice@example.com\nSubject: hi"},
 		applicationAuthEmailRequest{Email: "Alice <alice@example.com>"},
 	} {
-		if rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, body); rec.Code != http.StatusBadRequest {
+		if rec := postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRequest, body); rec.Code != http.StatusBadRequest {
 			t.Fatalf("request %v status = %d; want 400", body, rec.Code)
 		}
 	}
@@ -394,17 +394,17 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 
 	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
 	gate := newEmailTestGate(t, emailTestConfig(server.addr, "alice@example.com"), http.NotFoundHandler())
-	rec := postEmailJSON(gate, "attacker.example", applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"})
+	rec := postEmailJSON(gate, "attacker.example", types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: "alice@example.com"})
 	if rec.Code != http.StatusMisdirectedRequest {
 		t.Fatalf("status = %d; want 421", rec.Code)
 	}
 
 	// The default port names the same host.
-	rec = postEmailJSON(gate, emailTestHost+":443", applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"})
+	rec = postEmailJSON(gate, emailTestHost+":443", types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: "alice@example.com"})
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d; want 202", rec.Code)
 	}
-	if message := server.next(t); !strings.Contains(message.data, "https://"+emailTestHost+applicationAuthLoginPath+"#") {
+	if message := server.next(t); !strings.Contains(message.data, "https://"+emailTestHost+types.PathApplicationAuthLogin+"#") {
 		t.Fatalf("link does not use the canonical host:\n%s", message.data)
 	}
 
@@ -415,7 +415,7 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec := postEmailJSON(handler, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"}); rec.Code != http.StatusMisdirectedRequest {
+	if rec := postEmailJSON(handler, emailTestHost, types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: "alice@example.com"}); rec.Code != http.StatusMisdirectedRequest {
 		t.Fatalf("status without public hosts = %d; want 421", rec.Code)
 	}
 	server.expectNoMore(t)
@@ -444,7 +444,7 @@ func TestEmailMailHoldsOneLink(t *testing.T) {
 	if !ok || !strings.Contains(headers, "Subject: Sign in to "+emailTestHost) {
 		t.Fatalf("subject does not name the host:\n%s", headers)
 	}
-	if got := strings.Count(body, emailTestHost); got != 1 || !strings.Contains(body, "https://"+emailTestHost+applicationAuthLoginPath+"#email_token=token") {
+	if got := strings.Count(body, emailTestHost); got != 1 || !strings.Contains(body, "https://"+emailTestHost+types.PathApplicationAuthLogin+"#email_token=token") {
 		t.Fatalf("body names the host %d times, want only in the login link:\n%s", got, body)
 	}
 }
@@ -594,9 +594,9 @@ func TestEmailDomainBudgetSparesAListedAddress(t *testing.T) {
 	}
 	gate.email.mu.Unlock()
 
-	postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "late@team.example"})
+	postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: "late@team.example"})
 	server.expectNoMore(t)
-	postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@team.example"})
+	postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: "alice@team.example"})
 	if message := server.next(t); !slices.Equal(message.to, []string{"alice@team.example"}) {
 		t.Fatalf("mail to %v", message.to)
 	}
@@ -610,7 +610,7 @@ func TestEmailRequestRefusesARoutedAddress(t *testing.T) {
 	server := newSMTPTestServer(t, emailTestUsername, emailTestPassword)
 	gate := newEmailTestGate(t, emailTestConfig(server.addr, "@team.example"), http.NotFoundHandler())
 	for _, address := range []string{"attacker%evil.example@team.example", "evil.example!attacker@team.example"} {
-		if rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: address}); rec.Code != http.StatusBadRequest {
+		if rec := postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: address}); rec.Code != http.StatusBadRequest {
 			t.Fatalf("request for %s status = %d; want 400", address, rec.Code)
 		}
 	}
@@ -633,17 +633,17 @@ func TestEmailEndpointsRefuseAnotherOrigin(t *testing.T) {
 		return rec.Code
 	}
 
-	if code := post(applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"}); code != http.StatusForbidden {
+	if code := post(types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: "alice@example.com"}); code != http.StatusForbidden {
 		t.Fatalf("request status = %d; want 403", code)
 	}
 	server.expectNoMore(t)
 
 	token := gate.email.issue("bob@example.com", true, emailTestHost, "/", time.Now().UTC())
 	<-gate.email.sendSlots
-	if code := post(applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); code != http.StatusForbidden {
+	if code := post(types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token}); code != http.StatusForbidden {
 		t.Fatalf("redeem status = %d; want 403", code)
 	}
-	if rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusOK {
+	if rec := postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusOK {
 		t.Fatalf("same-origin redeem status = %d; want 200", rec.Code)
 	}
 }
@@ -656,8 +656,8 @@ func TestEmailLinkReturnsOnlyToLocalPaths(t *testing.T) {
 	gate := newEmailTestGate(t, emailTestConfig(server.addr, "@example.com"), http.NotFoundHandler())
 	for i, next := range []string{"https://evil.example/", "//evil.example/", "/\\evil.example", "/\t/evil.example"} {
 		email := fmt.Sprintf("user%d@example.com", i)
-		postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: email, Next: next})
-		rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: emailLinkToken(t, server.next(t))})
+		postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: email, Next: next})
+		rec := postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: emailLinkToken(t, server.next(t))})
 		var redeemed map[string]string
 		if err := json.Unmarshal(rec.Body.Bytes(), &redeemed); err != nil || rec.Code != http.StatusOK {
 			t.Fatalf("redeem = %d, %v", rec.Code, err)
@@ -689,17 +689,17 @@ func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 	<-gate.email.sendSlots
 
 	public.Store([]PublicHost{{URL: "https://" + emailTestHost}})
-	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusMisdirectedRequest {
+	if rec := postEmailJSON(gate, alias, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusMisdirectedRequest {
 		t.Fatalf("redeem at a lost alias = %d; want 421", rec.Code)
 	}
 	newHold := now.Add(time.Minute)
 	public.Store([]PublicHost{{URL: "https://" + emailTestHost}, {URL: "https://" + alias, Since: newHold}})
-	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusUnauthorized {
+	if rec := postEmailJSON(gate, alias, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("redeem of a link from the earlier hold = %d; want 401", rec.Code)
 	}
 	fresh := gate.email.issue("alice@example.com", true, alias, "/", newHold)
 	<-gate.email.sendSlots
-	if rec := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: fresh}); rec.Code != http.StatusOK {
+	if rec := postEmailJSON(gate, alias, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: fresh}); rec.Code != http.StatusOK {
 		t.Fatalf("redeem of a link from this hold = %d; want 200", rec.Code)
 	}
 }
@@ -747,7 +747,7 @@ func TestEmailSessionEndsWithItsPublicHost(t *testing.T) {
 	gate := handler.(*applicationAuth)
 	token := gate.email.issue("alice@example.com", true, alias, "/", time.Now().UTC())
 	<-gate.email.sendSlots
-	redeem := postEmailJSON(gate, alias, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token})
+	redeem := postEmailJSON(gate, alias, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token})
 	if redeem.Code != http.StatusOK || len(redeem.Result().Cookies()) != 1 {
 		t.Fatalf("redeem = %d, cookies = %v", redeem.Code, redeem.Result().Cookies())
 	}
@@ -1072,7 +1072,7 @@ func TestEmailPrincipalIsTheAddress(t *testing.T) {
 	gate := newEmailTestGate(t, emailTestConfig("127.0.0.1:25", "alice@example.com"), http.NotFoundHandler())
 	token := gate.email.issue("alice@example.com", true, emailTestHost, "/", time.Now().UTC())
 	<-gate.email.sendSlots
-	rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRedeemPath, applicationAuthEmailRedeemRequest{Token: token})
+	rec := postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("redeem status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -1106,7 +1106,7 @@ func TestEmailFailureLogsNoSecret(t *testing.T) {
 	cfg := emailTestConfig(server.addr, "alice@example.com")
 	cfg.SMTPPassword = secret
 	gate := newEmailTestGate(t, cfg, http.NotFoundHandler())
-	if rec := postEmailJSON(gate, emailTestHost, applicationAuthEmailRequestPath, applicationAuthEmailRequest{Email: "alice@example.com"}); rec.Code != http.StatusAccepted {
+	if rec := postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: "alice@example.com"}); rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d; want 202", rec.Code)
 	}
 	select {

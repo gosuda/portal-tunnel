@@ -120,7 +120,7 @@ func TestClientTerminateConnLoopback(t *testing.T) {
 	service := &ksigner.Service{
 		Store: func() ksigner.KeyStore {
 			store := ksigner.NewStaticKeyStore()
-			if err := store.Put(relayKeyID, key); err != nil {
+			if err := store.Put(types.KeylessRelayKeyID, key); err != nil {
 				t.Fatalf("seed static key store: %v", err)
 			}
 			return store
@@ -342,7 +342,7 @@ func TestClientTerminateConnExportsKeyingMaterial(t *testing.T) {
 	service := &ksigner.Service{
 		Store: func() ksigner.KeyStore {
 			store := ksigner.NewStaticKeyStore()
-			if err := store.Put(relayKeyID, key); err != nil {
+			if err := store.Put(types.KeylessRelayKeyID, key); err != nil {
 				t.Fatalf("seed static key store: %v", err)
 			}
 			return store

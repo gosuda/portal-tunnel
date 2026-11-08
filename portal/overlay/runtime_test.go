@@ -267,10 +267,10 @@ func TestGatewayKeepsTheRefusalReason(t *testing.T) {
 		code   int
 		api    string
 	}{
-		{statusPending, http.StatusForbidden, types.APIErrorCodeLeaseRejected},
-		{statusDenied, http.StatusForbidden, types.APIErrorCodeLeaseDenied},
-		{statusCapacity, http.StatusTooManyRequests, types.APIErrorCodeRateLimited},
-		{statusUnavailable, http.StatusForbidden, types.APIErrorCodeUnauthorized},
+		{types.OverlayStatusPending, http.StatusForbidden, types.APIErrorCodeLeaseRejected},
+		{types.OverlayStatusDenied, http.StatusForbidden, types.APIErrorCodeLeaseDenied},
+		{types.OverlayStatusCapacity, http.StatusTooManyRequests, types.APIErrorCodeRateLimited},
+		{types.OverlayStatusUnavailable, http.StatusForbidden, types.APIErrorCodeUnauthorized},
 		{9, http.StatusForbidden, types.APIErrorCodeUnauthorized}, // a status from a newer peer
 	} {
 		gate, capability := testGateway(t)
@@ -365,7 +365,7 @@ func TestDialRequiresAuthenticatedIVNPPeer(t *testing.T) {
 			runtime := &Runtime{endpoint: endpointStub{
 				destination: testDestination("gateway"),
 				dial: func(_ context.Context, network, address string) (net.Conn, error) {
-					if network != "i2p" || address != net.JoinHostPort(destination, streamPort) {
+					if network != "i2p" || address != net.JoinHostPort(destination, types.OverlayStreamPort) {
 						t.Fatalf("dial = %q %q, want destination-owned I2P stream", network, address)
 					}
 					return peerConn{Conn: local, remote: tc.remote}, nil

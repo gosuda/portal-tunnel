@@ -120,7 +120,7 @@ if err := sdk.RunHTTP(ctx, exposure, gate, ""); err != nil {
 - List `Allow` for `siwe` and `credential`, and `EmailList` for `oidc`, `saml` and `email`. `oidc`, `saml` and `email` refuse an empty list, but an empty `Allow` opens `siwe` to any wallet and `credential` to any credential issued from the identity, so always list who may open the app. `email` also needs `Config.PublicHosts`; the SDK API page has the snippet.
 - A gate built with the same identity and provider settings keeps existing sessions. Prefer one gate with `next` swapped behind it: a rebuild ends a SIWE login in progress and unused email links.
 - Store the identity with `identity.Marshal`, never `json.Marshal`, which leaves out the `TokenSecret` that session keys derive from.
-- Serve no routes of your own under `appauth.ReservedPathPrefix` (`/_portal/auth/`).
+- Serve no routes of your own under `types.PathApplicationAuthPrefix` (`/_portal/auth/`).
 - The gate protects the handler it wraps and nothing else. Do not combine it with `sdk.WithStaticRelayCache`, `sdk.WithTCP` or `sdk.WithUDP`: their traffic never passes through the handler, and `appauth.New` cannot see them.
 - An identity provider needs one registered callback per host: `https://<host>/_portal/auth/callback` for the canonical host on each relay, and for the alias if you share it.
 

@@ -57,8 +57,6 @@ var (
 )
 
 const (
-	capabilityPrefix        = "ov1"
-	streamPort              = "4017"
 	capabilityLimit         = 16 << 10
 	connectionLimit         = 128
 	sourceConnectionLimit   = 16
@@ -66,15 +64,6 @@ const (
 	sourceRequestBurst      = 16
 	gatewayRetryDelay       = 30 * time.Second
 	minimumGatewayTTL       = 30 * time.Second
-)
-
-const (
-	statusUnavailable = byte(0)
-	statusAccepted    = byte(1)
-	statusCapacity    = byte(2)
-	// A peer from before these two reads them as unavailable.
-	statusPending = byte(3)
-	statusDenied  = byte(4)
 )
 
 func normalizeIVNPDestination(destination string) (string, error) {
@@ -110,21 +99,21 @@ func (o ReverseOffer) Connection() net.Conn { return o.conn }
 
 // Accept writes the accepted status for the reverse-offer protocol.
 func (o ReverseOffer) Accept() error {
-	_, err := o.respond(statusAccepted)
+	_, err := o.respond(types.OverlayStatusAccepted)
 	return err
 }
 
 // RejectUnavailable writes the unavailable status for the reverse-offer protocol.
-func (o ReverseOffer) RejectUnavailable() { _, _ = o.respond(statusUnavailable) }
+func (o ReverseOffer) RejectUnavailable() { _, _ = o.respond(types.OverlayStatusUnavailable) }
 
 // RejectCapacity writes the capacity status for the reverse-offer protocol.
-func (o ReverseOffer) RejectCapacity() { _, _ = o.respond(statusCapacity) }
+func (o ReverseOffer) RejectCapacity() { _, _ = o.respond(types.OverlayStatusCapacity) }
 
 // RejectPending writes the status of a lease that waits for approval.
-func (o ReverseOffer) RejectPending() { _, _ = o.respond(statusPending) }
+func (o ReverseOffer) RejectPending() { _, _ = o.respond(types.OverlayStatusPending) }
 
 // RejectDenied writes the status of a lease the relay denied or banned.
-func (o ReverseOffer) RejectDenied() { _, _ = o.respond(statusDenied) }
+func (o ReverseOffer) RejectDenied() { _, _ = o.respond(types.OverlayStatusDenied) }
 
 // Close releases the connection transferred with the offer.
 func (o ReverseOffer) Close() { closeNow(o.conn) }
@@ -234,7 +223,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		}
 		return err
 	}
-	listener, err := endpoint.ListenContext(r.ctx, "i2p", ":"+streamPort)
+	listener, err := endpoint.ListenContext(r.ctx, "i2p", ":"+types.OverlayStreamPort)
 	if err != nil {
 		if r.ctx.Err() != nil {
 			return nil
@@ -314,7 +303,7 @@ func (r *Runtime) ReverseOffers() <-chan ReverseOffer {
 }
 
 func (r *Runtime) Handles(capability string) bool {
-	return strings.HasPrefix(strings.TrimSpace(capability), capabilityPrefix+".")
+	return strings.HasPrefix(strings.TrimSpace(capability), types.OverlayCapabilityPrefix+".")
 }
 
 func (r *Runtime) ForgetLease(leaseID string) {
@@ -559,14 +548,14 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		return nil, nil
 	}
 	switch response[0] {
-	case statusAccepted:
-	case statusCapacity:
+	case types.OverlayStatusAccepted:
+	case types.OverlayStatusCapacity:
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay capacity exhausted")
 		return nil, nil
-	case statusPending:
+	case types.OverlayStatusPending:
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
 		return nil, nil
-	case statusDenied:
+	case types.OverlayStatusDenied:
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseDenied, "lease is denied by the relay")
 		return nil, nil
 	default:
@@ -624,12 +613,12 @@ func (r *Runtime) acceptReverse(conn net.Conn) {
 	}
 	peer, err := peerDestination(conn)
 	if err != nil {
-		_, _ = conn.Write([]byte{statusUnavailable})
+		_, _ = conn.Write([]byte{types.OverlayStatusUnavailable})
 		return
 	}
 	claims, err := verifyCapability(string(raw), time.Now().UTC())
 	if err != nil || !strings.EqualFold(claims.Ingress.Address, r.config.Authority.Identity().Address) || claims.Ingress.IVNPDestination != r.Destination() || claims.GatewayDestination != peer {
-		_, _ = conn.Write([]byte{statusUnavailable})
+		_, _ = conn.Write([]byte{types.OverlayStatusUnavailable})
 		return
 	}
 	// Portal chooses the lease-admission outcome through the offer's response
@@ -649,7 +638,7 @@ func (r *Runtime) dial(ctx context.Context, destination string) (net.Conn, error
 	if err != nil {
 		return nil, err
 	}
-	conn, err := r.endpoint.DialContext(ctx, "i2p", net.JoinHostPort(destination, streamPort))
+	conn, err := r.endpoint.DialContext(ctx, "i2p", net.JoinHostPort(destination, types.OverlayStreamPort))
 	if err != nil {
 		return nil, err
 	}
@@ -684,7 +673,7 @@ func signCapability(authority identity.Authority, claims capabilityClaims) (stri
 	if err != nil {
 		return "", err
 	}
-	return capabilityPrefix + "." + base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(compact), nil
+	return types.OverlayCapabilityPrefix + "." + base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(compact), nil
 }
 
 func verifyCapability(capability string, now time.Time) (capabilityClaims, error) {
@@ -693,7 +682,7 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 		return capabilityClaims{}, errInvalidOverlayCapabilityLength
 	}
 	parts := strings.Split(capability, ".")
-	if len(parts) != 3 || parts[0] != capabilityPrefix {
+	if len(parts) != 3 || parts[0] != types.OverlayCapabilityPrefix {
 		return capabilityClaims{}, errInvalidOverlayCapability
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])

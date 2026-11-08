@@ -21,6 +21,8 @@ import (
 	"unicode"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (
@@ -34,8 +36,6 @@ var (
 )
 
 const (
-	applicationAuthEmailRequestPath = ReservedPathPrefix + "email/request"
-	applicationAuthEmailRedeemPath  = ReservedPathPrefix + "email/redeem"
 	// emailLinkTTL is how long a login link works.
 	emailLinkTTL = 10 * time.Minute
 	// emailSendTimeout bounds one SMTP conversation, from the dial to QUIT.
@@ -410,7 +410,7 @@ func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client, tlsConfig *tls
 // no To header, so nothing a visitor typed is part of the mail itself.
 func emailLoginMessage(from mail.Address, host, token string, now time.Time) ([]byte, error) {
 	_, fromDomain, _ := strings.Cut(from.Address, "@")
-	link := "https://" + host + applicationAuthLoginPath + "#email_token=" + token
+	link := "https://" + host + types.PathApplicationAuthLogin + "#email_token=" + token
 	headers := [][2]string{
 		{"From", from.String()},
 		{"Subject", "Sign in to " + host},

@@ -48,13 +48,6 @@ export const DEFAULT_TUNNEL_AUTH: TunnelAuthOptions = {
   emailFrom: "",
 };
 
-// The reserved paths a provider sends visitors back to, from
-// sdk/appauth (applicationAuthCallbackPath and the
-// applicationAuthSAML*Path constants).
-export const AUTH_CALLBACK_PATH = "/_portal/auth/callback";
-export const AUTH_SAML_ACS_PATH = "/_portal/auth/saml/acs";
-export const AUTH_SAML_METADATA_PATH = "/_portal/auth/saml/metadata";
-
 /** Sign-in covers HTTP only, so the tunnel refuses to combine it with UDP. */
 export function authBlocksUDP(auth: TunnelAuthOptions): boolean {
   return auth.method !== "none";

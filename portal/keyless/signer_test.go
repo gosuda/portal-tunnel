@@ -22,6 +22,8 @@ import (
 
 	"github.com/gosuda/keyless_tls/relay/signrpc"
 	"golang.org/x/crypto/cryptobyte"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const tenantHostname = "tenant.test.example"
@@ -255,7 +257,7 @@ func TestClientRepinsWhenTheRelayHoldsNoKeyForItsChain(t *testing.T) {
 
 	relay.renew(renewed, true)
 
-	if leaf, err := relay.visit(t, client, issuer.pool); err == nil || !strings.Contains(err.Error(), unknownCertificateMessage) {
+	if leaf, err := relay.visit(t, client, issuer.pool); err == nil || !strings.Contains(err.Error(), types.KeylessUnknownCertificateMessage) {
 		t.Fatalf("handshake with an unknown certificate: leaf %v, error %v; want the relay's refusal", leaf, err)
 	}
 	if leaf, err := relay.visit(t, client, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
@@ -308,10 +310,10 @@ func TestSignerAnswers(t *testing.T) {
 		status      int
 		message     string
 	}{
-		{"known certificate", relayKeyID, certificateMessage([]byte("known leaf")), http.StatusOK, ""},
+		{"known certificate", types.KeylessRelayKeyID, certificateMessage([]byte("known leaf")), http.StatusOK, ""},
 		{"other key id", "other", certificateMessage([]byte("known leaf")), http.StatusForbidden, "unknown key id"},
-		{"unknown certificate", relayKeyID, certificateMessage([]byte("another leaf")), http.StatusForbidden, unknownCertificateMessage},
-		{"malformed certificate message", relayKeyID, []byte("not a certificate message"), http.StatusBadRequest, "malformed certificate message"},
+		{"unknown certificate", types.KeylessRelayKeyID, certificateMessage([]byte("another leaf")), http.StatusForbidden, types.KeylessUnknownCertificateMessage},
+		{"malformed certificate message", types.KeylessRelayKeyID, []byte("not a certificate message"), http.StatusBadRequest, "malformed certificate message"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

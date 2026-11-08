@@ -25,6 +25,8 @@ import (
 	dsig "github.com/russellhaering/goxmldsig"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (
@@ -50,9 +52,7 @@ var (
 )
 
 const (
-	applicationAuthSAMLACSPath      = ReservedPathPrefix + "saml/acs"
-	applicationAuthSAMLMetadataPath = ReservedPathPrefix + "saml/metadata"
-	applicationAuthSAMLStateCookie  = "__Host-portal_saml_state"
+	applicationAuthSAMLStateCookie = "__Host-portal_saml_state"
 	// samlMetadataBodyLimit leaves room for metadata with many certificates and
 	// attributes; an aggregate of many entities is not supported anyway.
 	samlMetadataBodyLimit = 1 << 20
@@ -312,7 +312,7 @@ func (s *samlAuthenticator) spEntityID(host string) string {
 	if s.entityID != "" {
 		return s.entityID
 	}
-	return "https://" + host + applicationAuthSAMLMetadataPath
+	return "https://" + host + types.PathApplicationAuthSAMLMetadata
 }
 
 // serviceProvider is this tunnel as a SAML service provider at host. The ACS
@@ -323,7 +323,7 @@ func (s *samlAuthenticator) serviceProvider(idp samlIdentityProvider, host strin
 		IdentityProviderSSOURL:      idp.ssoURL,
 		IdentityProviderSSOBinding:  saml2.BindingHttpRedirect,
 		IdentityProviderIssuer:      idp.entityID,
-		AssertionConsumerServiceURL: "https://" + host + applicationAuthSAMLACSPath,
+		AssertionConsumerServiceURL: "https://" + host + types.PathApplicationAuthSAMLACS,
 		ServiceProviderIssuer:       entityID,
 		AudienceURI:                 entityID,
 		IDPCertificateStore:         &dsig.MemoryX509CertificateStore{Roots: idp.certs},
@@ -671,7 +671,7 @@ func (a *applicationAuth) serveSAMLMetadata(w http.ResponseWriter, r *http.Reque
 			ProtocolSupportEnumeration: saml2.SAMLProtocolNamespace,
 			AssertionConsumerServices: []samltypes.IndexedEndpoint{{
 				Binding:  saml2.BindingHttpPost,
-				Location: "https://" + host + applicationAuthSAMLACSPath,
+				Location: "https://" + host + types.PathApplicationAuthSAMLACS,
 				Index:    1,
 			}},
 		},

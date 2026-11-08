@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (
@@ -31,7 +33,7 @@ var (
 // BindingRegistry owns Portal's connection-binding policy for keyless transcript signing.
 type BindingRegistry struct {
 	mu      sync.Mutex
-	entries map[[16]byte]*bindingEntry
+	entries map[[types.TLSBindingSize]byte]*bindingEntry
 	ttl     time.Duration
 }
 
@@ -43,12 +45,12 @@ type bindingEntry struct {
 
 // NewBindingRegistry constructs a binding registry with the given lifetime.
 func NewBindingRegistry(ttl time.Duration) *BindingRegistry {
-	return &BindingRegistry{entries: make(map[[16]byte]*bindingEntry), ttl: ttl}
+	return &BindingRegistry{entries: make(map[[types.TLSBindingSize]byte]*bindingEntry), ttl: ttl}
 }
 
 // Issue mints a binding. A nil ClientHello leaves it unusable until FixHello.
-func (b *BindingRegistry) Issue(leaseID string, clientHello []byte) [16]byte {
-	var binding [16]byte
+func (b *BindingRegistry) Issue(leaseID string, clientHello []byte) [types.TLSBindingSize]byte {
+	var binding [types.TLSBindingSize]byte
 	if _, err := rand.Read(binding[:]); err != nil {
 		panic(fmt.Sprintf("issue lease binding: %v", err))
 	}
@@ -63,7 +65,7 @@ func (b *BindingRegistry) Issue(leaseID string, clientHello []byte) [16]byte {
 }
 
 // FixHello pins a ClientHello to a binding issued without one.
-func (b *BindingRegistry) FixHello(binding [16]byte, clientHello []byte) error {
+func (b *BindingRegistry) FixHello(binding [types.TLSBindingSize]byte, clientHello []byte) error {
 	if len(clientHello) == 0 {
 		return errClientHelloSpanIsRequired
 	}
@@ -85,14 +87,14 @@ func (b *BindingRegistry) FixHello(binding [16]byte, clientHello []byte) error {
 
 // ValidateAndConsume validates the lease and ClientHello and spends the binding.
 func (b *BindingRegistry) ValidateAndConsume(binding []byte, leaseID string, clientHello []byte) error {
-	if len(binding) != 16 {
+	if len(binding) != types.TLSBindingSize {
 		return errBindingMustBe16Bytes
 	}
 	if len(clientHello) == 0 {
 		return errClientHelloTranscriptIsRequired
 	}
 	helloHash := sha256.Sum256(clientHello)
-	var key [16]byte
+	var key [types.TLSBindingSize]byte
 	copy(key[:], binding)
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -114,7 +116,7 @@ func (b *BindingRegistry) ValidateAndConsume(binding []byte, leaseID string, cli
 }
 
 // Discard revokes a binding that was not delivered to a live stream.
-func (b *BindingRegistry) Discard(binding [16]byte) {
+func (b *BindingRegistry) Discard(binding [types.TLSBindingSize]byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.entries, binding)
@@ -198,7 +200,7 @@ func (a *clientHelloAccumulator) add(p []byte) ([]byte, bool, error) {
 
 // FixHelloOnWrite wraps conn and pins the binding to its first ClientHello
 // before forwarding the write that completes the handshake message.
-func (b *BindingRegistry) FixHelloOnWrite(conn net.Conn, binding [16]byte) net.Conn {
+func (b *BindingRegistry) FixHelloOnWrite(conn net.Conn, binding [types.TLSBindingSize]byte) net.Conn {
 	return &helloFixingConn{Conn: conn, bindings: b, binding: binding}
 }
 
@@ -208,7 +210,7 @@ type helloFixingConn struct {
 	capture  clientHelloAccumulator
 	fixed    bool
 	bindings *BindingRegistry
-	binding  [16]byte
+	binding  [types.TLSBindingSize]byte
 }
 
 func (c *helloFixingConn) Write(p []byte) (int, error) {

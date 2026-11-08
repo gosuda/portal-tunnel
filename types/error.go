@@ -1,5 +1,10 @@
 package types
 
+// KeylessUnknownCertificateMessage is a compatibility signal from /v1/sign:
+// the client refreshes its pinned chain when the remote signer reports it.
+// The signer exposes the refusal text rather than a structured error code.
+const KeylessUnknownCertificateMessage = "relay does not hold the key of the presented certificate"
+
 const (
 	APIErrorCodeFeatureUnavailable      = "feature_unavailable"
 	APIErrorCodeHijackFailed            = "hijack_failed"

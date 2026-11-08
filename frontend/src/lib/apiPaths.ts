@@ -1,3 +1,8 @@
+// Application callback paths mirror types/paths.go's PathApplicationAuth* constants.
+export const AUTH_CALLBACK_PATH = "/_portal/auth/callback";
+export const AUTH_SAML_ACS_PATH = "/_portal/auth/saml/acs";
+export const AUTH_SAML_METADATA_PATH = "/_portal/auth/saml/metadata";
+
 export const RELAY_API_PATHS = {
   public: {
     state: "/api/state",

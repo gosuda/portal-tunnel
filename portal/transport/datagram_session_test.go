@@ -148,7 +148,7 @@ func newAuthTestConnections(t *testing.T, configs ...*quic.Config) (*quic.Conn, 
 	if len(configs) > 0 {
 		clientConfig = configs[0]
 	}
-	client, err := quic.DialAddr(ctx, listener.Addr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{quicBackhaulALPN}}, clientConfig)
+	client, err := quic.DialAddr(ctx, listener.Addr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{types.QUICBackhaulALPN}}, clientConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

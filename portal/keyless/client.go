@@ -136,7 +136,7 @@ func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
 		Endpoint:   c.relayURL,
 		ServerName: c.serverName,
-		KeyID:      relayKeyID,
+		KeyID:      types.KeylessRelayKeyID,
 		RootCAPEM:  chainPEM,
 		Headers:    c.headers,
 	})
@@ -146,7 +146,7 @@ func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 	server, err := t13server.NewServer(t13server.Config{
 		CertPEM:          chainPEM,
 		NextProtos:       []string{"http/1.1"},
-		KeyID:            relayKeyID,
+		KeyID:            types.KeylessRelayKeyID,
 		TranscriptSigner: remoteSigner,
 	})
 	if err != nil {
@@ -245,7 +245,7 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 // any more, as when a renewal comes from another issuer. Both are cured by
 // pinning the chain the relay serves now.
 func pinIsStale(err error) bool {
-	if strings.Contains(err.Error(), unknownCertificateMessage) {
+	if strings.Contains(err.Error(), types.KeylessUnknownCertificateMessage) {
 		return true
 	}
 	_, verification := errors.AsType[*tls.CertificateVerificationError](err)

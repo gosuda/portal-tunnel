@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func newSigninTestHandler(t *testing.T, provider string) http.Handler {
@@ -22,7 +24,7 @@ func newSigninTestHandler(t *testing.T, provider string) http.Handler {
 }
 
 func getSigninPage(handler http.Handler, host string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodGet, "https://app.example"+applicationAuthLoginPath, nil)
+	req := httptest.NewRequest(http.MethodGet, "https://app.example"+types.PathApplicationAuthLogin, nil)
 	req.Host = host
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -75,7 +77,7 @@ func TestSigninPageHeadCarriesNoBody(t *testing.T) {
 	t.Parallel()
 
 	handler := newSigninTestHandler(t, ProviderCredential)
-	req := httptest.NewRequest(http.MethodHead, "https://app.example"+applicationAuthLoginPath, nil)
+	req := httptest.NewRequest(http.MethodHead, "https://app.example"+types.PathApplicationAuthLogin, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 || rec.Header().Get("Content-Security-Policy") == "" {

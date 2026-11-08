@@ -6,6 +6,31 @@ import (
 	"time"
 )
 
+// Reverse stream activation markers precede application traffic.
+const (
+	ReverseMarkerKeepalive = 0x00
+	ReverseMarkerRawStart  = 0x01
+	ReverseMarkerTLSStart  = 0x02
+	// TLSBindingSize binds one reverse connection to keyless transcript signing.
+	TLSBindingSize = 16
+)
+
+const (
+	QUICBackhaulALPN        = "portal-tunnel"
+	KeylessRelayKeyID       = "relay-cert"
+	OverlayCapabilityPrefix = "ov1"
+	OverlayStreamPort       = "4017"
+)
+
+// Overlay reverse-offer responses. Older peers treat pending and denied as unavailable.
+const (
+	OverlayStatusUnavailable = byte(0)
+	OverlayStatusAccepted    = byte(1)
+	OverlayStatusCapacity    = byte(2)
+	OverlayStatusPending     = byte(3)
+	OverlayStatusDenied      = byte(4)
+)
+
 const (
 	DefaultUDPFlowIdleTimeout   = 5 * time.Minute
 	DefaultUDPMaxFlows          = 1024

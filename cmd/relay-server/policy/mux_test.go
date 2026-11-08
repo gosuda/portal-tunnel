@@ -19,7 +19,7 @@ func TestMuxRejectsMethodBeforeAdmission(t *testing.T) {
 	for _, path := range []string{types.PathSDKRegisterChallenge, types.PathSDKRegister, types.PathDiscoveryAnnounce} {
 		t.Run(path, func(t *testing.T) {
 			limiter := NewSourceLimiter(60, 1, 0, 0)
-			handler := Mux(nil, http.NotFoundHandler(), nil, limiter, nil, types.PreAuthConfig{
+			handler := Mux(nil, http.NotFoundHandler(), nil, limiter, nil, PreAuthConfig{
 				ChallengeCost: 1,
 				RegisterCost:  1,
 				AnnounceCost:  1,
@@ -42,7 +42,7 @@ func TestMuxLeavesFallbackBodyLimitsToOwner(t *testing.T) {
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	})
-	handler := Mux(nil, fallback, nil, nil, nil, types.PreAuthConfig{})
+	handler := Mux(nil, fallback, nil, nil, nil, PreAuthConfig{})
 	request := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("upload"))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -64,7 +64,7 @@ func TestMuxUnapprovedLeaseBudget(t *testing.T) {
 	manual := access.Snapshot()
 	manual.SetMode(ModeManual)
 	access.Commit(manual)
-	handler := Mux(server, http.NotFoundHandler(), nil, nil, access, types.PreAuthConfig{})
+	handler := Mux(server, http.NotFoundHandler(), nil, nil, access, PreAuthConfig{})
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = r.Header.Get(fromHeader) + ":1234"
 		handler.ServeHTTP(w, r)

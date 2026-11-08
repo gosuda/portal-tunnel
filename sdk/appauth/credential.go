@@ -371,7 +371,7 @@ func CredentialRedeemURL(host, credential string) (string, error) {
 	if credential == "" {
 		return "", errApplicationCredentialIsRequired
 	}
-	return "https://" + host + applicationAuthLoginPath + "#credential=" + url.QueryEscape(credential), nil
+	return "https://" + host + types.PathApplicationAuthLogin + "#credential=" + url.QueryEscape(credential), nil
 }
 
 // normalizeHost returns the canonical name of an application: lower
