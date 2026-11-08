@@ -25,7 +25,7 @@ Use the smallest mode that satisfies the request:
 - Game server (Minecraft, Terraria, Palworld, or any dedicated game server): always start from `references/game-hosting.md` — raw TCP/UDP transport has different prerequisites and verification than HTTP.
 - Go app that should carry the tunnel in-process instead of running the CLI next to it: `references/sdk-embed.md`. The CLI stays the default even for Go; embedding is for users who ask for it.
 
-Default to a temporary preview when the user says only "share", "preview", or "deploy locally". Do not install an OS service unless the user asks for a persistent, managed, or restart-surviving tunnel and accepts that `portal agent run` without `--foreground` installs a per-user launchd or systemd unit.
+Default to a temporary preview when the user says only "share", "preview", or "deploy locally". Do not install an OS service unless the user asks for a persistent, managed, or restart-surviving tunnel and accepts the OS service that `portal agent run` without `--foreground` installs. Its scope depends on who runs it: a normal user gets a launchd LaunchAgent or a systemd user unit, root gets a LaunchDaemon or a unit in `/etc/systemd/system`, and Windows gets a service that runs as LocalSystem. Name that scope when you ask for approval.
 
 ## Workflow
 
@@ -58,7 +58,7 @@ For x402, do not guess the protected path, payment methods, amount, network, rec
 ### 4. Build the Command or Agent Config
 
 - Use loopback targets such as `127.0.0.1:<port>` unless the project explicitly needs another address.
-- Use the user's requested name. Otherwise derive a DNS-label-safe name from the app and pass it explicitly, so the public URL `https://<name>.<relay-host>/` is known before the tunnel starts; the relay website always emits `--name` for the same reason. `--name` applies only when the identity file is created. An existing `--identity-path` keeps its saved name and silently ignores the flag, so use one identity file per public name.
+- Use the user's requested name. Otherwise derive a DNS-label-safe name from the app and pass it explicitly, so the relay can grant the short URL `https://<name>.<relay-host>/`; the relay website always emits `--name` for the same reason. The short URL is not known before the tunnel starts: the relay grants it only when no other identity owns the name. Hand off `alias_url` when the relay grants it and `public_url` otherwise, as step 7 says. `--name` applies only when the identity file is created. An existing `--identity-path` keeps its saved name and silently ignores the flag, so use one identity file per public name.
 - For `portal expose`, always pass an absolute `--identity-path` outside the repository. The CLI default is `identity.json` in the process working directory and that file contains private key material. For `portal agent`, omit `identity_path` so the agent stores identity under its state directory; if you set the field, use an absolute path outside the repository.
 - Never print or commit identity JSON, control tokens, facilitator tokens, or wallet secrets.
 - With a user-selected relay on `portal expose`, pass `--relays <https-url> --discovery=false`. In persistent mode those flags are not accepted on `portal agent run`; put `relays = ["https://..."]` and `discovery = false` on the `[[tunnels]]` entry instead.

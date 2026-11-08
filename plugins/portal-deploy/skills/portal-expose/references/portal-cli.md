@@ -1,6 +1,6 @@
 # Portal CLI reference for app deployment
 
-Last checked against `gosuda/portal-tunnel` main commit `d38001ad` on 2026-09-22. Prefer the behavior of the installed Portal version and the repository's current `docs/src/routes/cli-reference/+page.md` and `docs/src/routes/portal-agent/+page.md` when they differ from this snapshot.
+Last checked against `gosuda/portal-tunnel` release `v2.7.3` (commit `e10679a5`) on 2026-11-08. Prefer the behavior of the installed Portal version and the repository's current `docs/src/routes/cli-reference/+page.md` and `docs/src/routes/portal-agent/+page.md` when they differ from this snapshot.
 
 ## Installation
 
@@ -48,7 +48,7 @@ portal expose --serve ./site --name my-app --identity-path /absolute/path/to/ide
 portal expose --serve ./site/index.html --name my-app --identity-path /absolute/path/to/identity.json
 ```
 
-Static serving follows symlinks inside the selected directory. Expose only a directory whose complete contents and symlink targets are intended to be public.
+Static serving follows a symlink only when its target stays inside the selected directory; a symlink that points outside it answers `404`. Expose only a directory whose complete contents are intended to be public.
 
 Multiple HTTP services:
 
@@ -89,7 +89,7 @@ portal expose 127.0.0.1:19132 --name game --udp --identity-path /absolute/path/t
 
 `--udp` adds a UDP relay on the default stream lease for the positional target. For a UDP-only request, the positional target must be that UDP service. `--udp-addr` is only for an explicit combined stream-plus-UDP request, for example `portal expose 127.0.0.1:8080 --udp --udp-addr 127.0.0.1:19132`. Do not point the positional target at an unrelated HTTP app just to attach UDP.
 
-`--tcp` and `--udp` require relay-side support. `--http-route` cannot be combined with `--tcp` or `--udp`; `--serve` cannot be combined with a target, HTTP routes, TCP, or UDP. `--cache` requires `--serve` and cannot be combined with `--ban-mitm`; `--cache-ttl` requires `--cache` and must be `0` or between `1s` and `8760h`.
+`--tcp` and `--udp` require relay-side support. `--http-route` cannot be combined with `--tcp` or `--udp`; `--serve` cannot be combined with a target, HTTP routes, TCP, or UDP. `--cache` requires `--serve` and cannot be combined with `--ban-mitm` or `--auth`; `--cache-ttl` requires `--cache` and must be `0` or between `1s` and `8760h`.
 
 ### Flags
 
@@ -103,7 +103,7 @@ The flag is `--description`, not `--desc`. Environment variables in the third co
 | `--ban-mitm` | `false` | `BAN_MITM` | Ban a relay when the self-probe detects TLS termination |
 | `--identity-path` | `identity.json` | `IDENTITY_PATH` | Identity file, created when missing |
 | `--identity-json` | | `IDENTITY_JSON` | In-memory identity JSON; wins over the file |
-| `--name` | generated | | Public hostname prefix, normalized to one DNS label of at most 63 ASCII characters; applies only to a new identity |
+| `--name` | none | | Request the short URL `<name>.<relay-host>`, normalized to one DNS label of at most 63 ASCII characters; applies only to a new identity. The relay grants the short URL only when no other identity owns the name; the identity-bound URL, which carries the address, is always published. Omitted, the service is address-only (`<address>.<relay-host>`) with no short URL |
 | `--description`, `--tags`, `--owner`, `--thumbnail` | | | Public listing metadata; `--tags` is comma-separated |
 | `--hide` | `false` | | Keep the service out of relay listings |
 | `--http-route` | | | `PATH=UPSTREAM [METHOD[,METHOD...]:AMOUNT]`, repeatable |
@@ -115,6 +115,7 @@ The flag is `--description`, not `--desc`. Environment variables in the third co
 | `--tcp` | `false` | `TCP_ENABLED` | Request a dedicated raw TCP port, no TLS |
 | `--max-active-relays` | `3` | `MAX_ACTIVE_RELAYS` | Cap on auto-selected relays kept connected |
 | `--metrics-addr` | | | Serve Prometheus `/metrics` on `host:port` |
+| `--log-format` | `text` | | `json` writes one JSON record per line on stdout; an integration reads relay readiness from the `"event":"relay_status"` records (`state`, `public_url`, `alias_url`, `approval`) instead of parsing log text |
 | `--x402-pay-to`, `--x402-network`, `--x402-asset`, `--x402-endpoint`, `--x402-testnet`, `--x402-facilitator-token` | | `CSPR_CLOUD_API_KEY` for the token | Paid routes; see `x402.md` |
 | `--auth`, `--auth-allow`, `--auth-email-list`, `--auth-identity-headers`, `--auth-identity-proof`, `--auth-oidc-issuer`, `--auth-oidc-client-id`, `--auth-oidc-client-secret`, `--auth-saml-metadata-url`, `--auth-saml-metadata-file`, `--auth-saml-entity-id`, `--auth-saml-subject-attribute`, `--auth-smtp-addr`, `--auth-smtp-username`, `--auth-smtp-password`, `--auth-smtp-from` | | `AUTH_IDENTITY_PROOF` for `--auth-identity-proof`; `AUTH_OIDC_ISSUER`, `AUTH_OIDC_CLIENT_ID`, `AUTH_OIDC_CLIENT_SECRET` for the `--auth-oidc-*` flags; `AUTH_SAML_*` for the `--auth-saml-*` flags; `AUTH_SMTP_ADDR`, `AUTH_SMTP_USERNAME`, `AUTH_SMTP_PASSWORD`, `AUTH_SMTP_FROM` for the `--auth-smtp-*` flags | Visitor sign-in; see `application-auth.md` |
 
@@ -124,7 +125,7 @@ The flag is `--description`, not `--desc`. Environment variables in the third co
 
 ## Persistent agent
 
-`portal agent run` without `--foreground` installs and starts a per-user OS service (launchd LaunchAgent or systemd user unit). Obtain approval before that path. `--foreground` keeps the agent in the current process and skips service installation.
+`portal agent run` without `--foreground` installs and starts an OS service: a launchd LaunchAgent or a systemd user unit for a normal user, a LaunchDaemon or a unit in `/etc/systemd/system` as root, and on Windows a service that runs as LocalSystem. Obtain approval before that path. `--foreground` keeps the agent in the current process and skips service installation.
 
 `run`, `restart`, and `stop` are service-wide. They apply to every `[[tunnels]]` entry owned by that `service_name`. Do not point a second config at the default `portal-agent` service if an existing agent already has unrelated tunnels. An isolated agent also needs its own `state_dir` and loopback `control_addr`; those otherwise default to the shared data directory and `127.0.0.1:4018`.
 
@@ -202,14 +203,14 @@ Default config locations:
 
 ### Config keys
 
-`[agent]`: `state_dir` (defaults to the platform data directory), `control_addr` (default `127.0.0.1:4018`), `service_name` (default `portal-agent`), `allowed_wallets` (wallet addresses allowed to sign in to the dashboard).
+`[agent]`: `state_dir` (defaults to the platform data directory), `control_addr` (default `127.0.0.1:4018`), `service_name` (default `portal-agent`), `allowed_wallets` (wallet addresses that may sign in to the loopback control API; empty allows any wallet, and such a session can only read `/agent/status`. Config and tunnel changes, and the dashboard, use the bearer token in `agent-endpoint.json`).
 
 `[[tunnels]]`: `id`, `name`, `target`, `serve` (static site directory or HTML file, relative to the config file's directory; cannot be combined with `target`, `http_routes`, `tcp`, or `udp`; the relay cache options have no TOML equivalent), `http_routes` (entries with `prefix`, `upstream`, `methods`, `amount`), `relays`, `discovery`, `overlay`, `identity_path`, `identity_json`, `udp`, `udp_addr`, `tcp`, `ban_mitm`, `max_active_relays` (default `3`), `description`, `tags`, `owner`, `thumbnail`, `hide`, `x402_pay_to`, `x402_testnet`, `x402_network`, `x402_asset`, `x402_endpoints`, `x402_facilitator_token`, `auth`, `auth_allowed_wallets`, `auth_email_list`, `auth_identity_headers`, `auth_oidc_issuer`, `auth_oidc_client_id`, `auth_oidc_client_secret`, `auth_saml_metadata_url`, `auth_saml_metadata_file`, `auth_saml_entity_id`, `auth_saml_subject_attribute`, `auth_smtp_addr`, `auth_smtp_username`, `auth_smtp_password`, `auth_smtp_from`, `strip_request_headers`. Apart from `id`, each key stands for a `portal expose` argument or flag (`target` is the positional target, `auth_allowed_wallets` is `--auth-allow`, `auth_email_list` is `--auth-email-list`, `strip_request_headers` is `--strip-request-header`). Some flags have no key, for example the relay cache options, `--metrics-addr`, `--log-format` and `--auth-identity-proof`, and the agent does not read `AUTH_IDENTITY_PROOF`, so an agent tunnel cannot send the identity proof.
 
 ## Output and readiness
 
 - A Portal process can start while relay discovery, lease registration, and reconnects continue in the background.
-- HTTP readiness log: `service ready at <https-url>`.
+- HTTP readiness log: `service ready at <identity-bound URL>`, followed by ` (short URL: <short URL>)` when the relay granted the name. Hand off the short URL when present.
 - Raw TCP/UDP readiness log: `raw transport endpoints allocated` with `tcp_addr` and/or `udp_addr`. Do not wait for an HTTPS URL in that mode.
 - `waiting for relay approval` and `refused by relay`: the relay does not route this tunnel. Neither is a readiness log. An approved tunnel becomes ready without a restart.
 - Multiple relays can produce multiple public URLs. Report and verify each URL or raw endpoint that is handed off.
