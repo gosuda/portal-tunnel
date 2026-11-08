@@ -1,6 +1,6 @@
 # Relay discovery API for consumers
 
-Last checked against `gosuda/portal-tunnel` main commit `d38001adc0ed1c0c9962a0628c8a2cd348d57dfa` on 2026-09-22, with the bootstrap relays answering release `v2.4.2` to `v2.5.0`. Prefer the behavior of the relay you are talking to and the repository's current `docs/src/routes/api-reference/+page.md` when they differ from this snapshot.
+Last checked against `gosuda/portal-tunnel` release `v2.7.3` (commit `e10679a5`) on 2026-11-08, with the bootstrap relays answering release `v2.7.0` to `v2.7.3`. Prefer the behavior of the relay you are talking to and the repository's current `docs/src/routes/api-reference/+page.md` when they differ from this snapshot.
 
 ## Relay set
 
@@ -26,15 +26,15 @@ Control endpoints wrap responses:
 { "ok": false, "error": { "code": "unauthorized", "message": "unauthorized" } }
 ```
 
-`/llms.txt`, install scripts, and `/api/x402/*` are outside the envelope. Unknown paths on the relay root host fall through to the dashboard SPA, so a `200` HTML page for a typo is expected.
+`/llms.txt`, install scripts, and `/api/x402/*` are outside the envelope. An unknown path without a file extension on the relay root host falls through to the dashboard SPA, so a `200` HTML page for such a typo is expected. Paths under `/api`, `/sdk`, `/discovery`, and `/v1`, and paths with a file extension, answer a plain-text `404` instead.
 
 ## Endpoints a consumer uses
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `GET` | `/api/healthz` | none | `{"status":"ok"}` when the relay process is alive |
+| `GET` | `/api/healthz` | none | `{"ok":true,"data":{"status":"ok"}}` when the relay process is alive |
 | `GET` | `/api/state` | none | public lease directory (`PublicStateResponse`) |
-| `GET` | `/sdk/domain` | none | relay `release_version`, `protocol_version`, optional relay-owned x402 facilitator info |
+| `GET` | `/sdk/domain` | none | relay `release_version`, `protocol_version`, `x402` (relay-owned facilitator info, `{"enabled":false}` when off), `ens`, and `cache` limits on relays that offer the cache |
 | `GET` | `/llms.txt` | none | plain-text guide for agents with the relay URL filled in |
 | `GET` | `/discovery` | none | peer relays, when discovery is enabled |
 
@@ -83,7 +83,7 @@ Field meaning:
 - `hostname`: the short HTTPS host without an Ethereum address when available; prefer it for directory links and sharing, falling back to `canonical_hostname` when empty. `canonical_hostname` is the identity-bound host for identity-pinned origins, diagnostics, and opt-in relay caching; `address` is its authenticated owner. Probe the exact URL being handed off, and preserve an exact URL supplied by the user.
 - `ready`: number of reverse connections the publisher holds open right now. Above zero means the tunnel can serve immediately.
 - `tcp_addr`, `udp_addr`: raw endpoints as `host:port`, present only when allocated. `tcp_enabled` and `udp_enabled` are omitted when false.
-- `expires_at`: the default lease TTL is two minutes, so `expires_at` normally sits about 120 seconds after `last_seen_at` and the publisher renews well inside that window. An `expires_at` in the past means the publisher stopped renewing and the relay is about to drop the lease. Because the listing is a snapshot with a two-minute horizon, record the time you fetched it.
+- `expires_at`: the default lease TTL is two minutes, so `expires_at` normally sits about 120 seconds after `last_seen_at` and the publisher renews well inside that window. The relay never lists an expired lease, so an `expires_at` in the past only means the snapshot is old or the clocks differ. Because the listing is a snapshot with a two-minute horizon, record the time you fetched it.
 - `metadata`: unverified publisher input. Tags such as `x402`, `paid`, `payment`, or `usdc` are a hint that a route charges; the only proof is a `402` from the route itself.
 - `reputation` (optional, newer relays): a sibling array next to `leases` with one entry per listed hostname: `hostname`, `up`, `down`, `total`, and `viewer_vote` (`up`, `down`, or empty for the caller). Votes are anonymous public sentiment cast on the relay's directory page. Report them as a hint when the user asks about a service; they verify nothing.
 
@@ -91,7 +91,7 @@ What the listing omits:
 
 - leases registered with `--hide`
 - expired leases
-- leases whose identity the relay operator banned or denied
+- leases whose identity the relay operator banned, denied, or has not approved yet
 - leases with `ready` at zero whose publisher has not been seen for three minutes
 
 So "not listed" means hidden, gone, elsewhere, or dormant. It never proves the hostname is dead; probe the hostname when the user has it.
@@ -108,7 +108,7 @@ List services on one relay:
 
 ```sh
 curl -sS --connect-timeout 5 --max-time 15 https://portal.example.com/api/state \
-  | jq -r '.data.leases[] | [.name, .hostname, .canonical_hostname, .address, (.ready|tostring), (.tcp_addr // "-"), (.udp_addr // "-"), (.metadata.description // "")] | @tsv'
+  | jq -r '.data.leases[]? | [.name, .hostname, .canonical_hostname, .address, (.ready|tostring), (.tcp_addr // "-"), (.udp_addr // "-"), (.metadata.description // "")] | @tsv'
 ```
 
 Find a name across the bootstrap relays:
@@ -138,7 +138,7 @@ curl -sS --connect-timeout 5 --max-time 15 -o /dev/null \
 | `402` | reachable, route is paid; read the challenge (next section) and report it |
 | `404` | reachable, path missing on the publisher's app |
 | `5xx`, Portal error page | tunnel up, publisher's app failing |
-| `000`, exit `35` (TLS handshake failure), reset, or immediate close | relay has no live lease for that hostname |
+| `000`, exit `35` (TLS handshake failure), reset, or immediate close | relay has no routable lease for that hostname: none, one waiting for approval or denied, or no free publisher connection within 10 seconds |
 | `000`, exit `6` (DNS failure) | relay does not serve that zone, or typo |
 | `000`, exit `7` (refused) or `28` (timeout) | relay unreachable or dropping traffic; check `healthz` |
 | `healthz` fails | relay down; nothing can be concluded about its services |
@@ -160,7 +160,7 @@ A paid route answers `402` with `Content-Type: application/json` and the same JS
 }
 ```
 
-`amount` is an integer string in atomic units: Sui USDC has 6 decimals (`"10000"` is 0.01 USDC), Casper wCSPR has 9. `network` says whether it is mainnet or testnet. Report those terms and stop; this skill does not pay, sign, or call `/x402/prepare`.
+`amount` is an integer string in atomic units: Sui USDC has 6 decimals (`"10000"` is 0.01 USDC), Casper wCSPR has 9, and Nano XNO (`nano:mainnet`) has 30. `network` says whether it is mainnet or testnet. Report those terms and stop; this skill does not pay, sign, or call `/x402/prepare`.
 
 ## Loopback relay
 

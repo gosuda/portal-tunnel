@@ -1,6 +1,6 @@
 # Raw TCP and UDP endpoints
 
-Last checked against `gosuda/portal-tunnel` main commit `d38001adc0ed1c0c9962a0628c8a2cd348d57dfa` on 2026-09-22. This mirrors `docs/src/routes/tcp-udp-tunneling/+page.md` and `docs/src/routes/game-server-hosting/+page.md`; prefer those pages when they differ.
+Last checked against `gosuda/portal-tunnel` release `v2.7.3` (commit `e10679a5`) on 2026-11-08. This mirrors `docs/src/routes/tcp-udp-tunneling/+page.md` and `docs/src/routes/game-server-hosting/+page.md`; prefer those pages when they differ.
 
 ## Where the address comes from
 
@@ -52,7 +52,7 @@ Limits that shape the probe:
 
 - UDP datagrams above 1238 bytes are dropped.
 - UDP flows idle for 5 minutes are forgotten by the relay; long-lived protocols need keepalives.
-- Relays cap concurrent TCP and UDP leases by their configured port range, so a publisher may lose an allocation to capacity rather than to an error.
+- Relays cap TCP and UDP leases separately, by their port ranges and lease limits. A registration over the cap gets `503` with `tcp_port_exhausted`, `tcp_port_capacity_exceeded`, `udp_port_exhausted`, or `udp_capacity_exceeded`, and the publisher keeps retrying, so a missing endpoint can mean a full relay.
 
 ## Reading failures
 
