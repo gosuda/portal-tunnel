@@ -416,8 +416,10 @@ The public directory shows one service with aggregate readiness; the admin API
 retains separate rows identified by `lease_id`.
 
 Without replica mode, registration still replaces all leases of that identity
-and invalidates their tokens. A replica cannot join an existing exclusive lease;
-stop that client before starting replicas. Replica clients reject relays without
+and invalidates their tokens. A replica cannot join a live exclusive lease or a
+retained relay cache entry for the same hostname; it gets a retryable
+`replica_conflict` error and joins once that lease is gone or the cache entry
+expires. A crashed exclusive client holds its lease until expiry. Replica clients reject relays without
 the advertised capability before sending any registration request. A replica
 challenge must also confirm `replica: true` before the SDK signs it, so a relay
 downgrade between domain lookup and challenge issuance cannot silently switch

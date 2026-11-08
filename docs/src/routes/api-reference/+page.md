@@ -265,6 +265,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `feature_unavailable` | feature is disabled or not configured |
 | `rate_limited` | request was throttled |
 | `hostname_conflict` | canonical hostname is inconsistently bound; routing fails closed |
+| `replica_conflict` | a replica cannot join a live exclusive lease or retained cache entry; retryable |
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not approved to route yet |
 | `lease_denied` | relay denied or banned the lease |

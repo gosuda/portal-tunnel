@@ -109,6 +109,11 @@ func isTerminalRelayError(err error) bool {
 	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok && apiErr.IsRateLimited() {
 		return false
 	}
+	// A replica conflict clears when the exclusive lease expires or the
+	// retained cache entry ages out, so the replica keeps retrying.
+	if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeReplicaConflict}) {
+		return false
+	}
 	if errors.Is(err, errRelayIncompatible) {
 		return true
 	}

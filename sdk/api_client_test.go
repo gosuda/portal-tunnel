@@ -556,6 +556,7 @@ func TestRateLimitsNeverPermanentlyDisqualifyRelay(t *testing.T) {
 		{StatusCode: http.StatusTooManyRequests},
 		{Code: types.APIErrorCodeRateLimited},
 		{StatusCode: http.StatusBadRequest, Code: types.APIErrorCodeRateLimited},
+		{StatusCode: http.StatusConflict, Code: types.APIErrorCodeReplicaConflict},
 	} {
 		if isTerminalRelayError(fmt.Errorf("register: %w", apiErr)) {
 			t.Fatalf("temporary admission error is terminal: %v", apiErr)
