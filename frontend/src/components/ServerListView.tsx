@@ -419,8 +419,8 @@ export function ServerListView({
           <button type="button" aria-current={browseView === "home" && sortBy === "recommended" ? "page" : undefined} onClick={() => { onBrowseViewChange("home"); onSortByChange("recommended"); }} className="portal-nav-item"><ThumbsUp className="size-5" /><span>Most recommended</span></button>
           <button type="button" aria-current={browseView === "favorites" ? "page" : undefined} onClick={() => onBrowseViewChange("favorites")} className="portal-nav-item"><ThumbsUp className="size-5" /><span>Favorites</span><span className="ml-auto text-xs text-muted-foreground">{favorites}</span></button>
         </nav>
-        <nav aria-label="Your apps" className="mt-3 shrink-0 border-t border-border pt-3">
-          <p className="px-3 py-2 text-base font-semibold">You</p>
+        <nav aria-label="Host" className="mt-3 shrink-0 border-t border-border pt-3">
+          <p className="px-3 py-2 text-base font-semibold">Host</p>
           <TunnelCommandModal trigger={
             <button type="button" aria-label="Launch App" className="portal-nav-item"><Terminal className="size-5" /><span>Launch App</span></button>
           } />
