@@ -109,7 +109,7 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 
 	// A verified challenge is a short-lived proof: replaying it
 	// re-authenticates the same wallet and issues a fresh session
-	// (siweauth keeps no replay state, issue #530).
+	// (SIWE challenges keep no replay state, issue #530).
 	replayReq := httptest.NewRequest(http.MethodPost, "https://app.example"+applicationAuthVerifyPath, bytes.NewReader(verifyBody))
 	replayReq.Header.Set("Origin", "https://app.example")
 	replayRec := httptest.NewRecorder()

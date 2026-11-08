@@ -1,35 +1,33 @@
-package siweauth
+package identity
 
 import (
 	"errors"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 )
 
 const testDomain = "app.example"
 
-func newTestAuthenticator(t *testing.T) *Authenticator {
+func newTestAuthenticator(t *testing.T) *SIWEAuthenticator {
 	t.Helper()
-	auth, err := New(Config{AllowAnyAddress: true, Statement: "Sign in to Portal", ChallengePrefix: "test_"})
+	auth, err := NewSIWEAuthenticator(SIWEAuthConfig{AllowAnyAddress: true, Statement: "Sign in to Portal", ChallengePrefix: "test_"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return auth
 }
 
-func testWallet(t *testing.T) identity.LocalAuthority {
+func testWallet(t *testing.T) LocalAuthority {
 	t.Helper()
-	resolved, err := identity.ResolveSecp256k1Identity(strings.Repeat("0", 63) + "3")
+	resolved, err := ResolveSecp256k1Identity(strings.Repeat("0", 63) + "3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return identity.NewLocalAuthority(resolved)
+	return NewLocalAuthority(resolved)
 }
 
-func issueTestChallenge(t *testing.T, auth *Authenticator, wallet identity.LocalAuthority, now time.Time) Challenge {
+func issueTestChallenge(t *testing.T, auth *SIWEAuthenticator, wallet LocalAuthority, now time.Time) SIWEChallenge {
 	t.Helper()
 	challenge, err := auth.Issue(wallet.Identity().Address, testDomain, "https://"+testDomain+"/", now)
 	if err != nil {
@@ -47,7 +45,7 @@ func TestIssueIsStatelessUnderFlood(t *testing.T) {
 	now := time.Now().UTC()
 
 	const flood = 5000
-	var challenge Challenge
+	var challenge SIWEChallenge
 	var err error
 	for i := 0; i < flood; i++ {
 		challenge, err = auth.Issue(wallet.Identity().Address, testDomain, "https://"+testDomain+"/", now)
@@ -88,8 +86,8 @@ func TestVerifyRejectsTamperedToken(t *testing.T) {
 	}
 	for name, token := range tampered {
 		t.Run(name, func(t *testing.T) {
-			if _, err := auth.Verify(token, challenge.Message, "", testDomain, time.Time{}, now); !errors.Is(err, ErrChallengeInvalid) {
-				t.Fatalf("err = %v; want ErrChallengeInvalid", err)
+			if _, err := auth.Verify(token, challenge.Message, "", testDomain, time.Time{}, now); !errors.Is(err, ErrSIWEChallengeInvalid) {
+				t.Fatalf("err = %v; want ErrSIWEChallengeInvalid", err)
 			}
 		})
 	}
@@ -103,8 +101,8 @@ func TestVerifyRejectsExpiredChallenge(t *testing.T) {
 
 	// Expiry is checked before the signature, so an unsigned placeholder
 	// keeps the assertion on the expiry path.
-	if _, err := auth.Verify(challenge.ID, challenge.Message, "", testDomain, time.Time{}, now.Add(challengeTTL+time.Minute)); !errors.Is(err, ErrChallengeExpired) {
-		t.Fatalf("err = %v; want ErrChallengeExpired", err)
+	if _, err := auth.Verify(challenge.ID, challenge.Message, "", testDomain, time.Time{}, now.Add(siweChallengeTTL+time.Minute)); !errors.Is(err, ErrSIWEChallengeExpired) {
+		t.Fatalf("err = %v; want ErrSIWEChallengeExpired", err)
 	}
 }
 
@@ -123,8 +121,8 @@ func TestVerifyRejectsChallengeFromBeforeNotBefore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now.Add(time.Second), now); !errors.Is(err, ErrChallengeExpired) {
-		t.Fatalf("Verify() error = %v, want %v", err, ErrChallengeExpired)
+	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now.Add(time.Second), now); !errors.Is(err, ErrSIWEChallengeExpired) {
+		t.Fatalf("Verify() error = %v, want %v", err, ErrSIWEChallengeExpired)
 	}
 	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now, now); err != nil {
 		t.Fatalf("Verify() from the first moment = %v", err)
@@ -167,8 +165,8 @@ func TestVerifyRejectsTamperedMessage(t *testing.T) {
 	if tampered == challenge.Message {
 		t.Fatal("message tamper did not change anything")
 	}
-	if _, err := auth.Verify(challenge.ID, tampered, signature, testDomain, time.Time{}, now); !errors.Is(err, ErrInvalidSignature) {
-		t.Fatalf("err = %v; want ErrInvalidSignature", err)
+	if _, err := auth.Verify(challenge.ID, tampered, signature, testDomain, time.Time{}, now); !errors.Is(err, ErrSIWEInvalidSignature) {
+		t.Fatalf("err = %v; want ErrSIWEInvalidSignature", err)
 	}
 }
 
@@ -181,8 +179,8 @@ func TestVerifyRejectsWrongDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, "other.example", time.Time{}, now); !errors.Is(err, ErrInvalidSignature) {
-		t.Fatalf("err = %v; want ErrInvalidSignature", err)
+	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, "other.example", time.Time{}, now); !errors.Is(err, ErrSIWEInvalidSignature) {
+		t.Fatalf("err = %v; want ErrSIWEInvalidSignature", err)
 	}
 }
 
@@ -205,7 +203,7 @@ func TestNewKeyIsInstanceLocal(t *testing.T) {
 	}
 
 	recreated := newTestAuthenticator(t)
-	if _, err := recreated.Verify(challenge.ID, challenge.Message, signature, testDomain, time.Time{}, now); !errors.Is(err, ErrChallengeInvalid) {
-		t.Fatalf("recreated-instance err = %v; want ErrChallengeInvalid", err)
+	if _, err := recreated.Verify(challenge.ID, challenge.Message, signature, testDomain, time.Time{}, now); !errors.Is(err, ErrSIWEChallengeInvalid) {
+		t.Fatalf("recreated-instance err = %v; want ErrSIWEChallengeInvalid", err)
 	}
 }

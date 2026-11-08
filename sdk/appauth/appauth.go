@@ -27,7 +27,6 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/gosuda/portal-tunnel/v2/internal/siweauth"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -276,7 +275,7 @@ type applicationAuth struct {
 	tunnelIdentity  types.Identity
 	signingKey      []byte
 	credentialKey   []byte
-	siwe            *siweauth.Authenticator
+	siwe            *identity.SIWEAuthenticator
 	oidc            *oidcAuthenticator
 	saml            *samlAuthenticator
 	email           *emailAuthenticator
@@ -596,7 +595,7 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 		return nil, fmt.Errorf("derive application auth signing key: %w", err)
 	}
 	var (
-		siwe  *siweauth.Authenticator
+		siwe  *identity.SIWEAuthenticator
 		oidc  *oidcAuthenticator
 		saml  *samlAuthenticator
 		email *emailAuthenticator
@@ -611,7 +610,7 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 	allowAnySubject := settings.provider == ProviderSIWE || (settings.provider == ProviderCredential && len(settings.allowed) == 0)
 	switch settings.provider {
 	case ProviderSIWE:
-		siwe, err = siweauth.New(siweauth.Config{
+		siwe, err = identity.NewSIWEAuthenticator(identity.SIWEAuthConfig{
 			AllowedAddresses: settings.allowed,
 			AllowAnyAddress:  len(settings.allowed) == 0,
 			Statement:        "Sign in to this Portal application",

@@ -26,8 +26,8 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
 - `sdk/appauth`: owns the application sign-in gate, its providers, and its
   sessions. It is public API for programs that embed the SDK, and the CLI uses
   the same package. It stays apart from `sdk` so that `sdk` and its WASM build do
-  not depend on OIDC and SAML libraries. `internal/siweauth` is the SIWE code it
-  shares with the agent.
+  not depend on OIDC and SAML libraries. `portal/identity` owns the SIWE message
+  and wallet challenge code it shares with the agent.
 
 - `cmd/portal-tunnel/tunnel`: owns the tunnel configuration of the CLI and the
   agent. `tunnel.Config` holds what the user set through `portal expose` flags, a
