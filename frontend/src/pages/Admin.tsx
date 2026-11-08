@@ -1,5 +1,5 @@
 import { SsgoiTransition } from "@ssgoi/react";
-import { Header } from "@/components/Header";
+import { AdminHeader } from "@/components/AdminHeader";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useAuth } from "@/hooks/useAuth";
 import { AdminServerList } from "@/components/AdminServerList";
@@ -57,9 +57,8 @@ export function Admin() {
         <div className="relative flex min-h-screen w-full flex-col bg-background">
           <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
             <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-              <Header
+              <AdminHeader
                 title="PORTAL ADMIN"
-                isAdmin
                 onAuthChange={handleAuthChange}
               />
             </div>

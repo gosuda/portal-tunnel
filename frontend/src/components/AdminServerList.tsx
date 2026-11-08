@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Header } from "@/components/Header";
-import { SearchBar } from "@/components/SearchBar";
+import { Search, Settings } from "lucide-react";
+import { AdminHeader } from "@/components/AdminHeader";
+import { Input } from "@/components/ui/input";
 import { AdminServerCard } from "@/components/AdminServerCard";
 import { TagCombobox } from "@/components/TagCombobox";
 import type { AdminServer, ApprovalMode, PortSettings } from "@/hooks/useAdmin";
@@ -214,29 +215,61 @@ export function AdminServerList({
   );
 
   const searchBar = (
-    <SearchBar
-      searchQuery={searchQuery}
-      onSearchChange={onSearchChange}
-      status={status}
-      onStatusChange={onStatusChange}
-      sortBy={sortBy}
-      onSortByChange={onSortByChange}
-      availableTags={availableTags}
-      selectedTags={selectedTags}
-      onAddTag={onTagToggle}
-      onRemoveTag={onTagToggle}
-      hideFiltersOnMobile
-      setShowFilterModal={setShowFilterModal}
-    />
+    <div className="flex flex-wrap mt-5 items-center gap-3 border-b border-border pb-4">
+      <div className="flex gap-2 items-center w-full lg:w-auto lg:min-w-72 lg:flex-1">
+        <label className="flex min-w-0 flex-1 items-stretch h-10 relative">
+          <div className="left-0 h-full absolute text-text-muted flex items-center justify-center pl-3 pr-2 rounded-l-md bg-border border border-border">
+            <Search className="w-4 h-4" />
+          </div>
+          <Input
+            aria-label="Search live apps"
+            type="search"
+            placeholder="Search apps, descriptions, or tags"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="h-10 pl-12 border border-border rounded-md"
+          />
+        </label>
+        <button
+          onClick={() => setShowFilterModal(true)}
+          className="sm:hidden flex items-center justify-center w-10 h-10 rounded-lg bg-secondary hover:bg-secondary/80 transition-colors"
+          aria-label="Filter settings"
+        >
+          <Settings className="w-5 h-5 text-secondary-foreground" />
+        </button>
+      </div>
+
+      <StatusSelect
+        className="flex-1 sm:flex-none"
+        status={status}
+        onStatusChange={onStatusChange}
+        hideFiltersOnMobile
+      />
+
+      <SortbySelect
+        className="flex-1 sm:flex-none"
+        sortBy={sortBy}
+        onSortByChange={onSortByChange}
+        hideFiltersOnMobile
+      />
+
+      <div className="relative hidden w-full flex-1 sm:flex sm:w-auto sm:min-w-48 lg:max-w-72">
+        <TagCombobox
+          availableTags={availableTags}
+          selectedTags={selectedTags}
+          onAdd={onTagToggle}
+          onRemove={onTagToggle}
+        />
+      </div>
+    </div>
   );
   return (
     <div className="relative flex h-auto min-h-screen w-full flex-col">
       <div className="flex h-full grow flex-col">
         <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
           <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-            <Header
+            <AdminHeader
               title={title}
-              isAdmin
               onAuthChange={onAuthChange}
             />
             <div className="flex items-center gap-2">
