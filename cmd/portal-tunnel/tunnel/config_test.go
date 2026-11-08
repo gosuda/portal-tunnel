@@ -120,8 +120,12 @@ func TestReplicaAuthCompatibility(t *testing.T) {
 			cfg.Replica = true
 			_, err := cfg.Spec()
 			reject := auth.Provider == appauth.ProviderEmail || auth.Provider == appauth.ProviderSAML
-			if reject && !errors.Is(err, errReplicaApplicationAuth) || !reject && err != nil {
-				t.Fatalf("replica %s config: got %v, want rejection=%v", auth.Provider, err, reject)
+			if reject {
+				if !errors.Is(err, errReplicaApplicationAuth) {
+					t.Fatalf("replica %s config: got %v, want %v", auth.Provider, err, errReplicaApplicationAuth)
+				}
+			} else if err != nil {
+				t.Fatalf("replica %s config: unexpected error: %v", auth.Provider, err)
 			}
 		})
 	}
