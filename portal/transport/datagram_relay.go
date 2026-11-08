@@ -17,7 +17,9 @@ import (
 )
 
 const (
-	defaultFlowCleanupInterval = 30 * time.Second
+	defaultFlowCleanupInterval  = 30 * time.Second
+	defaultUDPNewFlowsPerSecond = 64
+	defaultUDPNewFlowBurst      = 128
 )
 
 type flowState struct {
@@ -51,7 +53,7 @@ func NewRelayDatagram(identityKey types.ServiceIdentityKey, port int) *RelayData
 		flowTable:   make(map[uint32]*flowState),
 		addrIndex:   make(map[netip.AddrPort]uint32),
 		nextFlow:    1,
-		newFlows:    rate.NewLimiter(types.DefaultUDPNewFlowsPerSecond, types.DefaultUDPNewFlowBurst),
+		newFlows:    rate.NewLimiter(defaultUDPNewFlowsPerSecond, defaultUDPNewFlowBurst),
 		dropLogs:    rate.NewLimiter(rate.Every(time.Second), 1),
 	}
 }

@@ -322,7 +322,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	exposure := &Exposure{
 		cancel:         cancel,
 		done:           exposureCtx.Done(),
-		identity:       identity.Copy(),
+		identity:       identity,
 		options:        cfg,
 		metadata:       cfg.Metadata.Copy(),
 		cache:          source,
@@ -1222,7 +1222,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
 			Cache:      e.cache,
-			Identity:   e.identity.Copy(),
+			Identity:   e.identity,
 			Overlay:    e.options.Overlay,
 			UDPEnabled: e.options.UDPEnabled,
 			TCPEnabled: e.options.TCPEnabled,

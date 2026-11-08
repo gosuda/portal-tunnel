@@ -209,7 +209,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		cancel:        cancel,
 		doneCh:        listenerCtx.Done(),
 		metadata:      cfg.Metadata.Copy(),
-		identity:      cfg.Identity.Copy(),
+		identity:      cfg.Identity,
 		overlay:       cfg.Overlay,
 		statusUpdates: make(chan listenerStatus),
 		udpEnabled:    cfg.UDPEnabled,

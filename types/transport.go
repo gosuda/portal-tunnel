@@ -31,10 +31,8 @@ const (
 )
 
 const (
-	DefaultUDPFlowIdleTimeout   = 5 * time.Minute
-	DefaultUDPMaxFlows          = 1024
-	DefaultUDPNewFlowsPerSecond = 64
-	DefaultUDPNewFlowBurst      = 128
+	DefaultUDPFlowIdleTimeout = 5 * time.Minute
+	DefaultUDPMaxFlows        = 1024
 	// QUICInitialPacketSize is the backhaul packet size and its lower limit.
 	QUICInitialPacketSize = 1280
 	// quic-go v0.59.0 reserves 37 bytes from the packet size for DATAGRAM

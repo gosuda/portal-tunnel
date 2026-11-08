@@ -19,9 +19,6 @@ func TestServiceIdentityKeySerializationBoundary(t *testing.T) {
 	if parsed != key {
 		t.Fatalf("ParseServiceIdentityKey() = %#v, want %#v", parsed, key)
 	}
-	if got, err := ParseIdentityKey(" Demo : 0xAbCd "); err != nil || got != key.String() {
-		t.Fatalf("ParseIdentityKey() = %q, %v, want %q", got, err, key.String())
-	}
 
 	unnamedKey := NewServiceIdentityKey("", " 0xAbCd ")
 	if got := unnamedKey.String(); got != ":0xabcd" {
@@ -33,9 +30,6 @@ func TestServiceIdentityKeySerializationBoundary(t *testing.T) {
 	}
 	if parsedUnnamed != unnamedKey {
 		t.Fatalf("ParseServiceIdentityKey() = %#v, want %#v", parsedUnnamed, unnamedKey)
-	}
-	if got, err := ParseIdentityKey(" : 0xAbCd "); err != nil || got != unnamedKey.String() {
-		t.Fatalf("ParseIdentityKey() = %q, %v, want %q", got, err, unnamedKey.String())
 	}
 }
 

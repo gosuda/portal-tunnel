@@ -845,7 +845,7 @@ func (s *Server) RelayIdentity() identity.RelayIdentity {
 	if s == nil {
 		return identity.RelayIdentity{}
 	}
-	return s.identity.Copy()
+	return s.identity
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
