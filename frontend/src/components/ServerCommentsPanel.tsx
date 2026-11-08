@@ -2,7 +2,7 @@ import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import clsx from "clsx";
 import { MessageSquare, RefreshCw, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import type { useServerComments } from "@/hooks/useServerComments";
 import type { ReputationVote, ReputationVoteAction } from "@/types/api";
 import { COMMENT_MAX_LENGTH } from "@/types/api";

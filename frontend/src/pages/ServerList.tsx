@@ -3,7 +3,7 @@ import { useServerList } from "@/hooks/useServerList";
 import { ServerListView } from "@/components/ServerListView";
 import { ServerCommentsPanel } from "@/components/ServerCommentsPanel";
 import { useServerComments } from "@/hooks/useServerComments";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 
 export function ServerList() {

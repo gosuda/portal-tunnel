@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import type { AppComment, CommentListResponse, ReputationVoteAction } from "@/types/api";

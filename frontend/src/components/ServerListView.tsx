@@ -6,7 +6,7 @@ import { HeroBackdropSVG } from "@/components/DirectoryBackdrop";
 import { ServerCard } from "@/components/ServerCard";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { useCopy } from "@/hooks/useCopy";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import type { BrowseView, SortOption, StatusFilter } from "@/types/filters";
 import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
 import { apiClient } from "@/lib/apiClient";

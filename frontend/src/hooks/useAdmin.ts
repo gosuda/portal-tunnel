@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useList, type BaseServer } from "@/hooks/useList";
+import { useList } from "@/hooks/useList";
+import { leaseToServer, type BaseServer } from "@/lib/server";
 import type { BanFilter } from "@/types/filters";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
-import {
-  parseLeaseMetadata,
-  resolveLeasePayment,
-  resolveLeaseThumbnail,
-} from "@/lib/metadata";
 import type {
   ApprovalMode,
   LeasePolicyUpdate,
@@ -82,33 +78,11 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function toAdminServer(
-  row: PolicyLease,
-): AdminServer {
-  const metadata = parseLeaseMetadata(row.metadata);
-  const payment = resolveLeasePayment(metadata);
-  const hostname = row.hostname || "";
-  const canonicalHostname = row.canonical_hostname || "";
-  const routeHostname = canonicalHostname || hostname;
-  const serviceName = row.name || "";
-  const address = row.address.trim();
-
+function toAdminServer(row: PolicyLease): AdminServer {
   return {
-    id: routeHostname,
-    name: serviceName || routeHostname || "(unnamed)",
-    description: metadata.description,
-    tags: metadata.tags,
-    thumbnail: resolveLeaseThumbnail(metadata),
-    owner: metadata.owner,
-    online: (row.ready || 0) > 0,
-    dns: hostname || routeHostname,
-    link: hostname || routeHostname ? `https://${hostname || routeHostname}/` : "",
-    lastUpdated: row.last_seen_at || undefined,
-    firstSeen: row.first_seen_at || undefined,
-    paymentEnabled: payment.enabled,
-    paymentLabel: payment.label,
+    ...leaseToServer(row),
     identityKey: row.identity_key.trim(),
-    address,
+    address: row.address.trim(),
     isBanned: row.is_banned,
     bps: row.bps,
     isApproved: row.is_approved,

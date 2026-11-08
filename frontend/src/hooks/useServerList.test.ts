@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/apiClient";
 import type { Lease } from "@/types/api";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import { useServerList } from "./useServerList";
 
 vi.mock("@/lib/apiClient", () => ({ apiClient: { get: vi.fn() } }));

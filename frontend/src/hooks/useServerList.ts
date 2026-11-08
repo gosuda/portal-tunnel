@@ -1,14 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BrowseView } from "@/types/filters";
-import { useList, type BaseServer } from "@/hooks/useList";
+import { useList } from "@/hooks/useList";
+import { leaseToServer, type BaseServer } from "@/lib/server";
 import { apiClient } from "@/lib/apiClient";
 import { isHiddenByVotes } from "@/utils/reputation";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import {
-  parseLeaseMetadata,
-  resolveLeasePayment,
-  resolveLeaseThumbnail,
-} from "@/lib/metadata";
 import type {
   Lease,
   PublicStateResponse,
@@ -41,37 +37,6 @@ function collectReputation(
     }
   }
   return summaries;
-}
-
-function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
-  return leases.map((row) => {
-    const metadata = parseLeaseMetadata(row.metadata);
-    const payment = resolveLeasePayment(metadata);
-    const hostname = row.hostname || "";
-    const canonicalHostname = row.canonical_hostname || "";
-    const routeHostname = canonicalHostname || hostname;
-    const serviceName = row.name || "";
-    const tcpAddr = row.tcp_addr?.trim() || "";
-    const udpAddr = row.udp_addr?.trim() || "";
-
-    return {
-      id: routeHostname,
-      name: serviceName || routeHostname || "(unnamed)",
-      description: metadata.description || "",
-      tags: metadata.tags,
-      thumbnail: resolveLeaseThumbnail(metadata),
-      owner: metadata.owner || "",
-      online: (row.ready || 0) > 0,
-      dns: hostname || routeHostname,
-      link: !tcpAddr && !udpAddr && (hostname || routeHostname) ? `https://${hostname || routeHostname}/` : "",
-      tcpAddr: tcpAddr || undefined,
-      udpAddr: udpAddr || undefined,
-      lastUpdated: row.last_seen_at || undefined,
-      firstSeen: row.first_seen_at || undefined,
-      paymentEnabled: payment.enabled,
-      paymentLabel: payment.label,
-    };
-  });
 }
 
 export function useServerList() {
@@ -177,7 +142,7 @@ export function useServerList() {
   // this memo — a function identity dep would bail compilation out.
   const servers: BaseServer[] = useMemo(
     () =>
-      convertPublicLeasesToServers(publicState.leases).map((server) => ({
+      publicState.leases.map(leaseToServer).map((server) => ({
         ...server,
         reputation: summaries[normalizeHostname(server.id)] ?? {
           hostname: normalizeHostname(server.id),

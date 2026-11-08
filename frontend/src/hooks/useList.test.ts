@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { useList, type BaseServer } from "./useList";
+import { useList } from "./useList";
+import type { BaseServer } from "@/lib/server";
 
 const server = (id: string, up?: number, name = id): BaseServer => ({
   id,

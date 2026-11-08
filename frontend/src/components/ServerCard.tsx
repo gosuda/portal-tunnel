@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
 import { BadgeDollarSign, Menu, MessageSquare } from "lucide-react";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes } from "@/utils/reputation";
 
