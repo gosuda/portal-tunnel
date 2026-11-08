@@ -1429,3 +1429,68 @@ func (i testRelayIntermediate) issue(t *testing.T, host string, extra ...*x509.C
 	}
 	return &acme.TLSMaterial{CertPEM: certPEM, Certificate: certificate}
 }
+
+func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	id := newTestLeaseIdentity(t, "started-at")
+	clientStartedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+
+	// 1. Initial registration with explicit StartedAt sets FirstSeenAt to StartedAt
+	record1, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:  id,
+		StartedAt: clientStartedAt,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if !record1.FirstSeenAt.Equal(clientStartedAt) {
+		t.Fatalf("FirstSeenAt = %v, want %v", record1.FirstSeenAt, clientStartedAt)
+	}
+
+	leases := registry.PublicLeases(time.Now())
+	if len(leases) != 1 || !leases[0].FirstSeenAt.Equal(clientStartedAt) {
+		t.Fatalf("PublicLeases() first_seen_at = %v, want %v", leases[0].FirstSeenAt, clientStartedAt)
+	}
+
+	// 2. Re-registration without StartedAt preserves existing record's FirstSeenAt
+	record2, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: id,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() reconnect error = %v", err)
+	}
+	if !record2.FirstSeenAt.Equal(clientStartedAt) {
+		t.Fatalf("FirstSeenAt after reconnect without started_at = %v, want %v", record2.FirstSeenAt, clientStartedAt)
+	}
+
+	// 3. Re-registration with a newer StartedAt (e.g. process restart) updates FirstSeenAt
+	newStartedAt := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+	record3, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:  id,
+		StartedAt: newStartedAt,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() restart error = %v", err)
+	}
+	if !record3.FirstSeenAt.Equal(newStartedAt) {
+		t.Fatalf("FirstSeenAt after restart with new started_at = %v, want %v", record3.FirstSeenAt, newStartedAt)
+	}
+
+	// 4. StartedAt in the future is clamped to token issuance time
+	futureID := newTestLeaseIdentity(t, "future-started")
+	futureStartedAt := time.Now().UTC().Add(10 * time.Minute)
+	beforeReg := time.Now().UTC().Truncate(time.Second)
+	record4, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity:  futureID,
+		StartedAt: futureStartedAt,
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Register() future error = %v", err)
+	}
+	afterReg := time.Now().UTC().Add(time.Second)
+	if record4.FirstSeenAt.Before(beforeReg) || record4.FirstSeenAt.After(afterReg) {
+		t.Fatalf("FirstSeenAt for future StartedAt was %v, want clamped between %v and %v", record4.FirstSeenAt, beforeReg, afterReg)
+	}
+}

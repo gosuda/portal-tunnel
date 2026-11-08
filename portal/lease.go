@@ -471,6 +471,14 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
+	firstSeenAt := issuedAt
+	if !req.StartedAt.IsZero() {
+		if req.StartedAt.After(issuedAt) {
+			firstSeenAt = issuedAt
+		} else {
+			firstSeenAt = req.StartedAt.UTC()
+		}
+	}
 
 	record := &leaseRecord{
 		Identity:          leaseIdentity,
@@ -480,7 +488,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		Metadata:          req.Metadata.Copy(),
 		Overlay:           req.Overlay,
 		ExpiresAt:         expiresAt,
-		FirstSeenAt:       issuedAt,
+		FirstSeenAt:       firstSeenAt,
 		LastSeenAt:        issuedAt,
 		sourceAddr:        sourceAddr,
 		registerSource:    sourceAddr,
@@ -585,6 +593,9 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	r.cache.Register(record.cacheLease(), req)
 	if replacedIndex >= 0 {
+		if req.StartedAt.IsZero() && !replaced.FirstSeenAt.IsZero() {
+			record.FirstSeenAt = replaced.FirstSeenAt
+		}
 		r.bps.ResetIdentityLimiter(identityKey)
 		r.records[replacedIndex] = record
 	} else {

@@ -565,3 +565,39 @@ func TestAliasHostnameMatches(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisterChallengeCarriesStartedAt(t *testing.T) {
+	requests := make(chan types.RegisterChallengeRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == types.PathSDKRegisterChallenge {
+			var req types.RegisterChallengeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode register challenge request: %v", err)
+			}
+			requests <- req
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "test challenge complete")
+			return
+		}
+	}))
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	listener := &listener{
+		api:       &apiClient{relayURL: relayURL, http: server.Client()},
+		startedAt: startedAt,
+	}
+
+	_ = listener.registerAndConfigure(context.Background())
+	select {
+	case req := <-requests:
+		if !req.StartedAt.Equal(startedAt) {
+			t.Fatalf("register challenge StartedAt = %v, want %v", req.StartedAt, startedAt)
+		}
+	default:
+		t.Fatal("no register challenge request received")
+	}
+}
