@@ -37,6 +37,7 @@ Bandwidth guidance: web/API tunnels are lightweight (tens of GB/month for typica
 - If enabling TCP/UDP leases for game hosting, the host firewall or cloud security group must allow the same port range that Docker publishes. Half-open ranges cause silent failures.
 - `TRUST_PROXY_HEADERS=true` trusts nothing by itself; set `TRUSTED_PROXY_CIDRS` to the proxy's addresses or the relay ignores forwarded headers.
 - Relay-side IP bans no longer exist; policy is per identity key, and legacy `banned_ips` state is dropped on load. Do not promise an IP ban.
+- `TUNNEL_SOURCE_CIDRS` lists the networks that may register tunnels; empty accepts every network. A tunnel from elsewhere gets `403 source_not_allowed` naming the address the relay saw, and visitors are not affected. It matches the resolved client address, so behind a proxy it also needs `TRUST_PROXY_HEADERS` and `TRUSTED_PROXY_CIDRS`. A tunnel on the relay host can arrive from `::1`.
 
 ## Workflow
 

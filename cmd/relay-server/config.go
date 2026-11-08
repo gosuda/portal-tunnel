@@ -51,7 +51,7 @@ func prepareAppConfig(cfg *appConfig, issues []cli.EnvIssue) (*policy.Ingress, x
 	if err != nil {
 		return nil, x402FacilitatorSettings{}, err
 	}
-	ingress, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	ingress, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs, cfg.TunnelSourceCIDRs)
 	return ingress, x402Settings, err
 }
 

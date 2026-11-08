@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Relay: accept tunnels only from your networks
+
+`TUNNEL_SOURCE_CIDRS` lists the networks that may register tunnels. A tunnel from
+anywhere else gets `403 source_not_allowed` when it registers or renews, before
+the relay spends any pre-auth budget on it, and the SDK stops using that relay.
+Visitors are not affected, and the list applies under either approval mode, so a
+private relay can stay on `auto`. Empty, the default, accepts every network as
+before. Behind a reverse proxy the list needs `TRUST_PROXY_HEADERS` and
+`TRUSTED_PROXY_CIDRS`, or every tunnel appears to come from the proxy. An older
+relay ignores the setting, so a downgrade accepts every network again. See
+[Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks).
+
 ### Local relay: a certificate Safari can trust
 
 A local relay's self-signed certificate is now valid for 825 days instead of ten

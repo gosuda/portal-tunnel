@@ -20,8 +20,9 @@ const accessPublishAttempts = 8
 // under their SDK paths and wrapped with ingress client-IP resolution and
 // weighted pre-auth admission. Everything else falls through to the caller's
 // handler (admin API, x402, application routes). A nil ingress resolves the
-// socket peer, a nil admission disables pre-auth budgeting, and a nil access
-// keeps every identity routable; the relay binary always supplies real ones.
+// socket peer and lets every source run tunnels, a nil admission disables
+// pre-auth budgeting, and a nil access keeps every identity routable; the relay
+// binary always supplies real ones.
 func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *SourceLimiter, access *Store, preAuth PreAuthConfig) http.Handler {
 	if ingress == nil {
 		ingress = &Ingress{}
@@ -82,6 +83,23 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			next(w, r, ingress.SourceAddr(r))
 		}
 	}
+	// tunnelSource refuses registration and renewal from outside the networks
+	// the operator lets run tunnels. It runs before admit, so a refused source
+	// cannot drain the global budget that allowed tunnels share.
+	tunnelSource := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			source := ingress.SourceAddr(r)
+			if !ingress.allowsTunnelFrom(source) {
+				from := "an unresolved address"
+				if source.IsValid() {
+					from = source.String()
+				}
+				utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeSourceNotAllowed, "this relay does not accept tunnels from "+from)
+				return
+			}
+			next(w, r)
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(types.PathHealthz, func(w http.ResponseWriter, _ *http.Request) {
@@ -95,7 +113,7 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		s.HandleDomain(w, r)
 	})
 	mux.HandleFunc(types.PathSDKCertificateChain, s.HandleCertificateChain)
-	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request, source netip.Addr) {
+	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, tunnelSource(admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request, source netip.Addr) {
 		key, response, ok := s.HandleRegisterChallenge(w, r, source)
 		if !publishAccess(key) {
 			if ok {
@@ -106,8 +124,8 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		if ok && !s.RefuseChallengeOverBudget(w, key, response.ChallengeID, source) {
 			utils.WriteAPIData(w, http.StatusCreated, response)
 		}
-	})))
-	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request, _ netip.Addr) {
+	}))))
+	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, tunnelSource(admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request, _ netip.Addr) {
 		key, response, ok := s.HandleRegister(w, r)
 		if !publishAccess(key) {
 			if ok {
@@ -118,8 +136,8 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		if ok {
 			utils.WriteAPIData(w, http.StatusCreated, response)
 		}
-	})))
-	mux.HandleFunc(types.PathSDKRenew, withSource(s.HandleRenew))
+	}))))
+	mux.HandleFunc(types.PathSDKRenew, tunnelSource(withSource(s.HandleRenew)))
 	mux.HandleFunc(types.PathSDKReverse, s.HandleReverseEndpoint)
 	mux.HandleFunc(types.PathSDKUnregister, s.HandleUnregister)
 	mux.HandleFunc(types.PathSDKConnect, withSource(s.HandleConnect))
