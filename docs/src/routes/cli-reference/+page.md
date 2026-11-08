@@ -109,6 +109,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--http-route` | string | | HTTP route mapping in `PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]` form; repeatable; route amounts require `--x402-pay-to` |
 | `--serve` | string | | Serve a local directory or HTML file; unknown paths fall back to the entry HTML |
 | `--tcp` | bool | `false` | Request a dedicated raw TCP port on the relay |
+| `--replica` | bool | `false` | Join HTTP replicas sharing one service identity key and URL; requires a supporting relay; excludes dedicated TCP/UDP ports, relay cache, and overlay |
 | `--udp` | bool | `false` | Enable public UDP relay in addition to the default stream path |
 | `--auth` | string | | Protect HTTP application access with `siwe`, `credential`, `oidc`, `saml`, or `email`; cannot be combined with `--cache` |
 | `--auth-allow` | string | | Principal allowed to sign in with `siwe` (Ethereum wallet) or `credential` (subject); repeat for multiple principals (empty allows any valid principal); `oidc` and `saml` also read it, as `--auth-email-list`; requires `--auth` |

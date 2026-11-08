@@ -740,7 +740,7 @@ func (s *Server) bridgeTCPConn(record *leaseRecord, bridge *leaseBridge, inbound
 		if err != nil {
 			return
 		}
-		if err := s.registry.activateBridge(record, bridge, reverse); err != nil {
+		if err := s.registry.activateBridge(record, bridge, reverse, inbound); err != nil {
 			_ = reverse.Close()
 			return
 		}
@@ -1103,29 +1103,67 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 }
 
 func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte) error {
-	bridge, err := s.registry.admitBridge(ctx, record, conn)
-	if err != nil {
-		return err
+	deadline := time.Now().Add(defaultClaimTimeout)
+	key, replica := record.ServiceKey(), record.replica
+	var tried map[string]bool
+	if replica {
+		tried = make(map[string]bool)
 	}
-	defer record.releaseBridge(bridge)
-	claimCtx, cancel := context.WithTimeout(bridge.ctx, defaultClaimTimeout)
-	defer cancel()
-	binding := s.registry.bindings.Issue(record.id, helloSpan)
-	defer s.registry.bindings.Discard(binding)
 	for {
-		session, err := record.reverse.Acquire(claimCtx)
-		if err != nil {
-			return fmt.Errorf("acquire lease connection: %w", err)
-		}
-		if err := s.registry.activateBridge(record, bridge, session); err != nil {
-			_ = session.Close()
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := transport.WriteTLSStart(session, binding); err != nil {
+		if !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		if replica {
+			record = s.registry.selectReplica(key, tried)
+			if record == nil {
+				return errLeaseNotFound
+			}
+			tried[record.id] = true
+		}
+		// Until framing succeeds, only this function owns the inbound connection.
+		// Losing one candidate must leave it available to another replica.
+		bridge, err := s.registry.admitBridge(ctx, record, nil)
+		if err != nil {
+			if replica {
+				continue
+			}
+			return err
+		}
+		claimCtx, cancel := context.WithDeadline(bridge.ctx, deadline)
+		var session net.Conn
+		if replica {
+			session, err = record.reverse.TryAcquire(claimCtx)
+		} else {
+			session, err = record.reverse.Acquire(claimCtx)
+		}
+		cancel()
+		if err != nil || session == nil {
+			record.releaseBridge(bridge)
+			if replica {
+				continue
+			}
+			return fmt.Errorf("acquire lease connection: %w", err)
+		}
+		binding := s.registry.bindings.Issue(record.id, helloSpan)
+		err = s.registry.activateBridge(record, bridge, session, nil)
+		if err == nil {
+			err = transport.WriteTLSStart(session, binding)
+		}
+		if err == nil {
+			err = s.registry.activateBridge(record, bridge, session, conn)
+		}
+		if err != nil {
+			s.registry.bindings.Discard(binding)
 			_ = session.Close()
+			record.releaseBridge(bridge)
 			continue
 		}
 		s.proxy.bridge(bridge.ctx, conn, session, record.ServiceKey(), s.registry.bps)
+		s.registry.bindings.Discard(binding)
+		record.releaseBridge(bridge)
 		return nil
 	}
 }
@@ -1259,7 +1297,7 @@ func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
 			sourceAddr = addrPort.Addr().Unmap()
 		}
 	}
-	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
+	s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
 	log.Info().
 		Str("component", "quic-backhaul-listener").
 		Str("address", lease.Address).

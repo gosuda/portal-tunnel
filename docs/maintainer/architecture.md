@@ -264,6 +264,32 @@ finish. Its canceled context prevents application bytes from being copied.
 Allowing an identity again admits fresh activity only; canceled reservations
 cannot activate. Cancellation also interrupts bandwidth waits.
 
+HTTP replica registration is explicit (`replica` in the registration challenge).
+The service identity and hostname are shared; each record owns its lease ID,
+credentials, lifetime, and reverse pool. Exact lease lookups authenticate renew,
+unregister, signing, reverse admission, and activity updates. Exclusive registration
+replaces all records of that identity; a replica cannot join a live exclusive lease
+or retained cache entry. Replica requests reject dedicated TCP/UDP ports, relay
+cache, and overlay. Identity policy and bandwidth credit survive until the last
+lease is removed. Registration of a replica does not suspend its siblings.
+
+Incoming TLS connections rotate among routable, unexpired replicas with ready
+reverse streams. The registry serializes selection, comparing each lease's last
+selection order only against its siblings. The reverse pool supports immediate
+claims so a lost readiness race can try another candidate. Attempts share a claim
+deadline and visit each replica at most once; when no replica is ready, ingress
+fails rather than waiting on an unavailable client. A bridge initially owns only
+the reverse stream, taking the inbound connection after TLS framing succeeds and
+admission is rechecked. Each attempt has its own lease-bound TLS signing binding;
+application traffic is never replayed onto another replica.
+
+The public directory aggregates visible replicas into one service with combined
+readiness and lifetime bounds. Metadata comes from the live visible lease with
+the lexicographically smallest lease ID. Admin rows retain individual lease IDs;
+policy actions and reputation remain identity-scoped. Domain reports advertise
+`replicas: true`; SDK replica requests fail before registration if that capability
+is absent, preserving older relays' exclusive registration behavior.
+
 Copy loops preserve half-close in both directions: an origin can respond after
 request EOF, or finish its response while continuing to read the request.
 Native replies have no new duration limit. On the WebSocket carrier, yamux's

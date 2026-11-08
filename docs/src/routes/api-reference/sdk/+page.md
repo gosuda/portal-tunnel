@@ -43,6 +43,7 @@ that upgrades from ordinary HTTP into the reverse transport.
 | Field | Type | Notes |
 |-------|------|-------|
 | `protocol_version` | `string` | SDK tunnel protocol version |
+| `replicas` | `boolean` | `true` when opt-in concurrent HTTP leases are supported; absent means unsupported |
 | `release_version` | `string` | relay software release |
 | `cache` | `StaticCacheLimits` | optional; advertised when static caching is enabled |
 | `ens` | `ENSStatus` | gasless ENS status |
@@ -74,6 +75,7 @@ which are configured locally by the tunnel process.
 |-------|------|----------|-------|
 | `identity` | `Identity` | yes | `name` and `address` |
 | `allow_canonical_fallback` | `boolean` | no | allow canonical-only registration when the friendly alias is unavailable; defaults to `false` for protocol-10 compatibility |
+| `replica` | `boolean` | no | join concurrent HTTP leases for this identity; requires `replicas: true` from `/sdk/domain`; defaults to exclusive replacement |
 | `metadata` | `LeaseMetadata` | no | public lease metadata |
 | `overlay` | `boolean` | no | prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to `false` |
 | `ttl` | `number` | no | Requested seconds; non-positive values use 120, maximum 600. Larger values return HTTP 400. |
@@ -373,6 +375,56 @@ command is the maintained JS interop reference. See
 [Browser reverse transport](/architecture#browser-reverse-transport) for the
 carrier protocol and [Browser/WASM transport](/security-model#browser-wasm-transport)
 for its trust boundary.
+
+## HTTP Replicas
+
+Use `sdk.WithReplicas()` to run independent HTTP tunnel clients with the same
+identity key and name through one relay URL. Each client exposes its own local
+service. The relay distributes new TLS connections across clients with ready
+reverse streams; one HTTP connection can still carry many requests.
+
+```go
+exposure, err := sdk.Expose(ctx, serviceIdentity, []string{relayURL}, sdk.WithReplicas())
+if err != nil {
+    log.Fatal(err)
+}
+defer exposure.Close()
+if err := sdk.Proxy(ctx, exposure, "127.0.0.1:3000"); err != nil {
+    log.Fatal(err)
+}
+```
+
+The CLI equivalent is:
+
+```bash
+portal expose http://127.0.0.1:3000 --replica --name web \
+  --identity-path shared-service.json --relays https://relay.example --discovery=false
+```
+
+Run this on each service host with the same identity material and name. In an
+agent's `[[tunnels]]` entry, set `replica = true`. Identity keys are provisioned
+by the operator: every host holding that key has the same service authority,
+including the ability to replace all leases through an exclusive registration.
+Keep application settings and metadata consistent across replicas.
+
+Each replica has its own token, expiry, reverse pool, and unregister operation.
+Access policy, reputation, and bandwidth limits belong to the shared identity.
+The public directory shows one service with aggregate readiness; the admin API
+retains separate rows identified by `lease_id`.
+
+Without replica mode, registration still replaces all leases of that identity
+and invalidates their tokens. A replica cannot join an existing exclusive lease;
+stop that client before starting replicas. Replica clients reject relays without
+the advertised capability before sending any registration request. A replica
+challenge must also confirm `replica: true` before the SDK signs it, so a relay
+downgrade between domain lookup and challenge issuance cannot silently switch
+the request to exclusive registration.
+
+Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with replica
+mode. This is connection distribution within one relay, not cross-relay failover.
+Ready streams indicate tunnel availability, not application health. If no replica
+is ready, the incoming connection fails. Connections already carrying traffic
+are not migrated or replayed after a client fails.
 
 ## Go Application Auth
 

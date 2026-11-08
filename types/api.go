@@ -71,6 +71,8 @@ type RegisterRequest struct {
 }
 
 type RegisterChallengeRequest struct {
+	// Replica joins concurrent HTTP leases of the same service identity.
+	Replica  bool `json:"replica,omitempty"`
 	Cache    bool `json:"cache,omitempty"`
 	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
 	// AllowCanonicalFallback permits registration to continue without the friendly alias.
@@ -85,6 +87,7 @@ type RegisterChallengeRequest struct {
 }
 
 type RegisterChallengeResponse struct {
+	Replica     bool      `json:"replica,omitempty"`
 	ChallengeID string    `json:"challenge_id"`
 	ExpiresAt   time.Time `json:"expires_at"`
 	SIWEMessage string    `json:"siwe_message"`
@@ -185,6 +188,7 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
+	Replicas        bool               `json:"replicas,omitempty"`
 	Cache           *StaticCacheLimits `json:"cache,omitempty"`
 	ProtocolVersion string             `json:"protocol_version"`
 	ReleaseVersion  string             `json:"release_version"`

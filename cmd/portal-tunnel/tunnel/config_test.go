@@ -87,6 +87,24 @@ func TestConfigSpecModes(t *testing.T) {
 
 // A Config keeps nil and zero for what was not set, so Spec owns the defaults,
 // and an explicit value, false and zero included, wins over them.
+func TestReplicaConfigResolvesHTTPAndRejectsUnsupportedModes(t *testing.T) {
+	cfg := Config{Replica: true, TargetAddr: "localhost:3000"}
+	spec, err := cfg.Spec()
+	if err != nil || spec.HTTP == nil || !spec.Transport.Replica {
+		t.Fatalf("replica did not resolve to HTTP: %+v, %v", spec, err)
+	}
+	for _, invalid := range []Config{
+		{Replica: true, TargetAddr: "localhost:3000", Overlay: true},
+		{Replica: true, TargetAddr: "localhost:3000", TCPEnabled: true},
+		{Replica: true, TargetAddr: "localhost:3000", UDPEnabled: true},
+		{Replica: true, Serve: ".", Cache: &CacheConfig{}},
+	} {
+		if _, err := invalid.Spec(); err == nil {
+			t.Fatalf("unsupported replica mode accepted: %+v", invalid)
+		}
+	}
+}
+
 func TestConfigSpecDefaults(t *testing.T) {
 	off, on := false, true
 	for _, tc := range []struct {

@@ -69,6 +69,7 @@ const (
 )
 
 type listenerConfig struct {
+	Replica    bool
 	Cache      *cache.Source
 	Identity   types.Identity
 	Overlay    bool
@@ -171,6 +172,7 @@ type listener struct {
 	metadataMu        sync.RWMutex
 	metadata          types.LeaseMetadata
 	identity          types.Identity
+	replica           bool
 	overlay           bool
 	warnOverlayDirect sync.Once
 	udpEnabled        bool
@@ -213,6 +215,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		doneCh:        listenerCtx.Done(),
 		metadata:      cfg.Metadata.Copy(),
 		identity:      cfg.Identity,
+		replica:       cfg.Replica,
 		overlay:       cfg.Overlay,
 		statusUpdates: make(chan listenerStatus),
 		udpEnabled:    cfg.UDPEnabled,
@@ -403,6 +406,9 @@ func (l *listener) run(ctx context.Context) {
 
 		if errors.Is(err, errLeaseRefreshRequired) {
 			lease := l.clearLease("lease refresh required")
+			if l.replica && lease != nil && lease.accessToken != "" {
+				_ = l.api.unregister(ctx, lease.accessToken)
+			}
 			if lease != nil && lease.tenantTLS != nil {
 				_ = lease.tenantTLS.Close()
 			}
@@ -1272,6 +1278,7 @@ func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Cli
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	registerReq := types.RegisterChallengeRequest{
+		Replica:                l.replica,
 		AllowCanonicalFallback: true,
 		Identity:               l.identity,
 		Metadata:               l.metadataSnapshot(),
@@ -1324,6 +1331,9 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		chainCheckedAt: time.Now(),
 	}
 	oldLease := l.lease.Swap(next)
+	if l.replica && oldLease.accessToken != "" {
+		_ = l.api.unregister(ctx, oldLease.accessToken)
+	}
 	if oldLease.tenantTLS != nil {
 		_ = oldLease.tenantTLS.Close()
 	}

@@ -24,6 +24,7 @@ import (
 
 var (
 	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
+	errReplicaRequiresDirectHTTP           = errors.New("replicas require direct HTTP tunnels without dedicated TCP/UDP ports, relay cache, or overlay")
 	errPortalSDKContextIsNil               = errors.New("portal sdk: context is nil")
 	errPortalSDKThisRuntimeSupportsHTTPS   = errors.New("portal sdk: this runtime supports HTTPS exposure only")
 	errRelayStaticCacheCannotCombinedUDP   = errors.New("relay static cache cannot be combined with UDP, raw TCP, or MITM blocking")
@@ -170,6 +171,7 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
+	Replica    bool
 	Cache      *cache.SourceConfig
 	UDPEnabled bool
 	TCPEnabled bool
@@ -183,6 +185,12 @@ type options struct {
 
 // Option configures an optional capability of a relay-backed exposure.
 type Option func(*options)
+
+// WithReplicas joins independent HTTP leases sharing this service's identity key.
+// Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with it.
+func WithReplicas() Option {
+	return func(opts *options) { opts.Replica = true }
+}
 
 // WithStaticRelayCache opts a static site into relay TLS termination and bounded
 // offline serving. A zero TTL accepts the relay's maximum offline lifetime.
@@ -261,6 +269,11 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	}
 	if err := cfg.Metadata.Validate(); err != nil {
 		return nil, err
+	}
+	if cfg.Replica {
+		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.Overlay || cfg.Cache != nil {
+			return nil, errReplicaRequiresDirectHTTP
+		}
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
 	if runtime.GOOS == "js" && requiresSocketTransport {
@@ -1223,6 +1236,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
+			Replica:    e.options.Replica,
 			Cache:      e.cache,
 			Identity:   e.identity,
 			Overlay:    e.options.Overlay,

@@ -85,6 +85,31 @@ func TestAPIClientRejectsTunnelProtocolMismatch(t *testing.T) {
 	}
 }
 
+func TestReplicaRegistrationRejectsOldRelayBeforeChallenge(t *testing.T) {
+	var registrations atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == types.PathSDKDomain {
+			utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{ProtocolVersion: types.SDKVersion})
+			return
+		}
+		registrations.Add(1)
+		http.Error(w, "must not register", http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &apiClient{relayURL: relayURL}
+	t.Cleanup(client.resetTransport)
+	if _, err := client.register(t.Context(), types.RegisterChallengeRequest{Replica: true}, ""); !errors.Is(err, errRelayIncompatible) {
+		t.Fatalf("unsupported replica registration: %v", err)
+	}
+	if registrations.Load() != 0 {
+		t.Fatal("replica attempted registration on a relay without support")
+	}
+}
+
 func signTestReverseGateway(t *testing.T, rawURL string, expiresAt time.Time) types.RelayDescriptor {
 	t.Helper()
 	signer, err := identity.Generate("gateway")

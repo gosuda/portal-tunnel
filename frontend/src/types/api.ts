@@ -42,6 +42,7 @@ export interface Lease {
 }
 
 export interface PolicyLease extends Lease {
+  lease_id?: string;
   identity_key: string;
   bps: number;
   client_ip: string;
