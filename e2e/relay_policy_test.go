@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -639,6 +640,9 @@ func TestPortalExposeWaitsForRelayApproval(t *testing.T) {
 		t.Skip("builds and runs the portal binary")
 	}
 	portalBin := filepath.Join(t.TempDir(), "portal")
+	if runtime.GOOS == "windows" {
+		portalBin += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", portalBin, "./cmd/portal-tunnel")
 	build.Dir = repoRoot(t)
 	if out, err := build.CombinedOutput(); err != nil {
