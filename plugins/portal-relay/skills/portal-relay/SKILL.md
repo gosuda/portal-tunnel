@@ -104,7 +104,7 @@ MAX_PORT=40009
 
 `40000-40009` are the compose defaults; any range works because the published ports interpolate the same variables. Then uncomment the lease-port lines already present in the bundled `docker-compose.yml`: they expand to `${MIN_PORT:-40000}-${MAX_PORT:-40009}` for TCP and `/udp`, so the published range follows `.env`. For UDP also uncomment `443:443/udp`; the tunnel carries UDP lease traffic over a QUIC backhaul to the public `PORTAL_URL` port, so UDP leases do not work without it.
 
-The host's cloud firewall or security group must allow the same ports. See `references/game-hosting.md` in the portal-expose skill for game-specific knowledge.
+The host's cloud firewall or security group must allow the same ports. See the [Game Server Hosting guide](https://gosuda.github.io/portal-tunnel/game-server-hosting) for game-specific knowledge.
 
 ### 5. Verify
 

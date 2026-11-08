@@ -5,8 +5,12 @@
   },
   "plugins": [
     {
-      "name": "portal-deploy",
-      "source": "./plugins/portal-deploy"
+      "name": "portal-tunnel",
+      "source": "./plugins/portal-tunnel"
+    },
+    {
+      "name": "portal-relay",
+      "source": "./plugins/portal-relay"
     }
   ]
 }

@@ -1,12 +1,12 @@
 {
-  "name": "portal-deploy",
+  "name": "portal-tunnel",
   "version": "0.1.0",
   "description": "Safely expose, verify, and reach apps published through Portal tunnels.",
   "author": {
     "name": "gosuda"
   },
   "interface": {
-    "displayName": "Portal Deploy",
+    "displayName": "Portal Tunnel",
     "shortDescription": "Expose local apps via Portal",
     "longDescription": "Start or inspect a local app, publish it through Portal, verify the public HTTPS endpoint, and hand off a safe stop or persistence workflow. Or discover a service that someone else published through Portal, verify it is reachable, and report the terms of an x402 payment challenge without paying.",
     "developerName": "gosuda",

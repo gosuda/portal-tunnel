@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "portal-relay",
+  "version": "0.1.0",
+  "description": "Deploy, verify, and register a self-hosted Portal relay.",
+  "author": {
+    "name": "gosuda",
+    "url": "https://github.com/gosuda"
+  },
+  "homepage": "https://github.com/gosuda/portal-tunnel/tree/main/plugins/portal-relay",
+  "repository": "https://github.com/gosuda/portal-tunnel",
+  "license": "MIT",
+  "keywords": ["portal", "relay", "self-host", "dns", "docker-compose", "game-hosting"]
+}

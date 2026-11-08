@@ -5,10 +5,22 @@
   },
   "plugins": [
     {
-      "name": "portal-deploy",
+      "name": "portal-tunnel",
       "source": {
         "source": "local",
-        "path": "./plugins/portal-deploy"
+        "path": "./plugins/portal-tunnel"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "portal-relay",
+      "source": {
+        "source": "local",
+        "path": "./plugins/portal-relay"
       },
       "policy": {
         "installation": "AVAILABLE",

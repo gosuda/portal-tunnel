@@ -1,0 +1,24 @@
+{
+  "name": "portal-relay",
+  "version": "0.1.0",
+  "description": "Deploy, verify, and register a self-hosted Portal relay.",
+  "author": {
+    "name": "gosuda"
+  },
+  "interface": {
+    "displayName": "Portal Relay",
+    "shortDescription": "Run a self-hosted Portal relay",
+    "longDescription": "Deploy a public Portal relay with Docker Compose, delegate its DNS zone to the embedded authoritative DNS server, optionally enable TCP/UDP lease ports for game hosting, verify health and tunnel egress, and register the relay in the public pool.",
+    "developerName": "gosuda",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/gosuda/portal-tunnel",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "defaultPrompt": [
+      "Run a public Portal relay on this server and verify its health endpoint.",
+      "Set up a Portal relay with TCP/UDP leases for game hosting.",
+      "Register my Portal relay in the public relay pool."
+    ]
+  }
+}
