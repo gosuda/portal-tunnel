@@ -53,6 +53,7 @@ function renderDetail(reputation?: ReputationSummary) {
 describe("ServerDetail reputation gate", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    sessionStorage.clear();
     localStorage.clear();
   });
 
@@ -69,7 +70,7 @@ describe("ServerDetail reputation gate", () => {
 
     // The auto-open writes this flag right before navigating; it must
     // stay unset while the gate holds the visitor.
-    expect(localStorage.getItem("isPush")).toBeNull();
+    expect(sessionStorage.getItem("isPush")).toBeNull();
     expect(screen.getByText(/negative community ratings/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /open anyway/i })).toBeTruthy();
   });
@@ -79,6 +80,22 @@ describe("ServerDetail reputation gate", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /open anyway/i }));
 
-    expect(localStorage.getItem("isPush")).toBe("true");
+    expect(sessionStorage.getItem("isPush")).toBe("true");
+    expect(localStorage.getItem("isPush")).toBeNull();
+  });
+
+  it("returns to the directory when this tab already left for the service", () => {
+    sessionStorage.setItem("isPush", "true");
+    renderDetail();
+
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(sessionStorage.getItem("isPush")).toBeNull();
+  });
+
+  it("ignores a flag left in local storage by another tab", () => {
+    localStorage.setItem("isPush", "true");
+    renderDetail(FLAGGED);
+
+    expect(screen.getByRole("button", { name: /open anyway/i })).toBeTruthy();
   });
 });
