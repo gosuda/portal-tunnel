@@ -14,7 +14,7 @@ import type {
   ReputationVoteResponse,
 } from "@/types/api";
 
-const DESKTOP_QUERY = "(min-width: 1024px)";
+const DESKTOP_QUERY = "(min-width: 1280px)";
 const POLL_INTERVAL_MS = 1500;
 
 function normalizeHostname(hostname: string): string {

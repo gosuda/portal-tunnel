@@ -212,7 +212,7 @@ export function ServerListView({
         </div>
       </header>
 
-      {sidebarOpen && <button type="button" aria-label="Close navigation" onClick={() => onSidebarOpenChange(false)} className="fixed inset-x-0 top-[116px] bottom-0 z-40 bg-black/40 md:top-16 lg:hidden" />}
+      {sidebarOpen && <button type="button" aria-label="Close navigation" onClick={() => onSidebarOpenChange(false)} className="fixed inset-x-0 top-[116px] bottom-0 z-40 bg-black/40 md:top-16 xl:hidden" />}
       <aside id="portal-navigation" aria-label="Navigation" className={`fixed top-[116px] bottom-0 left-0 z-40 flex w-[min(240px,calc(100vw-3rem))] flex-col overflow-y-auto border-r border-border bg-background/85 px-3 backdrop-blur-xl pb-6 pt-3 md:top-16 ${sidebarOpen ? "translate-x-0 visible" : "-translate-x-full invisible"}`}>
         <SidebarNav variant="full" browseView={browseView} status={status} sortBy={sortBy} favorites={favorites} onBrowseViewChange={onBrowseViewChange} onSortByChange={onSortByChange} />
       </aside>
@@ -221,13 +221,13 @@ export function ServerListView({
         <aside
           id="portal-mini-navigation"
           aria-label="Mini Navigation"
-          className="fixed top-[116px] bottom-0 left-0 z-40 hidden w-[72px] flex-col items-center overflow-y-auto border-r border-border bg-background/85 px-1.5 py-3 backdrop-blur-xl md:top-16 lg:flex"
+          className="fixed top-[116px] bottom-0 left-0 z-40 hidden w-[72px] flex-col items-center overflow-y-auto border-r border-border bg-background/85 px-1.5 py-3 backdrop-blur-xl md:top-16 xl:flex"
         >
           <SidebarNav variant="mini" browseView={browseView} status={status} sortBy={sortBy} favorites={favorites} onBrowseViewChange={onBrowseViewChange} onSortByChange={onSortByChange} />
         </aside>
       )}
 
-      <main id="portal-content" tabIndex={-1} className={`min-w-0 pb-12 outline-none ${sidebarOpen ? "lg:pl-[240px]" : "lg:pl-[72px]"}`}>
+      <main id="portal-content" tabIndex={-1} className={`min-w-0 pb-12 outline-none ${sidebarOpen ? "xl:pl-[240px]" : "xl:pl-[72px]"}`}>
         {isAppView && (
           <section id="live-servers" aria-label={browseView === "favorites" ? "Favorite apps" : "Discover apps"}>
             <div className="sticky top-[116px] z-30 bg-background/80 px-4 pb-3 pt-2 backdrop-blur-xl md:top-16 lg:px-8">
