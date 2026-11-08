@@ -270,7 +270,8 @@ credentials, lifetime, and reverse pool. Exact lease lookups authenticate renew,
 unregister, signing, reverse admission, and activity updates. Exclusive registration
 replaces all records of that identity; a replica cannot join a live exclusive lease
 or retained cache entry. Replica requests reject dedicated TCP/UDP ports, relay
-cache, and overlay. Identity policy and bandwidth credit survive until the last
+cache, and overlay. One identity holds at most 16 live replicas; further
+replica registrations are refused as rate limited. Identity policy and bandwidth credit survive until the last
 lease is removed. Registration of a replica does not suspend its siblings.
 
 Incoming TLS connections rotate among routable, unexpired replicas with ready

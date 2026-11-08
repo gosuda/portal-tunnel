@@ -69,6 +69,7 @@ var (
 	errLeaseDenied              = &apiError{types.APIErrorCodeLeaseDenied, "lease is denied by the relay", http.StatusForbidden}
 	errTransportMismatch        = &apiError{types.APIErrorCodeTransportMismatch, "transport mismatch", http.StatusConflict}
 	errReplicaMode              = &apiError{types.APIErrorCodeInvalidRequest, "replicas require direct HTTP leases without dedicated TCP/UDP ports, cache, or overlay", http.StatusBadRequest}
+	errReplicaLimit             = &apiError{types.APIErrorCodeRateLimited, "replica limit reached for this identity", http.StatusServiceUnavailable}
 	errReplicaConflict          = &apiError{types.APIErrorCodeHostnameConflict, "replicas cannot join an exclusive lease or retained cache entry", http.StatusConflict}
 	errUnauthorized             = &apiError{types.APIErrorCodeUnauthorized, "unauthorized", http.StatusForbidden}
 	errUDPDisabled              = &apiError{types.APIErrorCodeUDPDisabled, "udp disabled", http.StatusForbidden}

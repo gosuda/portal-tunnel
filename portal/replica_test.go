@@ -155,6 +155,19 @@ func TestReplicaSelectionUsesReadyRoutableLeases(t *testing.T) {
 	}
 }
 
+func TestReplicaRegistrationIsBoundedPerIdentity(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "bounded")
+	for range defaultReplicaLimit {
+		record, _ := registerHTTPReplica(t, registry, identity)
+		t.Cleanup(record.Close)
+	}
+	_, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if !errors.Is(err, errReplicaLimit) {
+		t.Fatalf("replica beyond the per-identity limit: %v", err)
+	}
+}
+
 func TestReplicaRegistrationRejectsUnsupportedTransports(t *testing.T) {
 	registry := newTestRegistry(t, true, true)
 	identity := newTestLeaseIdentity(t, "unsupported")

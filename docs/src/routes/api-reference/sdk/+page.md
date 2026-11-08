@@ -408,6 +408,8 @@ including the ability to replace all leases through an exclusive registration.
 Keep application settings and metadata consistent across replicas.
 
 Each replica has its own token, expiry, reverse pool, and unregister operation.
+A relay accepts at most 16 live replicas per identity; further replicas get a
+retryable `rate_limited` error.
 Access policy, reputation, and bandwidth limits belong to the shared identity.
 The public directory shows one service with aggregate readiness; the admin API
 retains separate rows identified by `lease_id`.

@@ -42,6 +42,7 @@ const (
 	maxClaimedStartedAge                     = 7 * 24 * time.Hour
 	defaultReadyQueueLimit                   = 8
 	defaultLeaseBridgeLimit                  = 128
+	defaultReplicaLimit                      = 16
 )
 
 // requestedLeaseTTL checks seconds before conversion to avoid duration overflow.
@@ -576,6 +577,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	udpLeases := 0
 	tcpLeases := 0
+	replicas := 0
 	for _, existing := range r.records {
 		if existing == nil {
 			continue
@@ -592,6 +594,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 			}
 			if req.Replica {
 				record.Hostname = existing.Hostname
+				replicas++
 			}
 			if !existing.FirstSeenAt.IsZero() && existing.FirstSeenAt.Before(record.FirstSeenAt) {
 				record.FirstSeenAt = existing.FirstSeenAt
@@ -620,6 +623,11 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 				record.Hostname = ""
 			}
 		}
+	}
+	if replicas >= defaultReplicaLimit {
+		r.mu.Unlock()
+		r.rollbackRecord(record)
+		return nil, types.RegisterResponse{}, errReplicaLimit
 	}
 	if record.datagram != nil {
 		if max := r.udpMaxLeases; max > 0 && udpLeases >= max {
