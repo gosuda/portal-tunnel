@@ -4,12 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { BaseServer } from "@/lib/server";
-import type { ReputationSummary } from "@/types/api";
-
-// Directory presentation policy; the relay only stores vote aggregates.
-function isReputationWarning(summary: ReputationSummary | undefined): boolean {
-  return summary !== undefined && summary.total >= 5 && summary.down >= 3 && summary.down * 100 >= summary.total * 70;
-}
+import { isReputationWarning } from "@/utils/reputation";
 
 // Set right before this page leaves for the service. Session storage keeps it
 // to this tab, so a service opened in one tab does not bounce another tab's
