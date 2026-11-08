@@ -16,7 +16,6 @@ export function ServerList() {
     setSidebarOpen,
     handleBrowseViewChange,
     searchQuery,
-    status,
     sortBy,
     selectedTags,
     availableTags,
@@ -42,7 +41,6 @@ export function ServerList() {
         onBrowseViewChange={handleBrowseViewChange}
         leases={leases}
         searchQuery={searchQuery}
-        status={status}
         sortBy={sortBy}
         selectedTags={selectedTags}
         availableTags={availableTags}

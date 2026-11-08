@@ -11,7 +11,6 @@ function renderNav(variant: SidebarVariant, overrides: Partial<SidebarNavProps> 
   const props: SidebarNavProps = {
     variant,
     browseView: "home",
-    status: "all",
     sortBy: DEFAULT_SORT,
     favorites: 3,
     onBrowseViewChange: vi.fn(),
