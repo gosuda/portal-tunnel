@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
+import { readCurrentOrigin } from "@/lib/origin";
 import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import {

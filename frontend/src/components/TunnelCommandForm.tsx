@@ -17,9 +17,9 @@ import {
 } from "@/lib/tunnelCommand";
 import {
   DEFAULT_HOST,
-  readCurrentOrigin,
   useTunnelCommand,
 } from "@/hooks/useTunnelCommand";
+import { readCurrentOrigin } from "@/lib/origin";
 import type { ShareKind } from "@/lib/shareLink";
 
 const TARGET_KIND_LABEL: Record<ShareKind, string> = {
@@ -32,7 +32,7 @@ const TARGET_PLACEHOLDER = "Port, URL, or file path";
 
 export function TunnelCommandForm() {
   const inputId = useId();
-  const [tunnelTarget, setTunnelTarget] = useState<TunnelCommandOS>("unix");
+  const [os, setOS] = useState<TunnelCommandOS>("unix");
   const currentOrigin = readCurrentOrigin();
 
   const [relayUrls, setRelayUrls] = useState<string[]>(() => [
@@ -62,7 +62,6 @@ export function TunnelCommandForm() {
     setTarget,
     name,
     copied,
-    os,
     effectiveName,
     auth,
     setAuth,
@@ -78,7 +77,7 @@ export function TunnelCommandForm() {
     thumbnailURL: normalizedThumbnailURL,
     enableUDP,
     udpPort,
-    os: tunnelTarget,
+    os,
   });
   const udpBlocked = authBlocksUDP(auth);
 
@@ -127,14 +126,14 @@ export function TunnelCommandForm() {
         <div className={osGroupClass}>
           <button
             type="button"
-            onClick={() => setTunnelTarget("unix")}
+            onClick={() => setOS("unix")}
             className={osButtonClass(os === "unix")}
           >
             Linux / macOS
           </button>
           <button
             type="button"
-            onClick={() => setTunnelTarget("windows")}
+            onClick={() => setOS("windows")}
             className={osButtonClass(os === "windows")}
           >
             Windows
