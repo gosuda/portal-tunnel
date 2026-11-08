@@ -150,6 +150,17 @@ cannot bootstrap from an untrusted local TLS endpoint: a localhost setup that
 relies on this path still fails in the browser. See the
 [relay TLS bootstrap](https://github.com/gosuda/portal-tunnel/blob/main/utils/tls.go).
 
+A local relay issues itself a self-signed certificate, `fullchain.pem` in its
+`IDENTITY_PATH` directory, valid for 825 days, the longest Apple platforms
+accept. To open local tunnels in a browser, trust that certificate in the
+system or browser certificate store, and remove it when you are done. The relay
+issues a new one 30 days before expiry or when `PORTAL_URL` names a host the
+stored one does not cover, and the new one must be trusted again. Apple
+platforms also refuse a wildcard directly under `localhost`, so Safari and
+other WebKit browsers there open no `<name>.localhost` tunnel. For them, set
+`PORTAL_URL` one label deeper, such as `https://portal.localhost`, so tunnels
+are `<name>.portal.localhost`.
+
 <h2 id="relay-trust-reduction">Relay Trust Reduction</h2>
 
 The following guarantees apply to ordinary uncached tenant TLS with an

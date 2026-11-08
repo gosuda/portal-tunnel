@@ -1,5 +1,17 @@
 # Release notes
 
+## Unreleased
+
+### Local relay: a certificate Safari can trust
+
+A local relay's self-signed certificate is now valid for 825 days instead of ten
+years, because Apple platforms refuse a longer one even when it is trusted. On
+its next start, a relay replaces a stored certificate that is valid for longer,
+such as the ten-year one, or that expires within 30 days, so a browser that
+trusted the old certificate must trust the new one. Apple platforms also refuse
+the `*.localhost` wildcard, so to open local tunnels in Safari, set `PORTAL_URL`
+one label deeper, such as `https://portal.localhost`.
+
 ## v2.7.3
 
 ### Application auth: a tunnel answers only for hosts it holds

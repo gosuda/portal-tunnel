@@ -75,6 +75,38 @@ func TestCertificateUsable(t *testing.T) {
 	}
 }
 
+func TestLocalDevelopmentCertificateReusable(t *testing.T) {
+	t.Parallel()
+
+	const day = 24 * time.Hour
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	domains := []string{"portal.localhost", "*.portal.localhost"}
+	for _, tc := range []struct {
+		name      string
+		sans      []string
+		notBefore time.Time
+		notAfter  time.Time
+		want      bool
+	}{
+		{"issued now for the longest validity Apple accepts", domains, now.Add(-time.Hour), now.Add(-time.Hour).Add(localDevelopmentCertificateValidity), true},
+		{"one second longer than Apple accepts", domains, now.Add(-time.Hour), now.Add(-time.Hour).Add(localDevelopmentCertificateValidity + time.Second), false},
+		{"ten years, as older relays issued", domains, now.Add(-day), now.Add(3650 * day), false},
+		{"expires just after the renewal threshold", domains, now.Add(-769 * day), now.Add(defaultRenewThreshold + day), true},
+		{"expires within the renewal threshold", domains, now.Add(-771 * day), now.Add(defaultRenewThreshold - day), false},
+		{"another domain", []string{"relay.example", "*.relay.example"}, now.Add(-time.Hour), now.Add(800 * day), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cert := &x509.Certificate{DNSNames: tc.sans, NotBefore: tc.notBefore, NotAfter: tc.notAfter}
+			if got := localDevelopmentCertificateReusable(cert, domains, now); got != tc.want {
+				t.Fatalf("localDevelopmentCertificateReusable() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if localDevelopmentCertificateReusable(nil, domains, now) {
+		t.Fatal("localDevelopmentCertificateReusable(nil) = true, want false")
+	}
+}
+
 // Switching from CA A to CA B and back to A must not serve the certificate A
 // issued earlier once it has expired: each directory keeps its own file, and
 // the stored one is reused only while it has not expired and covers the relay

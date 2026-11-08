@@ -35,8 +35,11 @@ var (
 )
 
 const (
-	localDevelopmentCertificateTTL = 3650 * 24 * time.Hour
-	defaultRenewThreshold          = 30 * 24 * time.Hour
+	// localDevelopmentCertificateValidity is the longest validity Apple
+	// platforms accept for a TLS server certificate, even from a root the user
+	// trusts. Safari refuses a longer one however it is trusted.
+	localDevelopmentCertificateValidity = 825 * 24 * time.Hour
+	defaultRenewThreshold               = 30 * 24 * time.Hour
 	// maxRenewExpiryFloor bounds how long ARI may defer renewal: a certificate
 	// with less lifetime left is renewed whatever the CA suggests.
 	maxRenewExpiryFloor = 7 * 24 * time.Hour
@@ -339,9 +342,10 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	keyFile := filepath.Join(keyDir, keyFileName)
 	certFile := filepath.Join(keyDir, fullChainFileName)
 
+	now := time.Now().UTC()
 	if utils.FileExists(keyFile) && utils.FileExists(certFile) {
-		covered, err := certCoversDomains(certFile, domains)
-		if err == nil && covered {
+		cert, err := loadCertificate(certFile)
+		if err == nil && localDevelopmentCertificateReusable(cert, domains, now) {
 			return nil
 		}
 	}
@@ -361,15 +365,15 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 		return fmt.Errorf("generate local dev certificate serial: %w", err)
 	}
 
-	now := time.Now().UTC()
+	notBefore := now.Add(-1 * time.Hour)
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			CommonName:   baseHost,
 			Organization: []string{"Portal Local Development"},
 		},
-		NotBefore:             now.Add(-1 * time.Hour),
-		NotAfter:              now.Add(localDevelopmentCertificateTTL),
+		NotBefore:             notBefore,
+		NotAfter:              notBefore.Add(localDevelopmentCertificateValidity),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageKeyAgreement | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
@@ -403,6 +407,17 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 		return fmt.Errorf("write local dev private key: %w", err)
 	}
 	return nil
+}
+
+// localDevelopmentCertificateReusable reports whether the stored local
+// development certificate is kept at startup: it covers domains, has more than
+// the renewal threshold left, and is valid for no longer than Apple platforms
+// accept. Any other certificate is replaced, including the ten-year one older
+// relays issued. A local relay renews only at startup, so the threshold keeps
+// a relay that restarts at least monthly from serving an expired certificate.
+func localDevelopmentCertificateReusable(cert *x509.Certificate, domains []string, now time.Time) bool {
+	return certificateUsable(cert, domains, now.Add(defaultRenewThreshold)) &&
+		cert.NotAfter.Sub(cert.NotBefore) <= localDevelopmentCertificateValidity
 }
 
 func localDevelopmentDomains(baseHost string) []string {

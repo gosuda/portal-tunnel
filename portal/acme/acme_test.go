@@ -55,12 +55,14 @@ func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TLSFiles() error = %v", err)
 	}
-	covered, err := certCoversDomains(certFile, []string{"localhost"})
+	cert, err := loadCertificate(certFile)
 	if err != nil {
-		t.Fatalf("certCoversDomains() error = %v", err)
+		t.Fatalf("loadCertificate() error = %v", err)
 	}
-	if !covered {
-		t.Fatal("certCoversDomains() = false, want true")
+	// The next start must keep what this one issued, or each start would
+	// replace the certificate and undo the trust a user gave it.
+	if !localDevelopmentCertificateReusable(cert, localDevelopmentDomains("localhost"), time.Now().UTC()) {
+		t.Fatalf("issued certificate valid from %v to %v is replaced on the next start", cert.NotBefore, cert.NotAfter)
 	}
 }
 
