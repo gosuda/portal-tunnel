@@ -268,6 +268,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not approved to route yet |
 | `lease_denied` | relay denied or banned the lease |
+| `source_not_allowed` | relay does not accept tunnels from the caller's network |
 | `invalid_address` | address path or body value is invalid |
 | `invalid_mode` | approval mode is not `auto` or `manual` |
 | `http11_only` | endpoint requires HTTP/1.1 |

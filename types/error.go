@@ -22,6 +22,7 @@ const (
 	APIErrorCodeMethodNotAllowed        = "method_not_allowed"
 	APIErrorCodeNotFound                = "not_found"
 	APIErrorCodeRateLimited             = "rate_limited"
+	APIErrorCodeSourceNotAllowed        = "source_not_allowed"
 	APIErrorCodeUnauthorized            = "unauthorized"
 	APIErrorCodeUDPPortExhausted        = "udp_port_exhausted"
 	APIErrorCodeUDPDisabled             = "udp_disabled"

@@ -5,25 +5,44 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// Ingress resolves the client source for relay admission and diagnostics.
-// Forwarded headers are trusted only when the direct peer is inside an
-// explicitly configured trusted proxy CIDR.
+// Ingress resolves the client source for relay admission and diagnostics, and
+// decides which sources may run tunnels. Forwarded headers are trusted only
+// when the direct peer is inside an explicitly configured trusted proxy CIDR.
 type Ingress struct {
 	trustProxyHeaders bool
 	trustedProxyCIDRs []netip.Prefix
+	tunnelSourceCIDRs []netip.Prefix
 }
 
-func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs string) (*Ingress, error) {
-	trustedProxyCIDRs, err := parseTrustedProxyPrefixes(rawTrustedProxyCIDRs)
+// NewIngress reads both lists as comma-separated CIDRs. An empty tunnel source
+// list lets every source run tunnels.
+func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs, rawTunnelSourceCIDRs string) (*Ingress, error) {
+	trustedProxyCIDRs, err := parseCIDRs(rawTrustedProxyCIDRs)
 	if err != nil {
 		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
 	}
-	return &Ingress{trustProxyHeaders: trustProxyHeaders, trustedProxyCIDRs: trustedProxyCIDRs}, nil
+	tunnelSourceCIDRs, err := parseCIDRs(rawTunnelSourceCIDRs)
+	if err != nil {
+		return nil, fmt.Errorf("parse tunnel source cidrs: %w", err)
+	}
+	return &Ingress{trustProxyHeaders: trustProxyHeaders, trustedProxyCIDRs: trustedProxyCIDRs, tunnelSourceCIDRs: tunnelSourceCIDRs}, nil
+}
+
+// allowsTunnelFrom reports whether source may register or renew a tunnel. With
+// a list set, a source that could not be resolved is refused.
+func (i *Ingress) allowsTunnelFrom(source netip.Addr) bool {
+	if i == nil || len(i.tunnelSourceCIDRs) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(i.tunnelSourceCIDRs, func(network netip.Prefix) bool {
+		return network.Contains(source)
+	})
 }
 
 func (i *Ingress) SourceAddr(req *http.Request) netip.Addr {
@@ -96,7 +115,7 @@ func parseSourceAddr(raw string) netip.Addr {
 	return netip.Addr{}
 }
 
-func parseTrustedProxyPrefixes(raw string) ([]netip.Prefix, error) {
+func parseCIDRs(raw string) ([]netip.Prefix, error) {
 	parts := utils.SplitCSV(raw)
 	prefixes := make([]netip.Prefix, 0, len(parts))
 	seen := make(map[netip.Prefix]struct{}, len(parts))

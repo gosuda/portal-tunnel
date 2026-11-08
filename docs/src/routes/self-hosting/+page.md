@@ -225,6 +225,42 @@ pre-auth budget or lower this limit. On an `auto` relay only denied and banned
 leases count. Each IPv6 address is its own source, so this budget stops one host,
 not a network.
 
+### Accept tunnels only from your networks
+
+On an `auto` relay, anyone who can reach it can register a tunnel and serve under
+your domain. Keeping the relay's URL to yourself does not hide it: its ACME
+certificate puts the hostname in public Certificate Transparency logs. To accept
+tunnels only from networks you name, list them in `TUNNEL_SOURCE_CIDRS`:
+
+```yaml
+environment:
+  TUNNEL_SOURCE_CIDRS: "203.0.113.7/32,10.0.0.0/8"
+```
+
+A tunnel from any other address gets `403 source_not_allowed` when it registers
+or renews, with a message that names the address the relay saw, such as
+`this relay does not accept tunnels from 198.51.100.7`. The tunnel reports that
+relay as failed and does not retry it. Visitors are not affected. The list works
+with either approval mode, so a relay on `auto` serves new tunnels from your
+networks at once, including every identity an embedder creates, and refuses the
+rest. Empty, the default, accepts every network. The relay reads the list at
+startup.
+
+- Write each entry as a CIDR, such as `/32` for one IPv4 address and `/128` for
+  one IPv6 address.
+- The relay matches the client address it resolves for its pre-auth budget.
+  Behind a reverse proxy, set `TRUST_PROXY_HEADERS` and `TRUSTED_PROXY_CIDRS`
+  (see the [trust boundary](/deployment#client-addresses-and-the-trust-boundary)),
+  or every tunnel appears to come from the proxy. Listing the proxy's address
+  instead accepts everyone.
+- A home connection's address can change, and the list has to follow it. A shared
+  address, such as a NAT or a cloud gateway, accepts everyone behind it.
+- A tunnel on the relay's own host connects from the address the relay sees, which
+  can be `::1` rather than `127.0.0.1`, or a Docker bridge address. The refusal
+  names it.
+- A relay from before this setting ignores it and accepts every network, so
+  recheck the version after a downgrade.
+
 ## Optional: Enable TCP/UDP Tunneling
 
 To relay raw TCP or UDP traffic (game servers, databases, etc.), enable the transports and set a port range:

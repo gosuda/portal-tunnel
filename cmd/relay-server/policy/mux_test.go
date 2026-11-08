@@ -38,6 +38,68 @@ func TestMuxRejectsMethodBeforeAdmission(t *testing.T) {
 	}
 }
 
+// A relay that names the networks tunnels may come from refuses registration
+// and renewal from anywhere else before spending any pre-auth budget, and still
+// registers tunnels from those networks.
+func TestMuxRefusesTunnelsFromOutsideAllowedNetworks(t *testing.T) {
+	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingress, err := NewIngress(false, "", "192.0.2.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One unit of global budget, refilled once a minute: a refused request that
+	// spent it would leave the allowed tunnel below with none.
+	limiter := NewSourceLimiter(1, 1, 1, 1)
+	handler := Mux(server, http.NotFoundHandler(), ingress, limiter, NewStore(), PreAuthConfig{ChallengeCost: 1, RegisterCost: 1, AnnounceCost: 1})
+	leaseIdentity, err := identity.Generate("source-allowed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(types.RegisterChallengeRequest{Identity: leaseIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const fromHeader = "X-Test-From"
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = r.Header.Get(fromHeader) + ":1234"
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(relay.Close)
+	post := func(path, from string) (int, []byte) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, relay.URL+path, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set(fromHeader, from)
+		response, err := relay.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = response.Body.Close() }()
+		answer, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response.StatusCode, answer
+	}
+
+	for _, path := range []string{types.PathSDKRegisterChallenge, types.PathSDKRegister, types.PathSDKRenew} {
+		status, answer := post(path, "198.51.100.7")
+		var envelope types.APIEnvelope[json.RawMessage]
+		if err := json.Unmarshal(answer, &envelope); err != nil || status != http.StatusForbidden ||
+			envelope.Error == nil || envelope.Error.Code != types.APIErrorCodeSourceNotAllowed {
+			t.Fatalf("%s from outside the allowed networks = %d: %s", path, status, answer)
+		}
+	}
+	if status, answer := post(types.PathSDKRegisterChallenge, "192.0.2.7"); status != http.StatusCreated {
+		t.Fatalf("challenge from an allowed network = %d: %s", status, answer)
+	}
+}
+
 func TestMuxLeavesFallbackBodyLimitsToOwner(t *testing.T) {
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)

@@ -21,6 +21,11 @@ that upgrades from ordinary HTTP into the reverse transport.
    the returned endpoint using its opaque capability.
 6. `POST /sdk/unregister` removes the lease.
 
+A relay that sets `TUNNEL_SOURCE_CIDRS` answers `/sdk/register/challenge`,
+`/sdk/register` and `/sdk/renew` from any other network with
+`403 source_not_allowed`, before it spends any pre-auth budget. The SDK treats it
+as terminal for that relay.
+
 ## Endpoints
 
 | Method | Path | Auth | Body | Data |

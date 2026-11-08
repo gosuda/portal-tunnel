@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-func TestParseTrustedProxyPrefixesDeduplicatesMaskedNetworks(t *testing.T) {
-	got, err := parseTrustedProxyPrefixes("192.0.2.7/24, 192.0.2.0/24, 2001:db8::1/32, ::ffff:192.0.2.0/120")
+func TestParseCIDRsDeduplicatesMaskedNetworks(t *testing.T) {
+	got, err := parseCIDRs("192.0.2.7/24, 192.0.2.0/24, 2001:db8::1/32, ::ffff:192.0.2.0/120")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,12 +18,12 @@ func TestParseTrustedProxyPrefixesDeduplicatesMaskedNetworks(t *testing.T) {
 		netip.MustParsePrefix("2001:db8::/32"),
 	}
 	if !slices.Equal(got, want) {
-		t.Fatalf("parseTrustedProxyPrefixes() = %v, want %v", got, want)
+		t.Fatalf("parseCIDRs() = %v, want %v", got, want)
 	}
 }
 
 func TestClientIPDoesNotTrustImplicitProxies(t *testing.T) {
-	ingress, err := NewIngress(true, "")
+	ingress, err := NewIngress(true, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 		{name: "invalid headers", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "invalid", xri: "invalid", want: "172.31.240.2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ingress, err := NewIngress(tc.enabled, tc.cidrs)
+			ingress, err := NewIngress(tc.enabled, tc.cidrs, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,23 +82,66 @@ func TestClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 	}
 }
 
-// The relay's ingress rejects an unparseable proxy CIDR allowlist with the
-// same parse the config report reports, so a deployment cannot call a list
-// valid that startup rejects.
-func TestNewIngressRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
-	if _, err := NewIngress(false, "192.0.2.0/24,not-a-cidr"); err == nil {
+// The relay's ingress rejects an unparseable CIDR list with the same parse the
+// config report reports, so a deployment cannot call a list valid that startup
+// rejects.
+func TestNewIngressRejectsInvalidCIDRs(t *testing.T) {
+	if _, err := NewIngress(false, "192.0.2.0/24,not-a-cidr", ""); err == nil {
 		t.Fatal("NewIngress() error = nil, want error for invalid trusted proxy CIDR")
 	}
-	if _, err := NewIngress(false, "192.0.2.0/24,2001:db8::/32"); err != nil {
-		t.Fatalf("NewIngress() error = %v, want nil for valid CIDR list", err)
+	if _, err := NewIngress(false, "", "192.0.2.7"); err == nil {
+		t.Fatal("NewIngress() error = nil, want error for a tunnel source without a prefix length")
 	}
-	if _, err := NewIngress(false, ""); err != nil {
-		t.Fatalf("NewIngress() error = %v, want nil for empty CIDR list", err)
+	if _, err := NewIngress(false, "192.0.2.0/24,2001:db8::/32", "192.0.2.7/32,2001:db8::/32"); err != nil {
+		t.Fatalf("NewIngress() error = %v, want nil for valid CIDR lists", err)
+	}
+	if _, err := NewIngress(false, "", ""); err != nil {
+		t.Fatalf("NewIngress() error = %v, want nil for empty CIDR lists", err)
+	}
+}
+
+// Tunnel sources match the address pre-auth resolves, so an IPv4 peer reached
+// over a dual-stack socket and a client behind a trusted proxy match their
+// IPv4 and forwarded networks.
+func TestTunnelSourceMatchesResolvedAddress(t *testing.T) {
+	open, err := NewIngress(false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := NewIngress(true, "172.31.240.2/32", "192.0.2.0/24, ::ffff:203.0.113.7/128, 2001:db8::/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		peer, forwarded string
+		want            bool
+	}{
+		{peer: "192.0.2.9:1234", want: true},
+		{peer: "[::ffff:192.0.2.9]:1234", want: true},
+		{peer: "203.0.113.7:1234", want: true},
+		{peer: "[2001:db8::9]:1234", want: true},
+		{peer: "172.31.240.2:1234", forwarded: "192.0.2.9", want: true},
+		{peer: "172.31.240.2:1234", forwarded: "198.51.100.7", want: false},
+		{peer: "172.31.240.3:1234", forwarded: "192.0.2.9", want: false},
+		{peer: "203.0.113.8:1234", want: false},
+		{peer: "not-an-address", want: false},
+	} {
+		req := httptest.NewRequest("POST", "/sdk/register/challenge", nil)
+		req.RemoteAddr = tc.peer
+		if tc.forwarded != "" {
+			req.Header.Set("X-Forwarded-For", tc.forwarded)
+		}
+		if got := listed.allowsTunnelFrom(listed.SourceAddr(req)); got != tc.want {
+			t.Errorf("peer %q forwarding %q allowed = %v, want %v", tc.peer, tc.forwarded, got, tc.want)
+		}
+		if !open.allowsTunnelFrom(open.SourceAddr(req)) {
+			t.Errorf("an empty list refused peer %q", tc.peer)
+		}
 	}
 }
 
 func TestClientIPRevokesRemovedProxy(t *testing.T) {
-	ingress, err := NewIngress(true, "172.31.240.2/32")
+	ingress, err := NewIngress(true, "172.31.240.2/32", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +152,7 @@ func TestClientIPRevokesRemovedProxy(t *testing.T) {
 		t.Fatalf("client IP before removing proxy = %q, want forwarded address", got)
 	}
 	// Reconfiguring the relay without that proxy revokes its trust.
-	ingress, err = NewIngress(true, "")
+	ingress, err = NewIngress(true, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +162,7 @@ func TestClientIPRevokesRemovedProxy(t *testing.T) {
 }
 
 func TestClientIPRecognizesIPv4MappedTrustedProxyCIDR(t *testing.T) {
-	ingress, err := NewIngress(true, "::ffff:192.0.2.0/120")
+	ingress, err := NewIngress(true, "::ffff:192.0.2.0/120", "")
 	if err != nil {
 		t.Fatal(err)
 	}
