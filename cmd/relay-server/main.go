@@ -28,12 +28,8 @@ import (
 )
 
 var (
-	errUDPAndTCPRelayTransportRequire     = errors.New("udp and tcp relay transport require a valid min port and max port range")
-	errMinPortAndMaxPortMust              = errors.New("min port and max port must be between 1 and 65535")
-	errMinPortMustLessThanOr              = errors.New("min port must be less than or equal to max port")
 	errX402FacilitatorRequiresValidSuiPay = errors.New("x402 facilitator requires a valid Sui pay-to address")
 	errOnlyOneHelpTopicSupported          = errors.New("only one help topic is supported")
-	errUnapprovedLeaseLimitNegative       = errors.New("unapproved leases per source must not be negative")
 )
 
 func main() {
@@ -156,61 +152,24 @@ func runServeCommand(args []string) error {
 		}
 		return err
 	}
-	// A value that could not be parsed is always a mistake. Starting anyway is
-	// how a deployment ends up running with a setting nobody reads.
-	if err := envIssueError(env.Issues); err != nil {
+	ingress, x402Settings, err := prepareAppConfig(&cfg, env.Issues)
+	if err != nil {
 		return err
 	}
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("state_dir", cfg.Relay.StateDir).
-		Int("sni_port", utils.IntOrDefault(cfg.Relay.SNIPort, portal.DefaultSNIPort(cfg.Relay.PortalURL))).
+		Int("sni_port", cfg.Relay.SNIPort).
 		Msg("starting relay server")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
-	return runServer(ctx, cfg)
+	return runServer(ctx, cfg, ingress, x402Settings)
 }
 
-// resolveRelaySettings normalizes and checks the relay-owned admission and
-// ingress settings that live outside portal.ServerConfig, so the config
-// report and startup apply the same validation.
-func resolveRelaySettings(cfg *appConfig) (*policy.Ingress, error) {
-	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
-		return nil, err
-	}
-	if cfg.Relay.UnapprovedLeasesPerSource < 0 {
-		return nil, errUnapprovedLeaseLimitNegative
-	}
-	mode, err := policy.ParseMode(cfg.ApprovalMode)
-	if err != nil {
-		return nil, err
-	}
-	cfg.ApprovalMode = string(mode)
-	if cfg.UDPEnabled || cfg.TCPEnabled {
-		switch {
-		case cfg.Relay.MinPort <= 0 || cfg.Relay.MaxPort <= 0:
-			return nil, errUDPAndTCPRelayTransportRequire
-		case cfg.Relay.MinPort > 65535 || cfg.Relay.MaxPort > 65535:
-			return nil, errMinPortAndMaxPortMust
-		case cfg.Relay.MinPort > cfg.Relay.MaxPort:
-			return nil, errMinPortMustLessThanOr
-		}
-	}
-	return policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
-}
-
-func runServer(ctx context.Context, cfg appConfig) error {
-	x402Settings, err := resolveX402Facilitator(cfg)
-	if err != nil {
-		return fmt.Errorf("create relay server: %w", err)
-	}
-	ingress, err := resolveRelaySettings(&cfg)
-	if err != nil {
-		return fmt.Errorf("create relay server: %w", err)
-	}
+func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402Settings x402FacilitatorSettings) error {
 	// This application always serves /sdk/domain by composing facilitator metadata
 	// onto server.DomainReport(), whether payments are enabled or not.
 	cfg.Relay.ApplicationOwnsDomainReport = true

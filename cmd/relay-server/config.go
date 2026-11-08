@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 )
 
@@ -21,6 +22,37 @@ import (
 type envFileEntry struct {
 	Name  string
 	Value string
+}
+
+// prepareAppConfig resolves the same side-effect-free configuration for startup
+// and diagnostics. Runtime construction uses the normalized configuration and
+// the ingress and facilitator settings returned by this pass.
+func prepareAppConfig(cfg *appConfig, issues []cli.EnvIssue) (*policy.Ingress, x402FacilitatorSettings, error) {
+	if err := envIssueError(issues); err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	relay, err := portal.ValidateServerConfig(cfg.Relay)
+	if err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	cfg.Relay = relay
+	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	mode, err := policy.ParseMode(cfg.ApprovalMode)
+	if err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	cfg.ApprovalMode = string(mode)
+	if err := cfg.Relay.ValidateTransportPolicy(cfg.UDPEnabled, 0, cfg.TCPEnabled, 0); err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	x402Settings, err := resolveX402Facilitator(*cfg)
+	if err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	ingress, err := policy.NewIngress(cfg.TrustProxyHeaders, cfg.TrustedProxyCIDRs)
+	return ingress, x402Settings, err
 }
 
 func loadEnvFile(path string) ([]envFileEntry, error) {
@@ -173,11 +205,7 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "Validation")
-	if _, err := portal.ValidateServerConfig(cfg.Relay); err != nil {
-		fmt.Fprintf(w, "  INVALID %s\n", err)
-	} else if _, err := resolveRelaySettings(&cfg); err != nil {
-		fmt.Fprintf(w, "  INVALID %s\n", err)
-	} else if _, err := resolveX402Facilitator(cfg); err != nil {
+	if _, _, err := prepareAppConfig(&cfg, env.Issues); err != nil {
 		fmt.Fprintf(w, "  INVALID %s\n", err)
 	} else {
 		fmt.Fprintln(w, "  OK relay configuration is valid")
@@ -396,7 +424,7 @@ func envIssueError(issues []cli.EnvIssue) error {
 	}
 	messages := make([]string, 0, len(issues))
 	for _, issue := range issues {
-		messages = append(messages, fmt.Sprintf("%s=%q: %s", issue.Name, issue.Value, issue.Problem))
+		messages = append(messages, fmt.Sprintf("%s=%q: %s", issue.Name, displayValue(issue.Name, issue.Value), issue.Problem))
 	}
 	slices.Sort(messages)
 	return errors.New("invalid environment values: " + strings.Join(messages, "; "))

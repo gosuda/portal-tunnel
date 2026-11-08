@@ -193,6 +193,14 @@ without changing the process environment. Relay API, frontend, domain-report,
 and optional x402 routes share one application route table; protocol ingress
 and application body limits remain enforced at their respective boundaries.
 
+Relay startup and config diagnostics share one side-effect-free preparation
+path, retaining Portal's normalized settings and rejecting invalid environment
+values. Portal owns static transport-policy validation; a running server also
+checks listener availability before applying changes. Tunnel config-to-spec
+conversion uses explicit settings only. The expose CLI resolves environment
+defaults during flag registration; the agent applies its facilitator-token
+default to a runtime copy without writing that secret into its config file.
+
 Revocation detaches cached content and advances the retained lease's cache
 generation. Cache requests capture that generation before the final access
 check, and must still match it at publication. This fences uploads that overlap

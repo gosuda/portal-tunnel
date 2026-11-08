@@ -195,6 +195,9 @@ func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTP
 // ValidateServerConfig normalizes server configuration and checks the
 // side-effect-free invariants required before runtime resources are created.
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	if cfg.UnapprovedLeasesPerSource < 0 {
+		return ServerConfig{}, errors.New("unapproved leases per source must be non-negative")
+	}
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
 		return ServerConfig{}, errRelayOverlayRequiresDiscovery
@@ -274,8 +277,16 @@ func (cfg ServerConfig) snapshot() ServerConfig {
 	return cfg
 }
 
-func (cfg ServerConfig) hasLeasePortRange() bool {
-	return cfg.MinPort > 0 && cfg.MaxPort > 0 && cfg.MinPort <= 65535 && cfg.MaxPort <= 65535 && cfg.MinPort <= cfg.MaxPort
+// ValidateTransportPolicy checks policy limits and the configured lease port range.
+// Runtime availability is checked by Server.ValidateTransportPolicy.
+func (cfg ServerConfig) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
+	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
+		return errTransportMaxLeasesMustNonNegative
+	}
+	if (udpEnabled || tcpEnabled) && !(cfg.MinPort > 0 && cfg.MaxPort > 0 && cfg.MinPort <= 65535 && cfg.MaxPort <= 65535 && cfg.MinPort <= cfg.MaxPort) {
+		return errTransportEnablementRequiresLeasePortRange
+	}
+	return nil
 }
 
 type Server struct {
@@ -411,12 +422,9 @@ func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnable
 // changing enforcement. The relay can reject unsupported settings before
 // persisting them. Runtime UDP availability is fixed once the server starts.
 func (s *Server) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
-	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
-		return errTransportMaxLeasesMustNonNegative
-	}
 	cfg := s.config()
-	if (udpEnabled || tcpEnabled) && !cfg.hasLeasePortRange() {
-		return errTransportEnablementRequiresLeasePortRange
+	if err := cfg.ValidateTransportPolicy(udpEnabled, udpMaxLeases, tcpEnabled, tcpMaxLeases); err != nil {
+		return err
 	}
 	if s.group != nil && udpEnabled && s.quicBackhaul == nil {
 		return errEnablingUDPRequiresRelayRestart

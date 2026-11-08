@@ -132,3 +132,28 @@ func TestConfigReportSurfacesUnknownEnvFileKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigReportRejectsInvalidEnvironment(t *testing.T) {
+	cfg, env, err := resolveAppConfig(nil, []string{"DISCOVERY=invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report strings.Builder
+	writeConfigReport(&report, cfg, nil, "process environment", env)
+	if !strings.Contains(report.String(), "INVALID") || strings.Contains(report.String(), "OK relay configuration is valid") {
+		t.Fatalf("invalid environment was reported as valid:\n%s", report.String())
+	}
+}
+
+func TestPreparedConfigRetainsPortalDefaults(t *testing.T) {
+	cfg, env, err := resolveAppConfig(nil, []string{"PORTAL_URL=https://localhost:8443", "IDENTITY_PATH=./state"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := prepareAppConfig(&cfg, env.Issues); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Relay.SNIPort != 8443 || cfg.Relay.SNIListenAddr != ":8443" || cfg.Relay.ACME.KeyDir != cfg.Relay.StateDir {
+		t.Fatalf("normalized defaults were discarded: %+v", cfg.Relay)
+	}
+}

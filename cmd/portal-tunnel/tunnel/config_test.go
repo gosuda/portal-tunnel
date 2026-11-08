@@ -223,17 +223,16 @@ func TestConfigSpecResolvesComponents(t *testing.T) {
 	}
 }
 
-// The facilitator token falls back to CSPR_CLOUD_API_KEY, the variable
-// portal expose reads for --x402-facilitator-token; a token in the config wins.
-func TestConfigSpecFacilitatorTokenFromEnvironment(t *testing.T) {
+// Spec uses explicit input even when the process has a facilitator token.
+func TestConfigSpecDoesNotReadEnvironment(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", " env-token ")
 	cfg := Config{HTTPRoutes: []HTTPRoute{{Prefix: "/", Upstream: "127.0.0.1:3001"}}}
 	spec, err := cfg.Spec()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := spec.HTTP.Payment.FacilitatorToken; got != "env-token" {
-		t.Fatalf("token = %q, want the environment one", got)
+	if got := spec.HTTP.Payment.FacilitatorToken; got != "" {
+		t.Fatalf("token = %q, want empty explicit input", got)
 	}
 	cfg.FacilitatorToken = "config-token"
 	if spec, _ = cfg.Spec(); spec.HTTP.Payment.FacilitatorToken != "config-token" {
