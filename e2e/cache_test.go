@@ -46,7 +46,16 @@ func TestStalledMultipartUploadReleasesAdmission(t *testing.T) {
 	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { stopRelay(t, relay) })
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := relay.Shutdown(shutdownCtx); err != nil {
+			t.Errorf("shutdown relay: %v", err)
+		}
+		if err := relay.Wait(); err != nil {
+			t.Errorf("wait for relay shutdown: %v", err)
+		}
+	})
 	waitForRelayCertificateMaterial(t, stateDir)
 	client := relayControlClient(t, stateDir)
 	id, err := identity.Generate("stalled-cache")
