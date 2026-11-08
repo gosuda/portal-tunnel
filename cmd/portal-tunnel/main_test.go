@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // exposeSpec follows portal expose from its arguments to the tunnel spec, the
@@ -14,9 +14,9 @@ func exposeSpec(t *testing.T, args ...string) (tunnel.Spec, error) {
 	t.Helper()
 	var cfg tunnel.Config
 	var flags exposeFlags
-	fs := utils.NewFlagSet("expose", printExposeUsage)
+	fs := cli.NewFlagSet("expose", printExposeUsage)
 	registerExposeFlags(fs, &cfg, &flags)
-	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		t.Fatalf("parse portal expose %v: %v", args, err)
 	}
 	cfg.TargetAddr = fs.Arg(0)

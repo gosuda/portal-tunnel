@@ -20,18 +20,17 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var errWaitPortalAgentShutdownAgentStill = errors.New("wait for portal agent shutdown: agent is still running")
 
 func runAgentCommand(args []string) error {
-	return utils.RunCommands(args, os.Stdout, os.Stderr, printAgentUsage, map[string]utils.CommandFunc{
+	return cli.RunCommands(args, os.Stdout, os.Stderr, printAgentUsage, map[string]cli.CommandFunc{
 		"run":       runAgentRunCommand,
 		"dashboard": runAgentDashboardCommand,
 		"stop":      runAgentStopCommand,
 		"restart":   runAgentRestartCommand,
-		"help": utils.MakeHelpCommand(printAgentUsage, []utils.HelpTopic{
+		"help": cli.MakeHelpCommand(printAgentUsage, []cli.HelpTopic{
 			{Name: "run", Usage: printAgentRunUsage},
 			{Name: "dashboard", Usage: printAgentDashboardUsage},
 			{Name: "stop", Usage: printAgentStopUsage},
@@ -46,18 +45,18 @@ func runAgentRunCommand(args []string) error {
 	var serviceMode bool
 	var foreground bool
 	var theme string
-	fs := utils.NewFlagSet("agent run", printAgentRunUsage)
-	utils.StringFlag(fs, &configPath, "config", service.DefaultConfigPath(), "Portal agent TOML config path")
-	utils.BoolFlag(fs, &serviceMode, "service", false, "Run the foreground service process")
-	utils.BoolFlag(fs, &foreground, "foreground", false, "Run in the current process without installing the OS service")
+	fs := cli.NewFlagSet("agent run", printAgentRunUsage)
+	fs.StringVar(&configPath, "config", service.DefaultConfigPath(), "Portal agent TOML config path")
+	fs.BoolVar(&serviceMode, "service", false, "Run the foreground service process")
+	fs.BoolVar(&foreground, "foreground", false, "Run in the current process without installing the OS service")
 	env.String(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme with --foreground: amber or green", "PORTAL_TUI_THEME")
-	if err := utils.ParseFlagSet(fs, args, printAgentRunUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printAgentRunUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "agent run"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "agent run"); err != nil {
 		printAgentRunUsage(os.Stderr)
 		return err
 	}
@@ -98,15 +97,15 @@ func runAgentRunCommand(args []string) error {
 
 func runAgentRestartCommand(args []string) error {
 	var configPath string
-	fs := utils.NewFlagSet("agent restart", printAgentRestartUsage)
-	utils.StringFlag(fs, &configPath, "config", "", "Portal agent TOML config path")
-	if err := utils.ParseFlagSet(fs, args, printAgentRestartUsage); err != nil {
+	fs := cli.NewFlagSet("agent restart", printAgentRestartUsage)
+	fs.StringVar(&configPath, "config", "", "Portal agent TOML config path")
+	if err := cli.ParseFlagSet(fs, args, printAgentRestartUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "agent restart"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "agent restart"); err != nil {
 		printAgentRestartUsage(os.Stderr)
 		return err
 	}
@@ -228,16 +227,16 @@ func suppressTerminalLogs() func() {
 func runAgentStopCommand(args []string) error {
 	var configPath string
 	var stateDir string
-	fs := utils.NewFlagSet("agent stop", printAgentStopUsage)
-	utils.StringFlag(fs, &configPath, "config", "", "Portal agent TOML config path")
-	utils.StringFlag(fs, &stateDir, "state-dir", "", "Portal agent state directory")
-	if err := utils.ParseFlagSet(fs, args, printAgentStopUsage); err != nil {
+	fs := cli.NewFlagSet("agent stop", printAgentStopUsage)
+	fs.StringVar(&configPath, "config", "", "Portal agent TOML config path")
+	fs.StringVar(&stateDir, "state-dir", "", "Portal agent state directory")
+	if err := cli.ParseFlagSet(fs, args, printAgentStopUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "agent stop"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "agent stop"); err != nil {
 		printAgentStopUsage(os.Stderr)
 		return err
 	}
@@ -286,17 +285,17 @@ func runAgentDashboardCommand(args []string) error {
 	var configPath string
 	var stateDir string
 	var theme string
-	fs := utils.NewFlagSet("agent dashboard", printAgentDashboardUsage)
-	utils.StringFlag(fs, &configPath, "config", "", "Portal agent TOML config path")
-	utils.StringFlag(fs, &stateDir, "state-dir", "", "Portal agent state directory")
+	fs := cli.NewFlagSet("agent dashboard", printAgentDashboardUsage)
+	fs.StringVar(&configPath, "config", "", "Portal agent TOML config path")
+	fs.StringVar(&stateDir, "state-dir", "", "Portal agent state directory")
 	env.String(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme: amber or green", "PORTAL_TUI_THEME")
-	if err := utils.ParseFlagSet(fs, args, printAgentDashboardUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printAgentDashboardUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "agent dashboard"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "agent dashboard"); err != nil {
 		printAgentDashboardUsage(os.Stderr)
 		return err
 	}
@@ -419,7 +418,7 @@ func agentCLIInteractive() bool {
 }
 
 func printAgentUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"portal agent run [flags]",
 			"portal agent dashboard [flags]",
@@ -437,7 +436,7 @@ func printAgentUsage(w io.Writer) {
 }
 
 func printAgentRunUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{"portal agent run [flags]"},
 		[]string{
 			"portal agent run",
@@ -448,7 +447,7 @@ func printAgentRunUsage(w io.Writer) {
 }
 
 func printAgentDashboardUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{"portal agent dashboard [flags]"},
 		[]string{
 			"portal agent dashboard",
@@ -459,7 +458,7 @@ func printAgentDashboardUsage(w io.Writer) {
 }
 
 func printAgentStopUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{"portal agent stop [flags]"},
 		[]string{
 			"portal agent stop",
@@ -469,7 +468,7 @@ func printAgentStopUsage(w io.Writer) {
 }
 
 func printAgentRestartUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{"portal agent restart [flags]"},
 		[]string{
 			"portal agent restart",

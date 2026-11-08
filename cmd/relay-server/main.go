@@ -38,7 +38,7 @@ var (
 
 func main() {
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
-	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
+	if err := cli.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]cli.CommandFunc{
 		"":       runServeCommand,
 		"serve":  runServeCommand,
 		"config": runConfigCommand,
@@ -75,13 +75,13 @@ func resolveAppConfig(args []string, environ []string) (appConfig, *cli.Env, err
 	env := cli.NewEnv(environ)
 
 	cfg := appConfig{}
-	fs := utils.NewFlagSet("relay-server", printRootUsage)
+	fs := cli.NewFlagSet("relay-server", printRootUsage)
 	registerAppFlags(fs, &cfg, env)
 
-	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printRootUsage); err != nil {
 		return appConfig{}, env, err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
 		printRootUsage(os.Stderr)
 		return appConfig{}, env, err
 	}
@@ -112,7 +112,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.Bool(fs, &cfg.Relay.HTTPRedirect.Enabled, "http-redirect-enabled", false, "enable HTTP redirects to the canonical HTTPS portal URL (not tenant hosts)", "HTTP_REDIRECT_ENABLED")
 	env.String(fs, &cfg.Relay.HTTPRedirect.Addr, "http-redirect-addr", portal.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")
 	env.Bool(fs, &cfg.Relay.HTTPRedirect.HSTS, "http-redirect-hsts", false, "include HSTS max-age=31536000 on redirects; browsers ignore HSTS received over HTTP", "HTTP_REDIRECT_HSTS")
-	env.Int(fs, &cfg.Relay.SNIPort, "sni-port", 0, utils.ParsePortNumber, "local TCP SNI router listen port (0 follows the PORTAL_URL port when it names one, else 443)", "SNI_PORT")
+	env.Int(fs, &cfg.Relay.SNIPort, "sni-port", 0, parsePortNumber, "local TCP SNI router listen port (0 follows the PORTAL_URL port when it names one, else 443)", "SNI_PORT")
 	env.Bool(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	env.String(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
 
@@ -120,8 +120,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.Bool(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
 	env.String(fs, &cfg.ApprovalMode, "approval-mode", string(policy.ModeAuto), "initial lease approval mode (auto|manual); a mode saved in policy.json wins", "APPROVAL_MODE")
 	env.Int(fs, &cfg.Relay.UnapprovedLeasesPerSource, "unapproved-leases-per-source", 64, nil, "leases one source IP can hold while they are not routable (0=unlimited)", "UNAPPROVED_LEASES_PER_SOURCE")
-	env.Int(fs, &cfg.Relay.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
-	env.Int(fs, &cfg.Relay.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
+	env.Int(fs, &cfg.Relay.MinPort, "min-port", 0, parseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
+	env.Int(fs, &cfg.Relay.MaxPort, "max-port", 0, parseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
 	env.String(fs, &cfg.AdminToken, "admin-token", "", "admin bearer token for relay admin and policy APIs", "ADMIN_TOKEN")
 	env.Bool(fs, &cfg.PprofEnabled, "pprof-enabled", false, "enable pprof diagnostics HTTP server", "PPROF_ENABLED")
@@ -133,7 +133,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.String(fs, &cfg.Relay.ACME.CADirURL, "acme-ca-dir-url", "", "ACME CA directory URL (https) for managed certificate issuance; the CA must not require External Account Binding; defaults to Let's Encrypt production when empty", "ACME_CA_DIR_URL")
 	env.String(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01 and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
 	env.Bool(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
-	env.Int(fs, &cfg.Relay.ACME.EmbeddedDNSPort, "embedded-dns-port", 53, utils.ParsePortNumber, "listen port for the embedded authoritative DNS server (the default DNS provider); requires a one-time NS delegation of the base domain and open 53/tcp+udp", "EMBEDDED_DNS_PORT")
+	env.Int(fs, &cfg.Relay.ACME.EmbeddedDNSPort, "embedded-dns-port", 53, parsePortNumber, "listen port for the embedded authoritative DNS server (the default DNS provider); requires a one-time NS delegation of the base domain and open 53/tcp+udp", "EMBEDDED_DNS_PORT")
 	env.String(fs, &cfg.Relay.ACME.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token for DNS automation (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
 	env.String(fs, &cfg.Relay.ACME.GCPProjectID, "gcp-project-id", "", "Google Cloud project id for Cloud DNS automation; auto-detected from ADC or GCE metadata when omitted", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCE_PROJECT")
 	env.String(fs, &cfg.Relay.ACME.GCPManagedZone, "gcp-managed-zone", "", "explicit Google Cloud DNS managed zone name or numeric ID override", "GCP_MANAGED_ZONE", "GCP_ZONE", "GCE_ZONE_ID")
@@ -404,7 +404,7 @@ func runHelpCommand(args []string) error {
 }
 
 func printRootUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"relay-server [flags]",
 			"relay-server serve [flags]",
@@ -419,14 +419,14 @@ func printRootUsage(w io.Writer) {
 			"relay-server help",
 		},
 	)
-	fs := utils.NewFlagSet("relay-server", nil)
+	fs := cli.NewFlagSet("relay-server", nil)
 	registerAppFlags(fs, &appConfig{}, cli.NewEnv(nil))
-	utils.WriteFlagDefaults(w, fs)
-	utils.WriteHelpSection(w, "Loopback", []string{
+	cli.WriteFlagDefaults(w, fs)
+	cli.WriteHelpSection(w, "Loopback", []string{
 		"relay-server --portal-url https://127.0.0.1:8443",
 		"portal expose 127.0.0.1:8080 --relays https://127.0.0.1:8443 --discovery=false",
 	})
-	utils.WriteHelpSection(w, "Ready", []string{
+	cli.WriteHelpSection(w, "Ready", []string{
 		"After portal expose succeeds, it logs a line starting with: service ready at",
 	})
 }

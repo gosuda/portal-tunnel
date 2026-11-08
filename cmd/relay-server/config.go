@@ -9,11 +9,11 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 // envFileEntry is one assignment read from an env file, kept in file order so
@@ -321,18 +321,18 @@ func runConfigCommand(args []string) error {
 		envFilePath string
 		format      string
 	)
-	fs := utils.NewFlagSet("relay-server config", printConfigUsage)
-	utils.StringFlag(fs, &envFilePath, "env-file", "",
+	fs := cli.NewFlagSet("relay-server config", printConfigUsage)
+	fs.StringVar(&envFilePath, "env-file", "",
 		"read this file in place of the process environment, against relay defaults")
-	utils.StringFlag(fs, &format, "format", "text", "output format: text, env or names")
+	fs.StringVar(&format, "format", "text", "output format: text, env or names")
 
-	if err := utils.ParseFlagSet(fs, args, printConfigUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printConfigUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "relay-server config"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "relay-server config"); err != nil {
 		printConfigUsage(os.Stderr)
 		return err
 	}
@@ -375,7 +375,7 @@ func runConfigCommand(args []string) error {
 }
 
 func printConfigUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"relay-server config [--env-file PATH] [--format text|env]",
 		},
@@ -400,4 +400,27 @@ func envIssueError(issues []cli.EnvIssue) error {
 	}
 	slices.Sort(messages)
 	return errors.New("invalid environment values: " + strings.Join(messages, "; "))
+}
+
+func parsePortNumber(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		return fallback
+	}
+	return port
+}
+
+func parseOptionalPortNumber(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	if raw == "0" {
+		return 0
+	}
+	return parsePortNumber(raw, fallback)
 }

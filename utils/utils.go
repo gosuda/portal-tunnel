@@ -577,3 +577,17 @@ func normalizeUniqueStrings(inputs []string, normalize func(string) string) []st
 	}
 	return out
 }
+
+func IntOrDefault(v, fallback int) int {
+	if v > 0 {
+		return v
+	}
+	return fallback
+}
+
+func StringOrDefault(v, fallback string) string {
+	if v != "" {
+		return v
+	}
+	return fallback
+}

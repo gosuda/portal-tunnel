@@ -1,4 +1,4 @@
-// Package cli owns command-line environment resolution.
+// Package cli owns command dispatch, argument parsing, help, and environment resolution.
 package cli
 
 import (

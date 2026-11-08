@@ -1,11 +1,10 @@
-package utils
+package cli
 
 import (
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -16,66 +15,11 @@ var errOnlyOneHelpTopicSupported = errors.New("only one help topic is supported"
 type CommandFunc func([]string) error
 type boolFlagValue interface{ IsBoolFlag() bool }
 
-func ParsePortNumber(raw string, fallback int) int {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return fallback
-	}
-	port, err := strconv.Atoi(raw)
-	if err != nil || port < 1 || port > 65535 {
-		return fallback
-	}
-	return port
-}
-
-func ParseOptionalPortNumber(raw string, fallback int) int {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return fallback
-	}
-	if raw == "0" {
-		return 0
-	}
-	return ParsePortNumber(raw, fallback)
-}
-
-func IntOrDefault(v, fallback int) int {
-	if v > 0 {
-		return v
-	}
-	return fallback
-}
-
-func StringOrDefault(v, fallback string) string {
-	if v != "" {
-		return v
-	}
-	return fallback
-}
-
-func StringFlag(fs *flag.FlagSet, target *string, name, fallback, usage string) {
-	ensureFlagSet(fs).StringVar(target, name, fallback, usage)
-}
-
-func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string) {
-	ensureFlagSet(fs).BoolVar(target, name, fallback, usage)
-}
-
 func RepeatedStringFlag(fs *flag.FlagSet, target *[]string, name, usage string) {
-	ensureFlagSet(fs).Func(name, usage, func(value string) error {
-		if target == nil {
-			return nil
-		}
+	fs.Func(name, usage, func(value string) error {
 		*target = append(*target, value)
 		return nil
 	})
-}
-
-func ensureFlagSet(fs *flag.FlagSet) *flag.FlagSet {
-	if fs != nil {
-		return fs
-	}
-	return flag.CommandLine
 }
 
 func RunCommands(
@@ -246,22 +190,6 @@ func RequireNoArgs(args []string, command string) error {
 		return nil
 	}
 	return fmt.Errorf("%s does not accept positional arguments", strings.TrimSpace(command))
-}
-
-func NormalizeLoopbackTarget(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", nil
-	}
-	if port, ok := strings.CutPrefix(raw, ":"); ok {
-		if _, err := strconv.Atoi(port); err == nil {
-			return net.JoinHostPort("127.0.0.1", port), nil
-		}
-	}
-	if _, err := strconv.Atoi(raw); err == nil {
-		return net.JoinHostPort("127.0.0.1", raw), nil
-	}
-	return NormalizeTargetAddr(raw)
 }
 
 // HelpTopic maps a subcommand name to its usage printer.

@@ -185,8 +185,9 @@ Portal's enforcement state. Both admin update endpoints edit a detached candidat
 and share one serialized save-and-apply path. Readers use snapshots without
 waiting for file I/O; no separate transport-setting mirror or read lock is needed.
 
-`cmd/internal/cli` resolves environment-backed flags from a captured input for
-each command. The resolved values, variable reference, and parse diagnostics
+`cmd/internal/cli` owns shared command dispatch, argument parsing, help output,
+and environment-backed flags resolved from a captured input for each command.
+Plain flags use `flag.FlagSet` directly. The resolved values, variable reference, and parse diagnostics
 belong to that resolution. Relay config-file reports use the file as their input
 without changing the process environment. Relay API, frontend, domain-report,
 and optional x402 routes share one application route table; protocol ingress
