@@ -3,13 +3,14 @@ import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { AdminServerCard } from "@/components/AdminServerCard";
 import { TagCombobox } from "@/components/TagCombobox";
-import type { AdminServer, ApprovalMode, UDPSettings, TCPPortSettings } from "@/hooks/useAdmin";
+import type { AdminServer, ApprovalMode, PortSettings } from "@/hooks/useAdmin";
 import type { BanFilter, SortOption, StatusFilter } from "@/types/filters";
 import { StatusSelect } from "@/components/select/StatusSelect";
 import { BanStatusButtons } from "@/components/button/BanStatusButtons";
 import { SortbySelect } from "@/components/select/SortbySelect";
 import { ApprovalModeToggle } from "@/components/button/ApprovalModeToggle";
 import { FloatingActionBar } from "@/components/FloatingActionBar";
+import { TransportPolicyControl } from "@/components/TransportPolicyControl";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AdminServerListProps {
@@ -34,10 +35,10 @@ interface AdminServerListProps {
   ) => void | Promise<void>;
   onBPSChange: (identityKey: string, bps: number) => void | Promise<void>;
   onApprovalModeChange: (mode: ApprovalMode) => void;
-  udpSettings: UDPSettings;
-  onUDPSettingsChange: (settings: UDPSettings) => void | Promise<void>;
-  tcpPortSettings: TCPPortSettings;
-  onTCPPortSettingsChange: (settings: TCPPortSettings) => void | Promise<void>;
+  udpSettings: PortSettings;
+  onUDPSettingsChange: (settings: PortSettings) => void | Promise<void>;
+  tcpPortSettings: PortSettings;
+  onTCPPortSettingsChange: (settings: PortSettings) => void | Promise<void>;
   onApproveStatusChange: (
     identityKey: string,
     approve: boolean
@@ -163,41 +164,6 @@ export function AdminServerList({
     void runBulkAction(onBulkBan);
   };
 
-  const [maxLeasesInput, setMaxLeasesInput] = useState(
-    String(udpSettings.maxLeases)
-  );
-  const [tcpPortMaxLeasesInput, setTCPPortMaxLeasesInput] = useState(
-    String(tcpPortSettings.maxLeases)
-  );
-
-  useEffect(() => {
-    setMaxLeasesInput(String(udpSettings.maxLeases));
-  }, [udpSettings.maxLeases]);
-
-  useEffect(() => {
-    setTCPPortMaxLeasesInput(String(tcpPortSettings.maxLeases));
-  }, [tcpPortSettings.maxLeases]);
-
-  const handleUDPToggle = (enabled: boolean) => {
-    void onUDPSettingsChange({ ...udpSettings, enabled });
-  };
-
-  const handleTCPPortToggle = (enabled: boolean) => {
-    void onTCPPortSettingsChange({ ...tcpPortSettings, enabled });
-  };
-
-  const handleMaxLeasesSave = () => {
-    const value = Math.max(0, parseInt(maxLeasesInput, 10) || 0);
-    setMaxLeasesInput(String(value));
-    void onUDPSettingsChange({ ...udpSettings, maxLeases: value });
-  };
-
-  const handleTCPPortMaxLeasesSave = () => {
-    const value = Math.max(0, parseInt(tcpPortMaxLeasesInput, 10) || 0);
-    setTCPPortMaxLeasesInput(String(value));
-    void onTCPPortSettingsChange({ ...tcpPortSettings, maxLeases: value });
-  };
-
   const adminFilterControls = (
     <>
       <div className="flex items-center gap-3">
@@ -222,104 +188,8 @@ export function AdminServerList({
 
   const transportPolicyControls = (
     <>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">UDP</span>
-        <div className="flex rounded-lg overflow-hidden border border-foreground/20">
-          <button
-            disabled={policySaving}
-            onClick={() => handleUDPToggle(false)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${!udpSettings.enabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Disabled
-          </button>
-          <button
-            disabled={policySaving}
-            onClick={() => handleUDPToggle(true)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${udpSettings.enabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Enabled
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">Max UDP</span>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min="0"
-            disabled={policySaving}
-            value={maxLeasesInput}
-            onChange={(e) => setMaxLeasesInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleMaxLeasesSave();
-            }}
-            className="disabled:opacity-50 w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
-            placeholder="0"
-          />
-          <button
-            disabled={policySaving}
-            onClick={handleMaxLeasesSave}
-            className="cursor-pointer disabled:cursor-wait disabled:opacity-50 h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            Save
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">TCP</span>
-        <div className="flex rounded-lg overflow-hidden border border-foreground/20">
-          <button
-            disabled={policySaving}
-            onClick={() => handleTCPPortToggle(false)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${!tcpPortSettings.enabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Disabled
-          </button>
-          <button
-            disabled={policySaving}
-            onClick={() => handleTCPPortToggle(true)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${tcpPortSettings.enabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Enabled
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">Max TCP</span>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min="0"
-            disabled={policySaving}
-            value={tcpPortMaxLeasesInput}
-            onChange={(e) => setTCPPortMaxLeasesInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleTCPPortMaxLeasesSave();
-            }}
-            className="disabled:opacity-50 w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
-            placeholder="0"
-          />
-          <button
-            disabled={policySaving}
-            onClick={handleTCPPortMaxLeasesSave}
-            className="cursor-pointer disabled:cursor-wait disabled:opacity-50 h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            Save
-          </button>
-        </div>
-      </div>
+      <TransportPolicyControl label="UDP" settings={udpSettings} disabled={policySaving} onChange={onUDPSettingsChange} />
+      <TransportPolicyControl label="TCP" settings={tcpPortSettings} disabled={policySaving} onChange={onTCPPortSettingsChange} />
     </>
   );
 

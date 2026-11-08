@@ -8,6 +8,7 @@ import type {
   ApprovalMode,
   LeasePolicyUpdate,
   PolicyLease,
+  PolicyPortSettings,
   PolicySettings,
   PolicyStateResponse,
 } from "@/types/api";
@@ -27,14 +28,14 @@ export interface AdminServer extends BaseServer {
   displayIP: string;
 }
 
-export interface UDPSettings {
+/** A transport the relay can open per lease, and how many leases may use it. */
+export interface PortSettings {
   enabled: boolean;
   maxLeases: number;
 }
 
-export interface TCPPortSettings {
-  enabled: boolean;
-  maxLeases: number;
+function toPortSettings(settings: PolicyPortSettings): PortSettings {
+  return { enabled: settings.enabled, maxLeases: settings.max_leases };
 }
 
 const DEFAULT_POLICY_SETTINGS: PolicySettings = {
@@ -300,7 +301,7 @@ export function useAdmin(enabled = true) {
     updatePolicySettings({ approval_mode: mode });
 
   const handleSettingsChange = (key: "udp" | "tcp_port") =>
-    (settings: { enabled: boolean; maxLeases: number }) =>
+    (settings: PortSettings) =>
       updatePolicySettings({
         [key]: { enabled: settings.enabled, max_leases: settings.maxLeases },
       });
@@ -357,14 +358,8 @@ export function useAdmin(enabled = true) {
   const handleBulkBan = (identityKeys: string[]) => handleBulkAction(identityKeys, "ban");
 
   const approvalMode = normalizeApprovalMode(policySettings.approval_mode);
-  const udpSettings: UDPSettings = {
-    enabled: policySettings.udp.enabled,
-    maxLeases: policySettings.udp.max_leases,
-  };
-  const tcpPortSettings: TCPPortSettings = {
-    enabled: policySettings.tcp_port.enabled,
-    maxLeases: policySettings.tcp_port.max_leases,
-  };
+  const udpSettings = toPortSettings(policySettings.udp);
+  const tcpPortSettings = toPortSettings(policySettings.tcp_port);
 
   return {
     servers,
