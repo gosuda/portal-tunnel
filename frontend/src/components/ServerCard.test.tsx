@@ -262,7 +262,7 @@ describe("ServerCard comments interaction", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByTitle("tcp://tcp.relay.example.com:40000")).toBeTruthy();
+    expect(screen.getByTitle("tcp.relay.example.com:40000")).toBeTruthy();
     expect(screen.getByText("Dedicated TCP game server")).toBeTruthy();
     expect(screen.getByText("#game")).toBeTruthy();
     expect(screen.getByText("tcp.relay.example.com:40000")).toBeTruthy();
