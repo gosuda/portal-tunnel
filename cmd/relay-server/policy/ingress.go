@@ -20,8 +20,9 @@ type Ingress struct {
 	tunnelSourceCIDRs []netip.Prefix
 }
 
-// NewIngress reads both lists as comma-separated CIDRs. An empty tunnel source
-// list lets every source run tunnels.
+// NewIngress reads both lists as comma-separated CIDRs. A blank tunnel source
+// setting lets every source run tunnels; a non-blank one must name at least one
+// network, so a mistyped value cannot open the relay.
 func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs, rawTunnelSourceCIDRs string) (*Ingress, error) {
 	trustedProxyCIDRs, err := parseCIDRs(rawTrustedProxyCIDRs)
 	if err != nil {
@@ -30,6 +31,9 @@ func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs, rawTunnelSourceCID
 	tunnelSourceCIDRs, err := parseCIDRs(rawTunnelSourceCIDRs)
 	if err != nil {
 		return nil, fmt.Errorf("parse tunnel source cidrs: %w", err)
+	}
+	if len(tunnelSourceCIDRs) == 0 && strings.TrimSpace(rawTunnelSourceCIDRs) != "" {
+		return nil, fmt.Errorf("parse tunnel source cidrs: %q names no network", rawTunnelSourceCIDRs)
 	}
 	return &Ingress{trustProxyHeaders: trustProxyHeaders, trustedProxyCIDRs: trustedProxyCIDRs, tunnelSourceCIDRs: tunnelSourceCIDRs}, nil
 }

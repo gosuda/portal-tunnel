@@ -92,11 +92,18 @@ func TestNewIngressRejectsInvalidCIDRs(t *testing.T) {
 	if _, err := NewIngress(false, "", "192.0.2.7"); err == nil {
 		t.Fatal("NewIngress() error = nil, want error for a tunnel source without a prefix length")
 	}
+	for _, raw := range []string{",,,", " , ", ",	,"} {
+		if _, err := NewIngress(false, "", raw); err == nil {
+			t.Fatalf("NewIngress() error = nil, want error for tunnel sources %q that name no network", raw)
+		}
+	}
 	if _, err := NewIngress(false, "192.0.2.0/24,2001:db8::/32", "192.0.2.7/32,2001:db8::/32"); err != nil {
 		t.Fatalf("NewIngress() error = %v, want nil for valid CIDR lists", err)
 	}
-	if _, err := NewIngress(false, "", ""); err != nil {
-		t.Fatalf("NewIngress() error = %v, want nil for empty CIDR lists", err)
+	for _, raw := range []string{"", "  "} {
+		if _, err := NewIngress(false, "", raw); err != nil {
+			t.Fatalf("NewIngress() error = %v, want nil for blank tunnel sources %q", err, raw)
+		}
 	}
 }
 

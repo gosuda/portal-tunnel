@@ -166,7 +166,7 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the IVNP overlay and requires `DISCOVERY=true`; empty disables the overlay |
 | `APPROVAL_MODE` | `auto` | string | Initial lease approval mode (`auto` \| `manual`). A mode saved in `policy.json` wins; see [Private relay](/self-hosting#private-relay) |
 | `UNAPPROVED_LEASES_PER_SOURCE` | `64` | int | Leases one source IP can hold while they are not routable; `0` is unlimited; see [Private relay](/self-hosting#private-relay) |
-| `TUNNEL_SOURCE_CIDRS` | `""` | string | Networks that may register tunnels (comma-separated CIDRs); a tunnel from anywhere else gets `403 source_not_allowed`; empty allows every network; see [Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks) |
+| `TUNNEL_SOURCE_CIDRS` | `""` | string | Networks that may register tunnels (comma-separated CIDRs); a tunnel from anywhere else gets `403 source_not_allowed`; empty allows every network, and a value that names no network is a startup error; see [Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks) |
 
 ### IVNP overlay
 
