@@ -65,6 +65,7 @@ export function ServerCard({
   ];
   const isTransportService = endpoints.length > 0;
   const isNavigable = navigable && !isTransportService;
+  const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation));
 
   const copyEndpoint = (protocol: string, address: string) =>
     copy(address, protocol);
@@ -201,77 +202,83 @@ export function ServerCard({
         </h3>
 
         {/* Southeast actions: Upvotes, Downvotes, Comments */}
-        <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5">
-          {/* Rating Pill: [ 👍 12 | 👎 3 ] */}
-          <div className="inline-flex h-7 items-center rounded-lg border border-border/70 bg-secondary/50 p-0.5 text-xs text-muted-foreground shadow-2xs backdrop-blur-xs">
-            <button
-              type="button"
-              onClick={(e) => void handleVote(e, "up")}
-              disabled={!onVote || isVoting}
-              aria-label="Recommend app"
-              aria-pressed={server.reputation?.viewer_vote === "up"}
-              title={`Recommend: ${server.reputation?.up ?? 0}`}
-              className={clsx(
-                "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
-                onVote ? "cursor-pointer" : "cursor-default",
-                server.reputation?.viewer_vote === "up"
-                  ? "bg-primary text-primary-foreground shadow-xs font-semibold hover:bg-primary/90"
-                  : "hover:bg-secondary hover:text-foreground"
-              )}
-            >
-              <ThumbsUp className="size-3.5 shrink-0" />
-              <span className="tabular-nums">{server.reputation?.up ?? 0}</span>
-            </button>
+        {showActions && (
+          <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5">
+            {/* Rating Pill: [ 👍 12 | 👎 3 ] */}
+            {(onVote || server.reputation) && (
+              <div className="inline-flex h-7 items-center rounded-lg border border-border/70 bg-secondary/50 p-0.5 text-xs text-muted-foreground shadow-2xs backdrop-blur-xs">
+                <button
+                  type="button"
+                  onClick={(e) => void handleVote(e, "up")}
+                  disabled={!onVote || isVoting}
+                  aria-label="Recommend app"
+                  aria-pressed={server.reputation?.viewer_vote === "up"}
+                  title={`Recommend: ${server.reputation?.up ?? 0}`}
+                  className={clsx(
+                    "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
+                    onVote ? "cursor-pointer" : "cursor-default",
+                    server.reputation?.viewer_vote === "up"
+                      ? "bg-primary text-primary-foreground shadow-xs font-semibold hover:bg-primary/90"
+                      : "hover:bg-secondary hover:text-foreground"
+                  )}
+                >
+                  <ThumbsUp className="size-3.5 shrink-0" />
+                  <span className="tabular-nums">{server.reputation?.up ?? 0}</span>
+                </button>
 
-            <div className="my-1 h-3 w-px bg-border/70" />
+                <div className="my-1 h-3 w-px bg-border/70" />
 
-            <button
-              type="button"
-              onClick={(e) => void handleVote(e, "down")}
-              disabled={!onVote || isVoting}
-              aria-label="Do not recommend app"
-              aria-pressed={server.reputation?.viewer_vote === "down"}
-              title={`Do not recommend: ${server.reputation?.down ?? 0}`}
-              className={clsx(
-                "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
-                onVote ? "cursor-pointer" : "cursor-default",
-                server.reputation?.viewer_vote === "down"
-                  ? "bg-destructive text-destructive-foreground shadow-xs font-semibold hover:bg-destructive/90"
-                  : "hover:bg-secondary hover:text-foreground"
-              )}
-            >
-              <ThumbsDown className="size-3.5 shrink-0" />
-              <span className="tabular-nums">{server.reputation?.down ?? 0}</span>
-            </button>
+                <button
+                  type="button"
+                  onClick={(e) => void handleVote(e, "down")}
+                  disabled={!onVote || isVoting}
+                  aria-label="Do not recommend app"
+                  aria-pressed={server.reputation?.viewer_vote === "down"}
+                  title={`Do not recommend: ${server.reputation?.down ?? 0}`}
+                  className={clsx(
+                    "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
+                    onVote ? "cursor-pointer" : "cursor-default",
+                    server.reputation?.viewer_vote === "down"
+                      ? "bg-destructive text-destructive-foreground shadow-xs font-semibold hover:bg-destructive/90"
+                      : "hover:bg-secondary hover:text-foreground"
+                  )}
+                >
+                  <ThumbsDown className="size-3.5 shrink-0" />
+                  <span className="tabular-nums">{server.reputation?.down ?? 0}</span>
+                </button>
+              </div>
+            )}
+
+            {/* Comments Button: [ 💬 5 ] */}
+            {(onOpenComments || server.reputation?.comments !== undefined) && (
+              onOpenComments ? (
+                <button
+                  type="button"
+                  data-comments-trigger
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenComments(server);
+                  }}
+                  aria-label="Comments"
+                  title={`Comments: ${server.reputation?.comments ?? 0}`}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
+                >
+                  <MessageSquare className="size-3.5 shrink-0" />
+                  <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
+                </button>
+              ) : (
+                <span
+                  className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs"
+                  title={`Comments: ${server.reputation?.comments ?? 0}`}
+                >
+                  <MessageSquare className="size-3.5 shrink-0" />
+                  <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
+                </span>
+              )
+            )}
           </div>
-
-          {/* Comments Button: [ 💬 5 ] */}
-          {onOpenComments ? (
-            <button
-              type="button"
-              data-comments-trigger
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onOpenComments(server);
-              }}
-              aria-label="Comments"
-              title={`Comments: ${server.reputation?.comments ?? 0}`}
-              className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
-            >
-              <MessageSquare className="size-3.5 shrink-0" />
-              <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
-            </button>
-          ) : (
-            <span
-              className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs"
-              title={`Comments: ${server.reputation?.comments ?? 0}`}
-            >
-              <MessageSquare className="size-3.5 shrink-0" />
-              <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
-            </span>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Children slot (e.g. Admin controls) */}
