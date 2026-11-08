@@ -121,20 +121,14 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 	}, nil
 }
 
-// setUDPPolicy and setTCPPortPolicy apply the relay's current transport
-// capacity values; the relay owns the operator decisions behind them.
-func (r *leaseRegistry) setUDPPolicy(enabled bool, maxLeases int) {
+// setTransportPolicy publishes both transport policies under one registry lock.
+func (r *leaseRegistry) setTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.udpEnabled = enabled
-	r.udpMaxLeases = maxLeases
-}
-
-func (r *leaseRegistry) setTCPPortPolicy(enabled bool, maxLeases int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.tcpPortEnabled = enabled
-	r.tcpMaxLeases = maxLeases
+	r.udpEnabled = udpEnabled
+	r.udpMaxLeases = udpMaxLeases
+	r.tcpPortEnabled = tcpEnabled
+	r.tcpMaxLeases = tcpMaxLeases
 }
 
 func (r *leaseRegistry) udpPolicy() (bool, int) {

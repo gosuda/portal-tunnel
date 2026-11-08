@@ -399,6 +399,17 @@ func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.Reverse
 // stops admitting new UDP leases. Enabling UDP at runtime is refused when no
 // backhaul listener exists, since a listener cannot be created post-start.
 func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
+	if err := s.ValidateTransportPolicy(udpEnabled, udpMaxLeases, tcpEnabled, tcpMaxLeases); err != nil {
+		return err
+	}
+	s.registry.setTransportPolicy(udpEnabled, udpMaxLeases, tcpEnabled, tcpMaxLeases)
+	return nil
+}
+
+// ValidateTransportPolicy checks whether a policy can be applied without
+// changing enforcement. The relay can reject unsupported settings before
+// persisting them. Runtime UDP availability is fixed once the server starts.
+func (s *Server) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
 	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
 		return errTransportMaxLeasesMustNonNegative
 	}
@@ -409,8 +420,6 @@ func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnable
 	if s.group != nil && udpEnabled && s.quicBackhaul == nil {
 		return errEnablingUDPRequiresRelayRestart
 	}
-	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
-	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
 	return nil
 }
 

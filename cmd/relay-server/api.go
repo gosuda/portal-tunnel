@@ -263,18 +263,34 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			}
 			api.policyWriteMu.Lock()
 			defer api.policyWriteMu.Unlock()
-			api.policyMu.Lock()
+			mode, err := policy.ParseMode(req.ApprovalMode)
+			if err != nil {
+				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto' or 'manual'")
+				return
+			}
+			if err := api.server.ValidateTransportPolicy(req.UDP.Enabled, req.UDP.MaxLeases, req.TCPPort.Enabled, req.TCPPort.MaxLeases); err != nil {
+				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+				return
+			}
 			proposedAccess := api.access.Snapshot()
-			previous := api.policyState(proposedAccess)
-			if !api.applyPolicySettings(w, req, &proposedAccess) {
-				api.policyMu.Unlock()
-				return
-			}
+			proposedAccess.SetMode(mode)
+			api.policyMu.RLock()
 			payload := api.policyState(proposedAccess)
-			api.policyMu.Unlock()
-			if !api.persistPolicyState(w, previous, payload) {
+			api.policyMu.RUnlock()
+			payload.UDPEnabled, payload.UDPMaxLeases = &req.UDP.Enabled, &req.UDP.MaxLeases
+			payload.TCPPortEnabled, payload.TCPPortMaxLeases = &req.TCPPort.Enabled, &req.TCPPort.MaxLeases
+			if !api.persistPolicyState(w, payload) {
 				return
 			}
+			api.policyMu.Lock()
+			if err := api.server.SetTransportPolicy(req.UDP.Enabled, req.UDP.MaxLeases, req.TCPPort.Enabled, req.TCPPort.MaxLeases); err != nil {
+				api.policyMu.Unlock()
+				log.Error().Err(err).Msg("apply saved transport policy")
+				utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "saved transport policy could not be applied")
+				return
+			}
+			api.udpPolicy, api.tcpPortPolicy = req.UDP, req.TCPPort
+			api.policyMu.Unlock()
 			api.commitAccess(proposedAccess)
 			api.policyMu.RLock()
 			settings := api.policySettings()
@@ -310,17 +326,25 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 		}
 		api.policyWriteMu.Lock()
 		defer api.policyWriteMu.Unlock()
-		api.policyMu.Lock()
 		proposedAccess := api.access.Snapshot()
-		previous := api.policyState(proposedAccess)
-		if !api.applyLeasePolicyUpdate(w, identityKey, req, &proposedAccess) {
-			api.policyMu.Unlock()
+		if !applyLeasePolicyUpdate(w, identityKey, req, &proposedAccess) {
 			return
 		}
+		api.policyMu.RLock()
 		payload := api.policyState(proposedAccess)
-		api.policyMu.Unlock()
-		if !api.persistPolicyState(w, previous, payload) {
+		api.policyMu.RUnlock()
+		if req.BPS != nil {
+			if *req.BPS == 0 {
+				delete(payload.IdentityBPS, identityKey.String())
+			} else {
+				payload.IdentityBPS[identityKey.String()] = *req.BPS
+			}
+		}
+		if !api.persistPolicyState(w, payload) {
 			return
+		}
+		if req.BPS != nil {
+			api.server.BPSManager().SetIdentityBPS(identityKey, *req.BPS)
 		}
 		api.commitAccess(proposedAccess)
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
@@ -380,26 +404,6 @@ func (api *RelayAPI) policySettings() types.PolicySettings {
 	}
 }
 
-func (api *RelayAPI) applyPolicySettings(w http.ResponseWriter, req types.PolicySettings, access *policy.AccessState) bool {
-	if req.UDP.MaxLeases < 0 || req.TCPPort.MaxLeases < 0 {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
-		return false
-	}
-	mode, err := policy.ParseMode(req.ApprovalMode)
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto' or 'manual'")
-		return false
-	}
-	if err := api.server.SetTransportPolicy(req.UDP.Enabled, req.UDP.MaxLeases, req.TCPPort.Enabled, req.TCPPort.MaxLeases); err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-		return false
-	}
-	access.SetMode(mode)
-	api.udpPolicy = req.UDP
-	api.tcpPortPolicy = req.TCPPort
-	return true
-}
-
 // normalizePolicyIdentityKey canonicalizes an untrusted admin-supplied
 // identity key into the typed runtime form. It reuses the same normalization
 // as the policy.json loader, so malformed keys are rejected with an HTTP 400
@@ -412,7 +416,7 @@ func normalizePolicyIdentityKey(w http.ResponseWriter, raw string) (types.Servic
 	}
 	return key, true
 }
-func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey types.ServiceIdentityKey, req types.LeasePolicyUpdate, access *policy.AccessState) bool {
+func applyLeasePolicyUpdate(w http.ResponseWriter, identityKey types.ServiceIdentityKey, req types.LeasePolicyUpdate, access *policy.AccessState) bool {
 	if req.IsBanned == nil && req.IsApproved == nil && req.IsDenied == nil && req.BPS == nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease policy update is empty")
 		return false
@@ -425,11 +429,6 @@ func (api *RelayAPI) applyLeasePolicyUpdate(w http.ResponseWriter, identityKey t
 		if *req.BPS < 0 {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps must be non-negative")
 			return false
-		}
-		if *req.BPS == 0 {
-			api.server.BPSManager().DeleteIdentityBPS(identityKey)
-		} else {
-			api.server.BPSManager().SetIdentityBPS(identityKey, *req.BPS)
 		}
 	}
 	if req.IsBanned != nil {
@@ -490,15 +489,9 @@ func (api *RelayAPI) tokenAllowed(raw string) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }
 
-func (api *RelayAPI) persistPolicyState(w http.ResponseWriter, previous, payload persistedPolicyState) bool {
+func (api *RelayAPI) persistPolicyState(w http.ResponseWriter, payload persistedPolicyState) bool {
 	if err := api.savePolicyState(payload); err != nil {
 		log.Error().Err(err).Str("path", api.policyStatePath).Msg("persist relay policy state")
-		api.policyMu.Lock()
-		rollbackErr := previous.apply(api)
-		api.policyMu.Unlock()
-		if rollbackErr != nil {
-			log.Error().Err(rollbackErr).Msg("roll back relay policy state")
-		}
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "policy could not be persisted")
 		return false
 	}

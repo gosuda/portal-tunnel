@@ -188,21 +188,6 @@ func (m *BPSManager) SetIdentityBPS(key types.ServiceIdentityKey, bps int64) {
 	})
 }
 
-func (m *BPSManager) DeleteIdentityBPS(key types.ServiceIdentityKey) {
-	if m == nil || !key.Valid() {
-		return
-	}
-
-	if m.identityBPS != nil {
-		m.identityBPS.UpdateCopy(func(limits *map[types.ServiceIdentityKey]int64) {
-			delete(*limits, key)
-		})
-	}
-	m.mu.Lock()
-	delete(m.identityLimiters, key)
-	m.mu.Unlock()
-}
-
 // ResetIdentityLimiter forgets ephemeral token state while preserving the
 // operator-configured limit for the stable identity.
 func (m *BPSManager) ResetIdentityLimiter(key types.ServiceIdentityKey) {
@@ -230,22 +215,6 @@ func (m *BPSManager) IdentityBPSLimits() map[string]int64 {
 	return out
 }
 
-func (m *BPSManager) SetIdentityBPSLimits(limits map[string]int64) {
-	if m == nil {
-		return
-	}
-
-	next := make(map[types.ServiceIdentityKey]int64, len(limits))
-	for key, bps := range limits {
-		serviceKey, err := types.ParseServiceIdentityKey(key)
-		if err != nil || bps <= 0 {
-			continue
-		}
-		next[serviceKey] = bps
-	}
-	m.SetServiceIdentityBPSLimits(next)
-}
-
 func (m *BPSManager) SetServiceIdentityBPSLimits(next map[types.ServiceIdentityKey]int64) {
 	if m == nil {
 		return
@@ -260,7 +229,13 @@ func (m *BPSManager) SetServiceIdentityBPSLimits(next map[types.ServiceIdentityK
 		m.identityBPS.Store(limits)
 	}
 	m.mu.Lock()
-	m.identityLimiters = make(map[types.ServiceIdentityKey]*bpsLimiter)
+	// Rates are read separately on every reservation. Keep accrued credit for
+	// identities that remain limited, just as individual rate updates do.
+	for key := range m.identityLimiters {
+		if limits[key] <= 0 {
+			delete(m.identityLimiters, key)
+		}
+	}
 	m.mu.Unlock()
 }
 

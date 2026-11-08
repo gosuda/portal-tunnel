@@ -72,6 +72,31 @@ func TestServerStatsLeaseLifecycleAndCumulativeTraffic(t *testing.T) {
 	}
 }
 
+func TestTransportPolicyValidationDoesNotChangeEnforcement(t *testing.T) {
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://localhost", StateDir: t.TempDir(),
+		MinPort: 12000, MaxPort: 12010,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ValidateTransportPolicy(true, 1, true, 2); err != nil {
+		t.Fatal(err)
+	}
+	if server.supportsUDP() || server.supportsTCP() {
+		t.Fatal("validation enabled transports before the policy was applied")
+	}
+	if err := server.SetTransportPolicy(true, 1, true, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetTransportPolicy(false, -1, false, 0); err == nil {
+		t.Fatal("negative capacity was accepted")
+	}
+	if !server.supportsUDP() || !server.supportsTCP() {
+		t.Fatal("rejected policy changed transport enforcement")
+	}
+}
+
 func TestServerStatsConcurrentLeaseLifecycle(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	server := &Server{registry: registry}

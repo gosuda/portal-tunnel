@@ -171,6 +171,13 @@ cache snapshots, so mode changes also revoke cache-only identities. Registration
 reloads the committed snapshot if its publication is rejected.
 Revisions are local to a running relay; both sides start fresh on restart.
 
+Admin changes validate and persist their complete candidate before publishing
+access decisions, transport settings, or bandwidth limits. A failed policy-file
+write leaves runtime enforcement unchanged and needs no rollback. Portal owns
+transport capability validation and applies UDP/TCP policy together under the
+registry lock. Bulk bandwidth updates retain existing limiter credit for
+identities that remain limited; removing a limit discards its limiter state.
+
 Revocation detaches cached content and advances the retained lease's cache
 generation. Cache requests capture that generation before the final access
 check, and must still match it at publication. This fences uploads that overlap

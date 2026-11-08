@@ -27,6 +27,37 @@ func TestBPSWaitRetainsAccruedCredit(t *testing.T) {
 	})
 }
 
+func TestReplacingBPSLimitsPreservesAccruedCredit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		manager := NewBPSManager()
+		key := types.NewServiceIdentityKey("tenant", "address")
+		manager.SetIdentityBPS(key, 100)
+		done := make(chan int, 1)
+		go func() {
+			n, err := manager.ThrottleIdentityBPS(ctx, key, 10)
+			if err != nil {
+				n = -1
+			}
+			done <- n
+		}()
+		synctest.Wait()
+		synctest.Sleep(60 * time.Millisecond)
+		manager.SetServiceIdentityBPSLimits(map[types.ServiceIdentityKey]int64{key: 100})
+		synctest.Sleep(40 * time.Millisecond)
+		synctest.Wait()
+		select {
+		case n := <-done:
+			if n != 10 {
+				t.Fatalf("throttle returned %d bytes, want 10", n)
+			}
+		default:
+			t.Fatal("reapplying the limit discarded already accrued bandwidth credit")
+		}
+	})
+}
+
 func TestBridgeCancellationInterruptsThrottle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())

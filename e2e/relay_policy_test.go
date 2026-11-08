@@ -229,7 +229,7 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 		}
 	}
 	assertBlocked()
-	setPolicy(`{"identity_key":"`+leaseIdentity.Key()+`","is_banned":false,"is_denied":true}`, http.StatusOK)
+	setPolicy(`{"identity_key":"`+leaseIdentity.Key()+`","is_banned":false,"is_denied":true,"bps":10000}`, http.StatusOK)
 	assertBlocked()
 
 	// Make atomic replacement fail without permissions or filesystem mocks.
@@ -241,15 +241,31 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	if err := os.Mkdir(policyPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	setPolicy(`{"identity_key":"`+leaseIdentity.Key()+`","is_denied":false}`, http.StatusInternalServerError)
+	setPolicy(`{"identity_key":"`+leaseIdentity.Key()+`","is_denied":false,"bps":20000}`, http.StatusInternalServerError)
 	assertBlocked()
 	var state types.PolicyStateResponse
 	headers := http.Header{"Authorization": {"Bearer admin-test"}}
 	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Leases) != 1 || state.Leases[0].IsBanned || !state.Leases[0].IsDenied {
+	if len(state.Leases) != 1 || state.Leases[0].IsBanned || !state.Leases[0].IsDenied || state.Leases[0].BPS != 10000 {
 		t.Fatalf("failed save changed committed policy: %+v", state.Leases)
+	}
+	proposed := state.Policy
+	proposed.ApprovalMode = "manual"
+	proposed.UDP.MaxLeases = 4
+	proposed.TCPPort.MaxLeases = 5
+	err = utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, proposed, headers, nil)
+	var apiErr *types.APIRequestError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("policy save failure: %v", err)
+	}
+	var unchanged types.PolicySettings
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicy, nil, headers, &unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if unchanged != state.Policy {
+		t.Fatalf("failed save changed transport policy: got %+v, want %+v", unchanged, state.Policy)
 	}
 }
 
