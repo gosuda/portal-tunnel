@@ -42,6 +42,6 @@ Ubuntu images on Hetzner Cloud have no extra host firewall by default; if the us
 
 ## Hand off
 
-Then continue with the `portal-relay` skill from **Verify the host**, not from **Deploy**: a fresh image may lack Docker and Compose v2, and that step checks and, with approval, installs them. Use this host's public address as the glue address. Report the server, firewall, and primary IP with their hourly or monthly price, and rollback: `hcloud server delete <name>`, `hcloud firewall delete <name>`, and `hcloud primary-ip delete <name>` (disable protection first if it was enabled).
+Then continue with the `portal-relay` skill from **Verify the host**, not from **Deploy**: a fresh image may lack Docker and Compose v2, and that step checks and, with approval, installs them. Use this host's public address as the glue address. The DNS records come after **Deploy**, at the common skill's **Delegate DNS** step. Report the server, firewall, and primary IP with their hourly or monthly price, and rollback: `hcloud server delete <name>`, `hcloud firewall delete <name>`, and `hcloud primary-ip delete <name>` (disable protection first if it was enabled).
 
 Portal can also use Hetzner DNS as its ACME DNS provider (`ACME_DNS_PROVIDER=hetzner`); that is a relay setting covered by the configuration reference, not by this skill, and Hetzner DNS does not support ENS DNSSEC automation.

@@ -27,7 +27,14 @@ This skill deploys on a host that already exists. When the host or the parent DN
 - `portal-relay-aws`: create an EC2 or Lightsail instance and open its network.
 - `portal-relay-cloudflare`: write the NS, glue, and DS records in a Cloudflare parent zone.
 
-A cloud skill and a DNS skill can be combined in one request.
+A cloud skill and a DNS skill can be combined in one request. Run them at these points of the workflow below, for example Oracle + Cloudflare:
+
+1. Cloud skill (`portal-relay-oracle`, `-hetzner`, or `-aws`): create the host and open its network.
+2. This skill, **Verify the host** through **Deploy** (and step 3 when TCP/UDP leases are wanted): bootstrap Docker and start the relay.
+3. DNS skill (`portal-relay-cloudflare`) at step 4, **Delegate DNS**: NS, glue, then DS.
+4. This skill, **Verify** through **Hand off**: verify end to end and register.
+
+Without a DNS skill, do step 4 by hand. Without a cloud skill, start at **Verify the host**.
 
 After deployment, use `portal-relay-admin` to approve, deny, ban, or rate-limit leases and change approval mode, and `portal-relay-diagnose` when the relay, its DNS, TLS, or lease ports fail.
 
@@ -66,20 +73,7 @@ Bandwidth guidance: web/API tunnels are lightweight (tens of GB/month for typica
 - Check public IP reachability: confirm the host's firewall allows inbound on the required ports
 - Confirm a domain or subdomain is available for delegation (e.g., `relay.example.com`)
 
-### 2. Set up the delegation
-
-The embedded authoritative DNS server (default since #311) eliminates the need for external DNS provider credentials. At the parent zone's DNS management, create two records:
-
-| Type | Name | Value |
-|---|---|---|
-| `NS` | `relay.example.com` | `ns.relay.example.com` |
-| `A` | `ns.relay.example.com` | `<public IP>` (glue) |
-
-No wildcard record is needed — the relay synthesizes A answers for every tunnel hostname under its zone. See the [Configuration Reference](https://gosuda.github.io/portal-tunnel/configuration) for the canonical embedded DNS documentation.
-
-After the delegation resolves, publish the DS record printed in the relay's startup log at the parent zone; the embedded DNS signs its zone with a CSK stored at `IDENTITY_PATH/dnssec-csk.json`. Back that file up with the identity directory: replacing it without re-coordinating the parent DS breaks validation for resolvers that validate DNSSEC.
-
-### 3. Deploy
+### 2. Deploy
 
 Create `.env` and `docker-compose.yml` per the standard relay deployment:
 
@@ -110,7 +104,7 @@ docker compose up -d --force-recreate portal
 
 Always name the service; never pass `--remove-orphans` on a shared Compose project.
 
-### 4. Optional: enable TCP/UDP leases for game hosting
+### 3. Optional: enable TCP/UDP leases for game hosting
 
 Most public relays do not enable raw transport. If the user wants to support game servers (Minecraft, Terraria, etc.) or other TCP/UDP services through their relay:
 
@@ -124,6 +118,24 @@ MAX_PORT=40009
 `40000-40009` are the compose defaults; any range works because the published ports interpolate the same variables. Then uncomment the lease-port lines already present in the bundled `docker-compose.yml`: they expand to `${MIN_PORT:-40000}-${MAX_PORT:-40009}` for TCP and `/udp`, so the published range follows `.env`. For UDP also uncomment `443:443/udp`; the tunnel carries UDP lease traffic over a QUIC backhaul to the public `PORTAL_URL` port, so UDP leases do not work without it.
 
 The host's cloud firewall or security group must allow the same ports. See the [Game Server Hosting guide](https://gosuda.github.io/portal-tunnel/game-server-hosting) for game-specific knowledge.
+
+### 4. Delegate DNS
+
+The relay must be running before this step: its embedded DNS answers for the zone only after **Deploy**, and the DS record comes from its startup log (`docker compose logs portal | grep ds_record`).
+
+When the parent zone is on a DNS provider with a provider skill (`portal-relay-cloudflare`), run that skill now for the NS, glue, and DS records, then return here at **Verify**. Otherwise create the records by hand at the parent zone's DNS management:
+
+
+The embedded authoritative DNS server (default since #311) needs no external DNS provider credentials. Create two records:
+
+| Type | Name | Value |
+|---|---|---|
+| `NS` | `relay.example.com` | `ns.relay.example.com` |
+| `A` | `ns.relay.example.com` | `<public IP>` (glue) |
+
+No wildcard record is needed — the relay synthesizes A answers for every tunnel hostname under its zone. See the [Configuration Reference](https://gosuda.github.io/portal-tunnel/configuration) for the canonical embedded DNS documentation.
+
+After the delegation resolves, publish the DS record printed in the relay's startup log at the parent zone; the embedded DNS signs its zone with a CSK stored at `IDENTITY_PATH/dnssec-csk.json`. Back that file up with the identity directory: replacing it without re-coordinating the parent DS breaks validation for resolvers that validate DNSSEC.
 
 ### 5. Verify
 
