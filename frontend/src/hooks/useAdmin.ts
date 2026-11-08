@@ -1,17 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useList, type BaseServer } from "@/hooks/useList";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useList } from "@/hooks/useList";
+import { leaseToServer, type BaseServer } from "@/lib/server";
 import type { BanFilter } from "@/types/filters";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
-import {
-  parseLeaseMetadata,
-  resolveLeasePayment,
-  resolveLeaseThumbnail,
-} from "@/lib/metadata";
 import type {
   ApprovalMode,
   LeasePolicyUpdate,
   PolicyLease,
+  PolicyPortSettings,
   PolicySettings,
   PolicyStateResponse,
 } from "@/types/api";
@@ -31,14 +28,14 @@ export interface AdminServer extends BaseServer {
   displayIP: string;
 }
 
-export interface UDPSettings {
+/** A transport the relay can open per lease, and how many leases may use it. */
+export interface PortSettings {
   enabled: boolean;
   maxLeases: number;
 }
 
-export interface TCPPortSettings {
-  enabled: boolean;
-  maxLeases: number;
+function toPortSettings(settings: PolicyPortSettings): PortSettings {
+  return { enabled: settings.enabled, maxLeases: settings.max_leases };
 }
 
 const DEFAULT_POLICY_SETTINGS: PolicySettings = {
@@ -82,33 +79,11 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function toAdminServer(
-  row: PolicyLease,
-): AdminServer {
-  const metadata = parseLeaseMetadata(row.metadata);
-  const payment = resolveLeasePayment(metadata);
-  const hostname = row.hostname || "";
-  const canonicalHostname = row.canonical_hostname || "";
-  const routeHostname = canonicalHostname || hostname;
-  const serviceName = row.name || "";
-  const address = row.address.trim();
-
+function toAdminServer(row: PolicyLease): AdminServer {
   return {
-    id: routeHostname,
-    name: serviceName || routeHostname || "(unnamed)",
-    description: metadata.description,
-    tags: metadata.tags,
-    thumbnail: resolveLeaseThumbnail(metadata),
-    owner: metadata.owner,
-    online: (row.ready || 0) > 0,
-    dns: hostname || routeHostname,
-    link: hostname || routeHostname ? `https://${hostname || routeHostname}/` : "",
-    lastUpdated: row.last_seen_at || undefined,
-    firstSeen: row.first_seen_at || undefined,
-    paymentEnabled: payment.enabled,
-    paymentLabel: payment.label,
+    ...leaseToServer(row),
     identityKey: row.identity_key.trim(),
-    address,
+    address: row.address.trim(),
     isBanned: row.is_banned,
     bps: row.bps,
     isApproved: row.is_approved,
@@ -166,51 +141,47 @@ export function useAdmin(enabled = true) {
     setPolicySettings(state.settings);
   };
 
-  const fetchData = async () => {
-    setError("");
+  // Each load takes a number; only the latest may apply its result, so a
+  // refresh after an action and the first load cannot overwrite each other,
+  // and nothing applies after unmount.
+  const loadGeneration = useRef(0);
 
+  /** Reads the policy state; showLoading puts the page in its loading state. */
+  const reload = async (showLoading: boolean) => {
+    const generation = ++loadGeneration.current;
+    setError("");
+    if (showLoading) {
+      setLoading(true);
+    }
     try {
       const state = await loadPolicyState();
-      applyPolicyState(state);
+      if (generation === loadGeneration.current) {
+        applyPolicyState(state);
+      }
     } catch (err: unknown) {
-      setError(toAdminErrorMessage(err, "Failed to load admin data"));
+      if (generation === loadGeneration.current) {
+        setError(toAdminErrorMessage(err, "Failed to load admin data"));
+      }
+    } finally {
+      if (generation === loadGeneration.current) {
+        setLoading(false);
+      }
     }
   };
 
-  useEffect(() => {
-    let mounted = true;
-    if (!enabled) {
+  const loadOnEnable = useEffectEvent(() => {
+    if (enabled) {
+      void reload(true);
+    } else {
       setError("");
       setLoading(false);
-      return () => {
-        mounted = false;
-      };
     }
+  });
 
-    const loadInitialData = async () => {
-      setError("");
-      setLoading(true);
-      try {
-        const state = await loadPolicyState();
-        if (!mounted) {
-          return;
-        }
-        applyPolicyState(state);
-      } catch (err: unknown) {
-        if (!mounted) {
-          return;
-        }
-        setError(toAdminErrorMessage(err, "Failed to load admin data"));
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    };
-
-    void loadInitialData();
+  useEffect(() => {
+    loadOnEnable();
     return () => {
-      mounted = false;
+      loadGeneration.current += 1;
     };
   }, [enabled]);
 
@@ -238,7 +209,7 @@ export function useAdmin(enabled = true) {
     setError("");
     try {
       await action();
-      await fetchData();
+      await reload(false);
     } catch (err: unknown) {
       const message = toAdminErrorMessage(err, "Action failed");
       console.error(err);
@@ -326,7 +297,7 @@ export function useAdmin(enabled = true) {
     updatePolicySettings({ approval_mode: mode });
 
   const handleSettingsChange = (key: "udp" | "tcp_port") =>
-    (settings: { enabled: boolean; maxLeases: number }) =>
+    (settings: PortSettings) =>
       updatePolicySettings({
         [key]: { enabled: settings.enabled, max_leases: settings.maxLeases },
       });
@@ -383,14 +354,8 @@ export function useAdmin(enabled = true) {
   const handleBulkBan = (identityKeys: string[]) => handleBulkAction(identityKeys, "ban");
 
   const approvalMode = normalizeApprovalMode(policySettings.approval_mode);
-  const udpSettings: UDPSettings = {
-    enabled: policySettings.udp.enabled,
-    maxLeases: policySettings.udp.max_leases,
-  };
-  const tcpPortSettings: TCPPortSettings = {
-    enabled: policySettings.tcp_port.enabled,
-    maxLeases: policySettings.tcp_port.max_leases,
-  };
+  const udpSettings = toPortSettings(policySettings.udp);
+  const tcpPortSettings = toPortSettings(policySettings.tcp_port);
 
   return {
     servers,

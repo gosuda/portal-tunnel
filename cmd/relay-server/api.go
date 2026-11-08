@@ -826,7 +826,11 @@ func (api *RelayAPI) serveVote(w http.ResponseWriter, r *http.Request) {
 			Comments: api.reputation.ListComments(identity, viewerHash, commentAuthorHash(r)),
 		})
 	} else {
-		utils.WriteAPIData(w, http.StatusOK, policy.ReputationSummary{Hostname: hostname, VoteSummary: summary})
+		utils.WriteAPIData(w, http.StatusOK, policy.ReputationSummary{
+			Hostname:    hostname,
+			Comments:    api.reputation.CommentsCount(identity),
+			VoteSummary: summary,
+		})
 	}
 }
 

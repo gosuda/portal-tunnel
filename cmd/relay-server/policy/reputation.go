@@ -69,6 +69,7 @@ type VoteSummary struct {
 // ReputationSummary is one directory row for a live hostname.
 type ReputationSummary struct {
 	Hostname string `json:"hostname"`
+	Comments int    `json:"comments"`
 	VoteSummary
 }
 
@@ -289,9 +290,27 @@ func (s *ReputationStore) Summaries(viewerHash string, leases []types.PolicyLeas
 	rows := make([]ReputationSummary, 0, len(leases))
 	for _, lease := range leases {
 		hostname := cmp.Or(lease.CanonicalHostname, lease.Hostname)
-		rows = append(rows, ReputationSummary{Hostname: hostname, VoteSummary: summarizeVotes(s.state.Identities[lease.IdentityKey], viewerHash)})
+		commentsCount := 0
+		if s.state.Comments != nil {
+			commentsCount = len(s.state.Comments.Threads[lease.IdentityKey])
+		}
+		rows = append(rows, ReputationSummary{
+			Hostname:    hostname,
+			Comments:    commentsCount,
+			VoteSummary: summarizeVotes(s.state.Identities[lease.IdentityKey], viewerHash),
+		})
 	}
 	return rows
+}
+
+// CommentsCount returns the number of comments posted for the given app identity.
+func (s *ReputationStore) CommentsCount(identity string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Comments == nil {
+		return 0
+	}
+	return len(s.state.Comments.Threads[identity])
 }
 
 // ViewerHashFor resolves a cookie to its voter digest for read paths. A

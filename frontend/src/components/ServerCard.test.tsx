@@ -109,6 +109,7 @@ const REPUTATION: ReputationSummary = {
   down: 8,
   total: 20,
   viewer_vote: "",
+  comments: 5,
 };
 
 // Routes probe: the card sits on the directory route; navigation into
@@ -127,10 +128,10 @@ function renderCardWithComments() {
                 server={{
                   id: "srv-1",
                   name: "minecraft",
-                  description: "",
-                  tags: [],
+                  description: "A cool sandbox game",
+                  tags: ["game"],
                   thumbnail: "",
-                  owner: "",
+                  owner: "notch",
                   online: true,
                   dns: "minecraft.relay.example.com",
                   link: "/server/srv-1",
@@ -156,5 +157,135 @@ describe("ServerCard comments interaction", () => {
     expect(onOpenComments).toHaveBeenCalledWith(expect.objectContaining({ id: "srv-1" }));
     expect(screen.getByText("directory")).toBeTruthy();
     expect(screen.queryByText("service detail")).toBeNull();
+  });
+
+  it("displays upvotes, downvotes, and comment counts", () => {
+    renderCardWithComments();
+
+    expect(screen.getByTitle("Recommend: 12")).toBeTruthy();
+    expect(screen.getByTitle("Do not recommend: 8")).toBeTruthy();
+    expect(screen.getByTitle("Comments: 5")).toBeTruthy();
+    expect(screen.getByText("12")).toBeTruthy();
+    expect(screen.getByText("8")).toBeTruthy();
+    expect(screen.getByText("5")).toBeTruthy();
+  });
+
+  it("renders description in hover overlay and removes hamburger details menu", () => {
+    renderCardWithComments();
+
+    expect(screen.getByText("A cool sandbox game")).toBeTruthy();
+    expect(screen.queryByLabelText(/Actions for/i)).toBeNull();
+  });
+
+  it("navigates to /server/:id route even when server.link is an external URL", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <ServerCard
+                server={{
+                  id: "cool-app",
+                  name: "Cool App",
+                  description: "A secure app",
+                  tags: [],
+                  thumbnail: "",
+                  owner: "alice",
+                  online: true,
+                  dns: "cool.relay.example.com",
+                  link: "https://cool.relay.example.com/",
+                  reputation: REPUTATION,
+                }}
+              />
+            }
+          />
+          <Route path="/server/cool-app" element={<div>reputation gate page</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const openLink = screen.getByRole("link", { name: "Open Cool App" });
+    expect(openLink.getAttribute("href")).toBe("/server/cool-app");
+    fireEvent.click(openLink);
+    expect(screen.getByText("reputation gate page")).toBeTruthy();
+  });
+
+  it("toggles description disclosure via touch-accessible Info button without navigating", () => {
+    renderCardWithComments();
+    const infoButton = screen.getByRole("button", { name: "Show description" });
+    expect(infoButton.getAttribute("aria-expanded")).toBe("false");
+
+    // Open disclosure
+    fireEvent.click(infoButton);
+    expect(screen.getByRole("button", { name: "Hide description" })).toBeTruthy();
+    expect(screen.getByText("Tap to close")).toBeTruthy();
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+
+    // Close disclosure by clicking X button
+    fireEvent.click(screen.getByRole("button", { name: "Hide description" }));
+    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
+    expect(screen.queryByText("Tap to close")).toBeNull();
+  });
+
+  it("closes description disclosure when tapping directly on the overlay without navigating into the app", () => {
+    renderCardWithComments();
+    const infoButton = screen.getByRole("button", { name: "Show description" });
+
+    // Open disclosure
+    fireEvent.click(infoButton);
+    expect(screen.getByText("Tap to close")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+
+    // Directly tap on the overlay ("Tap to close" text)
+    fireEvent.click(screen.getByText("Tap to close"));
+    expect(screen.queryByText("Tap to close")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+
+    // Re-open and tap on the description paragraph text
+    fireEvent.click(screen.getByRole("button", { name: "Show description" }));
+    expect(screen.getByText("Tap to close")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("A cool sandbox game"));
+    expect(screen.queryByText("Tap to close")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
+    expect(screen.getByText("directory")).toBeTruthy();
+    expect(screen.queryByText("service detail")).toBeNull();
+  });
+
+  it("allows direct voting from the card without navigating into the service", async () => {
+    const onVote = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "srv-1",
+            name: "minecraft",
+            description: "",
+            tags: [],
+            thumbnail: "",
+            owner: "",
+            online: true,
+            dns: "minecraft.relay.example.com",
+            link: "/server/srv-1",
+            reputation: REPUTATION,
+          }}
+          onVote={onVote}
+        />
+      </MemoryRouter>
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Recommend app" }));
+    });
+    expect(onVote).toHaveBeenCalledWith("srv-1", "up");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Do not recommend app" }));
+    });
+    expect(onVote).toHaveBeenCalledWith("srv-1", "down");
   });
 });

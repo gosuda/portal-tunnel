@@ -1,21 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BrowseView } from "@/types/filters";
-import { useList, type BaseServer } from "@/hooks/useList";
+import { useList } from "@/hooks/useList";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { leaseToServer, type BaseServer } from "@/lib/server";
 import { apiClient } from "@/lib/apiClient";
 import { isHiddenByVotes } from "@/utils/reputation";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import {
-  parseLeaseMetadata,
-  resolveLeasePayment,
-  resolveLeaseThumbnail,
-} from "@/lib/metadata";
 import type {
   Lease,
   PublicStateResponse,
   ReputationSummary,
   ReputationVoteAction,
+  ReputationVoteRequest,
   ReputationVoteResponse,
 } from "@/types/api";
+
+const DESKTOP_QUERY = "(min-width: 1280px)";
+const POLL_INTERVAL_MS = 1500;
 
 function normalizeHostname(hostname: string): string {
   return hostname.trim().toLowerCase();
@@ -37,77 +38,58 @@ function collectReputation(
       typeof summary.down === "number" &&
       typeof summary.total === "number"
     ) {
-      summaries[normalizeHostname(summary.hostname)] = summary;
+      summaries[normalizeHostname(summary.hostname)] = {
+        ...summary,
+        comments: typeof summary.comments === "number" ? summary.comments : 0,
+      };
     }
   }
   return summaries;
 }
 
-function convertPublicLeasesToServers(leases: Lease[]): BaseServer[] {
-  return leases.map((row) => {
-    const metadata = parseLeaseMetadata(row.metadata);
-    const payment = resolveLeasePayment(metadata);
-    const hostname = row.hostname || "";
-    const canonicalHostname = row.canonical_hostname || "";
-    const routeHostname = canonicalHostname || hostname;
-    const serviceName = row.name || "";
-    const tcpAddr = row.tcp_addr?.trim() || "";
-    const udpAddr = row.udp_addr?.trim() || "";
-
-    return {
-      id: routeHostname,
-      name: serviceName || routeHostname || "(unnamed)",
-      description: metadata.description || "",
-      tags: metadata.tags,
-      thumbnail: resolveLeaseThumbnail(metadata),
-      owner: metadata.owner || "",
-      online: (row.ready || 0) > 0,
-      dns: hostname || routeHostname,
-      link: !tcpAddr && !udpAddr && (hostname || routeHostname) ? `https://${hostname || routeHostname}/` : "",
-      tcpAddr: tcpAddr || undefined,
-      udpAddr: udpAddr || undefined,
-      lastUpdated: row.last_seen_at || undefined,
-      firstSeen: row.first_seen_at || undefined,
-      paymentEnabled: payment.enabled,
-      paymentLabel: payment.label,
-    };
-  });
-}
-
 export function useServerList() {
-  const [commentServer, setCommentServer] = useState<BaseServer | null>(null);
+  // The app whose comments are open, by id, so the panel follows each poll.
+  const [commentServerId, setCommentServerId] = useState<string | null>(null);
   const [browseView, setBrowseView] = useState<BrowseView>("home");
   const [showHidden, setShowHidden] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(() =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia("(min-width: 1024px)").matches
-      : false
-  );
+  const isDesktop = useMediaQuery(DESKTOP_QUERY);
+  // The sidebar opens on desktop and closes on mobile, and follows the
+  // breakpoint when it is crossed; in between, the visitor toggles it.
+  const [sidebarOpen, setSidebarOpen] = useState(isDesktop);
+  const [sidebarBreakpoint, setSidebarBreakpoint] = useState(isDesktop);
+  if (sidebarBreakpoint !== isDesktop) {
+    setSidebarBreakpoint(isDesktop);
+    setSidebarOpen(isDesktop);
+  }
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     stale: true,
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
 
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return;
-    }
-    const desktop = window.matchMedia("(min-width: 1024px)");
-    const handleBreakpointChange = (event: MediaQueryListEvent) => {
-      setSidebarOpen(event.matches);
-    };
-    setSidebarOpen(desktop.matches);
-    desktop.addEventListener("change", handleBreakpointChange);
-    return () => desktop.removeEventListener("change", handleBreakpointChange);
-  }, []);
+  // The last snapshot as the relay sent it; an identical poll keeps the
+  // current state, so the directory does not filter, sort and re-render.
+  const lastSnapshot = useRef("");
 
   useEffect(() => {
     let cancelled = false;
-
     let timer: number | undefined;
+    let inFlight = false;
+
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = undefined;
+      // A hidden tab stops polling; becoming visible refreshes at once.
+      if (!cancelled && !document.hidden) {
+        timer = window.setTimeout(() => void refresh(), POLL_INTERVAL_MS);
+      }
+    };
 
     const refresh = async () => {
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
       try {
         const data = await apiClient.get<PublicStateResponse>(
           RELAY_API_PATHS.public.state
@@ -115,28 +97,46 @@ export function useServerList() {
         if (cancelled) {
           return;
         }
+        const leases = Array.isArray(data?.leases) ? data.leases : [];
+        const snapshot = JSON.stringify([leases, data?.reputation ?? null]);
+        if (snapshot === lastSnapshot.current) {
+          setPublicState((previous) =>
+            previous.stale ? { ...previous, stale: false } : previous
+          );
+          return;
+        }
+        lastSnapshot.current = snapshot;
         setSummaries(collectReputation(data?.reputation));
-        setPublicState({
-          leases: Array.isArray(data?.leases) ? data.leases : [],
-          stale: false,
-        });
+        setPublicState({ leases, stale: false });
       } catch (error) {
         console.error("Failed to load public relay state", error);
         if (!cancelled) {
-          setPublicState((previous) => ({ ...previous, stale: true }));
+          setPublicState((previous) =>
+            previous.stale ? previous : { ...previous, stale: true }
+          );
         }
       } finally {
-        if (!cancelled) {
-          timer = window.setTimeout(() => void refresh(), 1500);
-        }
+        inFlight = false;
+        schedule();
       }
     };
 
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      } else {
+        void refresh();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     void refresh();
 
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
@@ -148,13 +148,15 @@ export function useServerList() {
     try {
       const response = await apiClient.post<ReputationVoteResponse>(
         RELAY_API_PATHS.public.reputationVote,
-        { hostname: key, vote }
+        { hostname: key, vote } satisfies ReputationVoteRequest
       );
       if (
         typeof response?.up === "number" &&
         typeof response?.down === "number" &&
         typeof response?.total === "number"
       ) {
+        // The next poll must apply the relay's count even if it matches the old snapshot.
+        lastSnapshot.current = "";
         setSummaries((current) => ({
           ...current,
           [key]: {
@@ -163,6 +165,7 @@ export function useServerList() {
             down: response.down,
             total: response.total,
             viewer_vote: response.viewer_vote ?? "",
+            comments: response.comments ?? current[key]?.comments ?? 0,
           },
         }));
       }
@@ -177,7 +180,7 @@ export function useServerList() {
   // this memo — a function identity dep would bail compilation out.
   const servers: BaseServer[] = useMemo(
     () =>
-      convertPublicLeasesToServers(publicState.leases).map((server) => ({
+      publicState.leases.map(leaseToServer).map((server) => ({
         ...server,
         reputation: summaries[normalizeHostname(server.id)] ?? {
           hostname: normalizeHostname(server.id),
@@ -185,6 +188,7 @@ export function useServerList() {
           down: 0,
           total: 0,
           viewer_vote: "" as const,
+          comments: 0,
         },
       })),
     [publicState.leases, summaries]
@@ -200,8 +204,11 @@ export function useServerList() {
 
   return {
     ...list,
-    commentServer: commentServer ? servers.find((server) => server.id === commentServer.id) ?? commentServer : null,
-    setCommentServer,
+    // null once the app leaves the directory, which closes the panel.
+    commentServer: servers.find((server) => server.id === commentServerId) ?? null,
+    toggleComments: (server: BaseServer) =>
+      setCommentServerId((current) => (current === server.id ? null : server.id)),
+    closeComments: () => setCommentServerId(null),
     browseView,
     favorites,
     showHidden,
@@ -214,13 +221,10 @@ export function useServerList() {
       : list.filteredServers,
     handleBrowseViewChange: (view: BrowseView) => {
       setBrowseView(view);
-      if (typeof window !== "undefined" && typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 1024px)").matches) {
+      if (!isDesktop) {
         setSidebarOpen(false);
       }
-      list.handleSearchChange("");
-      list.handleStatusChange("all");
-      list.handleSortByChange("default");
-      list.selectedTags.forEach(list.handleTagToggle);
+      list.resetFilters();
     },
     // null means unavailable; an empty array is an authoritative empty snapshot.
     leases: publicState.stale ? null : publicState.leases,

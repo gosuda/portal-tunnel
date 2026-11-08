@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/apiClient";
 import type { Lease } from "@/types/api";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import { useServerList } from "./useServerList";
 
 vi.mock("@/lib/apiClient", () => ({ apiClient: { get: vi.fn() } }));
@@ -80,4 +80,66 @@ describe("useServerList public snapshot", () => {
     unmount();
   });
 
+  it("keeps the same directory when a poll returns an unchanged snapshot", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ leases: [{ ...lease, ready: 1 }] });
+    const { result, unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+
+    const directory = result.current.filteredServers;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+    expect(apiClient.get).toHaveBeenCalledTimes(2);
+    expect(result.current.filteredServers).toBe(directory);
+    unmount();
+  });
+
+  it("stops polling while the tab is hidden and refreshes when it shows again", async () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    vi.mocked(apiClient.get).mockResolvedValue({ leases: [lease] });
+    const { unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+
+    hidden = true;
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+
+    hidden = false;
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(apiClient.get).toHaveBeenCalledTimes(2);
+    unmount();
+  });
+  it("keeps the open comments on the app's latest entry and closes them when it leaves", async () => {
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({ leases: [lease] })
+      .mockResolvedValueOnce({ leases: [{ ...lease, ready: 1 }] })
+      .mockResolvedValueOnce({ leases: [] });
+    const { result, unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+
+    act(() => result.current.toggleComments(result.current.filteredServers[0]));
+    expect(result.current.commentServer?.online).toBe(false);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(result.current.commentServer?.online).toBe(true);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(result.current.commentServer).toBeNull();
+    unmount();
+  });
+
+  it("closes the comments when the same app is toggled again", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ leases: [lease] });
+    const { result, unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+    const app = result.current.filteredServers[0];
+
+    act(() => result.current.toggleComments(app));
+    act(() => result.current.toggleComments(app));
+
+    expect(result.current.commentServer).toBeNull();
+    unmount();
+  });
 });

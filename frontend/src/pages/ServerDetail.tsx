@@ -3,84 +3,70 @@ import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, BadgeDollarSign, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { ReputationSummary } from "@/types/api";
+import type { BaseServer } from "@/lib/server";
+import { isReputationWarning } from "@/utils/reputation";
 
-// Directory presentation policy; the relay only stores vote aggregates.
-function isReputationWarning(summary: ReputationSummary | undefined): boolean {
-  return summary !== undefined && summary.total >= 5 && summary.down >= 3 && summary.down * 100 >= summary.total * 70;
+// Set right before this page leaves for the service. Session storage keeps it
+// to this tab, so a service opened in one tab does not bounce another tab's
+// detail page back to the directory.
+const LEFT_FOR_SERVICE_KEY = "isPush";
+
+function leaveForService(url: string): void {
+  try {
+    sessionStorage.setItem(LEFT_FOR_SERVICE_KEY, "true");
+  } catch {
+    // Storage can be unavailable in restricted contexts; open the service anyway.
+  }
+  window.location.assign(url);
 }
 
-interface ServerDetailState {
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  thumbnail: string;
-  owner: string;
-  online: boolean;
-  serverUrl: string;
-  paymentEnabled?: boolean;
-  paymentLabel?: string;
-  reputation?: ReputationSummary;
+/** Whether this tab left for a service from here; reading clears it. */
+function consumeLeftForService(): boolean {
+  try {
+    const left = sessionStorage.getItem(LEFT_FOR_SERVICE_KEY) === "true";
+    sessionStorage.removeItem(LEFT_FOR_SERVICE_KEY);
+    return left;
+  } catch {
+    return false;
+  }
 }
 
 export function ServerDetail() {
   const location = useLocation();
   const navigate = useNavigate();
-  const server = location.state as ServerDetailState | null;
+  // The card passes its directory entry; a direct visit has none.
+  const server = location.state as BaseServer | null;
 
   const showGate = isReputationWarning(server?.reputation);
 
-  // Detect back navigation using pageshow event
+  // Coming back to this page after it opened the service (Back, or a bfcache
+  // restore) returns to the directory instead of opening the service again.
   useEffect(() => {
     const handlePageShow = () => {
-      // Navigate to home if restored from bfcache or has push flag in localStorage
-      const hasPushFlag = localStorage.getItem("isPush") === "true";
-
-      if (hasPushFlag) {
-        localStorage.removeItem("isPush");
+      if (consumeLeftForService()) {
         navigate("/", { replace: true });
       }
     };
-
     window.addEventListener("pageshow", handlePageShow);
-
-    return () => {
-      window.removeEventListener("pageshow", handlePageShow);
-    };
+    return () => window.removeEventListener("pageshow", handlePageShow);
   }, [navigate]);
 
   useEffect(() => {
-    if (typeof localStorage === "undefined") return;
     if (!server) {
       navigate("/");
       return;
     }
-
-    // Check localStorage immediately (before pageshow)
-    const hasPushFlag = localStorage.getItem("isPush") === "true";
-
-    if (hasPushFlag) {
-      // If flag already exists, go home (double-check with pageshow handler)
-      localStorage.removeItem("isPush");
+    if (consumeLeftForService()) {
       navigate("/");
       return;
     }
-
     if (showGate) {
       // Flagged service: hold the automatic open until the visitor decides.
       return;
     }
-
-    // Redirect after animation
-    const timer = setTimeout(() => {
-      localStorage.setItem("isPush", "true");
-      window.location.assign(server.serverUrl);
-    }, 500);
-
-    return () => {
-      clearTimeout(timer);
-    };
+    // Open the service once the hero transition has played.
+    const timer = setTimeout(() => leaveForService(server.link), 500);
+    return () => clearTimeout(timer);
   }, [server, navigate, showGate]);
 
   // If no server data, show nothing (will redirect)
@@ -103,10 +89,7 @@ export function ServerDetail() {
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
 
-  const openService = () => {
-    localStorage.setItem("isPush", "true");
-    window.location.assign(server.serverUrl);
-  };
+  const openService = () => leaveForService(server.link);
 
   const handleBack = () => {
     navigate(-1);

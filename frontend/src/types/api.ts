@@ -141,6 +141,7 @@ export interface ReputationSummary {
   down: number;
   total: number;
   viewer_vote?: ViewerVote;
+  comments?: number;
 }
 
 export interface ReputationVoteRequest {

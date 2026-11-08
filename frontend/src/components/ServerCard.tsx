@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { BadgeDollarSign, Menu, MessageSquare } from "lucide-react";
-import type { BaseServer } from "@/hooks/useList";
+import { BadgeDollarSign, Info, MessageSquare, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import type { BaseServer } from "@/lib/server";
+import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes } from "@/utils/reputation";
 
@@ -27,6 +28,7 @@ interface ServerCardProps {
   children?: ReactNode;
   navigable?: boolean;
   onOpenComments?: (server: BaseServer) => void;
+  onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
 }
 
 export function ServerCard({
@@ -35,14 +37,19 @@ export function ServerCard({
   children,
   navigable = true,
   onOpenComments,
+  onVote,
 }: ServerCardProps) {
   const {
     id: serverId, name, description, tags, thumbnail, owner, online,
     firstSeen, tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
   } = server;
-  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  // The thumbnail that failed to load; a new thumbnail URL gets its own try.
+  const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
+  const [isVoting, setIsVoting] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
-  const effectiveThumbnail = thumbnailFailed ? "" : thumbnail.trim();
+  const hasDetails = Boolean(description || (tags && tags.length > 0));
+  const effectiveThumbnail = failedThumbnail === thumbnail ? "" : thumbnail.trim();
   const resolvedThumbnail =
     effectiveThumbnail || pickPlaceholderThumbnail(name || serverId);
   const normalizedPaymentLabel = paymentLabel.trim();
@@ -54,33 +61,6 @@ export function ServerCard({
   ];
   const isTransportService = endpoints.length > 0;
   const isNavigable = navigable && !isTransportService;
-  const detailsRef = useRef<HTMLDetailsElement | null>(null);
-
-  useEffect(() => {
-    setThumbnailFailed(false);
-  }, [thumbnail]);
-
-  useEffect(() => {
-    const handleOutsideClick = (event: PointerEvent) => {
-      const details = detailsRef.current;
-      if (details?.open && !details.contains(event.target as Node)) {
-        details.removeAttribute("open");
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && detailsRef.current?.open) {
-        detailsRef.current.removeAttribute("open");
-      }
-    };
-
-    document.addEventListener("pointerdown", handleOutsideClick);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handleOutsideClick);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
 
   const copyEndpoint = (protocol: string, address: string) =>
     copy(address, protocol);
@@ -105,6 +85,23 @@ export function ServerCard({
     return `${seconds}s ago`;
   }, [firstSeen]);
 
+  const handleVote = async (event: React.MouseEvent, targetVote: "up" | "down") => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!onVote || isVoting) return;
+    setIsVoting(true);
+    try {
+      const currentVote = server.reputation?.viewer_vote;
+      const nextVote: ReputationVoteAction = currentVote === targetVote ? "clear" : targetVote;
+      const targetHost = server.id || server.reputation?.hostname || "";
+      await onVote(targetHost, nextVote);
+    } catch (err) {
+      console.error("Failed to vote from card", err);
+    } finally {
+      setIsVoting(false);
+    }
+  };
+
   const cardBody = (
     <article data-hero-key={`server-bg-${serverId}`} className="relative w-full min-w-0">
       {/* 1. Thumbnail Container (16:9 aspect ratio) */}
@@ -114,7 +111,7 @@ export function ServerCard({
           alt=""
           loading="lazy"
           className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
-          onError={effectiveThumbnail ? () => setThumbnailFailed(true) : undefined}
+          onError={effectiveThumbnail ? () => setFailedThumbnail(thumbnail) : undefined}
         />
 
         {/* Top-right custom action overlay */}
@@ -150,6 +147,84 @@ export function ServerCard({
           </span>
         )}
 
+        {/* Touch / Click Disclosure Toggle Button */}
+        {hasDetails && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setShowDetails((prev) => !prev);
+            }}
+            aria-label={showDetails ? "Hide description" : "Show description"}
+            aria-expanded={showDetails}
+            title={showDetails ? "Hide description" : "Show description"}
+            className={clsx(
+              "pointer-events-auto absolute z-30 flex size-7 items-center justify-center rounded-full text-white/90 backdrop-blur-md transition-all active:scale-95 cursor-pointer shadow-xs",
+              isTransportService && showPaymentBadge ? "top-2.5 left-28" : "top-2.5 left-2.5",
+              showDetails
+                ? "bg-black/90 text-white ring-1 ring-white/30"
+                : "bg-black/60 hover:bg-black/80 hover:text-white"
+            )}
+          >
+            {showDetails ? (
+              <X className="size-3.5 shrink-0" />
+            ) : (
+              <Info className="size-3.5 shrink-0" />
+            )}
+          </button>
+        )}
+
+        {/* Description overlay on hover, focus-within, or touch disclosure */}
+        {hasDetails && (
+          <div
+            onClick={
+              showDetails
+                ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setShowDetails(false);
+                  }
+                : undefined
+            }
+            className={clsx(
+              "absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 transition-opacity duration-200",
+              isTransportService ? "pb-16" : "",
+              showDetails
+                ? "pointer-events-auto opacity-100 cursor-pointer"
+                : "pointer-events-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+            )}
+          >
+            {description && (
+              <>
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-white/60">
+                    Description
+                  </span>
+                  {showDetails && (
+                    <span className="text-[10px] text-white/50">Tap to close</span>
+                  )}
+                </div>
+                <p className="line-clamp-4 text-xs leading-relaxed text-white/95 whitespace-pre-wrap break-words">
+                  {description}
+                </p>
+              </>
+            )}
+            {tags && tags.length > 0 && (
+              <div className={clsx("flex flex-wrap gap-1", description ? "mt-2" : "")}>
+                {tags.slice(0, 4).map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded bg-white/20 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-xs"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Raw transport endpoints (TCP / UDP) */}
         {isTransportService && (
           <div className="absolute inset-x-2.5 bottom-2.5 space-y-1 rounded-lg border border-white/10 bg-black/80 p-2 backdrop-blur-md">
@@ -174,108 +249,103 @@ export function ServerCard({
         )}
       </div>
 
-      {/* 2. Details Container: (Title/Desc) + Right Actions */}
-      <div className={clsx("mt-3 flex items-start justify-between gap-3", isNavigable ? "pointer-events-none" : "")}>
-        {/* Title and Short Metadata */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <h3
-            title={name}
-            className="line-clamp-2 break-words text-[15px] font-semibold leading-snug text-foreground transition-colors group-hover:text-primary"
-          >
-            {name}
-          </h3>
+      {/* 2. Details Container: Title/Metadata + Southeast Actions (Up, Down, Comments) */}
+      <div className={clsx("mt-2.5 flex flex-col gap-1.5", isNavigable ? "pointer-events-none" : "")}>
+        {/* Title */}
+        <h3
+          title={name}
+          className="line-clamp-2 break-words text-[15px] font-semibold leading-snug text-foreground transition-colors group-hover:text-primary"
+        >
+          {name}
+        </h3>
 
-          {(owner || formattedDuration) && (
-            <div className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-              {owner && (
-                <span className="truncate font-medium text-muted-foreground hover:text-foreground">
-                  {owner}
-                </span>
-              )}
-              {owner && formattedDuration && <span className="shrink-0">•</span>}
-              {formattedDuration && (
-                <span className="shrink-0">{formattedDuration}</span>
-              )}
+        {/* Bottom row: Metadata (left) + Southeast stats (right) */}
+        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          {/* Owner and duration */}
+          <div className="flex min-w-0 items-center gap-1.5 truncate">
+            {owner && (
+              <span className="truncate font-medium text-muted-foreground hover:text-foreground">
+                {owner}
+              </span>
+            )}
+            {owner && formattedDuration && <span className="shrink-0">•</span>}
+            {formattedDuration && (
+              <span className="shrink-0">{formattedDuration}</span>
+            )}
+          </div>
+
+          {/* Southeast actions: Upvotes, Downvotes, Comments */}
+          <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5">
+            {/* Rating Pill: [ 👍 12 | 👎 3 ] */}
+            <div className="inline-flex h-7 items-center rounded-lg border border-border/70 bg-secondary/50 p-0.5 text-xs text-muted-foreground shadow-2xs backdrop-blur-xs">
+              <button
+                type="button"
+                onClick={(e) => void handleVote(e, "up")}
+                disabled={!onVote || isVoting}
+                aria-label="Recommend app"
+                aria-pressed={server.reputation?.viewer_vote === "up"}
+                title={`Recommend: ${server.reputation?.up ?? 0}`}
+                className={clsx(
+                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
+                  onVote ? "cursor-pointer" : "cursor-default",
+                  server.reputation?.viewer_vote === "up"
+                    ? "bg-primary text-primary-foreground shadow-xs font-semibold hover:bg-primary/90"
+                    : "hover:bg-secondary hover:text-foreground"
+                )}
+              >
+                <ThumbsUp className="size-3.5 shrink-0" />
+                <span className="tabular-nums">{server.reputation?.up ?? 0}</span>
+              </button>
+
+              <div className="my-1 h-3 w-px bg-border/70" />
+
+              <button
+                type="button"
+                onClick={(e) => void handleVote(e, "down")}
+                disabled={!onVote || isVoting}
+                aria-label="Do not recommend app"
+                aria-pressed={server.reputation?.viewer_vote === "down"}
+                title={`Do not recommend: ${server.reputation?.down ?? 0}`}
+                className={clsx(
+                  "inline-flex h-full items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-all active:scale-95",
+                  onVote ? "cursor-pointer" : "cursor-default",
+                  server.reputation?.viewer_vote === "down"
+                    ? "bg-destructive text-destructive-foreground shadow-xs font-semibold hover:bg-destructive/90"
+                    : "hover:bg-secondary hover:text-foreground"
+                )}
+              >
+                <ThumbsDown className="size-3.5 shrink-0" />
+                <span className="tabular-nums">{server.reputation?.down ?? 0}</span>
+              </button>
             </div>
-          )}
-        </div>
 
-        {/* Right Actions: Comments + Hamburger Details */}
-        <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5 pt-0.5">
-          {onOpenComments && (
-            <button
-              type="button"
-              data-comments-trigger
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onOpenComments(server);
-              }}
-              aria-label="Comments"
-              title="Comments"
-              className="flex size-7.5 items-center justify-center rounded-lg border border-border/70 bg-secondary/60 text-foreground/80 transition-colors hover:bg-secondary hover:text-foreground"
-            >
-              <MessageSquare className="size-3.5" />
-            </button>
-          )}
-
-          {/* Details menu */}
-          <details ref={detailsRef} className="relative z-30 shrink-0">
-            <summary
-              aria-label={`Actions for ${name}`}
-              title={`Actions for ${name}`}
-              className="flex size-7.5 cursor-pointer list-none items-center justify-center rounded-lg border border-border/70 bg-secondary/60 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&::-webkit-details-marker]:hidden"
-            >
-              <Menu className="size-4" />
-            </summary>
-            <div className="absolute right-0 top-9 z-40 max-h-96 w-64 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-xl [scrollbar-width:thin]">
-              {description && (
-                <div className="border-b border-border/60 pb-2.5 mb-2.5">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Description
-                  </span>
-                  <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
-                    {description}
-                  </p>
-                </div>
-              )}
-
-              {tags && tags.length > 0 && (
-                <div className="border-b border-border/60 pb-2.5 mb-2.5">
-                  <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Tags
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="inline-flex items-center rounded-md bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground"
-                      >
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {owner && (
-                <div className="border-b border-border/60 pb-2.5 mb-2.5">
-                  <span className="mb-0.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Owner
-                  </span>
-                  <p className="text-xs text-foreground/80">
-                    {owner}
-                  </p>
-                </div>
-              )}
-
-              {!description && (!tags || tags.length === 0) && !owner && (
-                <div className="border-b border-border/60 pb-2 mb-2 text-xs text-muted-foreground">
-                  No additional details.
-                </div>
-              )}
-            </div>
-          </details>
+            {/* Comments Button: [ 💬 5 ] */}
+            {onOpenComments ? (
+              <button
+                type="button"
+                data-comments-trigger
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenComments(server);
+                }}
+                aria-label="Comments"
+                title={`Comments: ${server.reputation?.comments ?? 0}`}
+                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
+              >
+                <MessageSquare className="size-3.5 shrink-0" />
+                <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
+              </button>
+            ) : (
+              <span
+                className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs"
+                title={`Comments: ${server.reputation?.comments ?? 0}`}
+              >
+                <MessageSquare className="size-3.5 shrink-0" />
+                <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -288,27 +358,19 @@ export function ServerCard({
     </article>
   );
 
+  const detailPath = serverId
+    ? `/server/${encodeURIComponent(serverId)}`
+    : (server.link || "#");
+
   return (
-    <div className="group relative">
+    <div className="group relative" title={description || undefined}>
       {cardBody}
       {isNavigable && (
         <Link
-          to={server.link || "#"}
-          state={{
-            id: server.id,
-            name: server.name,
-            description: server.description,
-            tags: server.tags,
-            thumbnail: server.thumbnail,
-            owner: server.owner,
-            online: server.online,
-            serverUrl: server.link,
-            paymentEnabled: server.paymentEnabled,
-            paymentLabel: server.paymentLabel,
-            reputation: server.reputation,
-          }}
+          to={detailPath}
+          state={server}
           aria-label={`Open ${name}`}
-          className="absolute inset-0 z-20 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         />
       )}
     </div>

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import type { AppComment, CommentListResponse, ReputationVoteAction } from "@/types/api";
+import type { AppComment, CommentListResponse, ReputationVoteAction, VoteCommentRequest } from "@/types/api";
 
 // Mounted once per selected app by ServerList, so closing or switching panels
 // discards that app's draft and cannot apply an old request to a new thread.
@@ -78,7 +78,7 @@ export function useServerComments(server: BaseServer) {
     setVotingCommentId(id);
     setError("");
     try {
-      const data = await apiClient.post<CommentListResponse>(RELAY_API_PATHS.public.commentsVote, { hostname: server.id, id, vote });
+      const data = await apiClient.post<CommentListResponse>(RELAY_API_PATHS.public.commentsVote, { hostname: server.id, id, vote } satisfies VoteCommentRequest);
       setComments(data.comments);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not submit vote on comment.");

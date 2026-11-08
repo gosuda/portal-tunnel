@@ -1,27 +1,19 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { Check, Copy, ExternalLink, Github, Globe, Search, ShieldCheck, X, Home, ThumbsUp, Menu, BookOpen, Terminal, Plus } from "lucide-react";
+import { Search, X, Star, Menu, Plus } from "lucide-react";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { HeroBackdropSVG } from "@/components/DirectoryBackdrop";
+import { PublicRelaysSection } from "@/components/PublicRelaysSection";
 import { ServerCard } from "@/components/ServerCard";
+import { SidebarNav } from "@/components/SidebarNav";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { useCopy } from "@/hooks/useCopy";
-import type { BaseServer } from "@/hooks/useList";
-import type { BrowseView, SortOption, StatusFilter } from "@/types/filters";
-import { readCurrentOrigin } from "@/hooks/useTunnelCommand";
-import { apiClient } from "@/lib/apiClient";
-import { RELAY_API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
-import type { Lease, DiscoveryResponse, DomainResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
-
-export interface KnownRelay {
-  relayURL: string;
-  isCurrent: boolean;
-  protocolVersion?: string;
-}
-
-const OFFICIAL_REGISTRY_SOURCE_URL =
-  "https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json";
-const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
+import type { BaseServer } from "@/lib/server";
+import type { BrowseView, SortOption } from "@/types/filters";
+import { matchesMedia } from "@/hooks/useMediaQuery";
+import { useRelayDiscovery } from "@/hooks/useRelayDiscovery";
+import { ROUTE_PATHS } from "@/lib/apiPaths";
+import type { Lease, ReputationVoteAction } from "@/types/api";
 
 // A card fades up the first time it comes into view on this page load; cards
 // that return through filters or a remount appear in place.
@@ -40,7 +32,7 @@ function animateReorder(update: () => void, maxCards: number): void {
   if (
     typeof document.startViewTransition !== "function" ||
     maxCards > REORDER_ANIMATION_MAX_CARDS ||
-    (typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+    matchesMedia("(prefers-reduced-motion: reduce)")
   ) {
     update();
     return;
@@ -48,108 +40,26 @@ function animateReorder(update: () => void, maxCards: number): void {
   document.startViewTransition(() => flushSync(update));
 }
 
-function normalizeRelayURL(relayURL: string | undefined): string {
-  return typeof relayURL === "string" ? relayURL.trim() : "";
+/** The heading over the app grid: the view, then a search, then the order. */
+export function appListTitle(browseView: BrowseView, searchQuery: string, sortBy: SortOption): string {
+  if (browseView === "favorites") return "Favorites";
+  if (searchQuery.trim() !== "") return `Results for ${searchQuery}`;
+  if (sortBy === "recommended") return "Most recommended";
+  return "Home";
 }
 
-function normalizeKnownRelays(
-  relays: RelayDescriptor[] | undefined,
-  currentRelayURL: string
-): KnownRelay[] {
-  const seen = new Set<string>();
-  const knownRelays: KnownRelay[] = [];
-
-  relays?.forEach((relay) => {
-    const relayURL = normalizeRelayURL(relay.api_https_addr);
-    if (relayURL === "" || seen.has(relayURL)) {
-      return;
-    }
-
-    seen.add(relayURL);
-    knownRelays.push({
-      relayURL,
-      isCurrent: relayURL === currentRelayURL,
-    });
-  });
-
-  if (currentRelayURL !== "" && !seen.has(currentRelayURL)) {
-    knownRelays.push({
-      relayURL: currentRelayURL,
-      isCurrent: true,
-    });
+/** Why the grid is empty: still connecting, filtered out, or nothing there yet. */
+export function emptyListMessage(
+  browseView: BrowseView,
+  connecting: boolean,
+  filtered: boolean
+): { title: string; body: string } {
+  if (connecting) return { title: "Finding live apps", body: "Waiting for this relay to respond." };
+  if (filtered) return { title: "No results found", body: "Try another search or change your filters." };
+  if (browseView === "favorites") {
+    return { title: "Keep your favorite apps here", body: "Recommend an app to find it here later." };
   }
-
-  knownRelays.sort((a, b) => {
-    if (a.isCurrent !== b.isCurrent) {
-      return a.isCurrent ? -1 : 1;
-    }
-    return a.relayURL.localeCompare(b.relayURL);
-  });
-
-  return knownRelays;
-}
-
-export function mergeIncompatibleRelays(
-  knownRelays: KnownRelay[],
-  incompatible: IncompatibleRelayEntry[] | undefined,
-  currentRelayURL: string
-): KnownRelay[] {
-  if (!incompatible?.length) {
-    return knownRelays;
-  }
-
-  const seen = new Set(knownRelays.map((relay) => relay.relayURL));
-  const merged = [...knownRelays];
-
-  incompatible.forEach((entry) => {
-    const relayURL = normalizeRelayURL(entry.url);
-    if (relayURL === "" || seen.has(relayURL)) {
-      return;
-    }
-    seen.add(relayURL);
-    merged.push({
-      relayURL,
-      isCurrent: relayURL === currentRelayURL,
-      protocolVersion: entry.protocol_version?.trim() || undefined,
-    });
-  });
-
-  return merged;
-}
-
-// Locally observed release metadata: peer versions collected from the serving
-// relay's own discovery response, plus the response envelope itself.
-export function relayReleaseLabel(
-  versions: Record<string, string>,
-  relay: KnownRelay,
-  discovery?: DiscoveryResponse
-): string | null {
-  const observed =
-    versions[normalizeRelayURL(relay.relayURL)]?.trim() ?? "";
-  if (observed !== "") {
-    return observed;
-  }
-
-  if (relay.isCurrent) {
-    const selfRelease =
-      typeof discovery?.release_version === "string"
-        ? discovery.release_version.trim()
-        : "";
-    if (selfRelease !== "") {
-      return selfRelease;
-    }
-  }
-
-  const protocolVersion =
-    relay.protocolVersion?.trim() ||
-    (relay.isCurrent && typeof discovery?.protocol_version === "string"
-      ? discovery.protocol_version.trim()
-      : "");
-  if (protocolVersion !== "") {
-    return `discovery ${protocolVersion}`;
-  }
-
-  return null;
+  return { title: "No apps are live yet", body: "Create a tunnel to share your first app." };
 }
 
 interface LiveAppCardProps {
@@ -182,7 +92,6 @@ interface ServerListViewProps {
   onBrowseViewChange: (view: BrowseView) => void;
   title?: string;
   searchQuery: string;
-  status: StatusFilter;
   sortBy: SortOption;
   selectedTags: string[];
   availableTags: string[];
@@ -195,7 +104,9 @@ interface ServerListViewProps {
   onSearchChange: (value: string) => void;
   onSortByChange: (value: SortOption) => void;
   onTagToggle: (tag: string) => void;
+  onClearTags: () => void;
   onOpenComments: (server: BaseServer) => void;
+  onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
 }
 
 export function ServerListView({
@@ -205,7 +116,6 @@ export function ServerListView({
   onBrowseViewChange,
   title = "PORTAL",
   searchQuery,
-  status,
   sortBy,
   selectedTags,
   availableTags,
@@ -218,90 +128,21 @@ export function ServerListView({
   onSearchChange,
   onSortByChange,
   onTagToggle,
+  onClearTags,
   onOpenComments,
+  onVote,
 }: ServerListViewProps) {
-  const [relayReleases, setRelayReleases] = useState<{
-    versions: Record<string, string>;
-    discovery?: DiscoveryResponse;
-  }>({ versions: {} });
-  const [knownRelays, setKnownRelays] = useState<KnownRelay[]>([]);
-  const [releaseVersion, setReleaseVersion] = useState("");
-  const [relayDiscoveryLoading, setRelayDiscoveryLoading] = useState(true);
-  const [relaySearchQuery, setRelaySearchQuery] = useState("");
-
   const { copiedKey: copiedRelayURL, copy: copyRelayURL } = useCopy(1500);
-  const currentRelayURL = useMemo(() => readCurrentOrigin(), []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRelayDiscoveryLoading(true);
-    setRelayReleases({ versions: {} });
-    setKnownRelays([]);
-
-    void (async () => {
-      let nextKnownRelays = normalizeKnownRelays(undefined, currentRelayURL);
-      let nextReleases: {
-        versions: Record<string, string>;
-        discovery?: DiscoveryResponse;
-      } = { versions: {} };
-
-      try {
-        const domainPromise = apiClient.get<DomainResponse>(RELAY_API_PATHS.sdk.domain).catch(() => null);
-        const discoveryPromise = apiClient.get<DiscoveryResponse>(RELAY_API_PATHS.discovery).catch(() => null);
-        const [domain, discovery] = await Promise.all([domainPromise, discoveryPromise]);
-
-        const fetchedVersion =
-          (typeof domain?.release_version === "string" && domain.release_version.trim()) ||
-          (typeof discovery?.release_version === "string" && discovery.release_version.trim()) ||
-          "";
-        if (!cancelled && fetchedVersion) {
-          setReleaseVersion(fetchedVersion);
-        }
-
-        nextKnownRelays = mergeIncompatibleRelays(
-          normalizeKnownRelays(discovery?.relays, currentRelayURL),
-          discovery?.incompatible_relays,
-          currentRelayURL
-        );
-
-        const versions: Record<string, string> = {};
-        Object.entries(discovery?.relay_release_versions ?? {}).forEach(
-          ([url, ver]) => {
-            const relayURL = normalizeRelayURL(url);
-            const trimmedVersion = ver.trim();
-            if (relayURL !== "" && trimmedVersion !== "") {
-              versions[relayURL] = trimmedVersion;
-            }
-          }
-        );
-        nextReleases = {
-          versions,
-          discovery: {
-            release_version: discovery?.release_version,
-            protocol_version: discovery?.protocol_version,
-          },
-        };
-      } catch {
-        // Keep the current relay fallback when discovery is unavailable.
-      }
-
-      if (cancelled) {
-        return;
-      }
-
-      setKnownRelays(nextKnownRelays);
-      setRelayReleases(nextReleases);
-      setRelayDiscoveryLoading(false);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentRelayURL]);
+  const {
+    knownRelays,
+    relayReleases,
+    releaseVersion,
+    loading: relayDiscoveryLoading,
+  } = useRelayDiscovery();
 
   const gridRef = useRef<HTMLDivElement>(null);
   const hasActiveFilters =
-    searchQuery.trim() !== "" || status !== "all" || selectedTags.length > 0;
+    searchQuery.trim() !== "" || selectedTags.length > 0;
   // leases is null before the relay first answers and after a failed poll; an
   // active filter explains an empty list either way.
   const showConnecting = leases === null && !hasActiveFilters;
@@ -315,7 +156,7 @@ export function ServerListView({
       return;
     }
 
-    const animateEntrance = typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: no-preference)").matches;
+    const animateEntrance = matchesMedia("(prefers-reduced-motion: no-preference)");
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -354,26 +195,8 @@ export function ServerListView({
 
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
 
-  const filteredRelays = useMemo(() => {
-    const q = relaySearchQuery.trim().toLowerCase();
-    if (!q) {
-      return knownRelays;
-    }
-    return knownRelays.filter((relay) => {
-      const label =
-        relayReleaseLabel(
-          relayReleases.versions,
-          relay,
-          relayReleases.discovery
-        ) ?? "";
-      return (
-        relay.relayURL.toLowerCase().includes(q) ||
-        label.toLowerCase().includes(q)
-      );
-    });
-  }, [knownRelays, relayReleases, relaySearchQuery]);
-
   const isAppView = browseView === "home" || browseView === "favorites";
+  const emptyMessage = emptyListMessage(browseView, showConnecting, hasActiveFilters);
 
   return (
     <div className="portal-browser relative isolate min-h-screen text-foreground" onKeyDown={(event) => { if (event.key === "Escape") onSidebarOpenChange(false); }}>
@@ -412,58 +235,47 @@ export function ServerListView({
         </div>
       </header>
 
-      {sidebarOpen && <button type="button" aria-label="Close navigation" onClick={() => onSidebarOpenChange(false)} className="fixed inset-x-0 top-[116px] bottom-0 z-40 bg-black/40 md:top-16 lg:hidden" />}
+      {sidebarOpen && <button type="button" aria-label="Close navigation" onClick={() => onSidebarOpenChange(false)} className="fixed inset-x-0 top-[116px] bottom-0 z-40 bg-black/40 md:top-16 xl:hidden" />}
       <aside id="portal-navigation" aria-label="Navigation" className={`fixed top-[116px] bottom-0 left-0 z-40 flex w-[min(240px,calc(100vw-3rem))] flex-col overflow-y-auto border-r border-border bg-background/85 px-3 backdrop-blur-xl pb-6 pt-3 md:top-16 ${sidebarOpen ? "translate-x-0 visible" : "-translate-x-full invisible"}`}>
-        <nav aria-label="Browse apps" className="shrink-0 space-y-1">
-          <button type="button" aria-current={browseView === "home" && status === "all" && sortBy === "default" ? "page" : undefined} onClick={() => onBrowseViewChange("home")} className="portal-nav-item"><Home className="size-5" /><span>Home</span></button>
-          <button type="button" aria-current={browseView === "home" && sortBy === "recommended" ? "page" : undefined} onClick={() => { onBrowseViewChange("home"); onSortByChange("recommended"); }} className="portal-nav-item"><ThumbsUp className="size-5" /><span>Most recommended</span></button>
-          <button type="button" aria-current={browseView === "favorites" ? "page" : undefined} onClick={() => onBrowseViewChange("favorites")} className="portal-nav-item"><ThumbsUp className="size-5" /><span>Favorites</span><span className="ml-auto text-xs text-muted-foreground">{favorites}</span></button>
-        </nav>
-        <nav aria-label="Your apps" className="mt-3 shrink-0 border-t border-border pt-3">
-          <p className="px-3 py-2 text-base font-semibold">You</p>
-          <TunnelCommandModal trigger={
-            <button type="button" aria-label="Launch App" className="portal-nav-item"><Terminal className="size-5" /><span>Launch App</span></button>
-          } />
-        </nav>
-        <nav aria-label="Portal resources" className="mt-3 shrink-0 space-y-1 border-t border-border pt-3">
-          <p className="px-3 py-2 text-base font-semibold">Explore Portal</p>
-          <button type="button" aria-current={browseView === "relays" ? "page" : undefined} onClick={() => onBrowseViewChange("relays")} className="portal-nav-item"><Globe className="size-5" /><span>Public relays</span></button>
-          <a href="https://gosuda.github.io/portal-tunnel" target="_blank" rel="noopener noreferrer" className="portal-nav-item"><BookOpen className="size-5" /><span>Documentation</span></a>
-        </nav>
-        <div className="mt-auto shrink-0 pt-4">
-          <div className="flex items-center gap-4 border-t border-border px-3 pt-5 text-xs text-muted-foreground">
-            <a href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 hover:text-foreground"><Github className="size-4" aria-hidden="true" />GitHub</a>
-            <a href={ROUTE_PATHS.admin} className="inline-flex items-center gap-1.5 hover:text-foreground"><ShieldCheck className="size-4" aria-hidden="true" />Admin</a>
-          </div>
-        </div>
+        <SidebarNav variant="full" browseView={browseView} sortBy={sortBy} favorites={favorites} onBrowseViewChange={onBrowseViewChange} onSortByChange={onSortByChange} />
       </aside>
 
-      <main id="portal-content" tabIndex={-1} className={`min-w-0 pb-12 outline-none ${sidebarOpen ? "lg:pl-[240px]" : ""}`}>
+      {!sidebarOpen && (
+        <aside
+          id="portal-mini-navigation"
+          aria-label="Mini Navigation"
+          className="fixed top-[116px] bottom-0 left-0 z-40 hidden w-[72px] flex-col items-center overflow-y-auto border-r border-border bg-background/85 px-1.5 py-3 backdrop-blur-xl md:top-16 xl:flex"
+        >
+          <SidebarNav variant="mini" browseView={browseView} sortBy={sortBy} favorites={favorites} onBrowseViewChange={onBrowseViewChange} onSortByChange={onSortByChange} />
+        </aside>
+      )}
+
+      <main id="portal-content" tabIndex={-1} className={`min-w-0 pb-12 outline-none ${sidebarOpen ? "xl:pl-[240px]" : "xl:pl-[72px]"}`}>
         {isAppView && (
           <section id="live-servers" aria-label={browseView === "favorites" ? "Favorite apps" : "Discover apps"}>
             <div className="sticky top-[116px] z-30 bg-background/80 px-4 pb-3 pt-2 backdrop-blur-xl md:top-16 lg:px-8">
               <div aria-label="Filter by category" className="flex gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <button type="button" aria-pressed={selectedTags.length === 0} onClick={() => selectedTags.forEach(onTagToggle)} className={`portal-category ${selectedTags.length === 0 ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>All</button>
+                <button type="button" aria-pressed={selectedTags.length === 0} onClick={onClearTags} className={`portal-category ${selectedTags.length === 0 ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>All</button>
                 {availableTags.map((tag) => <button key={tag} type="button" aria-pressed={selectedTags.includes(tag)} onClick={() => handleTagToggle(tag)} className={`portal-category ${selectedTags.includes(tag) ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>{tag}</button>)}
               </div>
             </div>
             <div className="px-4 lg:px-8">
               <div className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <h1 className="text-xl font-bold">
-                  {browseView === "favorites" ? "Favorites" : searchQuery.trim() ? `Results for ${searchQuery}` : sortBy === "recommended" ? "Most recommended" : status === "online" ? "Live now" : browseView === "home" ? "Home" : "Discover apps"}
+                  {appListTitle(browseView, searchQuery, sortBy)}
                 </h1>
                 <p role="status" className="text-xs text-muted-foreground">{showConnecting ? "Connecting to relay..." : `${filteredServers.length.toLocaleString()} apps${paymentAppCount ? ` / ${paymentAppCount} paid` : ""}`}</p>
                 {(hiddenCount > 0 || showHidden) && <button type="button" aria-pressed={showHidden} onClick={() => onShowHiddenChange(!showHidden)} className="ml-auto rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground">{showHidden ? "Hide downvoted apps" : `Show hidden apps (${hiddenCount})`}</button>}
               </div>
               {filteredServers.length > 0 ? (
                 <div ref={gridRef} className="grid grid-cols-1 gap-x-4 gap-y-10 min-[600px]:grid-cols-2 min-[1150px]:grid-cols-3 min-[1600px]:grid-cols-4 min-[2000px]:grid-cols-5">
-                  {filteredServers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} /></LiveAppCard>)}
+                  {filteredServers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} onVote={onVote} /></LiveAppCard>)}
                 </div>
               ) : (
                 <div className="mx-auto flex min-h-[55vh] max-w-md flex-col items-center justify-center gap-3 px-4 text-center">
-                  {browseView === "favorites" ? <ThumbsUp className="mb-2 size-12 text-muted-foreground" /> : <Search className="mb-2 size-12 text-muted-foreground" />}
-                  <h2 className="text-xl font-semibold">{showConnecting ? "Finding live apps" : hasActiveFilters ? "No results found" : browseView === "favorites" ? "Keep your favorite apps here" : "No apps are live yet"}</h2>
-                  <p className="text-sm leading-6 text-muted-foreground">{showConnecting ? "Waiting for this relay to respond." : hasActiveFilters ? "Try another search or change your filters." : browseView === "favorites" ? "Recommend an app to find it here later." : "Create a tunnel to share your first app."}</p>
+                  {browseView === "favorites" ? <Star className="mb-2 size-12 text-muted-foreground" /> : <Search className="mb-2 size-12 text-muted-foreground" />}
+                  <h2 className="text-xl font-semibold">{emptyMessage.title}</h2>
+                  <p className="text-sm leading-6 text-muted-foreground">{emptyMessage.body}</p>
                 </div>
               )}
             </div>
@@ -471,28 +283,13 @@ export function ServerListView({
         )}
 
         {browseView === "relays" && (
-          <section id="public-relays" aria-labelledby="public-relays-title" className="px-4 py-6 lg:px-8">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div><h1 id="public-relays-title" className="text-2xl font-bold">Public relays</h1><p className="mt-2 text-sm text-muted-foreground">Explore other relays and the apps they host.</p></div>
-              <a href={OFFICIAL_REGISTRY_SOURCE_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-secondary px-4 py-2 text-sm font-medium">Registry<ExternalLink className="size-4" /></a>
-            </div>
-            <label className="mt-6 flex h-11 max-w-xl items-center gap-3 rounded-full border border-border px-4"><Search className="size-4 shrink-0 text-muted-foreground" /><input type="search" aria-label="Search relays" placeholder="Search by URL or version" value={relaySearchQuery} onChange={(event) => setRelaySearchQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></label>
-            {relayDiscoveryLoading ? <p role="status" className="py-12 text-sm text-muted-foreground">Loading relays...</p> : filteredRelays.length === 0 ? <p className="py-12 text-sm text-muted-foreground">No relays found.</p> : (
-              <div className="mt-6 grid gap-4 min-[700px]:grid-cols-2 min-[1300px]:grid-cols-3">
-                {filteredRelays.map((relay) => {
-                  const releaseLabel = relayReleaseLabel(relayReleases.versions, relay, relayReleases.discovery);
-                  const isCopied = copiedRelayURL === relay.relayURL;
-                  return (
-                    <article key={relay.relayURL} className="min-w-0 rounded-xl border border-border bg-card/85 p-5 backdrop-blur-sm">
-                      <Globe className="mb-4 size-8 text-muted-foreground" />
-                      <a href={relay.relayURL} target="_blank" rel="noopener noreferrer" title={relay.relayURL} className="block truncate text-sm font-semibold hover:underline">{relay.relayURL}</a>
-                      <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>{relay.isCurrent ? "Current relay" : "Public relay"}{releaseLabel ? ` / ${releaseLabel}` : ""}</span><button type="button" onClick={() => void copyRelayURL(relay.relayURL, relay.relayURL)} aria-label={isCopied ? `Copied ${relay.relayURL}` : `Copy ${relay.relayURL}`} className="flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-secondary">{isCopied ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}</button></div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+          <PublicRelaysSection
+            knownRelays={knownRelays}
+            relayReleases={relayReleases}
+            loading={relayDiscoveryLoading}
+            copiedURL={copiedRelayURL}
+            onCopyURL={copyRelayURL}
+          />
         )}
 
       </main>

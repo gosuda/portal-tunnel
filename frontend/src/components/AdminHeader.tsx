@@ -1,0 +1,165 @@
+import { useEffect, useState } from "react";
+import { KeyRound, Loader2, LogOut } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ThemeToggleButton } from "@/components/ThemeToggleButton";
+import type { AdminAuth } from "@/hooks/useAuth";
+import { apiClient } from "@/lib/apiClient";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
+import type { DomainResponse } from "@/types/api";
+
+interface AdminHeaderProps {
+  title?: string;
+  auth: AdminAuth;
+}
+
+export function AdminHeader({
+  title = "PORTAL ADMIN",
+  auth,
+}: AdminHeaderProps) {
+  const [releaseVersion, setReleaseVersion] = useState("");
+  const [ensVerified, setENSVerified] = useState(false);
+  const { isAuthenticated, isLoading, login, logout } = auth;
+  const [adminToken, setAdminToken] = useState("");
+  const [authError, setAuthError] = useState("");
+
+  const handleAdminLogin = async () => {
+    setAuthError("");
+    const result = await login(adminToken);
+    if (!result.success) {
+      setAuthError(result.error || "Admin login failed.");
+      return;
+    }
+    setAdminToken("");
+  };
+
+  const handleLogout = async () => {
+    setAuthError("");
+    await logout();
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const status = await apiClient.get<DomainResponse>(
+          RELAY_API_PATHS.sdk.domain
+        );
+        if (!cancelled) {
+          const fetchedVersion =
+            typeof status?.release_version === "string"
+              ? status.release_version.trim()
+              : "";
+          setReleaseVersion(fetchedVersion);
+          setENSVerified(status?.ens?.verified === true);
+        }
+      } catch {
+        if (!cancelled) {
+          setReleaseVersion("");
+          setENSVerified(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <header className="flex items-center justify-between gap-4 pb-2">
+      <div className="flex min-w-0 items-center text-foreground">
+        <a
+          href="/"
+          className="flex shrink-0 items-center justify-center"
+          aria-label="Portal home"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="19"
+            height="29"
+            viewBox="0 0 906.26 1457.543"
+            className="h-[29px] w-[19px] text-primary drop-shadow-[0_0_8px_rgb(var(--stage-accent)/0.45)]"
+          >
+            <path
+              fill="currentColor"
+              d="M254.854 137.158c-34.46 84.407-88.363 149.39-110.934 245.675 90.926-187.569 308.397-483.654 554.729-348.685 135.487 74.216 194.878 270.78 206.058 467.566 21.924 385.996-190.977 853.604-467.585 943.057-174.879 56.543-307.375-86.447-364.527-198.115-176.498-344.82 2.041-910.077 182.259-1109.498zm198.13 7.918C202.61 280.257 4.622 968.542 207.322 1270.414c51.713 77.029 194.535 160.648 285.294 71.318-209.061 31.529-288.389-176.143-301.145-340.765 31.411 147.743 139.396 326.12 309.075 253.588 251.957-107.723 376.778-648.46 269.433-966.817 22.394 134.616 15.572 317.711-47.551 412.087 86.655-230.615 7.903-704.478-269.444-554.749z"
+            />
+          </svg>
+        </a>
+
+        <div className="ml-[19px] flex min-w-0 items-center gap-[12px]">
+          <h2 className="min-w-0 text-[21px] leading-none font-extrabold tracking-[0.02em] text-foreground">
+            {title}
+          </h2>
+          {releaseVersion && (
+            <span className="inline-flex h-[24px] items-center rounded-[6px] border border-border bg-secondary/85 px-[10px] font-mono text-[11px] font-semibold text-foreground/80">
+              {releaseVersion}
+            </span>
+          )}
+          {ensVerified && (
+            <span className="hidden lg:inline-flex h-[24px] items-center rounded-[6px] bg-primary/12 px-2.5 text-xs font-semibold text-primary ring-1 ring-primary/20">
+              ENS verified
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-3">
+        <ThemeToggleButton className="inline-flex shrink-0" />
+
+        <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
+          {authError && (
+            <span className="max-w-64 text-right text-xs font-medium text-destructive">
+              {authError}
+            </span>
+          )}
+
+          {!isAuthenticated ? (
+            <form
+              className="flex max-w-full flex-wrap items-center justify-end gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleAdminLogin();
+              }}
+            >
+              <input
+                type="password"
+                value={adminToken}
+                onChange={(event) => setAdminToken(event.target.value)}
+                placeholder="Admin token"
+                autoComplete="current-password"
+                className="h-10 w-44 rounded-md border border-border/70 bg-background/90 px-4 text-sm text-foreground shadow-sm outline-none transition focus:border-primary/50 sm:w-56"
+                disabled={isLoading}
+              />
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={isLoading}
+                className="h-10 rounded-md border-border/70 bg-background/90 px-4 text-foreground shadow-sm transition-colors hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <KeyRound className="h-4 w-4" />
+                )}
+                <span className="text-sm font-semibold">Login</span>
+              </Button>
+            </form>
+          ) : (
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={handleLogout}
+              className="h-10 w-10 cursor-pointer rounded-md border-border/70 bg-background/90 text-foreground shadow-sm transition-colors hover:border-destructive/40 hover:bg-background hover:text-destructive"
+              aria-label="Logout"
+              title="Logout"
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}

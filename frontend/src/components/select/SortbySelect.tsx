@@ -39,7 +39,7 @@ export const SortbySelect = ({
       <SelectValue placeholder="Sort By" />
     </SelectTrigger>
     <SelectContent>
-      <SelectItem value="default">Default</SelectItem>
+      <SelectItem value="default">Newest</SelectItem>
       {allowRecommendationSort && (
         <SelectItem value="recommended">Most recommended</SelectItem>
       )}

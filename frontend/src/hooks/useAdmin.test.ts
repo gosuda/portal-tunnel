@@ -278,4 +278,36 @@ describe("useAdmin", () => {
     );
   });
 
+  it("applies only the latest load when an older one answers last", async () => {
+    let getCalls = 0;
+    let resolveFirst: ((value: DeferredPolicyState) => void) | undefined;
+    mockGet.mockImplementation((path: string) => {
+      if (path !== RELAY_API_PATHS.policy.state) {
+        throw new Error(`Unexpected GET path: ${path}`);
+      }
+      getCalls++;
+      if (getCalls === 1) {
+        return new Promise<DeferredPolicyState>((resolve) => {
+          resolveFirst = resolve;
+        }) as never;
+      }
+      return Promise.resolve({
+        leases: [{ ...buildLease("0x00000000000000000000000000000000000000A1"), bps: 2048 }],
+        policy: buildSettings(),
+      } as never);
+    });
+
+    const { result } = renderHook(() => useAdmin());
+    await act(async () => {
+      await result.current.handleApproveStatus("relay-1:0x00000000000000000000000000000000000000a1", true);
+    });
+    expect(result.current.servers[0]?.bps).toBe(2048);
+
+    await act(async () => {
+      resolveFirst?.({ leases: [buildLease("0x00000000000000000000000000000000000000A1")], policy: buildSettings() });
+    });
+
+    expect(result.current.servers[0]?.bps).toBe(2048);
+    expect(result.current.loading).toBe(false);
+  });
 });

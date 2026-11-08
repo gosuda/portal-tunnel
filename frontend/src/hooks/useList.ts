@@ -1,25 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { SortOption, StatusFilter } from "@/types/filters";
-import type { ReputationSummary } from "@/types/api";
-
-export interface BaseServer {
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  thumbnail: string;
-  owner: string;
-  online: boolean;
-  dns: string;
-  link: string;
-  tcpAddr?: string;
-  udpAddr?: string;
-  lastUpdated?: string;
-  firstSeen?: string;
-  paymentEnabled?: boolean;
-  paymentLabel?: string;
-  reputation?: ReputationSummary;
-}
+import { DEFAULT_SORT, type SortOption, type StatusFilter } from "@/types/filters";
+import type { BaseServer } from "@/lib/server";
 
 export interface UseListOptions<T extends BaseServer> {
   servers: T[];
@@ -37,6 +18,9 @@ export interface UseListReturn<T extends BaseServer> {
   handleStatusChange: (value: StatusFilter) => void;
   handleSortByChange: (value: SortOption) => void;
   handleTagToggle: (tag: string) => void;
+  clearTags: () => void;
+  /** Back to the unfiltered list in the given order. */
+  resetFilters: (sortBy?: SortOption) => void;
 }
 
 function parseTimestamp(value?: string, fallback = 0): number {
@@ -65,7 +49,7 @@ export function useList<T extends BaseServer>({
 }: UseListOptions<T>): UseListReturn<T> {
   const [searchQuery, setSearchQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
-  const [sortBy, setSortBy] = useState<SortOption>("duration");
+  const [sortBy, setSortBy] = useState<SortOption>(DEFAULT_SORT);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const availableTags = useMemo(() => {
     const counts = new Map<string, number>();
@@ -153,9 +137,15 @@ export function useList<T extends BaseServer>({
         case "owner":
           return (a: T, b: T) => a.owner.localeCompare(b.owner);
         case "default":
-          return (a: T, b: T) => a.id.localeCompare(b.id);
+          return (a: T, b: T) =>
+            parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
+            parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0) ||
+            a.id.localeCompare(b.id);
         default:
-          return (a: T, b: T) => a.id.localeCompare(b.id);
+          return (a: T, b: T) =>
+            parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
+            parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0) ||
+            a.id.localeCompare(b.id);
       }
     };
 
@@ -176,6 +166,15 @@ export function useList<T extends BaseServer>({
     );
   }
 
+  const clearTags = () => setSelectedTags([]);
+
+  const resetFilters = (nextSortBy: SortOption = DEFAULT_SORT) => {
+    setSearchQuery("");
+    setStatus("all");
+    setSortBy(nextSortBy);
+    setSelectedTags([]);
+  };
+
   return {
     searchQuery,
     status,
@@ -187,5 +186,7 @@ export function useList<T extends BaseServer>({
     handleStatusChange: setStatus,
     handleSortByChange: setSortBy,
     handleTagToggle,
+    clearTags,
+    resetFilters,
   };
 }

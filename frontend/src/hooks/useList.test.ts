@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { useList, type BaseServer } from "./useList";
+import { useList } from "./useList";
+import type { BaseServer } from "@/lib/server";
 
 const server = (id: string, up?: number, name = id): BaseServer => ({
   id,
@@ -15,6 +16,52 @@ const server = (id: string, up?: number, name = id): BaseServer => ({
   ...(up === undefined ? {} : {
     reputation: { hostname: id, up, down: 0, total: up, viewer_vote: "" },
   }),
+});
+
+describe("filter reset", () => {
+  it("clears search, status and tags and applies the given order", () => {
+    const servers = [server("b"), { ...server("a"), online: false }];
+    const { result } = renderHook(() => useList({ servers }));
+
+    act(() => {
+      result.current.handleSearchChange("zzz");
+      result.current.handleStatusChange("online");
+      result.current.handleTagToggle("tools");
+    });
+    expect(result.current.filteredServers).toEqual([]);
+
+    act(() => result.current.resetFilters("name-asc"));
+
+    expect(result.current.searchQuery).toBe("");
+    expect(result.current.status).toBe("all");
+    expect(result.current.selectedTags).toEqual([]);
+    expect(result.current.filteredServers.map(({ id }) => id)).toEqual(["a", "b"]);
+  });
+
+  it("defaults to newest first by firstSeen timestamp", () => {
+    const servers = [
+      { ...server("old"), firstSeen: "2026-01-01T00:00:00Z" },
+      { ...server("newest"), firstSeen: "2026-01-03T00:00:00Z" },
+      { ...server("middle"), firstSeen: "2026-01-02T00:00:00Z" },
+    ];
+    const { result } = renderHook(() => useList({ servers }));
+
+    expect(result.current.filteredServers.map(({ id }) => id)).toEqual([
+      "newest", "middle", "old",
+    ]);
+  });
+});
+
+describe("default order", () => {
+  it("opens in the order resetFilters returns to", () => {
+    const { result } = renderHook(() => useList({ servers: [server("a")] }));
+    const initial = result.current.sortBy;
+    act(() => {
+      result.current.handleSortByChange("name-desc");
+      result.current.resetFilters();
+    });
+    expect(result.current.sortBy).toBe(initial);
+  });
 });
 
 describe("recommendation sorting", () => {

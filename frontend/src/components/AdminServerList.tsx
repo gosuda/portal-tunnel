@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { Header } from "@/components/Header";
-import { SearchBar } from "@/components/SearchBar";
+import { Search, Settings } from "lucide-react";
+import { AdminHeader } from "@/components/AdminHeader";
+import { Input } from "@/components/ui/input";
 import { AdminServerCard } from "@/components/AdminServerCard";
 import { TagCombobox } from "@/components/TagCombobox";
-import type { AdminServer, ApprovalMode, UDPSettings, TCPPortSettings } from "@/hooks/useAdmin";
+import type { AdminServer, ApprovalMode, PortSettings } from "@/hooks/useAdmin";
+import type { AdminAuth } from "@/hooks/useAuth";
 import type { BanFilter, SortOption, StatusFilter } from "@/types/filters";
 import { StatusSelect } from "@/components/select/StatusSelect";
 import { BanStatusButtons } from "@/components/button/BanStatusButtons";
 import { SortbySelect } from "@/components/select/SortbySelect";
 import { ApprovalModeToggle } from "@/components/button/ApprovalModeToggle";
 import { FloatingActionBar } from "@/components/FloatingActionBar";
+import { TransportPolicyControl } from "@/components/TransportPolicyControl";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AdminServerListProps {
@@ -34,10 +37,10 @@ interface AdminServerListProps {
   ) => void | Promise<void>;
   onBPSChange: (identityKey: string, bps: number) => void | Promise<void>;
   onApprovalModeChange: (mode: ApprovalMode) => void;
-  udpSettings: UDPSettings;
-  onUDPSettingsChange: (settings: UDPSettings) => void | Promise<void>;
-  tcpPortSettings: TCPPortSettings;
-  onTCPPortSettingsChange: (settings: TCPPortSettings) => void | Promise<void>;
+  udpSettings: PortSettings;
+  onUDPSettingsChange: (settings: PortSettings) => void | Promise<void>;
+  tcpPortSettings: PortSettings;
+  onTCPPortSettingsChange: (settings: PortSettings) => void | Promise<void>;
   onApproveStatusChange: (
     identityKey: string,
     approve: boolean
@@ -49,7 +52,7 @@ interface AdminServerListProps {
   onBulkApprove: (identityKeys: string[]) => void | Promise<void>;
   onBulkDeny: (identityKeys: string[]) => void | Promise<void>;
   onBulkBan: (identityKeys: string[]) => void | Promise<void>;
-  onAuthChange: () => void | Promise<void>;
+  auth: AdminAuth;
 }
 export function AdminServerList({
   title = "PORTAL ADMIN",
@@ -79,7 +82,7 @@ export function AdminServerList({
   onBulkApprove,
   onBulkDeny,
   onBulkBan,
-  onAuthChange,
+  auth,
 }: AdminServerListProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [selectedIdentityKeys, setSelectedIdentityKeys] = useState<Set<string>>(new Set());
@@ -163,41 +166,6 @@ export function AdminServerList({
     void runBulkAction(onBulkBan);
   };
 
-  const [maxLeasesInput, setMaxLeasesInput] = useState(
-    String(udpSettings.maxLeases)
-  );
-  const [tcpPortMaxLeasesInput, setTCPPortMaxLeasesInput] = useState(
-    String(tcpPortSettings.maxLeases)
-  );
-
-  useEffect(() => {
-    setMaxLeasesInput(String(udpSettings.maxLeases));
-  }, [udpSettings.maxLeases]);
-
-  useEffect(() => {
-    setTCPPortMaxLeasesInput(String(tcpPortSettings.maxLeases));
-  }, [tcpPortSettings.maxLeases]);
-
-  const handleUDPToggle = (enabled: boolean) => {
-    void onUDPSettingsChange({ ...udpSettings, enabled });
-  };
-
-  const handleTCPPortToggle = (enabled: boolean) => {
-    void onTCPPortSettingsChange({ ...tcpPortSettings, enabled });
-  };
-
-  const handleMaxLeasesSave = () => {
-    const value = Math.max(0, parseInt(maxLeasesInput, 10) || 0);
-    setMaxLeasesInput(String(value));
-    void onUDPSettingsChange({ ...udpSettings, maxLeases: value });
-  };
-
-  const handleTCPPortMaxLeasesSave = () => {
-    const value = Math.max(0, parseInt(tcpPortMaxLeasesInput, 10) || 0);
-    setTCPPortMaxLeasesInput(String(value));
-    void onTCPPortSettingsChange({ ...tcpPortSettings, maxLeases: value });
-  };
-
   const adminFilterControls = (
     <>
       <div className="flex items-center gap-3">
@@ -222,104 +190,8 @@ export function AdminServerList({
 
   const transportPolicyControls = (
     <>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">UDP</span>
-        <div className="flex rounded-lg overflow-hidden border border-foreground/20">
-          <button
-            disabled={policySaving}
-            onClick={() => handleUDPToggle(false)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${!udpSettings.enabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Disabled
-          </button>
-          <button
-            disabled={policySaving}
-            onClick={() => handleUDPToggle(true)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${udpSettings.enabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Enabled
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">Max UDP</span>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min="0"
-            disabled={policySaving}
-            value={maxLeasesInput}
-            onChange={(e) => setMaxLeasesInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleMaxLeasesSave();
-            }}
-            className="disabled:opacity-50 w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
-            placeholder="0"
-          />
-          <button
-            disabled={policySaving}
-            onClick={handleMaxLeasesSave}
-            className="cursor-pointer disabled:cursor-wait disabled:opacity-50 h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            Save
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">TCP</span>
-        <div className="flex rounded-lg overflow-hidden border border-foreground/20">
-          <button
-            disabled={policySaving}
-            onClick={() => handleTCPPortToggle(false)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors ${!tcpPortSettings.enabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Disabled
-          </button>
-          <button
-            disabled={policySaving}
-            onClick={() => handleTCPPortToggle(true)}
-            className={`cursor-pointer disabled:cursor-wait disabled:opacity-50 px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${tcpPortSettings.enabled
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              }`}
-          >
-            Enabled
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-text-muted">Max TCP</span>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min="0"
-            disabled={policySaving}
-            value={tcpPortMaxLeasesInput}
-            onChange={(e) => setTCPPortMaxLeasesInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleTCPPortMaxLeasesSave();
-            }}
-            className="disabled:opacity-50 w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
-            placeholder="0"
-          />
-          <button
-            disabled={policySaving}
-            onClick={handleTCPPortMaxLeasesSave}
-            className="cursor-pointer disabled:cursor-wait disabled:opacity-50 h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            Save
-          </button>
-        </div>
-      </div>
+      <TransportPolicyControl label="UDP" settings={udpSettings} disabled={policySaving} onChange={onUDPSettingsChange} />
+      <TransportPolicyControl label="TCP" settings={tcpPortSettings} disabled={policySaving} onChange={onTCPPortSettingsChange} />
     </>
   );
 
@@ -344,31 +216,60 @@ export function AdminServerList({
   );
 
   const searchBar = (
-    <SearchBar
-      searchQuery={searchQuery}
-      onSearchChange={onSearchChange}
-      status={status}
-      onStatusChange={onStatusChange}
-      sortBy={sortBy}
-      onSortByChange={onSortByChange}
-      availableTags={availableTags}
-      selectedTags={selectedTags}
-      onAddTag={onTagToggle}
-      onRemoveTag={onTagToggle}
-      hideFiltersOnMobile
-      setShowFilterModal={setShowFilterModal}
-    />
+    <div className="flex flex-wrap mt-5 items-center gap-3 border-b border-border pb-4">
+      <div className="flex gap-2 items-center w-full lg:w-auto lg:min-w-72 lg:flex-1">
+        <label className="flex min-w-0 flex-1 items-stretch h-10 relative">
+          <div className="left-0 h-full absolute text-text-muted flex items-center justify-center pl-3 pr-2 rounded-l-md bg-border border border-border">
+            <Search className="w-4 h-4" />
+          </div>
+          <Input
+            aria-label="Search live apps"
+            type="search"
+            placeholder="Search apps, descriptions, or tags"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="h-10 pl-12 border border-border rounded-md"
+          />
+        </label>
+        <button
+          onClick={() => setShowFilterModal(true)}
+          className="sm:hidden flex items-center justify-center w-10 h-10 rounded-lg bg-secondary hover:bg-secondary/80 transition-colors"
+          aria-label="Filter settings"
+        >
+          <Settings className="w-5 h-5 text-secondary-foreground" />
+        </button>
+      </div>
+
+      <StatusSelect
+        className="flex-1 sm:flex-none"
+        status={status}
+        onStatusChange={onStatusChange}
+        hideFiltersOnMobile
+      />
+
+      <SortbySelect
+        className="flex-1 sm:flex-none"
+        sortBy={sortBy}
+        onSortByChange={onSortByChange}
+        hideFiltersOnMobile
+      />
+
+      <div className="relative hidden w-full flex-1 sm:flex sm:w-auto sm:min-w-48 lg:max-w-72">
+        <TagCombobox
+          availableTags={availableTags}
+          selectedTags={selectedTags}
+          onAdd={onTagToggle}
+          onRemove={onTagToggle}
+        />
+      </div>
+    </div>
   );
   return (
     <div className="relative flex h-auto min-h-screen w-full flex-col">
       <div className="flex h-full grow flex-col">
         <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
           <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-            <Header
-              title={title}
-              isAdmin
-              onAuthChange={onAuthChange}
-            />
+            <AdminHeader title={title} auth={auth} />
             <div className="flex items-center gap-2">
               <div className="flex-1">{searchBar}</div>
             </div>

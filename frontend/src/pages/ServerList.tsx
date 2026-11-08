@@ -3,19 +3,19 @@ import { useServerList } from "@/hooks/useServerList";
 import { ServerListView } from "@/components/ServerListView";
 import { ServerCommentsPanel } from "@/components/ServerCommentsPanel";
 import { useServerComments } from "@/hooks/useServerComments";
-import type { BaseServer } from "@/hooks/useList";
+import type { BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 
 export function ServerList() {
   const {
     commentServer,
-    setCommentServer,
+    toggleComments,
+    closeComments,
     browseView,
     sidebarOpen,
     setSidebarOpen,
     handleBrowseViewChange,
     searchQuery,
-    status,
     sortBy,
     selectedTags,
     availableTags,
@@ -27,6 +27,7 @@ export function ServerList() {
     handleSearchChange,
     handleSortByChange,
     handleTagToggle,
+    clearTags,
     onVote,
     leases,
   } = useServerList();
@@ -40,7 +41,6 @@ export function ServerList() {
         onBrowseViewChange={handleBrowseViewChange}
         leases={leases}
         searchQuery={searchQuery}
-        status={status}
         sortBy={sortBy}
         selectedTags={selectedTags}
         availableTags={availableTags}
@@ -52,15 +52,15 @@ export function ServerList() {
         onSearchChange={handleSearchChange}
         onSortByChange={handleSortByChange}
         onTagToggle={handleTagToggle}
-        onOpenComments={(server) =>
-          setCommentServer((current) => (current?.id === server.id ? null : server))
-        }
+        onClearTags={clearTags}
+        onOpenComments={toggleComments}
+        onVote={onVote}
       />
       {commentServer && (
         <CommentsThread
           key={commentServer.id}
           server={commentServer}
-          onClose={() => setCommentServer(null)}
+          onClose={closeComments}
           onVoteApp={onVote}
         />
       )}
