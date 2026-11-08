@@ -177,7 +177,7 @@ describe("ServerCard comments interaction", () => {
     expect(screen.queryByLabelText(/Actions for/i)).toBeNull();
   });
 
-  it("navigates to /server/:id route even when server.link is an external URL", () => {
+  it("navigates to /server/:id route when app has reputation warning", () => {
     render(
       <MemoryRouter initialEntries={["/"]}>
         <Routes>
@@ -195,7 +195,14 @@ describe("ServerCard comments interaction", () => {
                   online: true,
                   dns: "cool.relay.example.com",
                   link: "https://cool.relay.example.com/",
-                  reputation: REPUTATION,
+                  reputation: {
+                    hostname: "cool.relay.example.com",
+                    up: 1,
+                    down: 5,
+                    total: 6,
+                    viewer_vote: "",
+                    comments: 0,
+                  },
                 }}
               />
             }
@@ -209,6 +216,30 @@ describe("ServerCard comments interaction", () => {
     expect(openLink.getAttribute("href")).toBe("/server/cool-app");
     fireEvent.click(openLink);
     expect(screen.getByText("reputation gate page")).toBeTruthy();
+  });
+
+  it("links directly to server.link when app has no reputation warning", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <ServerCard
+          server={{
+            id: "cool-app",
+            name: "Cool App",
+            description: "A secure app",
+            tags: [],
+            thumbnail: "",
+            owner: "alice",
+            online: true,
+            dns: "cool.relay.example.com",
+            link: "https://cool.relay.example.com/",
+            reputation: REPUTATION,
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    const openLink = screen.getByRole("link", { name: "Open Cool App" });
+    expect(openLink.getAttribute("href")).toBe("https://cool.relay.example.com/");
   });
 
   it("toggles description disclosure via touch-accessible Info button without navigating", () => {
