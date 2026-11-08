@@ -175,7 +175,7 @@ func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
 		t.Run(fmt.Sprintf("start-%d", phase), func(t *testing.T) {
 			ctx, base, client := startPolicyRelay(t, stateDir, "--default-identity-bps", strconv.Itoa(defaultBPS))
 			for _, tenant := range identities {
-				exposure, err := sdk.Expose(ctx, tenant, []string{base.String()})
+				exposure, err := sdk.Expose(ctx, tenant, []string{"https://localhost:" + base.Port()})
 				if err != nil {
 					t.Fatal(err)
 				}
