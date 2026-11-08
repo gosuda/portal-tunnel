@@ -1332,7 +1332,9 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	}
 	oldLease := l.lease.Swap(next)
 	if l.replica && oldLease.accessToken != "" {
-		_ = l.api.unregister(ctx, oldLease.accessToken)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = l.api.unregister(cleanupCtx, oldLease.accessToken)
+		cancel()
 	}
 	if oldLease.tenantTLS != nil {
 		_ = oldLease.tenantTLS.Close()
