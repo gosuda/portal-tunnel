@@ -25,7 +25,7 @@ func TestAccessNamesTheDecision(t *testing.T) {
 	t.Parallel()
 
 	key := types.NewServiceIdentityKey("demo", "0x1234")
-	access := NewAccess().Snapshot()
+	access := NewStore().Snapshot()
 	if got := access.Access(key); got != types.LeaseRoutable {
 		t.Fatalf("auto mode = %q", got)
 	}
@@ -56,7 +56,7 @@ func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 
 	key := types.NewServiceIdentityKey("demo", "0x1234")
-	access := NewAccess().Snapshot()
+	access := NewStore().Snapshot()
 	access.SetMode(ModeManual)
 
 	access.Approve(key)
@@ -75,15 +75,25 @@ func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
-func TestAccessCommitsCompoundDecisionsAtomically(t *testing.T) {
+func TestPolicyCommitsCompoundDecisionsAtomically(t *testing.T) {
 	key := types.NewServiceIdentityKey("demo", "0x1234")
-	access := NewAccess()
+	access := NewStore()
 	initial := access.Snapshot()
 	initial.Ban(key)
+	initial.UDP = types.PolicyPortSettings{Enabled: true, MaxLeases: 2}
+	initial.TCPPort = types.PolicyPortSettings{Enabled: true, MaxLeases: 3}
+	initial.IdentityBPS = map[types.ServiceIdentityKey]int64{key: 100}
 	access.Commit(initial)
 
 	proposed := access.Snapshot()
 	proposed.Unban(key)
+	proposed.UDP.Enabled = false
+	proposed.TCPPort.MaxLeases = 4
+	proposed.IdentityBPS[key] = 200
+	before := access.Snapshot()
+	if !before.UDP.Enabled || before.TCPPort.MaxLeases != 3 || before.IdentityBPS[key] != 100 {
+		t.Fatal("editing candidate transport or bandwidth settings changed committed policy")
+	}
 	// A registration arriving between the two edits must still see the
 	// committed ban, even though the proposed state temporarily permits it.
 	observed := make(chan bool, 1)
@@ -100,9 +110,16 @@ func TestAccessCommitsCompoundDecisionsAtomically(t *testing.T) {
 	if committed.IsBanned(key) || !committed.IsDenied(key) || committed.Access(key) == types.LeaseRoutable {
 		t.Fatal("compound change did not atomically replace the ban with a denial")
 	}
+	if committed.UDP.Enabled || committed.TCPPort.MaxLeases != 4 || committed.IdentityBPS[key] != 200 {
+		t.Fatal("compound commit lost transport or bandwidth settings")
+	}
 	proposed.Undeny(key)
+	proposed.IdentityBPS[key] = 300
 	if access.Snapshot().Access(key) == types.LeaseRoutable {
 		t.Fatal("editing the proposal after commit changed live access")
+	}
+	if access.Snapshot().IdentityBPS[key] != 200 {
+		t.Fatal("editing the proposal after commit changed the live bandwidth limit")
 	}
 }
 
@@ -112,7 +129,7 @@ func TestAccessSetDecisionsIgnoresInvalidZeroKeys(t *testing.T) {
 	validKey := types.NewServiceIdentityKey("demo", "0x1234")
 	zeroKey := types.ServiceIdentityKey{}
 
-	access := NewAccess().Snapshot()
+	access := NewStore().Snapshot()
 	access.SetMode(ModeManual)
 	access.SetDecisions([]types.ServiceIdentityKey{validKey, zeroKey}, []types.ServiceIdentityKey{zeroKey})
 
@@ -136,7 +153,7 @@ func TestAccessUnnamedIdentityKeyDecisions(t *testing.T) {
 	unnamedKey := types.NewServiceIdentityKey("", "0x1234")
 	namedKey := types.NewServiceIdentityKey("demo", "0x1234")
 
-	access := NewAccess().Snapshot()
+	access := NewStore().Snapshot()
 	access.SetMode(ModeManual)
 
 	access.Approve(unnamedKey)

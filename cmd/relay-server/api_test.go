@@ -25,7 +25,7 @@ func newTestReputationAPI(t *testing.T) *RelayAPI {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, policy.NewAccess(), nil, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, types.PolicySettings{})
+	api, err := NewRelayAPI(server, policy.NewStore(), nil, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, types.PolicySettings{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, e
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, types.PolicySettings{})
+	api, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{})
 	return api, server, err
 }
 
@@ -116,11 +116,11 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, types.PolicySettings{})
+	api, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !api.access.Snapshot().IsBanned(types.NewServiceIdentityKey("blocked", "addr")) || api.access.Snapshot().Access(types.NewServiceIdentityKey("allowed", "addr")) != types.LeaseRoutable {
+	if !api.policies.Snapshot().IsBanned(types.NewServiceIdentityKey("blocked", "addr")) || api.policies.Snapshot().Access(types.NewServiceIdentityKey("allowed", "addr")) != types.LeaseRoutable {
 		t.Fatal("identity policy lost during migration")
 	}
 	data, err := os.ReadFile(path)
@@ -134,7 +134,7 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if _, ok := fields["banned_ips"]; ok {
 		t.Fatal("legacy bans remain persisted")
 	}
-	if _, err := NewRelayAPI(server, policy.NewAccess(), nil, path, "admin-test", frontend, types.PolicySettings{}); err != nil {
+	if _, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{}); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
@@ -153,17 +153,18 @@ func TestPolicyLoadNormalizesUnnormalizedIdentityKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !api.access.Snapshot().IsBanned(types.NewServiceIdentityKey("blocked", "addr")) {
+	if !api.policies.Snapshot().IsBanned(types.NewServiceIdentityKey("blocked", "addr")) {
 		t.Fatal("unnormalized ban not applied to canonical key")
 	}
-	if api.access.Snapshot().Access(types.NewServiceIdentityKey("allowed", "addr")) != types.LeaseRoutable {
+	if api.policies.Snapshot().Access(types.NewServiceIdentityKey("allowed", "addr")) != types.LeaseRoutable {
 		t.Fatal("unnormalized approval not effective for canonical key")
 	}
-	if !api.access.Snapshot().IsDenied(types.NewServiceIdentityKey("denied", "key")) {
+	if !api.policies.Snapshot().IsDenied(types.NewServiceIdentityKey("denied", "key")) {
 		t.Fatal("unnormalized denial not applied to canonical key")
 	}
-	limits := server.BPSManager().IdentityBPSLimits()
-	if len(limits) != 1 || limits["floody:key"] != 1500 {
+	key := types.NewServiceIdentityKey("floody", "key")
+	limits := api.policies.Snapshot().IdentityBPS
+	if len(limits) != 1 || limits[key] != 1500 || server.BPSManager().IdentityBPS(key) != 1500 {
 		t.Fatalf("identity_bps not normalized to canonical keys: %v", limits)
 	}
 }

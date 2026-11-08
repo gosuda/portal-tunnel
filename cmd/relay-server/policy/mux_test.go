@@ -60,7 +60,7 @@ func TestMuxUnapprovedLeaseBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	access := NewAccess()
+	access := NewStore()
 	manual := access.Snapshot()
 	manual.SetMode(ModeManual)
 	access.Commit(manual)

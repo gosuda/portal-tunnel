@@ -231,6 +231,24 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	assertBlocked()
 	setPolicy(`{"identity_key":"`+leaseIdentity.Key()+`","is_banned":false,"is_denied":true,"bps":10000}`, http.StatusOK)
 	assertBlocked()
+	headers := http.Header{"Authorization": {"Bearer admin-test"}}
+	var settings types.PolicySettings
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicy, nil, headers, &settings); err != nil {
+		t.Fatal(err)
+	}
+	settings.UDP.MaxLeases, settings.TCPPort.MaxLeases = 1, 2
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, settings, headers, nil); err != nil {
+		t.Fatal(err)
+	}
+	var afterSettings types.PolicyStateResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &afterSettings); err != nil {
+		t.Fatal(err)
+	}
+	if afterSettings.Policy.UDP.MaxLeases != 1 || afterSettings.Policy.TCPPort.MaxLeases != 2 ||
+		len(afterSettings.Leases) != 1 || !afterSettings.Leases[0].IsDenied || afterSettings.Leases[0].BPS != 10000 {
+		t.Fatalf("global policy update lost identity decisions or limits: %+v", afterSettings)
+	}
+	assertBlocked()
 
 	// Make atomic replacement fail without permissions or filesystem mocks.
 	// The relay has already loaded its state; a directory cannot be replaced
@@ -244,7 +262,6 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	setPolicy(`{"identity_key":"`+leaseIdentity.Key()+`","is_denied":false,"bps":20000}`, http.StatusInternalServerError)
 	assertBlocked()
 	var state types.PolicyStateResponse
-	headers := http.Header{"Authorization": {"Bearer admin-test"}}
 	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
 		t.Fatal(err)
 	}

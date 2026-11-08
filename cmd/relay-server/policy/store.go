@@ -26,57 +26,61 @@ func ParseMode(raw string) (Mode, error) {
 	return mode, nil
 }
 
-// Access owns committed relay access decisions. A transaction edits a detached
+// Store owns committed relay operator policy. A transaction edits a detached
 // Snapshot, persists it, then commits the complete state with a new revision.
-type Access struct {
-	state *utils.Snapshot[AccessState]
+type Store struct {
+	state *utils.Snapshot[State]
 }
 
-// AccessState is a detached set of decisions. Editing it never changes the live
+// State is a detached operator policy. Editing it never changes the live
 // relay policy; Commit installs the whole state once persistence has succeeded.
-type AccessState struct {
-	revision uint64
-	mode     Mode
-	approved map[types.ServiceIdentityKey]struct{}
-	denied   map[types.ServiceIdentityKey]struct{}
-	banned   map[types.ServiceIdentityKey]struct{}
+type State struct {
+	revision    uint64
+	mode        Mode
+	approved    map[types.ServiceIdentityKey]struct{}
+	denied      map[types.ServiceIdentityKey]struct{}
+	banned      map[types.ServiceIdentityKey]struct{}
+	UDP         types.PolicyPortSettings
+	TCPPort     types.PolicyPortSettings
+	IdentityBPS map[types.ServiceIdentityKey]int64
 }
 
-func (s AccessState) snapshot() AccessState {
+func (s State) snapshot() State {
 	s.approved = maps.Clone(s.approved)
 	s.denied = maps.Clone(s.denied)
 	s.banned = maps.Clone(s.banned)
+	s.IdentityBPS = maps.Clone(s.IdentityBPS)
 	return s
 }
 
-func NewAccess() *Access {
-	return &Access{state: utils.NewSnapshot(AccessState{}, AccessState.snapshot)}
+func NewStore() *Store {
+	return &Store{state: utils.NewSnapshot(State{}, State.snapshot)}
 }
 
 // Snapshot returns an independent copy for readers or a proposed transaction.
-func (a *Access) Snapshot() AccessState {
+func (a *Store) Snapshot() State {
 	if a == nil {
-		return AccessState{}
+		return State{}
 	}
 	return a.state.Load()
 }
 
 // Commit installs a durably saved candidate as one immutable revision. The
 // relay serializes transactions from Snapshot through persistence and Commit.
-// Revisions belong to this running relay; both Access and Portal start fresh
+// Revisions belong to this running relay; both Store and Portal start fresh
 // on restart, so policy.json needs no revision field or schema migration.
-func (a *Access) Commit(next AccessState) AccessState {
-	return a.state.Update(func(previous AccessState) AccessState {
+func (a *Store) Commit(next State) State {
+	return a.state.Update(func(previous State) State {
 		next.revision = previous.revision + 1
 		return next
 	})
 }
 
-func (s AccessState) Revision() uint64 {
+func (s State) Revision() uint64 {
 	return s.revision
 }
 
-func (s AccessState) Access(key types.ServiceIdentityKey) types.LeaseAccess {
+func (s State) Access(key types.ServiceIdentityKey) types.LeaseAccess {
 	switch {
 	case !key.Valid():
 		return types.LeaseRoutable
@@ -89,18 +93,18 @@ func (s AccessState) Access(key types.ServiceIdentityKey) types.LeaseAccess {
 	}
 }
 
-func (s AccessState) Mode() Mode {
+func (s State) Mode() Mode {
 	if s.mode == "" {
 		return ModeAuto
 	}
 	return s.mode
 }
 
-func (s *AccessState) SetMode(mode Mode) {
+func (s *State) SetMode(mode Mode) {
 	s.mode = mode
 }
 
-func (s AccessState) EffectiveApproval(key types.ServiceIdentityKey) bool {
+func (s State) EffectiveApproval(key types.ServiceIdentityKey) bool {
 	if s.Mode() == ModeAuto {
 		return true
 	}
@@ -108,7 +112,7 @@ func (s AccessState) EffectiveApproval(key types.ServiceIdentityKey) bool {
 	return ok
 }
 
-func (s *AccessState) Approve(key types.ServiceIdentityKey) {
+func (s *State) Approve(key types.ServiceIdentityKey) {
 	if !key.Valid() {
 		return
 	}
@@ -119,11 +123,11 @@ func (s *AccessState) Approve(key types.ServiceIdentityKey) {
 	delete(s.denied, key)
 }
 
-func (s *AccessState) Revoke(key types.ServiceIdentityKey) {
+func (s *State) Revoke(key types.ServiceIdentityKey) {
 	delete(s.approved, key)
 }
 
-func (s AccessState) ApprovedKeys() []types.ServiceIdentityKey {
+func (s State) ApprovedKeys() []types.ServiceIdentityKey {
 	out := make([]types.ServiceIdentityKey, 0, len(s.approved))
 	for key := range s.approved {
 		out = append(out, key)
@@ -131,12 +135,12 @@ func (s AccessState) ApprovedKeys() []types.ServiceIdentityKey {
 	return out
 }
 
-func (s AccessState) IsDenied(key types.ServiceIdentityKey) bool {
+func (s State) IsDenied(key types.ServiceIdentityKey) bool {
 	_, ok := s.denied[key]
 	return ok
 }
 
-func (s *AccessState) Deny(key types.ServiceIdentityKey) {
+func (s *State) Deny(key types.ServiceIdentityKey) {
 	if !key.Valid() {
 		return
 	}
@@ -147,11 +151,11 @@ func (s *AccessState) Deny(key types.ServiceIdentityKey) {
 	delete(s.approved, key)
 }
 
-func (s *AccessState) Undeny(key types.ServiceIdentityKey) {
+func (s *State) Undeny(key types.ServiceIdentityKey) {
 	delete(s.denied, key)
 }
 
-func (s AccessState) DeniedKeys() []types.ServiceIdentityKey {
+func (s State) DeniedKeys() []types.ServiceIdentityKey {
 	out := make([]types.ServiceIdentityKey, 0, len(s.denied))
 	for key := range s.denied {
 		out = append(out, key)
@@ -160,7 +164,7 @@ func (s AccessState) DeniedKeys() []types.ServiceIdentityKey {
 }
 
 // SetDecisions keeps denied keys from also counting as approved.
-func (s *AccessState) SetDecisions(approvedKeys, deniedKeys []types.ServiceIdentityKey) {
+func (s *State) SetDecisions(approvedKeys, deniedKeys []types.ServiceIdentityKey) {
 	s.approved = make(map[types.ServiceIdentityKey]struct{}, len(approvedKeys))
 	for _, key := range approvedKeys {
 		if key.Valid() {
@@ -176,12 +180,12 @@ func (s *AccessState) SetDecisions(approvedKeys, deniedKeys []types.ServiceIdent
 	}
 }
 
-func (s AccessState) IsBanned(key types.ServiceIdentityKey) bool {
+func (s State) IsBanned(key types.ServiceIdentityKey) bool {
 	_, ok := s.banned[key]
 	return ok
 }
 
-func (s *AccessState) Ban(key types.ServiceIdentityKey) {
+func (s *State) Ban(key types.ServiceIdentityKey) {
 	if !key.Valid() {
 		return
 	}
@@ -191,11 +195,11 @@ func (s *AccessState) Ban(key types.ServiceIdentityKey) {
 	s.banned[key] = struct{}{}
 }
 
-func (s *AccessState) Unban(key types.ServiceIdentityKey) {
+func (s *State) Unban(key types.ServiceIdentityKey) {
 	delete(s.banned, key)
 }
 
-func (s AccessState) BannedKeys() []types.ServiceIdentityKey {
+func (s State) BannedKeys() []types.ServiceIdentityKey {
 	out := make([]types.ServiceIdentityKey, 0, len(s.banned))
 	for key := range s.banned {
 		out = append(out, key)
@@ -203,7 +207,7 @@ func (s AccessState) BannedKeys() []types.ServiceIdentityKey {
 	return out
 }
 
-func (s *AccessState) SetBannedKeys(keys []types.ServiceIdentityKey) {
+func (s *State) SetBannedKeys(keys []types.ServiceIdentityKey) {
 	s.banned = make(map[types.ServiceIdentityKey]struct{}, len(keys))
 	for _, key := range keys {
 		s.Ban(key)

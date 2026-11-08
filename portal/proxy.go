@@ -199,22 +199,6 @@ func (m *BPSManager) ResetIdentityLimiter(key types.ServiceIdentityKey) {
 	m.mu.Unlock()
 }
 
-func (m *BPSManager) IdentityBPSLimits() map[string]int64 {
-	if m == nil {
-		return nil
-	}
-
-	if m.identityBPS == nil {
-		return nil
-	}
-	limits := m.identityBPS.Load()
-	out := make(map[string]int64, len(limits))
-	for key, bps := range limits {
-		out[key.String()] = bps
-	}
-	return out
-}
-
 func (m *BPSManager) SetServiceIdentityBPSLimits(next map[types.ServiceIdentityKey]int64) {
 	if m == nil {
 		return

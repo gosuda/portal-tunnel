@@ -178,6 +178,13 @@ transport capability validation and applies UDP/TCP policy together under the
 registry lock. Bulk bandwidth updates retain existing limiter credit for
 identities that remain limited; removing a limit discards its limiter state.
 
+`policy.Store` owns one committed snapshot containing approval mode, identity
+decisions, UDP/TCP settings, and per-identity bandwidth limits. Admin reads and
+the saved file are projections of this state, rather than reconstructions from
+Portal's enforcement state. Both admin update endpoints edit a detached candidate
+and share one serialized save-and-apply path. Readers use snapshots without
+waiting for file I/O; no separate transport-setting mirror or read lock is needed.
+
 Revocation detaches cached content and advances the retained lease's cache
 generation. Cache requests capture that generation before the final access
 check, and must still match it at publication. This fences uploads that overlap

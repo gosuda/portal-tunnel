@@ -226,7 +226,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
-	access := policy.NewAccess()
+	policies := policy.NewStore()
 	if x402Settings.Enabled {
 		// NewServer already validated the URL; keep metadata consistent with
 		// the normalized URL the relay advertises.
@@ -242,13 +242,13 @@ func runServer(ctx context.Context, cfg appConfig) error {
 		UDP:          types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
 		TCPPort:      types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
 	}
-	relayAPI, err := NewRelayAPI(server, access, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
+	relayAPI, err := NewRelayAPI(server, policies, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}
 	// Any admin write on an auto relay saves that mode, and a saved mode wins.
 	// Only this direction warns, because it leaves a private relay open.
-	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && access.Snapshot().Mode() == policy.ModeAuto {
+	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && policies.Snapshot().Mode() == policy.ModeAuto {
 		log.Warn().Str("policy_path", policyPath).Msg("approval mode manual is ignored: policy.json saves auto, so every lease is approved; set the mode with the admin API")
 	}
 
@@ -261,7 +261,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	base = policy.ControlBodyHandler(base)
 	handler := policy.Mux(server, base, ingress,
 		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
-		access, cfg.PreAuth)
+		policies, cfg.PreAuth)
 	handler = relayAPI.metrics.instrument(handler)
 	if !cfg.PprofEnabled {
 		return server.Serve(ctx, handler)
