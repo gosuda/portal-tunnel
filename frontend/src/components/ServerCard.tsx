@@ -145,15 +145,15 @@ export function ServerCard({
 
           {/* Center section: Slim Capsule Omnibar (Safari Compact Tab) */}
           <div
-            className="mx-auto flex max-w-[85%] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border border-border/60 dark:border-white/10 bg-background/70 dark:bg-black/30 px-2.5 py-0.5 text-[11px] shadow-2xs transition-colors duration-200 group-hover:border-border group-hover:bg-background/95"
+            className="mx-auto flex max-w-[85%] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/75 dark:bg-black/35 px-2.5 py-0.5 text-[12px] shadow-2xs transition-colors duration-200 group-hover:border-black/15 dark:group-hover:border-white/20 group-hover:bg-white/95 dark:group-hover:bg-black/55"
             title={displayUrl}
           >
             {isTransportService ? (
-              <Terminal className="size-2.5 shrink-0 text-muted-foreground/70" />
+              <Terminal className="size-2.5 shrink-0 text-neutral-400 dark:text-neutral-500" />
             ) : (
-              <Lock className="size-2.5 shrink-0 text-muted-foreground/60 transition-colors group-hover:text-emerald-500" />
+              <Lock className="size-2.5 shrink-0 text-neutral-400 dark:text-neutral-500 transition-colors group-hover:text-neutral-600 dark:group-hover:text-neutral-300" />
             )}
-            <span className="truncate font-mono text-[11px] font-medium tracking-tight text-foreground/80 group-hover:text-foreground">
+            <span className="truncate [font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,sans-serif] text-[12px] font-normal tracking-normal text-neutral-700 dark:text-neutral-300 transition-colors group-hover:text-neutral-900 dark:group-hover:text-neutral-100">
               {displayUrl}
             </span>
           </div>
