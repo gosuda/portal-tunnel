@@ -3,9 +3,6 @@ package utils
 import (
 	"cmp"
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -31,8 +28,6 @@ var (
 	errEndpointHostnameIsEmpty         = errors.New("endpoint hostname is empty")
 	errNoPeerCertificatesRelayEndpoint = errors.New("no peer certificates from relay endpoint")
 	errNoPEMBlockFound                 = errors.New("no pem block found")
-	errInvalidPrivateKeyPEM            = errors.New("invalid private key pem")
-	errUnsupportedPrivateKeyType       = errors.New("unsupported private key type")
 )
 
 func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Duration) (*tls.Config, *http.Client, *http.Transport, error) {
@@ -157,26 +152,4 @@ func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
 		return nil, errNoPEMBlockFound
 	}
 	return x509.ParseCertificate(block.Bytes)
-}
-
-func ParsePrivateKeyPEM(keyPEM []byte) (crypto.PrivateKey, error) {
-	block, _ := pem.Decode(keyPEM)
-	if block == nil {
-		return nil, errInvalidPrivateKeyPEM
-	}
-	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-		switch typed := key.(type) {
-		case *ecdsa.PrivateKey:
-			return typed, nil
-		case *rsa.PrivateKey:
-			return typed, nil
-		}
-	}
-	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	return nil, errUnsupportedPrivateKeyType
 }

@@ -1,9 +1,7 @@
 package utils
 
 import (
-	"context"
 	"crypto/tls"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -65,12 +63,6 @@ func WithHTTPTLSConfig(tlsConfig *tls.Config) HTTPClientOption {
 			return
 		}
 		mustTransportOf(c).TLSClientConfig = tlsConfig.Clone()
-	}
-}
-
-func WithHTTPDialContext(dialContext func(context.Context, string, string) (net.Conn, error)) HTTPClientOption {
-	return func(c *http.Client) {
-		mustTransportOf(c).DialContext = dialContext
 	}
 }
 

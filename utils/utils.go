@@ -315,30 +315,6 @@ func NormalizeRelayURLs(inputs ...string) ([]string, error) {
 	return normalizeUniqueStrings(out, strings.TrimSpace), nil
 }
 
-func RemoveRelayURL(inputs []string, target string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return append([]string(nil), inputs...)
-	}
-
-	filtered := make([]string, 0, len(inputs))
-	for _, input := range inputs {
-		input = strings.TrimSpace(input)
-		if input == "" || input == target {
-			continue
-		}
-		filtered = append(filtered, input)
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	return filtered
-}
-
 func LeaseHostname(name, rootHost string) (string, error) {
 	label, err := NormalizeDNSLabel(name)
 	if err != nil {
@@ -491,17 +467,6 @@ func IsLoopbackHost(hostname string) bool {
 		return true
 	}
 	return false
-}
-
-func HostPortOrLoopback(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	if host == "" || host == "::" || host == "0.0.0.0" {
-		host = "127.0.0.1"
-	}
-	return net.JoinHostPort(host, port)
 }
 
 func EnsurePort(host string) string {

@@ -142,7 +142,13 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	mux.Handle("/", fallback)
 
 	control := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if utils.HandleAPICORS(w, r) {
+		header := w.Header()
+		header.Set("Access-Control-Allow-Origin", "*")
+		header.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS")
+		header.Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, "+types.HeaderAccessToken)
+		header.Set("Access-Control-Max-Age", "600")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		mux.ServeHTTP(w, r)

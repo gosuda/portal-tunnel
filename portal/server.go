@@ -235,7 +235,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	cfg.PortalURL = selfRelayURL
 	cfg.Bootstraps = bootstraps
-	cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, selfRelayURL)
+	cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, selfRelayURL)
 
 	if cfg.SNIPort == 0 {
 		// SNI_PORT owns only the local bind. When PORTAL_URL names an explicit
@@ -333,7 +333,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
 		}
-		cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, cfg.PortalURL)
+		cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, cfg.PortalURL)
 		relaySet = discovery.NewRelaySet(cfg.Bootstraps)
 	}
 
@@ -1311,4 +1311,15 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 		ActiveConnections: s.proxy.activeConnectionCount(),
 		TCPBPS:            s.proxy.currentTCPBPS(now),
 	}, s.authority)
+}
+
+func removeRelayURL(inputs []string, target string) []string {
+	// Both inputs and the server URL are already normalized by their owners.
+	var filtered []string
+	for _, input := range inputs {
+		if input != target {
+			filtered = append(filtered, input)
+		}
+	}
+	return filtered
 }

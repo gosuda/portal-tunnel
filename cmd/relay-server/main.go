@@ -254,7 +254,7 @@ func runServer(ctx context.Context, cfg appConfig) error {
 	if err != nil {
 		return err
 	}
-	log.Info().Str("pprof_addr", utils.HostPortOrLoopback(bound.String())).Msg("starting pprof server")
+	log.Info().Str("pprof_addr", hostPortOrLoopback(bound.String())).Msg("starting pprof server")
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

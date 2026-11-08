@@ -61,3 +61,14 @@ func startPprofServer(ctx context.Context, addr string) (net.Addr, func(context.
 	}()
 	return listener.Addr(), server.Shutdown, serveErrs, nil
 }
+
+func hostPortOrLoopback(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "::" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
