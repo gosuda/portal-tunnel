@@ -137,9 +137,9 @@ type Exposure struct {
 
 	startedAt time.Time
 	identity  types.Identity
-	options  options
-	metadata types.LeaseMetadata
-	cache    *cache.Source
+	options   options
+	metadata  types.LeaseMetadata
+	cache     *cache.Source
 
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
