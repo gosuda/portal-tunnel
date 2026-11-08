@@ -29,8 +29,11 @@ anywhere else gets `403 source_not_allowed` when it registers or renews, before
 the relay spends any pre-auth budget on it, and the SDK stops using that relay.
 Visitors are not affected, and the list applies under either approval mode, so a
 private relay can stay on `auto`. Empty, the default, accepts every network as
-before. Behind a reverse proxy the list needs `TRUST_PROXY_HEADERS` and
-`TRUSTED_PROXY_CIDRS`, or every tunnel appears to come from the proxy. An older
+before, and a value that names no network stops the relay at startup. Behind a
+reverse proxy the list needs `TRUST_PROXY_HEADERS` and `TRUSTED_PROXY_CIDRS`, or
+every tunnel appears to come from the proxy, and the proxy must overwrite
+`X-Forwarded-For` rather than append to it, or a client can choose a listed
+address. An older
 relay ignores the setting, so a downgrade accepts every network again. See
 [Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks).
 

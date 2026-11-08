@@ -268,7 +268,8 @@ or renews, with a message that names the address the relay saw, such as
 relay as failed and does not retry it. Visitors are not affected. The list works
 with either approval mode, so a relay on `auto` serves new tunnels from your
 networks at once, including every identity an embedder creates, and refuses the
-rest. Empty, the default, accepts every network. The relay reads the list at
+rest. Empty, the default, accepts every network, and a value that names no
+network, such as `,`, stops the relay at startup. The relay reads the list at
 startup.
 
 - Write each entry as a CIDR, such as `/32` for one IPv4 address and `/128` for
@@ -277,7 +278,9 @@ startup.
   Behind a reverse proxy, set `TRUST_PROXY_HEADERS` and `TRUSTED_PROXY_CIDRS`
   (see the [trust boundary](/deployment#client-addresses-and-the-trust-boundary)),
   or every tunnel appears to come from the proxy. Listing the proxy's address
-  instead accepts everyone.
+  instead accepts everyone. The proxy must overwrite `X-Forwarded-For` rather
+  than append to it, or a client can put a listed address in the header and get
+  in.
 - A home connection's address can change, and the list has to follow it. A shared
   address, such as a NAT or a cloud gateway, accepts everyone behind it.
 - A tunnel on the relay's own host connects from the address the relay sees, which
