@@ -10,6 +10,102 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+func TestIdentityBPSDefaultAndOverrides(t *testing.T) {
+	manager := NewBPSManager(types.DefaultIdentityBPS)
+	key := types.NewServiceIdentityKey("tenant", "address")
+	other := types.NewServiceIdentityKey("other", "address")
+	if got := manager.IdentityBPS(key); got != types.DefaultIdentityBPS {
+		t.Fatalf("new identity limit = %d, want %d", got, types.DefaultIdentityBPS)
+	}
+	manager.SetIdentityBPS(key, 4*types.DefaultIdentityBPS)
+	if manager.IdentityBPS(key) != 4*types.DefaultIdentityBPS || manager.IdentityBPS(other) != types.DefaultIdentityBPS {
+		t.Fatal("individual override changed the default for other identities")
+	}
+	manager.SetIdentityBPS(key, 0)
+	if got := manager.IdentityBPS(key); got != 0 {
+		t.Fatalf("explicit unlimited inherited default: %d", got)
+	}
+	manager.SetServiceIdentityBPSLimits(map[types.ServiceIdentityKey]int64{key: 0})
+	if got := manager.IdentityBPS(key); got != 0 {
+		t.Fatalf("bulk policy update lost explicit unlimited: %d", got)
+	}
+	manager.SetServiceIdentityBPSLimits(nil)
+	if got := manager.IdentityBPS(key); got != types.DefaultIdentityBPS {
+		t.Fatalf("absent override did not inherit default: %d", got)
+	}
+}
+
+// Concurrent stream consumers share one identity budget, while another
+// identity retains its own budget. The clock advances without wall-time waits.
+func TestConcurrentStreamsShareDefaultIdentityBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewBPSManager(100)
+		shared := types.NewServiceIdentityKey("shared", "address")
+		other := types.NewServiceIdentityKey("other", "address")
+		type completion struct {
+			key     types.ServiceIdentityKey
+			elapsed time.Duration
+		}
+		done := make(chan completion, 3)
+		start := time.Now()
+		for _, key := range []types.ServiceIdentityKey{shared, shared, other} {
+			go func() {
+				for remaining := 50; remaining > 0; {
+					n, err := manager.ThrottleIdentityBPS(t.Context(), key, remaining)
+					if err != nil || n <= 0 || n > remaining {
+						t.Errorf("stream throttle returned %d bytes: %v", n, err)
+						break
+					}
+					remaining -= n
+				}
+				done <- completion{key: key, elapsed: time.Since(start)}
+			}()
+		}
+		var sharedElapsed time.Duration
+		for range 3 {
+			finished := <-done
+			if finished.key == shared {
+				sharedElapsed = max(sharedElapsed, finished.elapsed)
+			} else if finished.elapsed != 500*time.Millisecond {
+				t.Errorf("independent identity's 50 bytes took %v, want 500ms", finished.elapsed)
+			}
+		}
+		if sharedElapsed != time.Second {
+			t.Fatalf("two streams' combined 100 bytes took %v, want 1s", sharedElapsed)
+		}
+	})
+}
+
+// Reapplying unrelated policy must not discard a default-limited identity's
+// accrued credit; the identity has no entry in the override map.
+func TestDefaultBPSRetainsCreditAcrossPolicyUpdates(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewBPSManager(100)
+		key := types.NewServiceIdentityKey("tenant", "address")
+		done := make(chan int, 1)
+		go func() {
+			n, err := manager.ThrottleIdentityBPS(t.Context(), key, 10)
+			if err != nil {
+				t.Error(err)
+			}
+			done <- n
+		}()
+		synctest.Wait()
+		synctest.Sleep(60 * time.Millisecond)
+		manager.SetServiceIdentityBPSLimits(nil)
+		synctest.Sleep(40 * time.Millisecond)
+		synctest.Wait()
+		select {
+		case n := <-done:
+			if n != 10 {
+				t.Fatalf("throttle returned %d bytes, want 10", n)
+			}
+		default:
+			t.Fatal("default-limited identity lost credit during policy update")
+		}
+	})
+}
+
 func TestBPSWaitRetainsAccruedCredit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var limiter bpsLimiter
@@ -31,7 +127,7 @@ func TestReplacingBPSLimitsPreservesAccruedCredit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		manager := NewBPSManager()
+		manager := NewBPSManager(0)
 		key := types.NewServiceIdentityKey("tenant", "address")
 		manager.SetIdentityBPS(key, 100)
 		done := make(chan int, 1)
@@ -65,7 +161,7 @@ func TestBridgeCancellationInterruptsThrottle(t *testing.T) {
 		right, peer := net.Pipe()
 		defer client.Close()
 		defer peer.Close()
-		bps := NewBPSManager()
+		bps := NewBPSManager(0)
 		key := types.NewServiceIdentityKey("lease", "0x1")
 		bps.SetIdentityBPS(key, 1)
 		done := make(chan struct{})

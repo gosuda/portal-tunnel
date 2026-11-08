@@ -35,6 +35,7 @@ import (
 )
 
 var (
+	errDefaultIdentityBPSMustNonNegative         = errors.New("default identity bps must be non-negative")
 	errHTTPRedirectRequiresPortalURLAbsolute     = errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
 	errHTTPRedirectPortalURLPortMust             = errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
 	errHTTPRedirectHTTPRedirectAddrHas           = errors.New("http redirect HTTP_REDIRECT_ADDR has an invalid host")
@@ -141,6 +142,9 @@ type ServerConfig struct {
 	// UnapprovedLeasesPerSource bounds the leases one source can hold without
 	// being routable. Zero disables the bound.
 	UnapprovedLeasesPerSource int
+	// DefaultIdentityBPS is the stream budget in bytes/second for identities
+	// without an operator override. Zero permits unlimited traffic.
+	DefaultIdentityBPS int
 
 	// ApplicationOwnsDomainReport delegates types.PathSDKDomain to the
 	// application handler, which can compose Server.DomainReport() itself.
@@ -196,6 +200,9 @@ func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTP
 // ValidateServerConfig normalizes server configuration and checks the
 // side-effect-free invariants required before runtime resources are created.
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	if cfg.DefaultIdentityBPS < 0 {
+		return ServerConfig{}, errDefaultIdentityBPSMustNonNegative
+	}
 	if cfg.UnapprovedLeasesPerSource < 0 {
 		return ServerConfig{}, errUnapprovedLeaseLimitNegative
 	}
@@ -339,7 +346,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
 	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
-	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, relayAuthority, cfg.PortalURL)
+	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, relayAuthority, cfg.PortalURL, int64(cfg.DefaultIdentityBPS))
 	if err != nil {
 		return nil, err
 	}

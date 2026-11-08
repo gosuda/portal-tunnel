@@ -7,7 +7,44 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestDefaultIdentityBPSConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		environ []string
+		want    int
+	}{
+		{name: "default", want: types.DefaultIdentityBPS},
+		{name: "environment", environ: []string{"DEFAULT_IDENTITY_BPS=2097152"}, want: 2097152},
+		{name: "flag overrides environment", args: []string{"--default-identity-bps=4194304"}, environ: []string{"DEFAULT_IDENTITY_BPS=2097152"}, want: 4194304},
+		{name: "unlimited", environ: []string{"DEFAULT_IDENTITY_BPS=0"}, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, env, err := resolveAppConfig(tc.args, tc.environ)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := prepareAppConfig(&cfg, env.Issues); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Relay.DefaultIdentityBPS != tc.want {
+				t.Fatalf("default identity bps = %d, want %d", cfg.Relay.DefaultIdentityBPS, tc.want)
+			}
+		})
+	}
+	for _, environ := range [][]string{{"DEFAULT_IDENTITY_BPS=-1"}, {"DEFAULT_IDENTITY_BPS=invalid"}} {
+		cfg, env, err := resolveAppConfig(nil, environ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := prepareAppConfig(&cfg, env.Issues); err == nil {
+			t.Fatalf("invalid bandwidth configuration accepted: %v", environ)
+		}
+	}
+}
 
 // writeEnvFile writes lines to a temporary env file and returns its path.
 func writeEnvFile(t *testing.T, lines ...string) string {

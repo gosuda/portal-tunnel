@@ -194,10 +194,11 @@ func (api *RelayAPI) loadPolicyState(initial policy.State) error {
 		if err != nil {
 			return err
 		}
-		// Nonpositive limits in older files mean unlimited.
+		// Nonpositive limits in older files mean explicit unlimited, distinct
+		// from an absent entry inheriting the configured relay default.
 		for key, limit := range limits {
-			if limit <= 0 {
-				delete(limits, key)
+			if limit < 0 {
+				limits[key] = 0
 			}
 		}
 		initial.SetDecisions(approved, denied)
@@ -330,27 +331,30 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
 			return
 		}
-		if update.IsBanned == nil && update.IsApproved == nil && update.IsDenied == nil && update.BPS == nil {
+		if update.IsBanned == nil && update.IsApproved == nil && update.IsDenied == nil && update.BPS == nil && !update.ResetBPS {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease policy update is empty")
+			return
+		}
+		if update.ResetBPS && update.BPS != nil {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps and reset_bps are mutually exclusive")
 			return
 		}
 		if update.IsApproved != nil && update.IsDenied != nil && *update.IsApproved && *update.IsDenied {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "lease cannot be approved and denied")
 			return
 		}
+		if update.ResetBPS {
+			delete(next.IdentityBPS, key)
+		}
 		if update.BPS != nil {
 			if *update.BPS < 0 {
 				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps must be non-negative")
 				return
 			}
-			if *update.BPS == 0 {
-				delete(next.IdentityBPS, key)
-			} else {
-				if next.IdentityBPS == nil {
-					next.IdentityBPS = make(map[types.ServiceIdentityKey]int64)
-				}
-				next.IdentityBPS[key] = *update.BPS
+			if next.IdentityBPS == nil {
+				next.IdentityBPS = make(map[types.ServiceIdentityKey]int64)
 			}
+			next.IdentityBPS[key] = *update.BPS
 		}
 		if update.IsBanned != nil {
 			if *update.IsBanned {
@@ -401,7 +405,6 @@ func (api *RelayAPI) policyLeases(access policy.State) []types.PolicyLease {
 			continue
 		}
 		leases[i].IsApproved = access.EffectiveApproval(key)
-		leases[i].BPS = access.IdentityBPS[key]
 		leases[i].IsBanned = access.IsBanned(key)
 		leases[i].IsDenied = access.IsDenied(key)
 	}

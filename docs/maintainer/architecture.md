@@ -186,12 +186,17 @@ access decisions, transport settings, or bandwidth limits. A failed policy-file
 write leaves runtime enforcement unchanged and needs no rollback. Portal owns
 transport capability validation and applies UDP/TCP policy together under the
 registry lock. Bulk bandwidth updates retain existing limiter credit for
-identities that remain limited; removing a limit discards its limiter state.
+identities that remain limited, including those inheriting the relay default;
+making an identity unlimited discards its limiter state. `BPSManager` resolves
+the startup default only when an identity has no explicit override. Explicit
+zero overrides remain in the policy file and mean unlimited. Portal's lease
+listing supplies effective bandwidth limits to the admin view; the relay
+decorates that listing with its committed access decisions.
 
 `policy.Store` owns one committed snapshot containing approval mode, identity
-decisions, UDP/TCP settings, and per-identity bandwidth limits. Admin reads and
-the saved file are projections of this state, rather than reconstructions from
-Portal's enforcement state. Both admin update endpoints edit a detached candidate
+decisions, UDP/TCP settings, and explicit per-identity bandwidth overrides. Policy
+settings and the saved file are projections of this state, rather than
+reconstructions from Portal's enforcement state. Both admin update endpoints edit a detached candidate
 and share one serialized save-and-apply path. Readers use snapshots without
 waiting for file I/O; no separate transport-setting mirror or read lock is needed.
 

@@ -35,7 +35,7 @@ interface AdminServerListProps {
     identityKey: string,
     isBan: boolean
   ) => void | Promise<void>;
-  onBPSChange: (identityKey: string, bps: number) => void | Promise<void>;
+  onBPSChange: (identityKey: string, bps: number | null) => void | Promise<void>;
   onApprovalModeChange: (mode: ApprovalMode) => void;
   udpSettings: PortSettings;
   onUDPSettingsChange: (settings: PortSettings) => void | Promise<void>;
