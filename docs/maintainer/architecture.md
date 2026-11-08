@@ -185,6 +185,13 @@ Portal's enforcement state. Both admin update endpoints edit a detached candidat
 and share one serialized save-and-apply path. Readers use snapshots without
 waiting for file I/O; no separate transport-setting mirror or read lock is needed.
 
+`cmd/internal/cli` resolves environment-backed flags from a captured input for
+each command. The resolved values, variable reference, and parse diagnostics
+belong to that resolution. Relay config-file reports use the file as their input
+without changing the process environment. Relay API, frontend, domain-report,
+and optional x402 routes share one application route table; protocol ingress
+and application body limits remain enforced at their respective boundaries.
+
 Revocation detaches cached content and advances the retained lease's cache
 generation. Cache requests capture that generation before the final access
 check, and must still match it at publication. This fences uploads that overlap

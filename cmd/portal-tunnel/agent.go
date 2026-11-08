@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -40,6 +41,7 @@ func runAgentCommand(args []string) error {
 }
 
 func runAgentRunCommand(args []string) error {
+	env := cli.NewEnv(os.Environ())
 	var configPath string
 	var serviceMode bool
 	var foreground bool
@@ -48,7 +50,7 @@ func runAgentRunCommand(args []string) error {
 	utils.StringFlag(fs, &configPath, "config", service.DefaultConfigPath(), "Portal agent TOML config path")
 	utils.BoolFlag(fs, &serviceMode, "service", false, "Run the foreground service process")
 	utils.BoolFlag(fs, &foreground, "foreground", false, "Run in the current process without installing the OS service")
-	utils.StringFlagEnv(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme with --foreground: amber or green", "PORTAL_TUI_THEME")
+	env.String(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme with --foreground: amber or green", "PORTAL_TUI_THEME")
 	if err := utils.ParseFlagSet(fs, args, printAgentRunUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -280,13 +282,14 @@ func runAgentStopCommand(args []string) error {
 }
 
 func runAgentDashboardCommand(args []string) error {
+	env := cli.NewEnv(os.Environ())
 	var configPath string
 	var stateDir string
 	var theme string
 	fs := utils.NewFlagSet("agent dashboard", printAgentDashboardUsage)
 	utils.StringFlag(fs, &configPath, "config", "", "Portal agent TOML config path")
 	utils.StringFlag(fs, &stateDir, "state-dir", "", "Portal agent state directory")
-	utils.StringFlagEnv(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme: amber or green", "PORTAL_TUI_THEME")
+	env.String(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme: amber or green", "PORTAL_TUI_THEME")
 	if err := utils.ParseFlagSet(fs, args, printAgentDashboardUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

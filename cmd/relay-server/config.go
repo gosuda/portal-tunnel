@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -64,9 +65,9 @@ func loadEnvFile(path string) ([]envFileEntry, error) {
 }
 
 // knownEnvNames indexes every name the relay reads, including flag aliases.
-func knownEnvNames() map[string]utils.EnvVar {
-	index := make(map[string]utils.EnvVar)
-	for _, entry := range utils.EnvVars() {
+func knownEnvNames(vars []cli.EnvVar) map[string]cli.EnvVar {
+	index := make(map[string]cli.EnvVar)
+	for _, entry := range vars {
 		index[entry.Name] = entry
 		for _, alias := range entry.Aliases {
 			index[alias] = entry
@@ -87,7 +88,7 @@ func secretEnvName(name string) bool {
 
 // valueMarker distinguishes a key that something supplied from one running on
 // its default, so a long list can be skimmed for what the operator actually set.
-func valueMarker(entry utils.EnvVar) string {
+func valueMarker(entry cli.EnvVar) string {
 	if entry.SetBy == "" {
 		return "--"
 	}
@@ -97,7 +98,7 @@ func valueMarker(entry utils.EnvVar) string {
 // valueSource names where the effective value came from. When an alias supplied
 // it, the alias is named: "I set AWS_REGION, why is the value different?" is
 // answered by seeing that AWS_DEFAULT_REGION was consulted first.
-func valueSource(entry utils.EnvVar, supplied map[string]bool, envFile string) string {
+func valueSource(entry cli.EnvVar, supplied map[string]bool, envFile string) string {
 	if entry.SetBy == "" {
 		return fmt.Sprintf("default (%s)", defaultDisplay(entry.Default))
 	}
@@ -122,7 +123,7 @@ func displayValue(name, value string) string {
 	return value
 }
 
-func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, source string) {
+func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, source string, env *cli.Env) {
 	fmt.Fprintf(w, "Portal relay configuration (%s)\n", source)
 	// Reading a file in isolation applies relay defaults to every key the file
 	// omits. Inspect the environment inside the target process or container when
@@ -143,7 +144,7 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 	// an alias or a higher-priority name overrode would otherwise read as though
 	// it were in effect, which is the confusion this report exists to remove.
 	fmt.Fprintln(w, "Keys")
-	for _, entry := range utils.EnvVars() {
+	for _, entry := range env.Vars {
 		fmt.Fprintf(w, "  %-4s %-30s %-24s relay --%s\n",
 			valueMarker(entry), entry.Name, displayValue(entry.Name, entry.Value), entry.Flag)
 		fmt.Fprintf(w, "         source: %s\n", valueSource(entry, supplied, source))
@@ -152,7 +153,7 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 	// Keys the file supplies that nothing reads are how deployment drift hides:
 	// the relay runs on defaults while the operator believes their value is in
 	// effect. Surface every unrecognized name instead of dropping it.
-	relay := knownEnvNames()
+	relay := knownEnvNames(env.Vars)
 	var unknown []envFileEntry
 	for _, entry := range entries {
 		if _, isRelay := relay[entry.Name]; !isRelay {
@@ -174,7 +175,7 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 	fmt.Fprintln(w, "Validation")
 	if _, err := portal.ValidateServerConfig(cfg.Relay); err != nil {
 		fmt.Fprintf(w, "  INVALID %s\n", err)
-	} else if err := validateRelaySettings(&cfg); err != nil {
+	} else if _, err := resolveRelaySettings(&cfg); err != nil {
 		fmt.Fprintf(w, "  INVALID %s\n", err)
 	} else if _, err := resolveX402Facilitator(cfg); err != nil {
 		fmt.Fprintf(w, "  INVALID %s\n", err)
@@ -182,7 +183,7 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 		fmt.Fprintln(w, "  OK relay configuration is valid")
 	}
 
-	if issues := utils.EnvIssues(); len(issues) > 0 {
+	if issues := env.Issues; len(issues) > 0 {
 		fmt.Fprintln(w, "\nInvalid values")
 		for _, issue := range issues {
 			fmt.Fprintf(w, "  %s=%s  %s\n", issue.Name, displayValue(issue.Name, issue.Value), issue.Problem)
@@ -218,7 +219,7 @@ func writeWrapped(w io.Writer, text string) {
 // nearestEnvName suggests the closest known key for a typo. Deployment drift
 // usually looks like ADMIN_WALLETS for ADMIN_TOKEN: close enough to look right,
 // far enough that nothing reads it.
-func nearestEnvName(name string, relay map[string]utils.EnvVar) string {
+func nearestEnvName(name string, relay map[string]cli.EnvVar) string {
 	candidates := make([]string, 0, len(relay))
 	for candidate := range relay {
 		candidates = append(candidates, candidate)
@@ -257,13 +258,13 @@ func editDistance(a, b string) int {
 
 // writeEnvReference emits every key the relay reads. It is generated from the
 // flag definitions so it cannot drift from the binary.
-func writeEnvReference(w io.Writer) {
+func writeEnvReference(w io.Writer, vars []cli.EnvVar) {
 	fmt.Fprintln(w, "# Generated by `relay-server config --format env`. Do not edit by hand.")
 	fmt.Fprintln(w, "# Every environment key read by the relay binary.")
 	fmt.Fprintln(w, "# See .env.example for a deployment-specific starting point.")
 
 	fmt.Fprintln(w, "\n# ── relay ──")
-	for _, entry := range utils.EnvVars() {
+	for _, entry := range vars {
 		fmt.Fprintf(w, "\n# %s  [relay --%s]  default: %s\n", entry.Name, entry.Flag, defaultDisplay(entry.Default))
 		if len(entry.Aliases) > 0 {
 			fmt.Fprintf(w, "#   also accepted: %s\n", strings.Join(entry.Aliases, ", "))
@@ -274,9 +275,9 @@ func writeEnvReference(w io.Writer) {
 }
 
 // writeEnvNames lists every key the relay reads, one per line.
-func writeEnvNames(w io.Writer) {
+func writeEnvNames(w io.Writer, vars []cli.EnvVar) {
 	var names []string
-	for _, entry := range utils.EnvVars() {
+	for _, entry := range vars {
 		names = append(names, entry.Name)
 	}
 	sort.Strings(names)
@@ -315,66 +316,6 @@ func writeCommentWrapped(w io.Writer, text string) {
 	}
 }
 
-// applyEnvFileInIsolation makes the file the whole environment for the pass
-// that follows, and returns a function restoring what was there before.
-//
-// Setting only the file's own keys is not enough. A relay variable absent from
-// the file would stay inherited from the shell, and a higher-priority alias in
-// the shell would beat a value the file does supply — process AWS_REGION over
-// file AWS_DEFAULT_REGION, for instance. The report would then describe a mix
-// of file and shell, not the file against relay defaults.
-func applyEnvFileInIsolation(entries []envFileEntry) (func(), error) {
-	// A first pass populates the registry, which is how the set of names the
-	// relay reads is known.
-	if _, err := resolveAppConfig(nil); err != nil {
-		return nil, err
-	}
-
-	var names []string
-	for _, entry := range utils.EnvVars() {
-		names = append(names, entry.Name)
-		names = append(names, entry.Aliases...)
-	}
-	for _, entry := range entries {
-		names = append(names, entry.Name)
-	}
-
-	type saved struct {
-		value string
-		set   bool
-	}
-	previous := make(map[string]saved, len(names))
-	restore := func() {
-		for name, prior := range previous {
-			if prior.set {
-				_ = os.Setenv(name, prior.value)
-				continue
-			}
-			_ = os.Unsetenv(name)
-		}
-	}
-
-	for _, name := range names {
-		if _, recorded := previous[name]; recorded {
-			continue
-		}
-		value, set := os.LookupEnv(name)
-		previous[name] = saved{value: value, set: set}
-		if err := os.Unsetenv(name); err != nil {
-			restore()
-			return nil, fmt.Errorf("isolate %s: %w", name, err)
-		}
-	}
-
-	for _, entry := range entries {
-		if err := os.Setenv(entry.Name, entry.Value); err != nil {
-			restore()
-			return nil, fmt.Errorf("apply %s: %w", entry.Name, err)
-		}
-	}
-	return restore, nil
-}
-
 func runConfigCommand(args []string) error {
 	var (
 		envFilePath string
@@ -397,35 +338,35 @@ func runConfigCommand(args []string) error {
 	}
 
 	var entries []envFileEntry
+	environ := os.Environ()
 	source := "process environment"
 	if strings.TrimSpace(envFilePath) != "" {
 		loaded, err := loadEnvFile(envFilePath)
 		if err != nil {
 			return fmt.Errorf("read env file: %w", err)
 		}
-		restore, err := applyEnvFileInIsolation(loaded)
-		if err != nil {
-			return err
-		}
-		defer restore()
 		entries = loaded
+		environ = make([]string, 0, len(entries))
+		for _, entry := range entries {
+			environ = append(environ, entry.Name+"="+entry.Value)
+		}
 		source = envFilePath
 	}
 
-	cfg, err := resolveAppConfig(nil)
+	cfg, env, err := resolveAppConfig(nil, environ)
 	if err != nil {
 		return err
 	}
 
 	switch strings.TrimSpace(format) {
 	case "", "text":
-		writeConfigReport(os.Stdout, cfg, entries, source)
+		writeConfigReport(os.Stdout, cfg, entries, source, env)
 		return nil
 	case "env":
-		writeEnvReference(os.Stdout)
+		writeEnvReference(os.Stdout, env.Vars)
 		return nil
 	case "names":
-		writeEnvNames(os.Stdout)
+		writeEnvNames(os.Stdout, env.Vars)
 		return nil
 	default:
 		printConfigUsage(os.Stderr)
@@ -449,8 +390,7 @@ func printConfigUsage(w io.Writer) {
 // envIssueError turns recorded parse failures into a startup error. A value
 // that cannot be parsed is always a mistake, and falling back silently is what
 // let relays run with settings nothing read.
-func envIssueError() error {
-	issues := utils.EnvIssues()
+func envIssueError(issues []cli.EnvIssue) error {
 	if len(issues) == 0 {
 		return nil
 	}
