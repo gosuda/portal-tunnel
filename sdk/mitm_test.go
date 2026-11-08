@@ -769,7 +769,7 @@ func TestTLSChannelBindingIsNotServedOutsideResponderBoundary(t *testing.T) {
 				clientRaw, serverRaw := net.Pipe()
 				go func() { _, _ = clientRaw.Write(request) }()
 
-				var serverConn net.Conn = serverRaw
+				serverConn := serverRaw
 				if tc.exporter {
 					serverConn = &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0x42}, 32)}
 				}
