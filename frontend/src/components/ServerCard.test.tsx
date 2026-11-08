@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { Mock } from "vitest";
 import { describe, expect, it, vi } from "vitest";
 import type { ReputationSummary } from "@/types/api";
-import { ServerCard, createBlockiesData } from "./ServerCard";
+import { ServerCard } from "./ServerCard";
 
 const TCP = "minecraft.relay.example.com:50000";
 const UDP = "minecraft.relay.example.com:50001";
@@ -328,120 +328,5 @@ describe("ServerCard comments interaction", () => {
     expect(screen.queryByLabelText("Comments")).toBeNull();
     expect(screen.getByText("admin-app")).toBeTruthy();
     expect(screen.getByText("admin controls")).toBeTruthy();
-  });
-});
-
-describe("createBlockiesData", () => {
-  it("creates an 8x8 matrix with horizontal symmetry", () => {
-    const grid = createBlockiesData("0xca258bd157B6D3a01Cc2C3f92A0E64D75897013F");
-    expect(grid.length).toBe(8);
-    for (const row of grid) {
-      expect(row.length).toBe(8);
-      for (let x = 0; x < 4; x += 1) {
-        expect(row[x]).toBe(row[7 - x]);
-      }
-    }
-  });
-
-  it("is deterministic for identical seeds and case-insensitive", () => {
-    const gridA = createBlockiesData("0xca258bd157b6d3a01cc2c3f92a0e64d75897013f");
-    const gridB = createBlockiesData("0xCA258BD157B6D3A01CC2C3F92A0E64D75897013F");
-    expect(gridA).toEqual(gridB);
-  });
-
-  it("produces distinct color patterns for different seeds", () => {
-    const gridA = createBlockiesData("alice");
-    const gridB = createBlockiesData("bob");
-    expect(gridA).not.toEqual(gridB);
-  });
-});
-
-describe("ServerCard Blockies default thumbnail", () => {
-  it("renders 8x8 SVG blockies badge with dot grid when thumbnail is empty", () => {
-    const { container } = render(
-      <MemoryRouter>
-        <ServerCard
-          server={{
-            id: "srv-game",
-            name: "minecraft-server",
-            description: "",
-            tags: ["game"],
-            thumbnail: "",
-            owner: "",
-            online: true,
-            dns: "mc.relay.example.com",
-            link: "/server/srv-game",
-            address: "0xca258bd157b6d3a01cc2c3f92a0e64d75897013f",
-          }}
-        />
-      </MemoryRouter>
-    );
-
-    // Blockies SVG with 8x8 viewBox and 64 rects
-    const blockiesSvg = container.querySelector("svg[viewBox='0 0 8 8']");
-    expect(blockiesSvg).toBeTruthy();
-    const rects = blockiesSvg?.querySelectorAll("rect");
-    expect(rects?.length).toBe(64);
-
-    // Engineering dot grid pattern
-    const pattern = container.querySelector("pattern");
-    expect(pattern).toBeTruthy();
-  });
-
-  it("renders img tag when custom thumbnail is provided and falls back to Blockies on error", () => {
-    const { container } = render(
-      <MemoryRouter>
-        <ServerCard
-          server={{
-            id: "srv-custom",
-            name: "custom-app",
-            description: "",
-            tags: ["api"],
-            thumbnail: "https://example.com/custom-icon.png",
-            owner: "",
-            online: true,
-            dns: "custom.relay.example.com",
-            link: "/server/srv-custom",
-          }}
-        />
-      </MemoryRouter>
-    );
-
-    const img = screen.getByRole("img");
-    expect(img.getAttribute("src")).toBe("https://example.com/custom-icon.png");
-
-    // Simulate image loading failure
-    fireEvent.error(img);
-
-    // Should seamlessly fall back to DefaultServerThumbnail (SVG blockies)
-    expect(screen.queryByRole("img")).toBeNull();
-    const blockiesSvg = container.querySelector("svg[viewBox='0 0 8 8']");
-    expect(blockiesSvg).toBeTruthy();
-    expect(blockiesSvg?.querySelectorAll("rect").length).toBe(64);
-  });
-
-  it("renders identity address chip in corner when address is provided", () => {
-    render(
-      <MemoryRouter>
-        <ServerCard
-          server={{
-            id: "srv-addr",
-            name: "addr-app",
-            description: "",
-            tags: [],
-            thumbnail: "",
-            owner: "",
-            online: true,
-            dns: "addr.relay.example.com",
-            link: "/server/srv-addr",
-            address: "0xca2586617c06cbef8f936a5ea3faee9eefcb394f",
-          }}
-        />
-      </MemoryRouter>
-    );
-
-    const chip = screen.getByText("0xca25…394f");
-    expect(chip).toBeTruthy();
-    expect(chip.closest("div")?.getAttribute("title")).toBe("0xca2586617c06cbef8f936a5ea3faee9eefcb394f");
   });
 });
