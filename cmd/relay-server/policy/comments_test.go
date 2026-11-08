@@ -99,96 +99,119 @@ func TestCommentsFailedWriteDoesNotPublishComment(t *testing.T) {
 	}
 }
 
-func TestReputationImportsCommentsAndKeepsCombinedState(t *testing.T) {
-	for _, legacyThreadsOnly := range []bool{false, true} {
-		name := "threads_votes_authors"
-		if legacyThreadsOnly {
-			name = "threads_only"
-		}
-		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "reputation.json")
-			store, err := NewReputationStore(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			const hostname, identity = "app.example.com", "id:app.example.com"
-			source := netip.MustParseAddr("203.0.113.10")
-			_, cookie, err := store.Vote(identity, "", VoteUp, "", source)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Existing installations have no comments field in reputation.json.
-			if err := utils.WriteJSONFile(path, map[string]any{
-				"voter_secret": store.state.VoterSecret,
-				"identities":   store.state.Identities,
-			}, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			comment := types.AppComment{ID: "old-comment", Text: "Existing comment", CreatedAt: time.Now().UTC(), Up: 99, ViewerVote: VoteUp, CanDelete: true}
-			legacy := struct {
-				Threads map[string][]types.AppComment `json:"threads"`
-				Votes   map[string]map[string]string  `json:"votes"`
-				Authors map[string]string             `json:"authors"`
-			}{
-				Threads: map[string][]types.AppComment{identity: {comment}},
-				Votes:   map[string]map[string]string{comment.ID: {store.ViewerHashFor(cookie): VoteDown}},
-				Authors: map[string]string{comment.ID: "author"},
-			}
-			var legacyData any = legacy
-			if legacyThreadsOnly {
-				legacyData = legacy.Threads
-			}
-			if err := utils.WriteJSONFile(filepath.Join(filepath.Dir(path), "comments.json"), legacyData, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			store, err = NewReputationStore(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			comments := store.ListComments(identity, store.ViewerHashFor(cookie), "author")
-			if len(comments) != 1 || comments[0].Text != comment.Text {
-				t.Fatalf("legacy comment not imported: %+v", comments)
-			}
-			if !legacyThreadsOnly && (comments[0].Down != 1 || comments[0].ViewerVote != VoteDown || !comments[0].CanDelete) {
-				t.Fatalf("legacy votes or deletion rights lost: %+v", comments[0])
-			}
-			if comments[0].Up != 0 || (legacyThreadsOnly && (comments[0].ViewerVote != "" || comments[0].CanDelete)) {
-				t.Fatalf("legacy response fields were treated as stored state: %+v", comments[0])
-			}
-			summary, minted, err := store.Vote(identity, comment.ID, VoteUp, cookie, source)
-			if err != nil || minted != "" || summary.Up != 1 || summary.Down != 0 {
-				t.Fatalf("shared voter cookie: %+v, cookie=%q, err=%v", summary, minted, err)
-			}
-			if _, _, err := store.Vote(identity, "", VoteDown, cookie, source); err != nil {
-				t.Fatal(err)
-			}
-			store, err = NewReputationStore(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			comments = store.ListComments(identity, store.ViewerHashFor(cookie), "author")
-			if len(comments) != 1 || comments[0].ViewerVote != VoteUp {
-				t.Fatalf("app vote overwrote comment state: %+v", comments)
-			}
-			if !legacyThreadsOnly {
-				if _, err := store.DeleteComment(identity, comment.ID, "", "author"); err != nil {
-					t.Fatal(err)
-				}
-			} else if _, err := store.DeleteComment(identity, comment.ID, "", "author"); !errors.Is(err, ErrCommentNotFound) {
-				t.Fatalf("invented deletion rights for legacy comment: %v", err)
-			}
-			store, err = NewReputationStore(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !legacyThreadsOnly && len(store.ListComments(identity, "", "author")) != 0 {
-				t.Fatal("deleted comment was imported again from the old file")
-			}
-			row := store.Summaries(store.ViewerHashFor(cookie), testLeases(hostname))[0]
-			if row.Down != 1 || row.ViewerVote != VoteDown || row.Total != 1 {
-				t.Fatalf("comment mutation overwrote app vote or cookie identity: %+v", row)
-			}
-		})
+func TestReputationImportsCombinedLegacyComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reputation.json")
+	store, err := NewReputationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const hostname, identity = "app.example.com", "id:app.example.com"
+	source := netip.MustParseAddr("203.0.113.10")
+	_, cookie, err := store.Vote(identity, "", VoteUp, "", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Existing installations have no comments field in reputation.json.
+	if err := utils.WriteJSONFile(path, map[string]any{
+		"voter_secret": store.state.VoterSecret,
+		"identities":   store.state.Identities,
+	}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	comment := types.AppComment{ID: "old-comment", Text: "Existing comment", CreatedAt: time.Now().UTC(), Up: 99, ViewerVote: VoteUp, CanDelete: true}
+	legacy := struct {
+		Threads map[string][]types.AppComment `json:"threads"`
+		Votes   map[string]map[string]string  `json:"votes"`
+		Authors map[string]string             `json:"authors"`
+	}{
+		Threads: map[string][]types.AppComment{identity: {comment}},
+		Votes:   map[string]map[string]string{comment.ID: {store.ViewerHashFor(cookie): VoteDown}},
+		Authors: map[string]string{comment.ID: "author"},
+	}
+	if err := utils.WriteJSONFile(filepath.Join(filepath.Dir(path), "comments.json"), legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewReputationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comments := store.ListComments(identity, store.ViewerHashFor(cookie), "author")
+	if len(comments) != 1 || comments[0].Text != comment.Text {
+		t.Fatalf("legacy comment not imported: %+v", comments)
+	}
+	if comments[0].Down != 1 || comments[0].ViewerVote != VoteDown || !comments[0].CanDelete {
+		t.Fatalf("legacy votes or deletion rights lost: %+v", comments[0])
+	}
+	if comments[0].Up != 0 {
+		t.Fatalf("legacy response fields were treated as stored state: %+v", comments[0])
+	}
+	summary, minted, err := store.Vote(identity, comment.ID, VoteUp, cookie, source)
+	if err != nil || minted != "" || summary.Up != 1 || summary.Down != 0 {
+		t.Fatalf("shared voter cookie: %+v, cookie=%q, err=%v", summary, minted, err)
+	}
+	if _, _, err := store.Vote(identity, "", VoteDown, cookie, source); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewReputationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comments = store.ListComments(identity, store.ViewerHashFor(cookie), "author")
+	if len(comments) != 1 || comments[0].ViewerVote != VoteUp {
+		t.Fatalf("app vote overwrote comment state: %+v", comments)
+	}
+	if _, err := store.DeleteComment(identity, comment.ID, "", "author"); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewReputationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.ListComments(identity, "", "author")) != 0 {
+		t.Fatal("deleted comment was imported again from the old file")
+	}
+	row := store.Summaries(store.ViewerHashFor(cookie), testLeases(hostname))[0]
+	if row.Down != 1 || row.ViewerVote != VoteDown || row.Total != 1 {
+		t.Fatalf("comment mutation overwrote app vote or cookie identity: %+v", row)
+	}
+}
+
+func TestReputationImportsThreadsOnlyLegacyComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reputation.json")
+	store, err := NewReputationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const hostname, identity = "app.example.com", "id:app.example.com"
+	source := netip.MustParseAddr("203.0.113.10")
+	_, cookie, err := store.Vote(identity, "", VoteUp, "", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := utils.WriteJSONFile(path, map[string]any{
+		"voter_secret": store.state.VoterSecret,
+		"identities":   store.state.Identities,
+	}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	comment := types.AppComment{ID: "old-comment", Text: "Existing comment", CreatedAt: time.Now().UTC(), Up: 99, ViewerVote: VoteUp, CanDelete: true}
+	threads := map[string][]types.AppComment{identity: {comment}}
+	if err := utils.WriteJSONFile(filepath.Join(filepath.Dir(path), "comments.json"), threads, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewReputationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comments := store.ListComments(identity, store.ViewerHashFor(cookie), "author")
+	if len(comments) != 1 || comments[0].Text != comment.Text {
+		t.Fatalf("legacy comment not imported: %+v", comments)
+	}
+	if comments[0].Up != 0 || comments[0].ViewerVote != "" || comments[0].CanDelete {
+		t.Fatalf("legacy response fields were treated as stored state: %+v", comments[0])
+	}
+	if _, err := store.DeleteComment(identity, comment.ID, "", "author"); !errors.Is(err, ErrCommentNotFound) {
+		t.Fatalf("invented deletion rights for legacy comment: %v", err)
 	}
 }
 

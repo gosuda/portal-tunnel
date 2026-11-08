@@ -305,7 +305,12 @@ func TestVoteChangesAreDurableForAppsAndComments(t *testing.T) {
 					if summary.Total != 0 || summary.ViewerVote != "" {
 						t.Fatalf("clear vote: %+v", summary)
 					}
-				} else if summary.Total != 1 || summary.ViewerVote != choice || (choice == VoteDown && summary.Down != 1) {
+					continue
+				}
+				if summary.Total != 1 || summary.ViewerVote != choice {
+					t.Fatalf("switch or repeat vote: %+v", summary)
+				}
+				if choice == VoteDown && summary.Down != 1 {
 					t.Fatalf("switch or repeat vote: %+v", summary)
 				}
 			}

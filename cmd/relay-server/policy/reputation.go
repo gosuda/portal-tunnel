@@ -109,38 +109,16 @@ func NewReputationStore(path string) (*ReputationStore, error) {
 	if store.state.Identities == nil {
 		store.state.Identities = make(map[string]map[string]string)
 	}
-	if len(store.state.Identities) > reputationMaxIdentities {
-		return nil, ErrReputationCapacity
-	}
-	for identity, votes := range store.state.Identities {
-		if strings.TrimSpace(identity) == "" || len(votes) == 0 {
-			return nil, errReputationStoredInvalid
-		}
-		if len(votes) > reputationMaxVoters {
-			return nil, ErrReputationCapacity
-		}
-		for voter, vote := range votes {
-			if strings.TrimSpace(voter) == "" || (vote != VoteUp && vote != VoteDown) {
-				return nil, errReputationStoredInvalid
-			}
-		}
+	if err := validateIdentities(store.state.Identities); err != nil {
+		return nil, err
 	}
 	needsWrite := store.state.Comments == nil || len(store.state.VoterSecret) == 0
 	if store.state.Comments == nil {
-		// Once imported, the comments object remains present even when empty.
-		// The old file is never read again, so deleted comments cannot reappear.
-		store.state.Comments = &persistedComments{}
-		var raw json.RawMessage
-		if exists, err := utils.ReadJSONFileIfExists(filepath.Join(filepath.Dir(path), "comments.json"), &raw); err != nil {
-			return nil, fmt.Errorf("load legacy comments: %w", err)
-		} else if exists && len(raw) > 0 {
-			var comments persistedComments
-			if err := json.Unmarshal(raw, &comments); err == nil && comments.Threads != nil {
-				store.state.Comments = &comments
-			} else if err := json.Unmarshal(raw, &store.state.Comments.Threads); err != nil {
-				return nil, fmt.Errorf("load legacy comments: %w", err)
-			}
+		comments, err := loadLegacyComments(filepath.Dir(path))
+		if err != nil {
+			return nil, err
 		}
+		store.state.Comments = comments
 	}
 	if store.state.Comments.Threads == nil {
 		store.state.Comments.Threads = make(map[string][]storedComment)
@@ -167,6 +145,47 @@ func NewReputationStore(path string) (*ReputationStore, error) {
 	}
 	store.secret = store.state.VoterSecret
 	return store, nil
+}
+
+func validateIdentities(identities map[string]map[string]string) error {
+	if len(identities) > reputationMaxIdentities {
+		return ErrReputationCapacity
+	}
+	for identity, votes := range identities {
+		if strings.TrimSpace(identity) == "" || len(votes) == 0 {
+			return errReputationStoredInvalid
+		}
+		if len(votes) > reputationMaxVoters {
+			return ErrReputationCapacity
+		}
+		for voter, vote := range votes {
+			if strings.TrimSpace(voter) == "" || (vote != VoteUp && vote != VoteDown) {
+				return errReputationStoredInvalid
+			}
+		}
+	}
+	return nil
+}
+
+func loadLegacyComments(dir string) (*persistedComments, error) {
+	// Once imported, the comments object remains present even when empty.
+	// The old file is never read again, so deleted comments cannot reappear.
+	comments := &persistedComments{}
+	var raw json.RawMessage
+	exists, err := utils.ReadJSONFileIfExists(filepath.Join(dir, "comments.json"), &raw)
+	if err != nil {
+		return nil, fmt.Errorf("load legacy comments: %w", err)
+	}
+	if !exists || len(raw) == 0 {
+		return comments, nil
+	}
+	if err := json.Unmarshal(raw, comments); err == nil && comments.Threads != nil {
+		return comments, nil
+	}
+	if err := json.Unmarshal(raw, &comments.Threads); err != nil {
+		return nil, fmt.Errorf("load legacy comments: %w", err)
+	}
+	return comments, nil
 }
 
 // AllowVote spends the per-source vote budget before the request body is
