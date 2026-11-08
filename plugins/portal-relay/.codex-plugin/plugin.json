@@ -1,7 +1,7 @@
 {
   "name": "portal-relay",
-  "version": "0.1.0",
-  "description": "Deploy, verify, and register a self-hosted Portal relay.",
+  "version": "0.2.0",
+  "description": "Deploy, verify, and register a self-hosted Portal relay, on any Linux host or through Oracle Cloud, Hetzner Cloud, and Cloudflare DNS.",
   "author": {
     "name": "gosuda"
   },
@@ -18,7 +18,8 @@
     "defaultPrompt": [
       "Run a public Portal relay on this server and verify its health endpoint.",
       "Set up a Portal relay with TCP/UDP leases for game hosting.",
-      "Register my Portal relay in the public relay pool."
+      "Register my Portal relay in the public relay pool.",
+      "Deploy a Portal relay on Oracle Cloud and configure DNS with Cloudflare."
     ]
   }
 }

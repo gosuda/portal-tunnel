@@ -1,0 +1,4 @@
+interface:
+  display_name: "Portal Relay on Oracle Cloud"
+  short_description: "Create an OCI host for a Portal relay"
+  default_prompt: "Use $portal-relay-oracle to plan an Oracle Cloud instance for a Portal relay, then deploy it with $portal-relay after I approve the plan."
