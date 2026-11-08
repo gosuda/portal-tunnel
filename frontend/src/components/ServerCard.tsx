@@ -109,7 +109,7 @@ export function ServerCard({
   const cardBody = (
     <article className="relative w-full min-w-0">
       {/* 1. Thumbnail Container (16:9 aspect ratio) */}
-      <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-muted shadow-2xs transition-all duration-300 ease-out group-hover:-translate-y-0.5 group-hover:border-border group-hover:shadow-md">
+      <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-muted shadow-2xs transition-all duration-300 ease-out group-hover:scale-[1.02] group-hover:border-border group-hover:shadow-md">
         <img
           src={resolvedThumbnail}
           alt=""
