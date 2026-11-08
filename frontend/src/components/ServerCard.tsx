@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
 import { BadgeDollarSign, MessageSquare, ThumbsDown, ThumbsUp } from "lucide-react";
@@ -43,10 +43,11 @@ export function ServerCard({
     id: serverId, name, description, tags, thumbnail, owner, online,
     firstSeen, tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
   } = server;
-  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  // The thumbnail that failed to load; a new thumbnail URL gets its own try.
+  const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const [isVoting, setIsVoting] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
-  const effectiveThumbnail = thumbnailFailed ? "" : thumbnail.trim();
+  const effectiveThumbnail = failedThumbnail === thumbnail ? "" : thumbnail.trim();
   const resolvedThumbnail =
     effectiveThumbnail || pickPlaceholderThumbnail(name || serverId);
   const normalizedPaymentLabel = paymentLabel.trim();
@@ -58,10 +59,6 @@ export function ServerCard({
   ];
   const isTransportService = endpoints.length > 0;
   const isNavigable = navigable && !isTransportService;
-
-  useEffect(() => {
-    setThumbnailFailed(false);
-  }, [thumbnail]);
 
   const copyEndpoint = (protocol: string, address: string) =>
     copy(address, protocol);
@@ -112,7 +109,7 @@ export function ServerCard({
           alt=""
           loading="lazy"
           className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
-          onError={effectiveThumbnail ? () => setThumbnailFailed(true) : undefined}
+          onError={effectiveThumbnail ? () => setFailedThumbnail(thumbnail) : undefined}
         />
 
         {/* Top-right custom action overlay */}
