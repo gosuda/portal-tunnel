@@ -356,10 +356,11 @@ func (r *leaseRegistry) recordByKey(key types.ServiceIdentityKey, now time.Time)
 	return nil
 }
 
-// selectReplica rotates ready leases of one identity under the registry lock.
+// selectReplica rotates live leases of one identity under the registry lock,
+// skipping leases without a ready reverse stream when requireReady is set.
 // Selection order is compared only within an identity, so unrelated traffic
 // cannot skew its round-robin order.
-func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, tried map[string]bool) *leaseRecord {
+func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, tried map[string]bool, requireReady bool) *leaseRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.isRoutableLocked(key) {
@@ -371,7 +372,7 @@ func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, tried map[st
 		if record == nil || !record.replica || record.ServiceKey() != key {
 			continue
 		}
-		if record.isExpired(now) || tried[record.id] || record.reverse.ReadyCount() == 0 {
+		if record.isExpired(now) || tried[record.id] || (requireReady && record.reverse.ReadyCount() == 0) {
 			continue
 		}
 		if selected == nil || record.lastSelected < selected.lastSelected {

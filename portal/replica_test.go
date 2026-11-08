@@ -122,7 +122,7 @@ func TestReplicaSelectionUsesReadyRoutableLeases(t *testing.T) {
 		}
 	}
 	key := identity.ServiceKey()
-	selected := registry.selectReplica(key, nil)
+	selected := registry.selectReplica(key, nil, true)
 	if selected == nil || selected == empty {
 		t.Fatal("selected a replica without a ready reverse stream")
 	}
@@ -135,9 +135,12 @@ func TestReplicaSelectionUsesReadyRoutableLeases(t *testing.T) {
 	if err != nil || stream != nil {
 		t.Fatalf("empty pool must permit immediate failover: %v", err)
 	}
-	next := registry.selectReplica(key, map[string]bool{selected.id: true})
+	next := registry.selectReplica(key, map[string]bool{selected.id: true}, true)
 	if next == nil || next == selected || next == empty {
 		t.Fatal("did not select the other ready replica")
+	}
+	if waitOn := registry.selectReplica(key, map[string]bool{first.id: true, second.id: true}, false); waitOn != empty {
+		t.Fatal("a burst with no ready replica must wait on a live replica")
 	}
 	if public := registry.PublicLeases(time.Now()); len(public) != 1 || public[0].Ready != 1 {
 		t.Fatalf("directory must contain one service with aggregate readiness: %+v", public)
@@ -147,7 +150,7 @@ func TestReplicaSelectionUsesReadyRoutableLeases(t *testing.T) {
 		t.Fatal("admin listing lost independent lease identities")
 	}
 	registry.setIdentityAccess(key, types.LeaseDenied, 1)
-	if registry.selectReplica(key, nil) != nil || len(registry.PublicLeases(time.Now())) != 0 {
+	if registry.selectReplica(key, nil, false) != nil || len(registry.PublicLeases(time.Now())) != 0 {
 		t.Fatal("identity denial did not cover all replicas")
 	}
 }

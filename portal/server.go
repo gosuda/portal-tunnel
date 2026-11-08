@@ -1109,6 +1109,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	if replica {
 		tried = make(map[string]bool)
 	}
+	waiting := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1117,10 +1118,19 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 			return context.DeadlineExceeded
 		}
 		if replica {
-			record = s.registry.selectReplica(key, tried)
-			if record == nil {
-				return errLeaseNotFound
+			next := s.registry.selectReplica(key, tried, true)
+			if next == nil {
+				// No replica is ready: wait on one live replica under the same
+				// deadline, as an exclusive lease waits for its client to refill.
+				if waiting {
+					return errLeaseNotFound
+				}
+				if next = s.registry.selectReplica(key, nil, false); next == nil {
+					return errLeaseNotFound
+				}
+				waiting = true
 			}
+			record = next
 			tried[record.id] = true
 		}
 		// Until framing succeeds, only this function owns the inbound connection.
@@ -1134,7 +1144,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		}
 		claimCtx, cancel := context.WithDeadline(bridge.ctx, deadline)
 		var session net.Conn
-		if replica {
+		if replica && !waiting {
 			session, err = record.reverse.TryAcquire(claimCtx)
 		} else {
 			session, err = record.reverse.Acquire(claimCtx)

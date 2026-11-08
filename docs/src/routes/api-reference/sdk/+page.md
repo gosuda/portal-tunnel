@@ -423,7 +423,8 @@ the request to exclusive registration.
 Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with replica
 mode. This is connection distribution within one relay, not cross-relay failover.
 Ready streams indicate tunnel availability, not application health. If no replica
-is ready, the incoming connection fails. Connections already carrying traffic
+is ready, the incoming connection waits for a refilled stream on one live
+replica until the claim deadline, then fails. Connections already carrying traffic
 are not migrated or replayed after a client fails.
 
 ## Go Application Auth
