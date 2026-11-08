@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
@@ -47,7 +48,7 @@ var (
 func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
-	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
+	if err := cli.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]cli.CommandFunc{
 		"expose": runExposeCommand,
 		"agent":  runAgentCommand,
 		"auth":   runAuthCommand,
@@ -57,7 +58,7 @@ func main() {
 			fmt.Fprintln(os.Stdout, types.ReleaseVersion)
 			return nil
 		},
-		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
+		"help": cli.MakeHelpCommand(printRootUsage, []cli.HelpTopic{
 			{Name: "expose", Usage: printExposeUsage},
 			{Name: "agent", Usage: printAgentUsage},
 			{Name: "auth", Usage: printAuthUsage},
@@ -88,51 +89,52 @@ type exposeFlags struct {
 }
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
-	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
-	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
-	utils.BoolFlagEnv(fs, &cfg.Overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
-	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
-	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.IdentityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
-	utils.StringFlag(fs, &cfg.Name, "name", "", "Request a short URL without the Ethereum address (single DNS label, maximum 63 ASCII characters); applies to new identities; omitted for the address-only default service")
-	utils.StringFlag(fs, &cfg.Description, "description", "", "Service description metadata")
-	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
-	utils.StringFlag(fs, &cfg.Owner, "owner", "", "Service owner metadata")
-	utils.StringFlag(fs, &cfg.Thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
-	utils.BoolFlag(fs, &cfg.Hide, "hide", false, "Hide service from relay listing screens")
-	utils.StringFlag(fs, &cfg.Provider, "auth", "", "Protect HTTP application access with siwe, credential, oidc, saml, or email authentication")
-	utils.RepeatedStringFlag(fs, &cfg.Allow, "auth-allow", "Principal allowed to sign in with siwe (Ethereum wallet) or credential (subject); repeat to allow multiple principals (empty allows any valid principal). oidc and saml also read it, as --auth-email-list")
-	utils.RepeatedStringFlag(fs, &cfg.EmailList, "auth-email-list", "Who may sign in with oidc, saml, or email: an email address, an @domain, or, for oidc and saml, sub:<subject>; repeat to allow multiple entries (at least one is required)")
-	utils.BoolFlag(fs, &cfg.IdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
-	utils.StringFlagEnv(fs, &cfg.IdentityProof, "auth-identity-proof", "", "Secret sent as X-Portal-Proof with the identity headers so the upstream can verify they came from Portal (at least 16 visible ASCII characters; requires --auth-identity-headers). Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_IDENTITY_PROOF")
-	utils.StringFlagEnv(fs, &cfg.OIDCIssuerURL, "auth-oidc-issuer", "", "OIDC issuer URL for --auth oidc", "AUTH_OIDC_ISSUER")
-	utils.StringFlagEnv(fs, &cfg.OIDCClientID, "auth-oidc-client-id", "", "OIDC client ID for --auth oidc", "AUTH_OIDC_CLIENT_ID")
-	utils.StringFlagEnv(fs, &cfg.OIDCClientSecret, "auth-oidc-client-secret", "", "Optional OIDC client secret for --auth oidc", "AUTH_OIDC_CLIENT_SECRET")
-	utils.StringFlagEnv(fs, &cfg.SAMLMetadataURL, "auth-saml-metadata-url", "", "SAML identity provider metadata URL for --auth saml (or use --auth-saml-metadata-file)", "AUTH_SAML_METADATA_URL")
-	utils.StringFlagEnv(fs, &cfg.SAMLMetadataFile, "auth-saml-metadata-file", "", "SAML identity provider metadata file for --auth saml, for an identity provider that publishes no metadata URL", "AUTH_SAML_METADATA_FILE")
-	utils.StringFlagEnv(fs, &cfg.SAMLEntityID, "auth-saml-entity-id", "", "SAML service provider entity ID for --auth saml (default https://<host>/_portal/auth/saml/metadata)", "AUTH_SAML_ENTITY_ID")
-	utils.StringFlagEnv(fs, &cfg.SAMLSubjectAttribute, "auth-saml-subject-attribute", "", "SAML attribute that names the visitor for --auth saml, such as email (default: the NameID)", "AUTH_SAML_SUBJECT_ATTRIBUTE")
-	utils.StringFlagEnv(fs, &cfg.SMTPAddr, "auth-smtp-addr", "", "SMTP server host:port that sends the login links of --auth email (port 465 uses TLS; any other port requires STARTTLS, except on localhost, 127.0.0.1, or ::1)", "AUTH_SMTP_ADDR")
-	utils.StringFlagEnv(fs, &cfg.SMTPUsername, "auth-smtp-username", "", "Optional SMTP username for --auth email; requires --auth-smtp-password", "AUTH_SMTP_USERNAME")
-	utils.StringFlagEnv(fs, &cfg.SMTPPassword, "auth-smtp-password", "", "SMTP password for --auth email. Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_SMTP_PASSWORD")
-	utils.StringFlagEnv(fs, &cfg.SMTPFrom, "auth-smtp-from", "", "Fixed sender address of the login links of --auth email, such as \"Portal <login@example.com>\"", "AUTH_SMTP_FROM")
-	utils.StringFlag(fs, &cfg.PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
-	utils.BoolFlag(fs, &cfg.Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
-	utils.StringFlag(fs, &cfg.Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, casper:casper-test, and nano:mainnet")
-	utils.StringFlag(fs, &cfg.Asset, "x402-asset", "", "Payment asset contract; required for Casper wCSPR")
-	utils.RepeatedStringFlag(fs, &cfg.Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint and Nano verifies each payment on every listed RPC node (at least two)")
-	utils.StringFlagEnv(fs, &cfg.FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
-	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
-	utils.RepeatedStringFlag(fs, &cfg.StripRequestHeaders, "strip-request-header", "Client request header removed before routed HTTP forwards it upstream; repeat for multiple headers; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (Host, X-Forwarded-*) are always rewritten by the tunnel; requires --http-route or --auth")
-	utils.StringFlag(fs, &cfg.Serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
-	utils.BoolFlag(fs, &flags.cache, "cache", false, "Allow selected relays to store --serve content and terminate browser TLS; cached responses lose end-to-end TLS to this client")
+	env := cli.NewEnv(os.Environ())
+	fs.StringVar(&flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
+	fs.BoolVar(&flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
+	env.Bool(fs, &cfg.Overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
+	env.Bool(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
+	env.String(fs, &cfg.IdentityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
+	env.String(fs, &cfg.IdentityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
+	fs.StringVar(&cfg.Name, "name", "", "Request a short URL without the Ethereum address (single DNS label, maximum 63 ASCII characters); applies to new identities; omitted for the address-only default service")
+	fs.StringVar(&cfg.Description, "description", "", "Service description metadata")
+	fs.StringVar(&flags.tags, "tags", "", "Service tags metadata (comma-separated)")
+	fs.StringVar(&cfg.Owner, "owner", "", "Service owner metadata")
+	fs.StringVar(&cfg.Thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
+	fs.BoolVar(&cfg.Hide, "hide", false, "Hide service from relay listing screens")
+	fs.StringVar(&cfg.Provider, "auth", "", "Protect HTTP application access with siwe, credential, oidc, saml, or email authentication")
+	cli.RepeatedStringFlag(fs, &cfg.Allow, "auth-allow", "Principal allowed to sign in with siwe (Ethereum wallet) or credential (subject); repeat to allow multiple principals (empty allows any valid principal). oidc and saml also read it, as --auth-email-list")
+	cli.RepeatedStringFlag(fs, &cfg.EmailList, "auth-email-list", "Who may sign in with oidc, saml, or email: an email address, an @domain, or, for oidc and saml, sub:<subject>; repeat to allow multiple entries (at least one is required)")
+	fs.BoolVar(&cfg.IdentityHeaders, "auth-identity-headers", false, "Send authenticated X-Portal-User and X-Portal-Auth headers to HTTP upstreams")
+	env.String(fs, &cfg.IdentityProof, "auth-identity-proof", "", "Secret sent as X-Portal-Proof with the identity headers so the upstream can verify they came from Portal (at least 16 visible ASCII characters; requires --auth-identity-headers). Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_IDENTITY_PROOF")
+	env.String(fs, &cfg.OIDCIssuerURL, "auth-oidc-issuer", "", "OIDC issuer URL for --auth oidc", "AUTH_OIDC_ISSUER")
+	env.String(fs, &cfg.OIDCClientID, "auth-oidc-client-id", "", "OIDC client ID for --auth oidc", "AUTH_OIDC_CLIENT_ID")
+	env.String(fs, &cfg.OIDCClientSecret, "auth-oidc-client-secret", "", "Optional OIDC client secret for --auth oidc", "AUTH_OIDC_CLIENT_SECRET")
+	env.String(fs, &cfg.SAMLMetadataURL, "auth-saml-metadata-url", "", "SAML identity provider metadata URL for --auth saml (or use --auth-saml-metadata-file)", "AUTH_SAML_METADATA_URL")
+	env.String(fs, &cfg.SAMLMetadataFile, "auth-saml-metadata-file", "", "SAML identity provider metadata file for --auth saml, for an identity provider that publishes no metadata URL", "AUTH_SAML_METADATA_FILE")
+	env.String(fs, &cfg.SAMLEntityID, "auth-saml-entity-id", "", "SAML service provider entity ID for --auth saml (default https://<host>/_portal/auth/saml/metadata)", "AUTH_SAML_ENTITY_ID")
+	env.String(fs, &cfg.SAMLSubjectAttribute, "auth-saml-subject-attribute", "", "SAML attribute that names the visitor for --auth saml, such as email (default: the NameID)", "AUTH_SAML_SUBJECT_ATTRIBUTE")
+	env.String(fs, &cfg.SMTPAddr, "auth-smtp-addr", "", "SMTP server host:port that sends the login links of --auth email (port 465 uses TLS; any other port requires STARTTLS, except on localhost, 127.0.0.1, or ::1)", "AUTH_SMTP_ADDR")
+	env.String(fs, &cfg.SMTPUsername, "auth-smtp-username", "", "Optional SMTP username for --auth email; requires --auth-smtp-password", "AUTH_SMTP_USERNAME")
+	env.String(fs, &cfg.SMTPPassword, "auth-smtp-password", "", "SMTP password for --auth email. Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_SMTP_PASSWORD")
+	env.String(fs, &cfg.SMTPFrom, "auth-smtp-from", "", "Fixed sender address of the login links of --auth email, such as \"Portal <login@example.com>\"", "AUTH_SMTP_FROM")
+	fs.StringVar(&cfg.PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
+	fs.BoolVar(&cfg.Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
+	fs.StringVar(&cfg.Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, casper:casper-test, and nano:mainnet")
+	fs.StringVar(&cfg.Asset, "x402-asset", "", "Payment asset contract; required for Casper wCSPR")
+	cli.RepeatedStringFlag(fs, &cfg.Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint and Nano verifies each payment on every listed RPC node (at least two)")
+	env.String(fs, &cfg.FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
+	cli.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
+	cli.RepeatedStringFlag(fs, &cfg.StripRequestHeaders, "strip-request-header", "Client request header removed before routed HTTP forwards it upstream; repeat for multiple headers; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (Host, X-Forwarded-*) are always rewritten by the tunnel; requires --http-route or --auth")
+	fs.StringVar(&cfg.Serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
+	fs.BoolVar(&flags.cache, "cache", false, "Allow selected relays to store --serve content and terminate browser TLS; cached responses lose end-to-end TLS to this client")
 	fs.DurationVar(&flags.cacheTTL, "cache-ttl", 0, "Requested offline cache lifetime, clamped by the relay; 0 uses relay policy (requires --cache)")
-	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
-	utils.StringFlagEnv(fs, &cfg.UDPAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
-	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
-	utils.IntFlagEnv(fs, &cfg.MaxActiveRelays, "max-active-relays", discovery.DefaultMaxActiveRelays, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
-	utils.StringFlag(fs, &flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
-	utils.StringFlag(fs, &flags.logFormat, "log-format", "text", "Log output format: text (default human-readable console) or json (one structured JSON log record per line on stdout; integrations filter relay lifecycle records by event=relay_status)")
+	env.Bool(fs, &cfg.UDPEnabled, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
+	env.String(fs, &cfg.UDPAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
+	env.Bool(fs, &cfg.TCPEnabled, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
+	env.Int(fs, &cfg.MaxActiveRelays, "max-active-relays", discovery.DefaultMaxActiveRelays, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
+	fs.StringVar(&flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
+	fs.StringVar(&flags.logFormat, "log-format", "text", "Log output format: text (default human-readable console) or json (one structured JSON log record per line on stdout; integrations filter relay lifecycle records by event=relay_status)")
 }
 
 func runExposeCommand(args []string) error {
@@ -140,9 +142,9 @@ func runExposeCommand(args []string) error {
 
 	var cfg tunnel.Config
 	var flags exposeFlags
-	fs := utils.NewFlagSet("expose", printExposeUsage)
+	fs := cli.NewFlagSet("expose", printExposeUsage)
 	registerExposeFlags(fs, &cfg, &flags)
-	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -161,7 +163,7 @@ func runExposeCommand(args []string) error {
 		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
 	var err error
-	cfg.TargetAddr, err = utils.OptionalSingleArg(fs.Args(), "target")
+	cfg.TargetAddr, err = cli.OptionalSingleArg(fs.Args(), "target")
 	if err != nil {
 		printExposeUsage(os.Stderr)
 		return err
@@ -278,24 +280,25 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 }
 
 func runAuthCommand(args []string) error {
+	env := cli.NewEnv(os.Environ())
 	if len(args) == 0 || args[0] != "issue" {
 		printAuthUsage(os.Stderr)
 		return errAuthSubcommandMustBeIssue
 	}
 	var subject, identityPath, identityJSON string
 	var expires time.Duration
-	fs := utils.NewFlagSet("auth issue", printAuthUsage)
-	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
+	fs := cli.NewFlagSet("auth issue", printAuthUsage)
+	fs.StringVar(&subject, "subject", "", "Subject granted access")
 	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
-	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
-	if err := utils.ParseFlagSet(fs, args[1:], printAuthUsage); err != nil {
+	env.String(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
+	env.String(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
+	if err := cli.ParseFlagSet(fs, args[1:], printAuthUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	host, err := utils.OptionalSingleArg(fs.Args(), "tunnel")
+	host, err := cli.OptionalSingleArg(fs.Args(), "tunnel")
 	if err != nil || host == "" {
 		printAuthUsage(os.Stderr)
 		if err != nil {
@@ -360,16 +363,16 @@ func parseHTTPRoutePayment(value string) ([]string, string, error) {
 
 func runUpdateCommand(args []string) error {
 	var version string
-	fs := utils.NewFlagSet("update", printUpdateUsage)
-	utils.StringFlag(fs, &version, "version", "", "Release version to install; defaults to latest")
+	fs := cli.NewFlagSet("update", printUpdateUsage)
+	fs.StringVar(&version, "version", "", "Release version to install; defaults to latest")
 
-	if err := utils.ParseFlagSet(fs, args, printUpdateUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printUpdateUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "update"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "update"); err != nil {
 		printUpdateUsage(os.Stderr)
 		return err
 	}
@@ -391,18 +394,18 @@ func runListCommand(args []string) error {
 	installer.StartUpdateCheck(types.ReleaseVersion)
 
 	flags := listFlags{}
-	fs := utils.NewFlagSet("list", printListUsage)
+	fs := cli.NewFlagSet("list", printListUsage)
 
-	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
-	utils.BoolFlag(fs, &flags.defaultRelays, "default-relays", true, "Include bootstrap relays")
+	fs.StringVar(&flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
+	fs.BoolVar(&flags.defaultRelays, "default-relays", true, "Include bootstrap relays")
 
-	if err := utils.ParseFlagSet(fs, args, printListUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printListUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "list"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "list"); err != nil {
 		printListUsage(os.Stderr)
 		return err
 	}
@@ -464,7 +467,7 @@ func fetchRelayVersion(ctx context.Context, relayURL string) string {
 }
 
 func printRootUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
 			"portal expose [flags] --http-route \"PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT]\" [...]",
@@ -506,7 +509,7 @@ func printExposeUsage(w io.Writer) {
 	if w == nil {
 		return
 	}
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
 			"portal expose [flags] --serve <dir|file.html>",
@@ -522,7 +525,7 @@ func printExposeUsage(w io.Writer) {
 			"portal expose 3000 --overlay",
 		},
 	)
-	fs := utils.NewFlagSet("expose", nil)
+	fs := cli.NewFlagSet("expose", nil)
 	registerExposeFlags(fs, &tunnel.Config{}, &exposeFlags{})
 	common := flag.NewFlagSet("Common flags", flag.ContinueOnError)
 	advanced := flag.NewFlagSet("Advanced flags", flag.ContinueOnError)
@@ -542,30 +545,31 @@ func printExposeUsage(w io.Writer) {
 		group.SetOutput(w)
 		group.PrintDefaults()
 	}
-	utils.WriteHelpSection(w, "Loopback", []string{
+	cli.WriteHelpSection(w, "Loopback", []string{
 		"portal expose 127.0.0.1:8080 --identity-path /absolute/path/outside/repo/identity.json --relays https://127.0.0.1:8443 --discovery=false",
 		"the local relay must advertise the same origin clients dial: PORTAL_URL=https://127.0.0.1:8443",
 	})
-	utils.WriteHelpSection(w, "Ready", []string{
+	cli.WriteHelpSection(w, "Ready", []string{
 		"On success the process logs a line starting with: service ready at",
 		"Integrations: --log-format json emits structured relay_status log records on stdout",
 	})
 }
 
 func printAuthUsage(w io.Writer) {
-	utils.WriteCommandUsage(w, []string{"portal auth issue [flags] <host>"}, []string{"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h"})
-	fs := utils.NewFlagSet("auth issue", nil)
+	env := cli.NewEnv(nil)
+	cli.WriteCommandUsage(w, []string{"portal auth issue [flags] <host>"}, []string{"portal auth issue gentle-puffin-jam.gosunuts.xyz --subject alice --expires 720h"})
+	fs := cli.NewFlagSet("auth issue", nil)
 	var subject, identityPath, identityJSON string
 	var expires time.Duration
-	utils.StringFlag(fs, &subject, "subject", "", "Subject granted access")
+	fs.StringVar(&subject, "subject", "", "Subject granted access")
 	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
-	utils.StringFlagEnv(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
-	utils.WriteFlagDefaults(w, fs)
+	env.String(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
+	env.String(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
+	cli.WriteFlagDefaults(w, fs)
 }
 
 func printListUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"portal list [flags]",
 		},
@@ -577,7 +581,7 @@ func printListUsage(w io.Writer) {
 }
 
 func printUpdateUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"portal update [flags]",
 		},

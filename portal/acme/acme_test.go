@@ -386,11 +386,12 @@ func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
 	// Its certificate is test-only; no requests leave the loopback connection.
 	client := utils.NewHTTPClient(
 		utils.WithHTTPTLSConfig(&tls.Config{InsecureSkipVerify: true}),
-		utils.WithHTTPDialContext(func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
-		}),
 	)
-	client.Transport.(*http.Transport).Proxy = nil
+	transport := client.Transport.(*http.Transport)
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}
 	t.Cleanup(client.CloseIdleConnections)
 	originalClient := utils.DefaultHTTPClient
 	utils.DefaultHTTPClient = client

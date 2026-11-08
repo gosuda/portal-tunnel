@@ -57,8 +57,7 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 	if err != nil {
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
-	registry.setUDPPolicy(udpEnabled, 0)
-	registry.setTCPPortPolicy(tcpPortEnabled, 0)
+	registry.setTransportPolicy(udpEnabled, 0, tcpPortEnabled, 0)
 	// Registered leases bind UDP and raw-TCP relays; releasing them keeps
 	// repeated runs in one process free of port collisions.
 	t.Cleanup(func() { registry.CloseAll() })
@@ -975,9 +974,9 @@ func TestLeaseCapacityRejectionRollsBackRawPorts(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.limitUDP {
-				registry.setUDPPolicy(true, 1)
+				registry.setTransportPolicy(true, 1, true, 0)
 			} else {
-				registry.setTCPPortPolicy(true, 1)
+				registry.setTransportPolicy(true, 0, true, 1)
 			}
 			for i := range 3 {
 				request.Identity = newTestLeaseIdentity(t, fmt.Sprintf("rejected-%d", i))
@@ -989,8 +988,7 @@ func TestLeaseCapacityRejectionRollsBackRawPorts(t *testing.T) {
 					t.Fatalf("rejected registration %d retained ports: UDP=%+v TCP=%+v", i, registry.udpPorts, registry.tcpPorts)
 				}
 			}
-			registry.setUDPPolicy(true, 2)
-			registry.setTCPPortPolicy(true, 2)
+			registry.setTransportPolicy(true, 2, true, 2)
 			request.Identity = newTestLeaseIdentity(t, "accepted")
 			if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
 				t.Fatalf("capacity rejection exhausted raw ports: %v", err)

@@ -22,7 +22,7 @@ const accessPublishAttempts = 8
 // handler (admin API, x402, application routes). A nil ingress resolves the
 // socket peer, a nil admission disables pre-auth budgeting, and a nil access
 // keeps every identity routable; the relay binary always supplies real ones.
-func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *SourceLimiter, access *Access, preAuth PreAuthConfig) http.Handler {
+func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *SourceLimiter, access *Store, preAuth PreAuthConfig) http.Handler {
 	if ingress == nil {
 		ingress = &Ingress{}
 	}
@@ -142,7 +142,13 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	mux.Handle("/", fallback)
 
 	control := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if utils.HandleAPICORS(w, r) {
+		header := w.Header()
+		header.Set("Access-Control-Allow-Origin", "*")
+		header.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS")
+		header.Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, "+types.HeaderAccessToken)
+		header.Set("Access-Control-Max-Age", "600")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		mux.ServeHTTP(w, r)

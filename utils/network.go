@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -239,4 +241,20 @@ func IsPublicIP(ip netip.Addr) bool {
 		}
 	}
 	return true
+}
+
+func NormalizeLoopbackTarget(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if port, ok := strings.CutPrefix(raw, ":"); ok {
+		if _, err := strconv.Atoi(port); err == nil {
+			return net.JoinHostPort("127.0.0.1", port), nil
+		}
+	}
+	if _, err := strconv.Atoi(raw); err == nil {
+		return net.JoinHostPort("127.0.0.1", raw), nil
+	}
+	return NormalizeTargetAddr(raw)
 }

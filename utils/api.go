@@ -49,19 +49,6 @@ func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-func HandleAPICORS(w http.ResponseWriter, r *http.Request) bool {
-	header := w.Header()
-	header.Set("Access-Control-Allow-Origin", "*")
-	header.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS")
-	header.Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, "+types.HeaderAccessToken)
-	header.Set("Access-Control-Max-Age", "600")
-	if r.Method != http.MethodOptions {
-		return false
-	}
-	w.WriteHeader(http.StatusNoContent)
-	return true
-}
-
 func MethodNotAllowedError() APIErrorResponse {
 	return APIErrorResponse{
 		Status:  http.StatusMethodNotAllowed,
@@ -185,7 +172,7 @@ func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, m
 	if int64(len(respBody)) > maxBytes {
 		return fmt.Errorf("%w: limit %d bytes", ErrAPIResponseTooLarge, maxBytes)
 	}
-	if err := DecodeAPIData(respBody, out); err != nil {
+	if err := decodeAPIData(respBody, out); err != nil {
 		var apiErr *types.APIRequestError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == 0 {
 			apiErr.StatusCode = resp.StatusCode
@@ -195,7 +182,7 @@ func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, m
 	return nil
 }
 
-func DecodeAPIData(body []byte, out any) error {
+func decodeAPIData(body []byte, out any) error {
 	var envelope types.APIEnvelope[json.RawMessage]
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return fmt.Errorf("decode response: %w", err)

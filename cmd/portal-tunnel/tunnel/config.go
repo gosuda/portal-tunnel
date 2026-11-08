@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"cmp"
-	"os"
 	"slices"
 	"strings"
 
@@ -131,13 +130,11 @@ func (c Config) Spec() (Spec, error) {
 	}
 	auth := c.AuthConfig
 	if c.Serve != "" || len(c.HTTPRoutes) > 0 || !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) > 0 {
-		payment := gateway.X402Payment{X402Config: c.X402Config}
-		payment.FacilitatorToken = cmp.Or(payment.FacilitatorToken, strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
 		spec.HTTP = &HTTPConfig{
 			Serve:               c.Serve,
 			Routes:              c.HTTPRoutes,
 			StripRequestHeaders: c.StripRequestHeaders,
-			Payment:             payment,
+			Payment:             gateway.X402Payment{X402Config: c.X402Config},
 			Cache:               c.Cache,
 		}
 		if !auth.IsZero() {

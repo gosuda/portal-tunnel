@@ -72,6 +72,60 @@ func TestServerStatsLeaseLifecycleAndCumulativeTraffic(t *testing.T) {
 	}
 }
 
+func TestTransportPolicyPortRange(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		min, max int
+		valid    bool
+	}{
+		{"disabled", 0, 0, false},
+		{"missing minimum", 0, 3000, false},
+		{"missing maximum", 3000, 0, false},
+		{"negative", -1, 3000, false},
+		{"overflow", 3000, 65536, false},
+		{"reversed", 3001, 3000, false},
+		{"single port", 3000, 3000, true},
+		{"full range", 1, 65535, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := ServerConfig{MinPort: tc.min, MaxPort: tc.max}
+			for _, udp := range []bool{false, true} {
+				if err := cfg.ValidateTransportPolicy(udp, 0, !udp, 0); (err == nil) != tc.valid {
+					t.Fatalf("range %d..%d, UDP %v: %v", tc.min, tc.max, udp, err)
+				}
+			}
+			if err := cfg.ValidateTransportPolicy(false, 0, false, 0); err != nil {
+				t.Fatalf("disabled transports require no port range: %v", err)
+			}
+		})
+	}
+}
+
+func TestTransportPolicyValidationDoesNotChangeEnforcement(t *testing.T) {
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://localhost", StateDir: t.TempDir(),
+		MinPort: 12000, MaxPort: 12010,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ValidateTransportPolicy(true, 1, true, 2); err != nil {
+		t.Fatal(err)
+	}
+	if server.supportsUDP() || server.supportsTCP() {
+		t.Fatal("validation enabled transports before the policy was applied")
+	}
+	if err := server.SetTransportPolicy(true, 1, true, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetTransportPolicy(false, -1, false, 0); err == nil {
+		t.Fatal("negative capacity was accepted")
+	}
+	if !server.supportsUDP() || !server.supportsTCP() {
+		t.Fatal("rejected policy changed transport enforcement")
+	}
+}
+
 func TestServerStatsConcurrentLeaseLifecycle(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	server := &Server{registry: registry}

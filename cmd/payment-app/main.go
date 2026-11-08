@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -68,37 +69,38 @@ func main() {
 }
 
 func run(args []string) error {
+	env := cli.NewEnv(os.Environ())
 	cfg := paymentConfig{}
-	fs := utils.NewFlagSet("payment-app", printUsage)
+	fs := cli.NewFlagSet("payment-app", printUsage)
 
-	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
-	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", false, "include bootstrap relays and enable discovery", "DISCOVERY")
-	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
-	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
-	utils.IntFlagEnv(fs, &cfg.maxActiveRelays, "max-active-relays", 3, nil, "maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
-	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8093", "local payment app HTTP listen address (host:port or URL)")
-	utils.StringFlag(fs, &cfg.name, "name", "payment-app", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
-	utils.StringFlag(fs, &cfg.desc, "description", "Portal Sui wallet x402 payment app", "lease description")
-	utils.StringFlag(fs, &cfg.tags, "tags", "payment,x402,sui,usdc,image,photo", "comma-separated lease tags")
-	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
-	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", defaultThumbnailURL, "lease thumbnail")
-	utils.StringFlag(fs, &cfg.photoURL, "photo-url", defaultPhotoURL, "image URL revealed after payment")
-	utils.BoolFlag(fs, &cfg.hide, "hide", false, "hide this lease from listings")
-	utils.BoolFlag(fs, &cfg.x402Testnet, "x402-testnet", true, "use Sui testnet for x402 payments")
-	utils.StringFlag(fs, &cfg.x402PayTo, "x402-pay-to", "", "Sui USDC recipient address")
-	utils.StringFlag(fs, &cfg.x402Amount, "x402-amount", "0.01", "USDC amount")
-	utils.RepeatedStringFlag(fs, &cfg.x402Endpoints, "x402-rpc", "Sui gRPC endpoint; repeat to try multiple endpoints before defaults")
+	env.String(fs, &cfg.relayURLs, "relays", "https://localhost", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
+	env.Bool(fs, &cfg.discovery, "discovery", false, "include bootstrap relays and enable discovery", "DISCOVERY")
+	env.Bool(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
+	env.String(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
+	env.String(fs, &cfg.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
+	env.Int(fs, &cfg.maxActiveRelays, "max-active-relays", 3, nil, "maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
+	fs.StringVar(&cfg.addr, "addr", "127.0.0.1:8093", "local payment app HTTP listen address (host:port or URL)")
+	fs.StringVar(&cfg.name, "name", "payment-app", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
+	fs.StringVar(&cfg.desc, "description", "Portal Sui wallet x402 payment app", "lease description")
+	fs.StringVar(&cfg.tags, "tags", "payment,x402,sui,usdc,image,photo", "comma-separated lease tags")
+	fs.StringVar(&cfg.owner, "owner", "PortalApp Developer", "lease owner")
+	fs.StringVar(&cfg.thumbnail, "thumbnail", defaultThumbnailURL, "lease thumbnail")
+	fs.StringVar(&cfg.photoURL, "photo-url", defaultPhotoURL, "image URL revealed after payment")
+	fs.BoolVar(&cfg.hide, "hide", false, "hide this lease from listings")
+	fs.BoolVar(&cfg.x402Testnet, "x402-testnet", true, "use Sui testnet for x402 payments")
+	fs.StringVar(&cfg.x402PayTo, "x402-pay-to", "", "Sui USDC recipient address")
+	fs.StringVar(&cfg.x402Amount, "x402-amount", "0.01", "USDC amount")
+	cli.RepeatedStringFlag(fs, &cfg.x402Endpoints, "x402-rpc", "Sui gRPC endpoint; repeat to try multiple endpoints before defaults")
 	fs.IntVar(&cfg.x402MaxTimeoutSeconds, "x402-max-timeout", 0, "x402 max payment timeout seconds advertised to clients")
 	fs.IntVar(&cfg.x402RequestTimeout, "x402-request-timeout", 30, "Sui gRPC and x402 verify/settle timeout seconds")
 
-	if err := utils.ParseFlagSet(fs, args, printUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "payment-app"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "payment-app"); err != nil {
 		printUsage(os.Stderr)
 		return err
 	}
@@ -199,7 +201,7 @@ func runPaymentApp(ctx context.Context, cfg paymentConfig) error {
 }
 
 func printUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"payment-app --x402-pay-to SUI_ADDRESS [flags]",
 		},

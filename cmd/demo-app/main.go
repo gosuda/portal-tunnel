@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -25,11 +26,11 @@ import (
 
 func main() {
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
-	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
+	if err := cli.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]cli.CommandFunc{
 		"":    runTCPCommand,
 		"tcp": runTCPCommand,
 		"udp": runUDPCommand,
-		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
+		"help": cli.MakeHelpCommand(printRootUsage, []cli.HelpTopic{
 			{Name: "tcp", Usage: printTCPUsage},
 			{Name: "udp", Usage: printUDPUsage},
 		}),
@@ -58,34 +59,35 @@ type demoConfig struct {
 // registerConnectivityFlags registers the relay, discovery, identity, and
 // owner flags that are shared across TCP and UDP demo commands.
 func registerConnectivityFlags(fs *flag.FlagSet, cfg *demoConfig, defaultRelays string) {
-	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", defaultRelays, "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
-	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include bootstrap relays and enable discovery", "DISCOVERY")
-	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
-	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
-	utils.IntFlagEnv(fs, &cfg.maxActiveRelays, "max-active-relays", 3, nil, "maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
-	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
+	env := cli.NewEnv(os.Environ())
+	env.String(fs, &cfg.relayURLs, "relays", defaultRelays, "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
+	env.Bool(fs, &cfg.discovery, "discovery", true, "include bootstrap relays and enable discovery", "DISCOVERY")
+	env.Bool(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
+	env.String(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
+	env.String(fs, &cfg.identityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
+	env.Int(fs, &cfg.maxActiveRelays, "max-active-relays", 3, nil, "maximum number of auto-selected relays to keep connected; explicit --relays are always included", "MAX_ACTIVE_RELAYS")
+	fs.StringVar(&cfg.owner, "owner", "PortalApp Developer", "lease owner")
 }
 
 func runTCPCommand(args []string) error {
 	cfg := demoConfig{}
 
-	fs := utils.NewFlagSet("demo-app", printTCPUsage)
+	fs := cli.NewFlagSet("demo-app", printTCPUsage)
 	registerConnectivityFlags(fs, &cfg, "https://gosunuts.xyz")
-	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
-	utils.StringFlag(fs, &cfg.name, "name", "demo-app", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
-	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo connectivity app", "lease description")
-	utils.StringFlag(fs, &cfg.tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
-	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
-	utils.BoolFlag(fs, &cfg.hide, "hide", false, "hide this lease from listings")
+	fs.StringVar(&cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
+	fs.StringVar(&cfg.name, "name", "demo-app", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
+	fs.StringVar(&cfg.desc, "description", "Portal demo connectivity app", "lease description")
+	fs.StringVar(&cfg.tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
+	fs.StringVar(&cfg.thumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
+	fs.BoolVar(&cfg.hide, "hide", false, "hide this lease from listings")
 
-	if err := utils.ParseFlagSet(fs, args, printTCPUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printTCPUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "demo-app"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "demo-app"); err != nil {
 		printTCPUsage(os.Stderr)
 		return err
 	}
@@ -103,22 +105,22 @@ func runTCPCommand(args []string) error {
 
 func runUDPCommand(args []string) error {
 	cfg := demoConfig{}
-	fs := utils.NewFlagSet("demo-app-udp", printUDPUsage)
+	fs := cli.NewFlagSet("demo-app-udp", printUDPUsage)
 
 	registerConnectivityFlags(fs, &cfg, "https://localhost")
-	utils.StringFlag(fs, &cfg.name, "name", "demo-udp", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
-	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo UDP echo service", "lease description")
-	utils.StringFlag(fs, &cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
-	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", "", "lease thumbnail")
-	utils.BoolFlag(fs, &cfg.hide, "hide", true, "hide this lease from listings")
+	fs.StringVar(&cfg.name, "name", "demo-udp", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
+	fs.StringVar(&cfg.desc, "description", "Portal demo UDP echo service", "lease description")
+	fs.StringVar(&cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
+	fs.StringVar(&cfg.thumbnail, "thumbnail", "", "lease thumbnail")
+	fs.BoolVar(&cfg.hide, "hide", true, "hide this lease from listings")
 
-	if err := utils.ParseFlagSet(fs, args, printUDPUsage); err != nil {
+	if err := cli.ParseFlagSet(fs, args, printUDPUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if err := utils.RequireNoArgs(fs.Args(), "udp"); err != nil {
+	if err := cli.RequireNoArgs(fs.Args(), "udp"); err != nil {
 		printUDPUsage(os.Stderr)
 		return err
 	}
@@ -288,7 +290,7 @@ func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure) {
 }
 
 func printRootUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"demo-app [flags]",
 			"demo-app tcp [flags]",
@@ -305,7 +307,7 @@ func printRootUsage(w io.Writer) {
 }
 
 func printTCPUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"demo-app [flags]",
 			"demo-app tcp [flags]",
@@ -319,7 +321,7 @@ func printTCPUsage(w io.Writer) {
 }
 
 func printUDPUsage(w io.Writer) {
-	utils.WriteCommandUsage(w,
+	cli.WriteCommandUsage(w,
 		[]string{
 			"demo-app udp [flags]",
 		},

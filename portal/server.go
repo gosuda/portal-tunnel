@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -42,6 +43,7 @@ var (
 	errStateDirectoryIsRequired                  = errors.New("state directory is required")
 	errRootHostIsRequired                        = errors.New("root host is required")
 	errTransportMaxLeasesMustNonNegative         = errors.New("transport max leases must be non-negative")
+	errUnapprovedLeaseLimitNegative              = errors.New("unapproved leases per source must be non-negative")
 	errTransportEnablementRequiresLeasePortRange = errors.New("transport enablement requires a lease port range")
 	errEnablingUDPRequiresRelayRestart           = errors.New("enabling udp requires a relay restart")
 	errServerAlreadyStarted                      = errors.New("server already started")
@@ -168,7 +170,7 @@ func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTP
 			return HTTPRedirectConfig{}, errHTTPRedirectPortalURLPortMust
 		}
 	}
-	cfg.Addr = utils.StringOrDefault(strings.TrimSpace(cfg.Addr), DefaultHTTPRedirectAddr)
+	cfg.Addr = cmp.Or(strings.TrimSpace(cfg.Addr), DefaultHTTPRedirectAddr)
 	host, port, err := net.SplitHostPort(cfg.Addr)
 	if err != nil {
 		return HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR must be a host:port address: %w", err)
@@ -194,6 +196,9 @@ func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTP
 // ValidateServerConfig normalizes server configuration and checks the
 // side-effect-free invariants required before runtime resources are created.
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	if cfg.UnapprovedLeasesPerSource < 0 {
+		return ServerConfig{}, errUnapprovedLeaseLimitNegative
+	}
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
 		return ServerConfig{}, errRelayOverlayRequiresDiscovery
@@ -235,7 +240,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	cfg.PortalURL = selfRelayURL
 	cfg.Bootstraps = bootstraps
-	cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, selfRelayURL)
+	cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, selfRelayURL)
 
 	if cfg.SNIPort == 0 {
 		// SNI_PORT owns only the local bind. When PORTAL_URL names an explicit
@@ -245,7 +250,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
 	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
-	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
+	cfg.SNIListenAddr = cmp.Or(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
 	return cfg, nil
 }
 
@@ -273,8 +278,20 @@ func (cfg ServerConfig) snapshot() ServerConfig {
 	return cfg
 }
 
-func (cfg ServerConfig) hasLeasePortRange() bool {
-	return cfg.MinPort > 0 && cfg.MaxPort > 0 && cfg.MinPort <= 65535 && cfg.MaxPort <= 65535 && cfg.MinPort <= cfg.MaxPort
+// ValidateTransportPolicy checks policy limits and the configured lease port range.
+// Runtime availability is checked by Server.ValidateTransportPolicy.
+func (cfg ServerConfig) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
+	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
+		return errTransportMaxLeasesMustNonNegative
+	}
+	if udpEnabled || tcpEnabled {
+		minInRange := cfg.MinPort > 0 && cfg.MinPort <= 65535
+		maxInRange := cfg.MaxPort > 0 && cfg.MaxPort <= 65535
+		if !minInRange || !maxInRange || cfg.MinPort > cfg.MaxPort {
+			return errTransportEnablementRequiresLeasePortRange
+		}
+	}
+	return nil
 }
 
 type Server struct {
@@ -333,7 +350,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
 		}
-		cfg.Bootstraps = utils.RemoveRelayURL(cfg.Bootstraps, cfg.PortalURL)
+		cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, cfg.PortalURL)
 		relaySet = discovery.NewRelaySet(cfg.Bootstraps)
 	}
 
@@ -399,18 +416,24 @@ func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.Reverse
 // stops admitting new UDP leases. Enabling UDP at runtime is refused when no
 // backhaul listener exists, since a listener cannot be created post-start.
 func (s *Server) SetTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
-	if udpMaxLeases < 0 || tcpMaxLeases < 0 {
-		return errTransportMaxLeasesMustNonNegative
+	if err := s.ValidateTransportPolicy(udpEnabled, udpMaxLeases, tcpEnabled, tcpMaxLeases); err != nil {
+		return err
 	}
+	s.registry.setTransportPolicy(udpEnabled, udpMaxLeases, tcpEnabled, tcpMaxLeases)
+	return nil
+}
+
+// ValidateTransportPolicy checks whether a policy can be applied without
+// changing enforcement. The relay can reject unsupported settings before
+// persisting them. Runtime UDP availability is fixed once the server starts.
+func (s *Server) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) error {
 	cfg := s.config()
-	if (udpEnabled || tcpEnabled) && !cfg.hasLeasePortRange() {
-		return errTransportEnablementRequiresLeasePortRange
+	if err := cfg.ValidateTransportPolicy(udpEnabled, udpMaxLeases, tcpEnabled, tcpMaxLeases); err != nil {
+		return err
 	}
 	if s.group != nil && udpEnabled && s.quicBackhaul == nil {
 		return errEnablingUDPRequiresRelayRestart
 	}
-	s.registry.setUDPPolicy(udpEnabled, udpMaxLeases)
-	s.registry.setTCPPortPolicy(tcpEnabled, tcpMaxLeases)
 	return nil
 }
 
@@ -1302,4 +1325,15 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 		ActiveConnections: s.proxy.activeConnectionCount(),
 		TCPBPS:            s.proxy.currentTCPBPS(now),
 	}, s.authority)
+}
+
+func removeRelayURL(inputs []string, target string) []string {
+	// Both inputs and the server URL are already normalized by their owners.
+	var filtered []string
+	for _, input := range inputs {
+		if input != target {
+			filtered = append(filtered, input)
+		}
+	}
+	return filtered
 }

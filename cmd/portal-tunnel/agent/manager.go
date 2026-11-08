@@ -674,6 +674,8 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
+	// Resolve process defaults on the runtime copy; never persist the secret.
+	cfg.FacilitatorToken = cmp.Or(strings.TrimSpace(cfg.FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
 	spec, err := cfg.Spec()
 	if err != nil {
 		return err

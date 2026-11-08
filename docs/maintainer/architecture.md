@@ -171,6 +171,36 @@ cache snapshots, so mode changes also revoke cache-only identities. Registration
 reloads the committed snapshot if its publication is rejected.
 Revisions are local to a running relay; both sides start fresh on restart.
 
+Admin changes validate and persist their complete candidate before publishing
+access decisions, transport settings, or bandwidth limits. A failed policy-file
+write leaves runtime enforcement unchanged and needs no rollback. Portal owns
+transport capability validation and applies UDP/TCP policy together under the
+registry lock. Bulk bandwidth updates retain existing limiter credit for
+identities that remain limited; removing a limit discards its limiter state.
+
+`policy.Store` owns one committed snapshot containing approval mode, identity
+decisions, UDP/TCP settings, and per-identity bandwidth limits. Admin reads and
+the saved file are projections of this state, rather than reconstructions from
+Portal's enforcement state. Both admin update endpoints edit a detached candidate
+and share one serialized save-and-apply path. Readers use snapshots without
+waiting for file I/O; no separate transport-setting mirror or read lock is needed.
+
+`cmd/internal/cli` owns shared command dispatch, argument parsing, help output,
+and environment-backed flags resolved from a captured input for each command.
+Plain flags use `flag.FlagSet` directly. The resolved values, variable reference, and parse diagnostics
+belong to that resolution. Relay config-file reports use the file as their input
+without changing the process environment. Relay API, frontend, domain-report,
+and optional x402 routes share one application route table; protocol ingress
+and application body limits remain enforced at their respective boundaries.
+
+Relay startup and config diagnostics share one side-effect-free preparation
+path, retaining Portal's normalized settings and rejecting invalid environment
+values. Portal owns static transport-policy validation; a running server also
+checks listener availability before applying changes. Tunnel config-to-spec
+conversion uses explicit settings only. The expose CLI resolves environment
+defaults during flag registration; the agent applies its facilitator-token
+default to a runtime copy without writing that secret into its config file.
+
 Revocation detaches cached content and advances the retained lease's cache
 generation. Cache requests capture that generation before the final access
 check, and must still match it at publication. This fences uploads that overlap

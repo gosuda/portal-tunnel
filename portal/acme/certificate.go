@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -30,6 +31,8 @@ import (
 )
 
 var (
+	errInvalidPrivateKeyPEM        = errors.New("invalid private key pem")
+	errUnsupportedPrivateKeyType   = errors.New("unsupported private key type")
 	errACMECADirectoryURLMustValid = errors.New("acme ca directory url must be a valid URL without credentials, query, or fragment")
 	errACMECADirectoryURLMustUse   = errors.New("acme ca directory url must use https")
 )
@@ -316,7 +319,7 @@ func (u *acmeUser) GetPrivateKey() crypto.PrivateKey        { return u.Key }
 func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
 	keyPEM, err := os.ReadFile(path)
 	if err == nil {
-		return utils.ParsePrivateKeyPEM(keyPEM)
+		return parseAccountKeyPEM(keyPEM)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -430,4 +433,26 @@ func localDevelopmentDomains(baseHost string) []string {
 		}
 	}
 	return domains
+}
+
+func parseAccountKeyPEM(keyPEM []byte) (crypto.PrivateKey, error) {
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, errInvalidPrivateKeyPEM
+	}
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		switch typed := key.(type) {
+		case *ecdsa.PrivateKey:
+			return typed, nil
+		case *rsa.PrivateKey:
+			return typed, nil
+		}
+	}
+	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	return nil, errUnsupportedPrivateKeyType
 }

@@ -20,7 +20,7 @@ func writeEnvFile(t *testing.T, lines ...string) string {
 	return path
 }
 
-// resolveWithEnvFile runs the same isolation the config subcommand performs and
+// resolveWithEnvFile uses the file values as the entire input environment and
 // returns the resulting configuration.
 func resolveWithEnvFile(t *testing.T, path string) appConfig {
 	t.Helper()
@@ -28,13 +28,11 @@ func resolveWithEnvFile(t *testing.T, path string) appConfig {
 	if err != nil {
 		t.Fatalf("load env file: %v", err)
 	}
-	restore, err := applyEnvFileInIsolation(entries)
-	if err != nil {
-		t.Fatalf("isolate env file: %v", err)
+	var environ []string
+	for _, entry := range entries {
+		environ = append(environ, entry.Name+"="+entry.Value)
 	}
-	defer restore()
-
-	cfg, err := resolveAppConfig(nil)
+	cfg, _, err := resolveAppConfig(nil, environ)
 	if err != nil {
 		t.Fatalf("resolve config: %v", err)
 	}
@@ -77,27 +75,15 @@ func TestEnvFileIsolationBeatsHigherPriorityAlias(t *testing.T) {
 	}
 }
 
-func TestEnvFileIsolationRestoresEnvironment(t *testing.T) {
+func TestConfigResolutionDoesNotChangeEnvironment(t *testing.T) {
 	t.Setenv("DISCOVERY", "true")
-	if err := os.Unsetenv("BOOTSTRAPS"); err != nil {
-		t.Fatalf("unset BOOTSTRAPS: %v", err)
+	t.Setenv("BOOTSTRAPS", "https://inherited.example.com")
+	cfg := resolveWithEnvFile(t, writeEnvFile(t, "BOOTSTRAPS=https://file.example.com"))
+	if cfg.Relay.DiscoveryEnabled || len(cfg.Relay.Bootstraps) != 1 || cfg.Relay.Bootstraps[0] != "https://file.example.com" {
+		t.Fatalf("file did not resolve independently: %+v", cfg.Relay)
 	}
-
-	entries, err := loadEnvFile(writeEnvFile(t, "BOOTSTRAPS=https://seed.example.com"))
-	if err != nil {
-		t.Fatalf("load env file: %v", err)
-	}
-	restore, err := applyEnvFileInIsolation(entries)
-	if err != nil {
-		t.Fatalf("isolate env file: %v", err)
-	}
-	restore()
-
-	if got := os.Getenv("DISCOVERY"); got != "true" {
-		t.Fatalf("DISCOVERY = %q after restore, want true", got)
-	}
-	if _, set := os.LookupEnv("BOOTSTRAPS"); set {
-		t.Fatal("BOOTSTRAPS is set after restore; it was unset before")
+	if os.Getenv("DISCOVERY") != "true" || os.Getenv("BOOTSTRAPS") != "https://inherited.example.com" {
+		t.Fatal("reading the file changed the process environment")
 	}
 }
 
@@ -130,21 +116,44 @@ func TestConfigReportSurfacesUnknownEnvFileKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load env file: %v", err)
 	}
-	restore, err := applyEnvFileInIsolation(entries)
-	if err != nil {
-		t.Fatalf("isolate env file: %v", err)
+	var environ []string
+	for _, entry := range entries {
+		environ = append(environ, entry.Name+"="+entry.Value)
 	}
-	defer restore()
-
-	cfg, err := resolveAppConfig(nil)
+	cfg, env, err := resolveAppConfig(nil, environ)
 	if err != nil {
 		t.Fatalf("resolve config: %v", err)
 	}
 	var report strings.Builder
-	writeConfigReport(&report, cfg, entries, path)
+	writeConfigReport(&report, cfg, entries, path, env)
 	for _, want := range []string{"DISCOVRY", "did you mean DISCOVERY?"} {
 		if !strings.Contains(report.String(), want) {
 			t.Fatalf("config report missing %q:\n%s", want, report.String())
 		}
+	}
+}
+
+func TestConfigReportRejectsInvalidEnvironment(t *testing.T) {
+	cfg, env, err := resolveAppConfig(nil, []string{"DISCOVERY=invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report strings.Builder
+	writeConfigReport(&report, cfg, nil, "process environment", env)
+	if !strings.Contains(report.String(), "INVALID") || strings.Contains(report.String(), "OK relay configuration is valid") {
+		t.Fatalf("invalid environment was reported as valid:\n%s", report.String())
+	}
+}
+
+func TestPreparedConfigRetainsPortalDefaults(t *testing.T) {
+	cfg, env, err := resolveAppConfig(nil, []string{"PORTAL_URL=https://localhost:8443", "IDENTITY_PATH=./state"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := prepareAppConfig(&cfg, env.Issues); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Relay.SNIPort != 8443 || cfg.Relay.SNIListenAddr != ":8443" || cfg.Relay.ACME.KeyDir != cfg.Relay.StateDir {
+		t.Fatalf("normalized defaults were discarded: %+v", cfg.Relay)
 	}
 }
