@@ -8,7 +8,7 @@ describe("PublicRelaysSection", () => {
     { relayURL: "https://relay-2.example", isCurrent: false },
   ];
   const releases = {
-    discovery: "v2.7.0",
+    discovery: { release_version: "v2.7.0" },
     versions: { "https://relay-1.example": "v2.7.3" },
   };
 
