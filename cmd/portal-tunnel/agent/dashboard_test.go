@@ -541,11 +541,13 @@ func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 
 func TestDashboardDeleteQuestionIgnoresOtherClicks(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
-	// The idle tunnel's first relay is not connected, so its Connect button can be clicked.
-	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()}, keyDown, keyDown, keyDown, keyDown)
+	// A running tunnel with a failed relay has a clickable Connect button.
+	status := testDashboardStatus()
+	status.Tunnels[0].Relays = []AgentRelayStatus{{RelayURL: "https://failed.example.net", State: sdk.RelayFailed}}
+	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: status})
 	asked, _ := press(model, keyF8)
-	if !strings.Contains(asked.View(), `Delete tunnel "idle"?`) {
-		t.Fatal("F8 should ask before deleting the idle tunnel")
+	if !strings.Contains(asked.View(), `Delete tunnel "web"?`) {
+		t.Fatal("F8 should ask before deleting the web tunnel")
 	}
 
 	clicked := make(map[agentDashboardAction]bool)
