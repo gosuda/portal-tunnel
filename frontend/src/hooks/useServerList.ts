@@ -11,6 +11,7 @@ import type {
   PublicStateResponse,
   ReputationSummary,
   ReputationVoteAction,
+  ReputationVoteRequest,
   ReputationVoteResponse,
 } from "@/types/api";
 
@@ -147,7 +148,7 @@ export function useServerList() {
     try {
       const response = await apiClient.post<ReputationVoteResponse>(
         RELAY_API_PATHS.public.reputationVote,
-        { hostname: key, vote }
+        { hostname: key, vote } satisfies ReputationVoteRequest
       );
       if (
         typeof response?.up === "number" &&
