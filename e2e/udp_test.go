@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestUDPPortRelay(t *testing.T) {
@@ -390,5 +392,46 @@ func TestUDPProxyCloseReleasesOriginSocket(t *testing.T) {
 			}
 			_ = rebound.Close()
 		})
+	}
+}
+
+func TestUDPOversizedPacketsDropWhole(t *testing.T) {
+	origin, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = origin.Close() })
+	port, _, _ := startUDPTestTunnel(t, "127.0.0.1", "127.0.0.1", origin.LocalAddr().String())
+	client, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	for _, size := range []int{types.MaxUDPPayloadSize + 1, 4096} {
+		if _, err := client.Write(bytes.Repeat([]byte("x"), size)); err != nil {
+			t.Fatalf("send oversized packet (%d): %v", size, err)
+		}
+	}
+	valid := bytes.Repeat([]byte("v"), types.MaxUDPPayloadSize)
+	if _, err := client.Write(valid); err != nil {
+		t.Fatal(err)
+	}
+	_ = origin.SetReadDeadline(time.Now().Add(10 * time.Second))
+	buf := make([]byte, 65535)
+	n, peer, err := origin.ReadFromUDP(buf)
+	if err != nil || !bytes.Equal(buf[:n], valid) {
+		t.Fatalf("origin received oversized prefix or lost valid packet: size=%d err=%v", n, err)
+	}
+	// Enforce the same whole-packet limit on local-origin responses.
+	if _, err := origin.WriteToUDP(bytes.Repeat([]byte("x"), 4096), peer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := origin.WriteToUDP(valid, peer); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, err = client.Read(buf)
+	if err != nil || !bytes.Equal(buf[:n], valid) {
+		t.Fatalf("client received oversized prefix or lost valid reply: size=%d err=%v", n, err)
 	}
 }

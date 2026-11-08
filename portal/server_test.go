@@ -399,72 +399,207 @@ func TestCertificateSignerMismatchRejectsStartup(t *testing.T) {
 }
 
 func TestRelayHTTPRedirectListener(t *testing.T) {
-	for _, hsts := range []bool{false, true} {
-		t.Run("hsts="+strconv.FormatBool(hsts), func(t *testing.T) {
-			redirectListener, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			redirectAddr := redirectListener.Addr().String()
-			_ = redirectListener.Close()
+	t.Run("enabled answers only with the canonical origin", func(t *testing.T) {
+		for _, hsts := range []bool{false, true} {
+			t.Run("hsts="+strconv.FormatBool(hsts), func(t *testing.T) {
+				redirectListener, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				redirectAddr := redirectListener.Addr().String()
+				_ = redirectListener.Close()
 
-			sniListener, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			sniAddr := sniListener.Addr().String()
-			_ = sniListener.Close()
+				sniListener, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				sniAddr := sniListener.Addr().String()
+				_ = sniListener.Close()
 
-			server, err := NewServer(ServerConfig{
-				PortalURL:     "https://localhost:4017/base/?configured=discarded#fragment",
-				StateDir:      t.TempDir(),
-				SNIListenAddr: sniAddr,
-				HTTPRedirect:  HTTPRedirectConfig{Enabled: true, Addr: redirectAddr, HSTS: hsts},
-			})
-			if err != nil {
-				t.Fatalf("create portal server: %v", err)
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			if err := server.Start(ctx, http.NotFoundHandler()); err != nil {
-				t.Fatalf("start portal server: %v", err)
-			}
-			t.Cleanup(func() {
+				server, err := NewServer(ServerConfig{
+					PortalURL:     "https://localhost:4017/base/?configured=discarded#fragment",
+					StateDir:      t.TempDir(),
+					SNIListenAddr: sniAddr,
+					HTTPRedirect:  HTTPRedirectConfig{Enabled: true, Addr: redirectAddr, HSTS: hsts},
+				})
+				if err != nil {
+					t.Fatalf("create portal server: %v", err)
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if err := server.Start(ctx, http.NotFoundHandler()); err != nil {
+					t.Fatalf("start portal server: %v", err)
+				}
+
+				client := &http.Client{
+					Transport:     &http.Transport{DisableKeepAlives: true},
+					CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+					Timeout:       5 * time.Second,
+				}
+				t.Cleanup(client.CloseIdleConnections)
+
+				for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodOptions} {
+					req, err := http.NewRequest(method, "http://"+redirectAddr+"//tenant/path?secret=discarded", nil)
+					if err != nil {
+						t.Fatalf("build %s request: %v", method, err)
+					}
+					if method == http.MethodOptions {
+						req.URL.Path = "*"
+						req.URL.RawQuery = ""
+					}
+					req.Host = "attacker.example"
+					req.Header.Set("X-Forwarded-Host", "other-attacker.example")
+					resp, err := client.Do(req)
+					if err != nil {
+						t.Fatalf("%s redirect request: %v", method, err)
+					}
+					_ = resp.Body.Close()
+					const wantLocation = "https://localhost:4017/base"
+					if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != wantLocation {
+						t.Fatalf("%s: status=%d Location=%q, want 301 to %s", method, resp.StatusCode, resp.Header.Get("Location"), wantLocation)
+					}
+					wantHSTS := ""
+					if hsts {
+						wantHSTS = "max-age=31536000"
+					}
+					if got := resp.Header.Get("Strict-Transport-Security"); got != wantHSTS {
+						t.Fatalf("%s: Strict-Transport-Security=%q, want %q", method, got, wantHSTS)
+					}
+				}
+
 				shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
 				defer c()
-				_ = server.Shutdown(shutdownCtx)
-				_ = server.Wait()
+				if err := server.Shutdown(shutdownCtx); err != nil {
+					t.Fatalf("shutdown: %v", err)
+				}
+				if err := server.Wait(); err != nil {
+					t.Fatalf("wait: %v", err)
+				}
+				released, err := net.Listen("tcp", redirectAddr)
+				if err != nil {
+					t.Fatalf("redirect port not released after shutdown: %v", err)
+				}
+				_ = released.Close()
 			})
+		}
+	})
 
-			client := &http.Client{
-				Transport:     &http.Transport{DisableKeepAlives: true},
-				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-				Timeout:       5 * time.Second,
-			}
-			t.Cleanup(client.CloseIdleConnections)
+	t.Run("disabled leaves the configured address unbound", func(t *testing.T) {
+		redirectListener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		redirectAddr := redirectListener.Addr().String()
+		_ = redirectListener.Close()
 
-			req, err := http.NewRequest(http.MethodGet, "http://"+redirectAddr+"//tenant/path?secret=discarded", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			req.Host = "attacker.example"
-			req.Header.Set("X-Forwarded-Host", "other-attacker.example")
-			resp, err := client.Do(req)
-			if err != nil {
-				t.Fatalf("redirect request: %v", err)
-			}
-			_ = resp.Body.Close()
-			const wantLocation = "https://localhost:4017/base"
-			if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != wantLocation {
-				t.Fatalf("status=%d Location=%q, want 301 to %s", resp.StatusCode, resp.Header.Get("Location"), wantLocation)
-			}
-			wantHSTS := ""
-			if hsts {
-				wantHSTS = "max-age=31536000"
-			}
-			if got := resp.Header.Get("Strict-Transport-Security"); got != wantHSTS {
-				t.Fatalf("Strict-Transport-Security=%q, want %q", got, wantHSTS)
-			}
+		sniListener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sniAddr := sniListener.Addr().String()
+		_ = sniListener.Close()
+
+		server, err := NewServer(ServerConfig{
+			PortalURL:     "https://localhost:4017",
+			StateDir:      t.TempDir(),
+			SNIListenAddr: sniAddr,
+			HTTPRedirect:  HTTPRedirectConfig{Addr: redirectAddr},
 		})
-	}
+		if err != nil {
+			t.Fatalf("create portal server: %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		if err := server.Start(ctx, http.NotFoundHandler()); err != nil {
+			t.Fatalf("start portal server: %v", err)
+		}
+		t.Cleanup(func() {
+			shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			defer c()
+			_ = server.Shutdown(shutdownCtx)
+			_ = server.Wait()
+		})
+
+		listener, err := net.Listen("tcp", redirectAddr)
+		if err != nil {
+			t.Fatalf("disabled redirect must not bind the configured address %s: %v", redirectAddr, err)
+		}
+		_ = listener.Close()
+	})
+
+	t.Run("bind failure cleans up and retries", func(t *testing.T) {
+		occupied, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("occupy redirect address: %v", err)
+		}
+		redirectAddr := occupied.Addr().String()
+
+		sniListener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			_ = occupied.Close()
+			t.Fatal(err)
+		}
+		sniAddr := sniListener.Addr().String()
+		_ = sniListener.Close()
+
+		cfg := ServerConfig{
+			PortalURL:     "https://localhost:4017",
+			StateDir:      t.TempDir(),
+			SNIListenAddr: sniAddr,
+			HTTPRedirect:  HTTPRedirectConfig{Enabled: true, Addr: redirectAddr},
+		}
+		server, err := NewServer(cfg)
+		if err != nil {
+			_ = occupied.Close()
+			t.Fatalf("create portal server: %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		if startErr := server.Start(ctx, http.NotFoundHandler()); startErr == nil {
+			shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			defer c()
+			_ = server.Shutdown(shutdownCtx)
+			_ = server.Wait()
+			_ = occupied.Close()
+			t.Fatal("Start() succeeded with the redirect address already occupied")
+		}
+		if err := occupied.Close(); err != nil {
+			t.Fatalf("release occupied redirect address: %v", err)
+		}
+		// A failed Start must not leak the SNI listener it had already bound.
+		rebound, err := net.Listen("tcp", sniAddr)
+		if err != nil {
+			t.Fatalf("failed Start leaked the SNI listener: %v", err)
+		}
+		_ = rebound.Close()
+
+		retry, err := NewServer(cfg)
+		if err != nil {
+			t.Fatalf("create retry portal server: %v", err)
+		}
+		if err := retry.Start(ctx, http.NotFoundHandler()); err != nil {
+			t.Fatalf("retry Start() after releasing the redirect address: %v", err)
+		}
+		defer func() {
+			shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			defer c()
+			_ = retry.Shutdown(shutdownCtx)
+			_ = retry.Wait()
+		}()
+
+		client := &http.Client{
+			Transport:     &http.Transport{DisableKeepAlives: true},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			Timeout:       5 * time.Second,
+		}
+		t.Cleanup(client.CloseIdleConnections)
+		resp, err := client.Get("http://" + redirectAddr + "/ignored")
+		if err != nil {
+			t.Fatalf("GET retry redirect: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != "https://localhost:4017" {
+			t.Fatalf("retry: status=%d Location=%q, want 301 to the canonical origin", resp.StatusCode, resp.Header.Get("Location"))
+		}
+	})
 }
