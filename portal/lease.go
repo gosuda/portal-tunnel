@@ -1203,19 +1203,21 @@ func (r *leaseRegistry) stats(now time.Time) (activeLeases, activeUDPFlows int64
 }
 
 func (r *leaseRegistry) deleteRecord(i int) {
-	key := r.records[i].ServiceKey()
-	if record := r.records[i]; record != nil {
+	record := r.records[i]
+	if record != nil {
 		r.cache.Detach(record.cacheLease())
-	}
-	if record := r.records[i]; record != nil && r.overlay != nil {
-		r.overlay.ForgetLease(record.id)
+		if r.overlay != nil {
+			r.overlay.ForgetLease(record.id)
+		}
 	}
 	last := len(r.records) - 1
 	r.records[i] = r.records[last]
 	r.records[last] = nil
 	r.records = r.records[:last]
-	if r.recordByKey(key, time.Time{}) == nil {
-		r.bps.ResetIdentityLimiter(key)
+	if record != nil && record.reverse != nil {
+		if key := record.ServiceKey(); r.recordByKey(key, time.Time{}) == nil {
+			r.bps.ResetIdentityLimiter(key)
+		}
 	}
 }
 
