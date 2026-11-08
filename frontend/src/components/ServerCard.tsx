@@ -3,9 +3,12 @@ import { Link } from "react-router-dom";
 import clsx from "clsx";
 import {
   BadgeDollarSign,
+  ChevronLeft,
+  ChevronRight,
   Info,
   Lock,
   MessageSquare,
+  RotateCw,
   Terminal,
   ThumbsDown,
   ThumbsUp,
@@ -135,37 +138,54 @@ export function ServerCard({
 
   const cardBody = (
     <article className="relative w-full min-w-0">
-      {/* 1. Browser Window Frame */}
-      <div className="relative flex flex-col w-full overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xs transition-all duration-200 group-hover:border-border group-hover:shadow-md">
-        {/* Browser Header Bar */}
-        <div className="flex h-8 w-full items-center justify-between gap-2 border-b border-border/70 bg-muted/40 px-3 py-1.5 backdrop-blur-xs select-none">
-          {/* Traffic light window controls */}
-          <div className="flex items-center gap-1.5 shrink-0" aria-hidden="true">
-            <span className="size-2 rounded-full bg-border transition-colors duration-150 group-hover:bg-red-500/80" />
-            <span className="size-2 rounded-full bg-border transition-colors duration-150 group-hover:bg-amber-500/80" />
-            <span className="size-2 rounded-full bg-border transition-colors duration-150 group-hover:bg-emerald-500/80" />
+      {/* 1. macOS Safari Window Frame */}
+      <div className="relative flex flex-col w-full overflow-hidden rounded-2xl border border-black/10 dark:border-white/10 bg-card shadow-[0_10px_30px_-5px_rgba(0,0,0,0.08),0_4px_12px_rgba(0,0,0,0.03)] dark:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.06)] transition-all duration-300 ease-out group-hover:-translate-y-1 group-hover:shadow-[0_20px_40px_-10px_rgba(0,0,0,0.15)] dark:group-hover:shadow-[0_28px_56px_-12px_rgba(0,0,0,0.75)]">
+        {/* Safari Toolbar Header */}
+        <div className="relative flex h-9.5 w-full items-center justify-between gap-2.5 border-b border-black/[0.08] dark:border-white/[0.08] bg-gradient-to-b from-neutral-100/95 via-neutral-150/90 to-neutral-200/85 dark:from-neutral-800/95 dark:via-neutral-850/90 dark:to-neutral-900/90 px-3.5 py-1.5 backdrop-blur-md select-none">
+          {/* Top highlight specular rim (1px inner bevel) */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/50 dark:bg-white/15" />
+
+          {/* Left section: macOS Traffic Lights + Chevrons */}
+          <div className="flex items-center gap-3 shrink-0" aria-hidden="true">
+            {/* Traffic lights */}
+            <div className="flex items-center gap-2">
+              <span className="size-3 rounded-full bg-[#FF5F56] border border-[#E0443E]/70 shadow-[inset_0_1px_1px_rgba(255,255,255,0.45)]" />
+              <span className="size-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]/70 shadow-[inset_0_1px_1px_rgba(255,255,255,0.45)]" />
+              <span className="size-3 rounded-full bg-[#27C93F] border border-[#1AAB29]/70 shadow-[inset_0_1px_1px_rgba(255,255,255,0.45)]" />
+            </div>
+
+            {/* Navigation Chevrons (< >) */}
+            <div className="hidden sm:flex items-center gap-1 text-muted-foreground/35 pl-0.5">
+              <ChevronLeft className="size-3.5" />
+              <ChevronRight className="size-3.5" />
+            </div>
           </div>
 
-          {/* URL Address Bar */}
+          {/* Center section: Safari Pill Omnibar */}
           <div
-            className="flex min-w-0 flex-1 max-w-[68%] items-center justify-center gap-1.5 rounded-md border border-border/60 bg-background/80 px-2 py-0.5 text-[11px] text-muted-foreground shadow-2xs transition-colors group-hover:border-border"
+            className="flex min-w-0 flex-1 max-w-[56%] sm:max-w-[62%] items-center justify-between gap-1.5 rounded-lg border border-black/[0.08] dark:border-white/[0.1] bg-white/80 dark:bg-black/35 px-2.5 py-1 text-[11px] text-muted-foreground shadow-[inset_0_1px_2px_rgba(0,0,0,0.04)] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] transition-colors group-hover:border-black/15 dark:group-hover:border-white/20"
             title={displayUrl}
           >
-            {isTransportService ? (
-              <Terminal className="size-2.5 shrink-0 text-muted-foreground/80" />
-            ) : (
-              <Lock className="size-2.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <div className="flex min-w-0 items-center gap-1.5 flex-1 truncate">
+              {isTransportService ? (
+                <Terminal className="size-2.5 shrink-0 text-muted-foreground/70" />
+              ) : (
+                <Lock className="size-2.5 shrink-0 text-muted-foreground/60" />
+              )}
+              <span className="truncate text-[11px] font-medium tracking-tight text-foreground/85">
+                {displayUrl}
+              </span>
+            </div>
+            {!isTransportService && (
+              <RotateCw className="size-2.5 shrink-0 text-muted-foreground/35 hidden sm:block" />
             )}
-            <span className="truncate font-mono text-[11px] text-foreground/80">
-              {displayUrl}
-            </span>
           </div>
 
-          {/* Right status (LIVE) */}
-          <div className="flex items-center justify-end shrink-0 min-w-5">
+          {/* Right section: Status & Controls */}
+          <div className="flex items-center justify-end shrink-0 min-w-7">
             {online && !isTransportService ? (
               <span
-                className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-emerald-600 dark:text-emerald-400"
+                className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold tracking-wider text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
                 title="Live"
               >
                 <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
