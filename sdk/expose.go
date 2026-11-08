@@ -188,6 +188,9 @@ type Option func(*options)
 
 // WithReplicas joins independent HTTP leases sharing this service's identity key.
 // Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with it.
+// Handler state is not shared: embedders must provide their own service-wide
+// login and payment replay guarantees. The built-in appauth gate and the CLI's
+// Nano payment gate do not support this topology.
 func WithReplicas() Option {
 	return func(opts *options) { opts.Replica = true }
 }

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	nanoscheme "github.com/gosuda/x402-facilitator/scheme/nano"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
@@ -36,6 +37,8 @@ var (
 	errStripRequestHeaderXForwardedProto       = errors.New(`strip request header "X-Forwarded-Proto" is not supported: RunHTTP always overwrites it with the trusted https value`)
 	errCasperPaymentsRequireAnAsset            = errors.New("casper payments require an asset")
 	errReplicaRequiresHTTP                     = errors.New("replicas require HTTP without dedicated TCP/UDP ports, relay cache, or overlay")
+	errReplicaApplicationAuth                  = errors.New("replicas cannot use built-in application auth: login state and alias session lifetimes are not shared between replicas")
+	errReplicaNanoPayments                     = errors.New("replicas cannot use Nano payments: payment proof consumption is local to each gateway")
 )
 
 // Spec is the resolved description of one tunnel that the runtime is built
@@ -105,6 +108,9 @@ func (spec Spec) Validate() error {
 		if spec.HTTP.Cache != nil {
 			return errReplicaRequiresHTTP
 		}
+		if spec.HTTP.Auth != nil {
+			return errReplicaApplicationAuth
+		}
 	}
 	target := strings.TrimSpace(spec.Transport.Target)
 	if spec.HTTP == nil {
@@ -140,6 +146,9 @@ func (spec Spec) Validate() error {
 		}
 	}
 	for _, route := range httpConfig.Routes {
+		if spec.Transport.Replica && strings.TrimSpace(route.Amount) != "" && nanoscheme.IsNanoNetwork(strings.ToLower(httpConfig.Payment.Network)) {
+			return errReplicaNanoPayments
+		}
 		prefix := strings.TrimSpace(route.Prefix)
 		if prefix == "" || strings.TrimSpace(route.Upstream) == "" {
 			return errHTTPRoutesRequirePrefixAndUpstream

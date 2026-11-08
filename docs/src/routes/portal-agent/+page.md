@@ -465,7 +465,7 @@ Common fields:
 | `identity_json` | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
 | `udp`, `udp_addr` | UDP transport settings |
 | `tcp` | Dedicated raw TCP port setting |
-| `replica` | Join concurrent HTTP leases sharing this service identity key and URL; defaults to false; cannot combine with dedicated TCP/UDP ports, relay cache, or overlay |
+| `replica` | Join concurrent HTTP leases sharing this service identity key and URL; defaults to false; cannot combine with dedicated TCP/UDP ports, relay cache, overlay, built-in application auth, or Nano payments |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | Public relay metadata |
 | `auth` | Application login provider: `siwe`, `credential`, `oidc`, `saml`, or `email` |

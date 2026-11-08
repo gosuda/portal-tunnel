@@ -423,7 +423,18 @@ downgrade between domain lookup and challenge issuance cannot silently switch
 the request to exclusive registration.
 
 Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with replica
-mode. This is connection distribution within one relay, not cross-relay failover.
+mode. The CLI and agent also reject built-in application authentication and
+paid Nano routes with replica mode. SIWE challenges and email links are bound
+to one authenticator, alias session lifetimes follow each exposure's own hold,
+and Nano payment proofs are consumed only within one gateway process. Identical
+identity keys and configuration do not share that state across replicas.
+
+SDK embedders own handler compatibility: `WithReplicas()` does not synchronize
+application sessions or payment consumption. Do not compose it with
+`sdk/appauth` or independent Nano payment gates. An upstream application must
+provide its own service-wide session and replay protection.
+
+This is connection distribution within one relay, not cross-relay failover.
 Ready streams indicate tunnel availability, not application health. If no replica
 is ready, the incoming connection waits for a refilled stream on one live
 replica until the claim deadline, then fails. Connections already carrying traffic

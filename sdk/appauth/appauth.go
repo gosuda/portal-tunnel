@@ -571,6 +571,8 @@ func isUnsafeRedirectRune(r rune) bool {
 // provider. A gate built from the same id, including its TokenSecret, and the same
 // provider settings accepts the sessions of an earlier gate; the allowlist is
 // checked again on every request.
+// This gate does not support sdk.WithReplicas: SIWE challenges and email links
+// are instance-bound, and alias session lifetime follows each exposure's hold.
 func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error) {
 	if next == nil {
 		return nil, errApplicationAuthHandlerIsRequired

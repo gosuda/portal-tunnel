@@ -270,9 +270,14 @@ credentials, lifetime, and reverse pool. Exact lease lookups authenticate renew,
 unregister, signing, reverse admission, and activity updates. Exclusive registration
 replaces all records of that identity; a replica cannot join a live exclusive lease
 or retained cache entry. Replica requests reject dedicated TCP/UDP ports, relay
-cache, and overlay. One identity holds at most 16 live replicas; further
-replica registrations are refused as rate limited. Identity policy and bandwidth credit survive until the last
-lease is removed. Registration of a replica does not suspend its siblings.
+cache, and overlay.
+The CLI and agent also reject the built-in application auth gate and paid Nano
+routes for replicas. Their login challenges, email links, alias session epochs,
+and payment consumption cannot safely follow connection rotation across
+independent clients. SDK embedders own the compatibility of their HTTP handlers.
+One identity holds at most 16 live replicas; further replica registrations are
+refused as rate limited. Identity policy and bandwidth credit survive until the
+last lease is removed. Registration of a replica does not suspend its siblings.
 
 Incoming TLS connections rotate among routable, unexpired replicas with ready
 reverse streams. The registry serializes selection, comparing each lease's last
