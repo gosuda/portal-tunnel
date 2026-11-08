@@ -270,7 +270,9 @@ with either approval mode, so a relay on `auto` serves new tunnels from your
 networks at once, including every identity an embedder creates, and refuses the
 rest. Empty, the default, accepts every network, and a value that names no
 network, such as `,`, stops the relay at startup. The relay reads the list at
-startup.
+startup and prints it as `tunnel_source_cidrs` in its `starting relay server`
+log line, so an empty value there means a misspelled or missing variable left
+the relay open.
 
 - Write each entry as a CIDR, such as `/32` for one IPv4 address and `/128` for
   one IPv6 address.
