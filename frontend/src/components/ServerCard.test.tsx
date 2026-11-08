@@ -242,7 +242,7 @@ describe("ServerCard comments interaction", () => {
     expect(openLink.getAttribute("href")).toBe("https://cool.relay.example.com/");
   });
 
-  it("renders website URL in browser style address bar", () => {
+  it("renders website URL in thumbnail chip", () => {
     render(
       <MemoryRouter>
         <ServerCard
