@@ -115,7 +115,7 @@ func TestTunnelSourceMatchesResolvedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed, err := NewIngress(true, "172.31.240.2/32", "192.0.2.0/24, ::ffff:203.0.113.7/128, 2001:db8::/32")
+	listed, err := NewIngress(true, "172.31.240.2/32", "192.0.2.0/24, ::ffff:203.0.113.7/128, 2001:db8::/32, fe80::/10")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +127,7 @@ func TestTunnelSourceMatchesResolvedAddress(t *testing.T) {
 		{peer: "[::ffff:192.0.2.9]:1234", want: true},
 		{peer: "203.0.113.7:1234", want: true},
 		{peer: "[2001:db8::9]:1234", want: true},
+		{peer: "[fe80::1%eth0]:1234", want: true},
 		{peer: "172.31.240.2:1234", forwarded: "192.0.2.9", want: true},
 		{peer: "172.31.240.2:1234", forwarded: "198.51.100.7", want: false},
 		{peer: "172.31.240.3:1234", forwarded: "192.0.2.9", want: false},

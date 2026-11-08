@@ -39,13 +39,14 @@ func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs, rawTunnelSourceCID
 }
 
 // allowsTunnelFrom reports whether source may register or renew a tunnel. With
-// a list set, a source that could not be resolved is refused.
+// a list set, a source that could not be resolved is refused. An IPv6 zone is
+// dropped first, because a prefix never contains a zoned address.
 func (i *Ingress) allowsTunnelFrom(source netip.Addr) bool {
 	if i == nil || len(i.tunnelSourceCIDRs) == 0 {
 		return true
 	}
 	return slices.ContainsFunc(i.tunnelSourceCIDRs, func(network netip.Prefix) bool {
-		return network.Contains(source)
+		return network.Contains(source.WithZone(""))
 	})
 }
 
