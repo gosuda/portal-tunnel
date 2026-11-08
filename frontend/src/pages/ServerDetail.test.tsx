@@ -27,7 +27,8 @@ const SERVER_STATE = {
   thumbnail: "",
   owner: "",
   online: true,
-  serverUrl: "https://svc.example.com/",
+  dns: "svc.example.com",
+  link: "https://svc.example.com/",
 };
 
 function renderDetail(reputation?: ReputationSummary) {
@@ -97,5 +98,16 @@ describe("ServerDetail reputation gate", () => {
     renderDetail(FLAGGED);
 
     expect(screen.getByRole("button", { name: /open anyway/i })).toBeTruthy();
+  });
+  it("opens the card's link after the transition", () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    renderDetail();
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(assign).toHaveBeenCalledWith("https://svc.example.com/");
   });
 });

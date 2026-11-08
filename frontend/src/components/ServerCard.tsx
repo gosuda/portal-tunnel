@@ -320,19 +320,7 @@ export function ServerCard({
       {isNavigable && (
         <Link
           to={server.link || "#"}
-          state={{
-            id: server.id,
-            name: server.name,
-            description: server.description,
-            tags: server.tags,
-            thumbnail: server.thumbnail,
-            owner: server.owner,
-            online: server.online,
-            serverUrl: server.link,
-            paymentEnabled: server.paymentEnabled,
-            paymentLabel: server.paymentLabel,
-            reputation: server.reputation,
-          }}
+          state={server}
           aria-label={`Open ${name}`}
           className="absolute inset-0 z-20 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         />
