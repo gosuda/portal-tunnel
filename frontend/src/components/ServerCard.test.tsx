@@ -265,6 +265,36 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByText("cool.relay.example.com/dashboard")).toBeTruthy();
   });
 
+  it("keeps description overlay hidden on transport service hover until info button is toggled", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "tcp-srv",
+            name: "TCP Srv",
+            description: "Dedicated TCP game server",
+            tags: ["game"],
+            thumbnail: "",
+            owner: "admin",
+            online: true,
+            dns: "tcp.relay.example.com",
+            link: "",
+            tcpAddr: "tcp.relay.example.com:40000",
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    const infoButton = screen.getByRole("button", { name: "Show description" });
+    expect(infoButton.getAttribute("aria-expanded")).toBe("false");
+
+    // Click Info to reveal description
+    fireEvent.click(infoButton);
+    expect(screen.getByRole("button", { name: "Hide description" })).toBeTruthy();
+    expect(screen.getByText("Dedicated TCP game server")).toBeTruthy();
+    expect(screen.getByText("tcp.relay.example.com:40000")).toBeTruthy();
+  });
+
   it("toggles description disclosure via touch-accessible Info button without navigating", () => {
     renderCardWithComments();
     const infoButton = screen.getByRole("button", { name: "Show description" });

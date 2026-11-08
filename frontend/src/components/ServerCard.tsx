@@ -250,9 +250,11 @@ export function ServerCard({
               }
               className={clsx(
                 "absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 transition-opacity duration-200",
-                isTransportService ? "pb-16" : "",
+                isTransportService ? (endpoints.length > 1 ? "pb-24" : "pb-18") : "",
                 showDetails
                   ? "pointer-events-auto opacity-100 cursor-pointer"
+                  : isTransportService
+                  ? "pointer-events-none opacity-0"
                   : "pointer-events-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
               )}
             >
@@ -288,7 +290,7 @@ export function ServerCard({
 
           {/* Raw transport endpoints (TCP / UDP) */}
           {isTransportService && (
-            <div className="absolute inset-x-2.5 bottom-2.5 space-y-1 rounded-lg border border-white/10 bg-black/80 p-2 backdrop-blur-md">
+            <div className="pointer-events-auto absolute inset-x-2.5 bottom-2.5 z-30 space-y-1 rounded-lg border border-white/10 bg-black/85 p-2 backdrop-blur-md shadow-xs">
               {endpoints.map((endpoint) => (
                 <div key={endpoint.protocol} className="flex min-w-0 items-center gap-2">
                   <code
@@ -300,7 +302,7 @@ export function ServerCard({
                   <button
                     type="button"
                     onClick={() => void copyEndpoint(endpoint.protocol, endpoint.address)}
-                    className="pointer-events-auto relative z-30 shrink-0 rounded bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    className="pointer-events-auto relative z-30 shrink-0 rounded bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary cursor-pointer active:scale-95"
                   >
                     {copiedProtocol === endpoint.protocol ? "Copied!" : `Copy ${endpoint.protocol}`}
                   </button>
