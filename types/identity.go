@@ -224,8 +224,9 @@ type DeleteCommentRequest struct {
 	ID       string `json:"id"`
 }
 
-type VoteCommentRequest struct {
+// VoteRequest targets an app, or one of its comments when ID is required by the route.
+type VoteRequest struct {
 	Hostname string `json:"hostname"`
-	ID       string `json:"id"`
+	ID       string `json:"id,omitempty"`
 	Vote     string `json:"vote"`
 }

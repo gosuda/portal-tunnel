@@ -1,10 +1,9 @@
 package policy
 
-// Service reputation: relay-local, stable-identity-keyed up/down votes.
+// Service reputation: relay-local app votes, comments, and comment votes.
 //
 // The relay's lease registry owns service lifecycle. This file owns only the
-// bounded vote ledger, the voter cookie secret, and the per-source vote
-// budget; the vote wire path and HTTP handling stay with the relay API.
+// bounded feedback data and voter identities; HTTP handling stays with the API.
 
 import (
 	"cmp"
@@ -14,10 +13,13 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"net/netip"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +28,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-var errReputationStoreRequiresStatePath = errors.New("reputation store requires a state path")
+var (
+	errReputationStoreRequiresStatePath = errors.New("reputation store requires a state path")
+	errReputationStoredInvalid          = errors.New("invalid stored app votes")
+)
 
 // Vote values are the relay-local wire contract mirrored by the frontend.
 const (
@@ -45,32 +50,41 @@ const (
 	reputationMaxIdentities = 4096
 )
 
-// persistedReputation is the reputation.json schema. All collections are
-// bounded by the reputationMax* constants.
+// persistedReputation is the reputation.json schema. A non-nil Comments also
+// records that legacy comments.json has been imported, including an empty file.
 type persistedReputation struct {
 	VoterSecret []byte                       `json:"voter_secret"`
 	Identities  map[string]map[string]string `json:"identities,omitempty"`
+	Comments    *persistedComments           `json:"comments"`
+}
+
+// VoteSummary is the aggregate of one app's or comment's votes.
+type VoteSummary struct {
+	Up         int    `json:"up"`
+	Down       int    `json:"down"`
+	Total      int    `json:"total"`
+	ViewerVote string `json:"viewer_vote"`
 }
 
 // ReputationSummary is one directory row for a live hostname.
 type ReputationSummary struct {
-	Hostname   string `json:"hostname"`
-	Up         int    `json:"up"`
-	Down       int    `json:"down"`
-	Total      int    `json:"total"`
-	ViewerVote string `json:"viewer_vote"` // "" | "up" | "down"
+	Hostname string `json:"hostname"`
+	VoteSummary
 }
 
 var (
 	ErrReputationUnknownHostname = errors.New("hostname is not in the public directory")
 	ErrReputationCapacity        = errors.New("reputation capacity exhausted")
+	ErrVoteChoice                = errors.New("vote must be 'up', 'down', or 'clear'")
 )
 
-// ReputationStore owns the bounded vote ledger, the voter cookie secret, and
-// the per-source vote budget.
+// ReputationStore owns app votes, comments and their votes, voter identities,
+// and admission budgets under one lock and in one state file.
 type ReputationStore struct {
-	path    string
-	limiter *SourceLimiter
+	path               string
+	limiter            *SourceLimiter
+	commentPostLimiter *SourceLimiter
+	commentVoteLimiter *SourceLimiter
 
 	mu     sync.Mutex
 	state  persistedReputation
@@ -82,7 +96,12 @@ func NewReputationStore(path string) (*ReputationStore, error) {
 	if path == "" {
 		return nil, errReputationStoreRequiresStatePath
 	}
-	store := &ReputationStore{path: path}
+	store := &ReputationStore{
+		path:               path,
+		limiter:            NewSourceLimiter(10, 20, 120, 40),
+		commentPostLimiter: NewSourceLimiter(3, 3, 30, 10),
+		commentVoteLimiter: NewSourceLimiter(10, 20, 120, 40),
+	}
 	_, err := utils.ReadJSONFileIfExists(path, &store.state)
 	if err != nil {
 		return nil, fmt.Errorf("load reputation state: %w", err)
@@ -90,85 +109,159 @@ func NewReputationStore(path string) (*ReputationStore, error) {
 	if store.state.Identities == nil {
 		store.state.Identities = make(map[string]map[string]string)
 	}
+	if len(store.state.Identities) > reputationMaxIdentities {
+		return nil, ErrReputationCapacity
+	}
+	for identity, votes := range store.state.Identities {
+		if strings.TrimSpace(identity) == "" || len(votes) == 0 {
+			return nil, errReputationStoredInvalid
+		}
+		if len(votes) > reputationMaxVoters {
+			return nil, ErrReputationCapacity
+		}
+		for voter, vote := range votes {
+			if strings.TrimSpace(voter) == "" || (vote != VoteUp && vote != VoteDown) {
+				return nil, errReputationStoredInvalid
+			}
+		}
+	}
+	needsWrite := store.state.Comments == nil || len(store.state.VoterSecret) == 0
+	if store.state.Comments == nil {
+		// Once imported, the comments object remains present even when empty.
+		// The old file is never read again, so deleted comments cannot reappear.
+		store.state.Comments = &persistedComments{}
+		var raw json.RawMessage
+		if exists, err := utils.ReadJSONFileIfExists(filepath.Join(filepath.Dir(path), "comments.json"), &raw); err != nil {
+			return nil, fmt.Errorf("load legacy comments: %w", err)
+		} else if exists && len(raw) > 0 {
+			var comments persistedComments
+			if err := json.Unmarshal(raw, &comments); err == nil && comments.Threads != nil {
+				store.state.Comments = &comments
+			} else if err := json.Unmarshal(raw, &store.state.Comments.Threads); err != nil {
+				return nil, fmt.Errorf("load legacy comments: %w", err)
+			}
+		}
+	}
+	if store.state.Comments.Threads == nil {
+		store.state.Comments.Threads = make(map[string][]storedComment)
+	}
+	if store.state.Comments.Votes == nil {
+		store.state.Comments.Votes = make(map[string]map[string]string)
+	}
+	if store.state.Comments.Authors == nil {
+		store.state.Comments.Authors = make(map[string]string)
+	}
+	if err := store.validateComments(); err != nil {
+		return nil, err
+	}
 	if len(store.state.VoterSecret) == 0 {
 		store.state.VoterSecret = make([]byte, reputationVoterIDBytes)
 		if _, err := rand.Read(store.state.VoterSecret); err != nil {
 			return nil, fmt.Errorf("generate reputation voter secret: %w", err)
 		}
+	}
+	if needsWrite {
 		if err := utils.WriteJSONFile(store.path, store.state, 0o600); err != nil {
-			return nil, fmt.Errorf("persist reputation voter secret: %w", err)
+			return nil, fmt.Errorf("persist reputation state: %w", err)
 		}
 	}
 	store.secret = store.state.VoterSecret
-	store.limiter = NewSourceLimiter(10, 20, 120, 40)
 	return store, nil
 }
 
 // AllowVote spends the per-source vote budget before the request body is
 // decoded and returns the retry guidance when the source is exhausted.
-func (s *ReputationStore) AllowVote(source netip.Addr) time.Duration {
-	retry, _ := s.limiter.Allow(source, 1)
+func (s *ReputationStore) AllowVote(source netip.Addr, comment bool) time.Duration {
+	limiter := s.limiter
+	if comment {
+		limiter = s.commentVoteLimiter
+	}
+	retry, _ := limiter.Allow(source, 1)
 	return retry
 }
 
-// CastVote resolves a signed cookie or a stable source-bound voter identity,
-// applies the vote, and persists atomically under one lock. The returned
-// cookie is reissued for requests without a valid cookie, but never creates
-// another voter for the same source. Identity comes from public leases.
-func (s *ReputationStore) CastVote(hostname, identity, vote, cookieID string, source netip.Addr) (ReputationSummary, string, error) {
+// Vote changes an app vote when commentID is empty, or a vote on that app's
+// comment otherwise. Target checks and admission policy precede one shared
+// mutation and atomic commit. It does not build comment-list responses.
+func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, source netip.Addr) (VoteSummary, string, error) {
+	vote = strings.TrimSpace(vote)
+	if vote != VoteUp && vote != VoteDown && vote != VoteClear {
+		return VoteSummary{}, "", ErrVoteChoice
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if identity == "" {
-		return ReputationSummary{}, "", ErrReputationUnknownHostname
+		return VoteSummary{}, "", ErrReputationUnknownHostname
+	}
+	ledger, key := s.state.Identities, identity
+	capacityErr := ErrReputationCapacity
+	if commentID != "" {
+		if !slices.ContainsFunc(s.state.Comments.Threads[identity], func(c storedComment) bool { return c.ID == commentID }) {
+			return VoteSummary{}, "", ErrCommentNotFound
+		}
+		ledger, key = s.state.Comments.Votes, commentID
+		capacityErr = ErrCommentCapacity
 	}
 	hash, minted, err := s.resolveVoterLocked(cookieID, source)
 	if err != nil {
-		return ReputationSummary{}, "", err
+		return VoteSummary{}, "", err
 	}
-
-	previous := s.state.Identities[identity]
-	if (vote == VoteClear && previous[hash] == "") || previous[hash] == vote {
-		return s.summarize(hostname, previous, hash), minted, nil
+	previous := ledger[key]
+	if previous[hash] == vote || (vote == VoteClear && previous[hash] == "") {
+		return summarizeVotes(previous, hash), minted, nil
 	}
-	if vote != VoteClear && previous == nil && len(s.state.Identities) >= reputationMaxIdentities {
-		return ReputationSummary{}, "", ErrReputationCapacity
-	}
-	if _, exists := previous[hash]; vote != VoteClear && !exists {
+	if _, exists := previous[hash]; !exists && vote != VoteClear {
 		if len(previous) >= reputationMaxVoters {
-			return ReputationSummary{}, "", ErrReputationCapacity
+			return VoteSummary{}, "", capacityErr
 		}
-		// Cookie-free creation still spends the source and shared mint budget.
-		// Reissuing an existing voter's cookie must not pay this charge again.
-		if minted != "" {
-			if retry, _ := s.limiter.Allow(source, 10); retry > 0 {
-				return ReputationSummary{}, "", ErrReputationCapacity
+		if commentID == "" {
+			if previous == nil && len(ledger) >= reputationMaxIdentities {
+				return VoteSummary{}, "", ErrReputationCapacity
+			}
+			// Only a new cookieless app voter pays the extra mint budget.
+			if minted != "" {
+				if retry, _ := s.limiter.Allow(source, 10); retry > 0 {
+					return VoteSummary{}, "", ErrReputationCapacity
+				}
+			}
+		} else {
+			total := 0
+			for _, votes := range ledger {
+				total += len(votes)
+			}
+			if total >= commentsMaxVotes {
+				return VoteSummary{}, "", ErrCommentCapacity
 			}
 		}
 	}
-	nextIdentities := maps.Clone(s.state.Identities)
+	nextLedger := maps.Clone(ledger)
 	votes := maps.Clone(previous)
 	if votes == nil {
 		votes = make(map[string]string)
 	}
 	if vote == VoteClear {
 		delete(votes, hash)
-		if len(votes) == 0 {
-			delete(nextIdentities, identity)
-		} else {
-			nextIdentities[identity] = votes
-		}
 	} else {
 		votes[hash] = vote
-		nextIdentities[identity] = votes
+	}
+	if len(votes) == 0 {
+		delete(nextLedger, key)
+	} else {
+		nextLedger[key] = votes
 	}
 	nextState := s.state
-	nextState.Identities = nextIdentities
-
+	if commentID == "" {
+		nextState.Identities = nextLedger
+	} else {
+		comments := *s.state.Comments
+		comments.Votes = nextLedger
+		nextState.Comments = &comments
+	}
 	if err := utils.WriteJSONFile(s.path, nextState, 0o600); err != nil {
-		return ReputationSummary{}, "", fmt.Errorf("persist reputation: %w", err)
+		return VoteSummary{}, "", fmt.Errorf("persist vote: %w", err)
 	}
 	s.state = nextState
-	return s.summarize(hostname, votes, hash), minted, nil
+	return summarizeVotes(votes, hash), minted, nil
 }
 
 func (s *ReputationStore) Summaries(viewerHash string, leases []types.PolicyLease) []ReputationSummary {
@@ -177,7 +270,7 @@ func (s *ReputationStore) Summaries(viewerHash string, leases []types.PolicyLeas
 	rows := make([]ReputationSummary, 0, len(leases))
 	for _, lease := range leases {
 		hostname := cmp.Or(lease.CanonicalHostname, lease.Hostname)
-		rows = append(rows, s.summarize(hostname, s.state.Identities[lease.IdentityKey], viewerHash))
+		rows = append(rows, ReputationSummary{Hostname: hostname, VoteSummary: summarizeVotes(s.state.Identities[lease.IdentityKey], viewerHash)})
 	}
 	return rows
 }
@@ -194,14 +287,6 @@ func (s *ReputationStore) ViewerHashFor(cookieID string) string {
 		return ""
 	}
 	return hash
-}
-
-// ResolveVoter resolves a cookie or derives a stable source-bound voter identity,
-// returning the voter digest and any newly minted cookie string.
-func (s *ReputationStore) ResolveVoter(cookieID string, source netip.Addr) (hash, minted string, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.resolveVoterLocked(cookieID, source)
 }
 
 // resolveVoterLocked returns the digest of a verified cookie or derives one
@@ -244,26 +329,16 @@ func (s *ReputationStore) voterMAC(id []byte) []byte {
 	return mac.Sum(nil)
 }
 
-// summarize projects one hostname's row, zero-count when rec is nil so a
-// newly live hostname without a record still renders with vote controls.
-func (s *ReputationStore) summarize(hostname string, votes map[string]string, viewerHash string) ReputationSummary {
-	if votes == nil {
-		return ReputationSummary{Hostname: hostname}
-	}
-	up, down := 0, 0
+func summarizeVotes(votes map[string]string, viewerHash string) VoteSummary {
+	summary := VoteSummary{ViewerVote: votes[viewerHash]}
 	for _, vote := range votes {
 		switch vote {
 		case VoteUp:
-			up++
+			summary.Up++
 		case VoteDown:
-			down++
+			summary.Down++
 		}
 	}
-	return ReputationSummary{
-		Hostname:   hostname,
-		Up:         up,
-		Down:       down,
-		Total:      up + down,
-		ViewerVote: votes[viewerHash],
-	}
+	summary.Total = summary.Up + summary.Down
+	return summary
 }
