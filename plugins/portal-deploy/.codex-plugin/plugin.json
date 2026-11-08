@@ -1,0 +1,19 @@
+{
+  "name": "portal-deploy",
+  "version": "0.2.0",
+  "description": "Deprecated: split into portal-tunnel and portal-relay. Contains only redirect skills.",
+  "author": {
+    "name": "gosuda"
+  },
+  "interface": {
+    "displayName": "Portal Deploy (deprecated)",
+    "shortDescription": "Moved to Portal Tunnel and Portal Relay",
+    "longDescription": "Deprecated compatibility package. Its skills only point to the canonical portal-expose and portal-connect skills in the portal-tunnel plugin and the portal-relay skill in the portal-relay plugin. Install those plugins instead.",
+    "developerName": "gosuda",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/gosuda/portal-tunnel",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg"
+  }
+}

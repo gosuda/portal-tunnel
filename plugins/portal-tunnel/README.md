@@ -87,6 +87,8 @@ When importing the whole `portal-tunnel` repository, `.cursor-plugin/marketplace
 
 The former `portal-deploy` plugin is split into `portal-tunnel` (`portal-expose`, `portal-connect`) and `portal-relay` (`portal-relay`). Skill names and behavior are unchanged; only the plugin name and paths change.
 
+`plugins/portal-deploy/` remains as a deprecated compatibility package. Its three `SKILL.md` files hold no workflow; each points to the canonical skill, so old raw URLs, `AGENTS.md` blocks, the `llms.txt` of relays that have not upgraded, and `portal-deploy@portal-tunnel` installs keep working. Updating an existing `portal-deploy` install replaces the old skills with these redirects. The package will be removed in a later release.
+
 - Claude Code: `claude plugin uninstall portal-deploy@portal-tunnel`, then `claude plugin marketplace update portal-tunnel` and install `portal-tunnel@portal-tunnel` (and `portal-relay@portal-tunnel` if you run a relay). Invocations change from `/portal-deploy:<skill>` to `/portal-tunnel:<skill>` or `/portal-relay:portal-relay`.
 - Codex: remove `portal-deploy`, refresh the marketplace, then add `portal-tunnel@portal-tunnel` and, for relay operators, `portal-relay@portal-tunnel`. `$<skill>` invocations are unchanged.
 - Cursor: replace the `~/.cursor/plugins/local/portal-deploy` symlink with links to `plugins/portal-tunnel` and, if needed, `plugins/portal-relay`.

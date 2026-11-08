@@ -11,6 +11,10 @@
     {
       "name": "portal-relay",
       "source": "./plugins/portal-relay"
+    },
+    {
+      "name": "portal-deploy",
+      "source": "./plugins/portal-deploy"
     }
   ]
 }
