@@ -37,6 +37,19 @@ describe("filter reset", () => {
     expect(result.current.selectedTags).toEqual([]);
     expect(result.current.filteredServers.map(({ id }) => id)).toEqual(["a", "b"]);
   });
+
+  it("defaults to newest first by firstSeen timestamp", () => {
+    const servers = [
+      { ...server("old"), firstSeen: "2026-01-01T00:00:00Z" },
+      { ...server("newest"), firstSeen: "2026-01-03T00:00:00Z" },
+      { ...server("middle"), firstSeen: "2026-01-02T00:00:00Z" },
+    ];
+    const { result } = renderHook(() => useList({ servers }));
+
+    expect(result.current.filteredServers.map(({ id }) => id)).toEqual([
+      "newest", "middle", "old",
+    ]);
+  });
 });
 
 describe("recommendation sorting", () => {

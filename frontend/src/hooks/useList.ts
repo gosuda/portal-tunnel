@@ -49,7 +49,7 @@ export function useList<T extends BaseServer>({
 }: UseListOptions<T>): UseListReturn<T> {
   const [searchQuery, setSearchQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
-  const [sortBy, setSortBy] = useState<SortOption>("duration");
+  const [sortBy, setSortBy] = useState<SortOption>("default");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const availableTags = useMemo(() => {
     const counts = new Map<string, number>();
@@ -137,9 +137,15 @@ export function useList<T extends BaseServer>({
         case "owner":
           return (a: T, b: T) => a.owner.localeCompare(b.owner);
         case "default":
-          return (a: T, b: T) => a.id.localeCompare(b.id);
+          return (a: T, b: T) =>
+            parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
+            parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0) ||
+            a.id.localeCompare(b.id);
         default:
-          return (a: T, b: T) => a.id.localeCompare(b.id);
+          return (a: T, b: T) =>
+            parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
+            parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0) ||
+            a.id.localeCompare(b.id);
       }
     };
 
