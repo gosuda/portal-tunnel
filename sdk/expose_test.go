@@ -125,7 +125,7 @@ func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
 			accessToken: "token",
 			hostname:    "demo.relay.example",
 			tcpAddr:     "demo.relay.example:40000",
-		}, listenerSnapshot.snapshot),
+		}),
 	}
 	pending := &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}
 	denied := &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}

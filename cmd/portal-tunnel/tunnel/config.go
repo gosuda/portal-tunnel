@@ -56,6 +56,42 @@ type Config struct {
 // fields called Config would shadow each other without a word.
 type AuthConfig = appauth.Config
 
+// ParseHTTPRoute parses one PATH=UPSTREAM [METHOD[,METHOD...]:AMOUNT] entry.
+// An amount without methods applies payment to every method.
+func ParseHTTPRoute(value string) (HTTPRoute, error) {
+	prefix, rest, ok := strings.Cut(value, "=")
+	if !ok {
+		return HTTPRoute{}, fmt.Errorf("expected PATH=UPSTREAM [METHOD[,METHOD...]:AMOUNT]")
+	}
+	prefix = strings.TrimSpace(prefix)
+	if !strings.HasPrefix(prefix, "/") {
+		return HTTPRoute{}, fmt.Errorf("route path %q must start with /", prefix)
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 || len(fields) > 2 {
+		return HTTPRoute{}, fmt.Errorf("expected an upstream and optional payment amount")
+	}
+	route := HTTPRoute{Prefix: utils.NormalizeURLPath(prefix), Upstream: fields[0]}
+	if len(fields) == 2 {
+		methods, amount, hasMethods := strings.Cut(fields[1], ":")
+		if !hasMethods {
+			amount = fields[1]
+		}
+		if amount == "" {
+			return HTTPRoute{}, fmt.Errorf("payment amount is required")
+		}
+		route.Amount = amount
+		if hasMethods {
+			var err error
+			route.Methods, err = gateway.NormalizePaymentMethods(strings.Split(methods, ","))
+			if err != nil {
+				return HTTPRoute{}, err
+			}
+		}
+	}
+	return route, nil
+}
+
 // Normalize puts c in the form a config stores: values without surrounding
 // spaces, relay URLs in their canonical form, the methods of an HTTP route in
 // upper case and once each, and each component as its owner normalizes it. Paths

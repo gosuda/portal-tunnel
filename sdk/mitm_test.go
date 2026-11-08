@@ -316,7 +316,7 @@ func newChannelBindingListener(t *testing.T, seed, hostname string) *listener {
 	hostname = cmp.Or(hostname, canonicalTestHostname(t, tunnelIdentity.Address))
 	l := &listener{
 		identity: tunnelIdentity,
-		lease:    utils.NewSnapshot(listenerSnapshot{hostname: hostname, accessToken: "test-access-token"}, listenerSnapshot.snapshot),
+		lease:    utils.NewSnapshot(listenerSnapshot{hostname: hostname, accessToken: "test-access-token"}),
 	}
 	l.mitmManager = newMITMManager(l, true)
 	return l

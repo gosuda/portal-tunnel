@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -36,10 +37,10 @@ func keyRunes(text string) tea.KeyMsg {
 // dashboard draws, not about what users name their tunnels.
 func testDashboardStatus() AgentStatusResponse {
 	relays := []AgentRelayStatus{
-		{RelayURL: "https://relay-one.example.com", PublicURL: "https://web.relay-one.example.com", Version: "v2.4.1", SupportsTCP: true, SupportsUDP: true},
-		{RelayURL: "https://relay-two.example.org:8443", Connecting: true, Version: "v2.4.0", SupportsTCP: true},
+		{RelayURL: "https://relay-one.example.com", PublicURL: "https://web.relay-one.example.com", Version: "v2.4.1", State: sdk.RelayReady},
+		{RelayURL: "https://relay-two.example.org:8443", State: sdk.RelayConnecting, Version: "v2.4.0"},
 		{RelayURL: "https://relay-three.example.net"},
-		{RelayURL: "https://banned.example.net", Banned: true},
+		{RelayURL: "https://failed.example.net", State: sdk.RelayFailed},
 	}
 	return AgentStatusResponse{
 		ConfigPath:    "/Users/someone/.config/portal/config.toml",
@@ -58,7 +59,7 @@ func testDashboardStatus() AgentStatusResponse {
 				Relays:     relays[:1],
 			},
 			{ID: "site", State: "running", Serve: "./public-site"},
-			{ID: "idle", Name: "idle", State: "stopped", MaxActiveRelays: 1, Relays: relays[2:]},
+			{ID: "idle", Name: "idle", State: "stopped", MaxActiveRelays: 1},
 		},
 	}
 }

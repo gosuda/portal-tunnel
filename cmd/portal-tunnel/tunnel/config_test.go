@@ -10,6 +10,32 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
+func TestParseHTTPRoute(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  HTTPRoute
+	}{
+		{input: "/api=3000", want: HTTPRoute{Prefix: "/api", Upstream: "3000"}},
+		{input: " /api/ = http://localhost:3000/base?q=1 ", want: HTTPRoute{Prefix: "/api", Upstream: "http://localhost:3000/base?q=1"}},
+		{input: "/paid=3000 0.01", want: HTTPRoute{Prefix: "/paid", Upstream: "3000", Amount: "0.01"}},
+		{input: "/paid=3000 post,GET,POST:0.01", want: HTTPRoute{Prefix: "/paid", Upstream: "3000", Amount: "0.01", Methods: []string{"GET", "POST"}}},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := ParseHTTPRoute(tc.input)
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ParseHTTPRoute() = %+v, %v; want %+v", got, err, tc.want)
+			}
+		})
+	}
+	for _, input := range []string{"", "/api", "=3000", "api=3000", "/api=", "/api=3000 GET:", "/api=3000 :0.01", "/api=3000 GET,:0.01", "/api=3000 0.01 extra"} {
+		t.Run("invalid "+input, func(t *testing.T) {
+			if _, err := ParseHTTPRoute(input); err == nil {
+				t.Fatal("ParseHTTPRoute() accepted invalid syntax")
+			}
+		})
+	}
+}
+
 // An explicit blank method must not become an empty list, which charges every
 // method rather than rejecting the invalid payment configuration.
 func TestConfigSpecRejectsBlankPaymentMethods(t *testing.T) {

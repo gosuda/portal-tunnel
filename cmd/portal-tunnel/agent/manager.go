@@ -405,7 +405,6 @@ type managedTunnel struct {
 	runtime   *tunnel.Runtime
 	lastError string
 	address   string
-	relays    []AgentRelayStatus
 }
 
 func (t *managedTunnel) Start(parent context.Context) {
@@ -493,7 +492,6 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	runtime := t.runtime
 	done := t.done
 	address := t.address
-	relays := append([]AgentRelayStatus(nil), t.relays...)
 	t.mu.RUnlock()
 
 	running := false
@@ -519,6 +517,7 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	spec, _ := cfg.Spec()
 	auth := cfg.AuthConfig
 	status := AgentTunnelStatus{
+		Address:                 address,
 		ID:                      cfg.ID,
 		Name:                    cfg.Name,
 		State:                   state,
@@ -543,35 +542,12 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 			status.AuthProviderError = err.Error()
 		}
 	}
-	if len(cfg.HTTPRoutes) > 0 {
-		status.HTTPRoutes = make([]tunnel.HTTPRoute, 0, len(cfg.HTTPRoutes))
-		for _, route := range cfg.HTTPRoutes {
-			status.HTTPRoutes = append(status.HTTPRoutes, tunnel.HTTPRoute{
-				Prefix:   route.Prefix,
-				Upstream: route.Upstream,
-				Methods:  append([]string(nil), route.Methods...),
-				Amount:   route.Amount,
-			})
-		}
+	if spec.HTTP != nil {
+		status.HTTPRoutes = spec.HTTP.Routes
 	}
-	if runtime == nil {
-		status.Address = address
-		for i := range relays {
-			relays[i].AliasURL = ""
-		}
-		status.Relays = relays
-		return status
+	if runtime != nil {
+		status.Relays = agentRelayStatuses(runtime.Exposure.Relays())
 	}
-	relays = agentRelayStatuses(runtime.Exposure.Relays())
-	t.mu.Lock()
-	if t.runtime == runtime {
-		t.relays = append([]AgentRelayStatus(nil), relays...)
-	}
-	address = t.address
-	t.mu.Unlock()
-
-	status.Address = address
-	status.Relays = relays
 	return status
 }
 
@@ -583,13 +559,14 @@ func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
 			aliasURL = relay.AliasURL
 		}
 		statuses = append(statuses, AgentRelayStatus{
-			RelayURL:   relay.RelayURL,
-			PublicURL:  relay.PublicURL,
-			AliasURL:   aliasURL,
-			TCPAddr:    relay.TCPAddr,
-			Version:    relay.Version,
-			Connecting: relay.State == sdk.RelayConnecting,
-			Approval:   string(relay.Approval),
+			RelayURL:  relay.RelayURL,
+			PublicURL: relay.PublicURL,
+			AliasURL:  aliasURL,
+			TCPAddr:   relay.TCPAddr,
+			Version:   relay.Version,
+			State:     relay.State,
+			Failure:   relay.Failure,
+			Approval:  relay.Approval,
 		})
 	}
 	return statuses
@@ -636,7 +613,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.mu.Lock()
 	t.runtime = runtime
 	t.address = runtime.Identity.Address
-	t.relays = agentRelayStatuses(runtime.Exposure.Relays())
 	t.lastError = ""
 	t.mu.Unlock()
 

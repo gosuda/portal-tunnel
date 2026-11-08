@@ -25,11 +25,9 @@ const (
 )
 
 type Refresher struct {
-	relaySet            *RelaySet
-	httpClient          *http.Client
-	publicHTTPClient    *http.Client
-	lastAnnounceSuccess map[string]bool
-	lastAnnounceMu      sync.Mutex
+	relaySet         *RelaySet
+	httpClient       *http.Client
+	publicHTTPClient *http.Client
 }
 
 func NewRefresher(relaySet *RelaySet) *Refresher {
@@ -56,7 +54,6 @@ func NewRefresher(relaySet *RelaySet) *Refresher {
 			CheckRedirect: rejectDiscoveryRedirect,
 			Timeout:       defaultRequestTimeout,
 		},
-		lastAnnounceSuccess: make(map[string]bool),
 	}
 }
 
@@ -89,36 +86,19 @@ func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDesc
 		}
 		baseURL, err := url.Parse(relayURL)
 		if err != nil {
-			if r.shouldLogAnnounce(relayURL, false) {
-				log.Warn().Err(err).Str("relay", relayURL).Msg("relay discovery announce target skipped")
-			}
+			log.Warn().Err(err).Str("relay", relayURL).Msg("relay discovery announce target skipped")
 			return nil
 		}
 		if err := utils.HTTPDoAPIPath(ctx, r.httpClient, baseURL, http.MethodPost, types.PathDiscoveryAnnounce, req, nil, nil); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if r.shouldLogAnnounce(relayURL, false) {
-				log.Warn().Err(err).Str("relay", relayURL).Msg("relay discovery announce failed")
-			}
+			log.Warn().Err(err).Str("relay", relayURL).Msg("relay discovery announce failed")
 			return nil
 		}
-		if r.shouldLogAnnounce(relayURL, true) {
-			log.Info().Str("relay", relayURL).Msg("relay discovery announce succeeded")
-		}
+		log.Debug().Str("relay", relayURL).Msg("relay discovery announce succeeded")
 		return nil
 	})
-}
-
-func (r *Refresher) shouldLogAnnounce(relayURL string, success bool) bool {
-	r.lastAnnounceMu.Lock()
-	defer r.lastAnnounceMu.Unlock()
-	previous, ok := r.lastAnnounceSuccess[relayURL]
-	if ok && previous == success {
-		return false
-	}
-	r.lastAnnounceSuccess[relayURL] = success
-	return true
 }
 
 // sortRefreshCandidates orders relays so that the most important sources are

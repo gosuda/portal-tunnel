@@ -6,74 +6,32 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
 func TestRelayDashboardMode(t *testing.T) {
-	tunnel := AgentTunnelStatus{ID: "web"}
-	relayURL := "https://relay.example.com"
-	tests := []struct {
-		name     string
-		relay    AgentRelayStatus
-		attempts map[relayAttemptKey]bool
-		want     string
+	for _, tc := range []struct {
+		name  string
+		relay AgentRelayStatus
+		want  string
 	}{
-		{name: "idle", relay: AgentRelayStatus{RelayURL: relayURL}, want: "-"},
-		{name: "connected", relay: AgentRelayStatus{RelayURL: relayURL, PublicURL: "https://web.relay.example.com"}, want: "direct"},
-		{name: "banned", relay: AgentRelayStatus{RelayURL: relayURL, Banned: true}, want: "banned"},
-		{name: "connecting", relay: AgentRelayStatus{RelayURL: relayURL, Connecting: true}, want: "connecting..."},
-		{name: "waiting for approval", relay: AgentRelayStatus{RelayURL: relayURL, Connecting: true, Approval: "pending"}, want: "waiting"},
-		{name: "refused by relay", relay: AgentRelayStatus{RelayURL: relayURL, Connecting: true, Approval: "refused"}, want: "refused"},
-		{
-			name:     "connect requested and not reported yet",
-			relay:    AgentRelayStatus{RelayURL: relayURL},
-			attempts: map[relayAttemptKey]bool{{tunnelID: "web", relayURL: relayURL}: false},
-			want:     "connecting...",
-		},
-		{
-			name:     "connect attempt ended without a connection",
-			relay:    AgentRelayStatus{RelayURL: relayURL},
-			attempts: map[relayAttemptKey]bool{{tunnelID: "web", relayURL: relayURL}: true},
-			want:     "failed",
-		},
-		{
-			name:     "connected wins over a stale failed attempt",
-			relay:    AgentRelayStatus{RelayURL: relayURL, PublicURL: "https://web.relay.example.com"},
-			attempts: map[relayAttemptKey]bool{{tunnelID: "web", relayURL: relayURL}: true},
-			want:     "direct",
-		},
-		{
-			name:     "attempt for another relay does not apply",
-			relay:    AgentRelayStatus{RelayURL: relayURL},
-			attempts: map[relayAttemptKey]bool{{tunnelID: "web", relayURL: "https://other.example.com"}: true},
-			want:     "-",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			model := agentDashboardModel{relayAttempts: tt.attempts}
-			if got := model.relayDashboardMode(tunnel, tt.relay); got != tt.want {
-				t.Fatalf("mode = %q, want %q", got, tt.want)
+		{name: "unknown", want: "-"},
+		{name: "ready", relay: AgentRelayStatus{State: sdk.RelayReady, PublicURL: "https://app.example"}, want: "direct"},
+		{name: "connecting", relay: AgentRelayStatus{State: sdk.RelayConnecting}, want: "connecting..."},
+		{name: "waiting", relay: AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalPending}, want: "waiting"},
+		{name: "refused", relay: AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalRefused}, want: "refused"},
+		{name: "failed with retained URL", relay: AgentRelayStatus{State: sdk.RelayFailed, PublicURL: "https://app.example"}, want: "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := relayDashboardMode(tc.relay); got != tc.want {
+				t.Fatalf("mode = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestRelayDashboardFeaturesAndVersion(t *testing.T) {
-	features := []struct {
-		relay AgentRelayStatus
-		want  string
-	}{
-		{relay: AgentRelayStatus{SupportsUDP: true, SupportsTCP: true}, want: "udp,tcp"},
-		{relay: AgentRelayStatus{SupportsTCP: true}, want: "tcp"},
-		{relay: AgentRelayStatus{SupportsUDP: true}, want: "udp"},
-		{relay: AgentRelayStatus{}, want: "-"},
-	}
-	for _, tt := range features {
-		if got := relayDashboardFeatures(tt.relay); got != tt.want {
-			t.Fatalf("features(%+v) = %q, want %q", tt.relay, got, tt.want)
-		}
-	}
-
+func TestRelayDashboardVersion(t *testing.T) {
 	if got := relayDashboardVersion(AgentRelayStatus{Version: " v2.4.1 "}); got != "v2.4.1" {
 		t.Fatalf("version = %q, want the trimmed version", got)
 	}
@@ -151,10 +109,10 @@ func TestAgentDashboardRelayRowFitsAndDropsColumnsWhenNarrow(t *testing.T) {
 		{width: 27, want: nil},
 		{width: 46, want: []string{"direct", "open", "web.relay.example.com"}},
 		{width: 55, want: []string{"direct", publicURL}},
-		{width: 120, want: []string{"direct", "v2.4.1", "udp,tcp", publicURL}},
+		{width: 120, want: []string{"direct", "v2.4.1", publicURL}},
 	}
 	for _, tt := range tests {
-		row := agentDashboardRelayRow(tt.width, "direct", "v2.4.1", "udp,tcp", publicURL)
+		row := agentDashboardRelayRow(tt.width, "direct", "v2.4.1", publicURL)
 		if got := lipgloss.Width(row); got > tt.width {
 			t.Fatalf("width %d: row %q is %d cells wide", tt.width, row, got)
 		}
@@ -164,7 +122,7 @@ func TestAgentDashboardRelayRowFitsAndDropsColumnsWhenNarrow(t *testing.T) {
 	}
 
 	for width := 1; width <= 140; width++ {
-		row := agentDashboardRelayRow(width, "connecting...", "v2.4.1", "udp,tcp", publicURL)
+		row := agentDashboardRelayRow(width, "connecting...", "v2.4.1", publicURL)
 		if got := lipgloss.Width(row); got > width {
 			t.Fatalf("width %d: row %q is %d cells wide", width, row, got)
 		}

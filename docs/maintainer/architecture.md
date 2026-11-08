@@ -52,6 +52,10 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   the current exposure; other changed settings restart that tunnel. Runtime
   relay connect/disconnect commands belong to the current SDK exposure and do
   not change the saved settings or the manager's configuration comparison.
+  Agent relay status projects the current exposure's state, failure, and
+  approval directly. The dashboard uses these observations without tracking
+  connection-attempt history. A tunnel without a runtime reports no relay
+  endpoints; reading status does not retain a second relay snapshot.
 
 - `portal/discovery`: provides blind collaborator relay selection for `sdk.Exposure`.
   Relay selection returns public relay priorities; Portal does not construct an
