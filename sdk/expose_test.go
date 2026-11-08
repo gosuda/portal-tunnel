@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -63,6 +64,12 @@ func TestAliasSinceDatesTheCurrentHold(t *testing.T) {
 	if first.IsZero() {
 		t.Fatal("a held alias has no date")
 	}
+	// Start with an older hold so reacquisition need not fall on a different
+	// clock tick, which is not guaranteed on Windows.
+	held := status()
+	held.AliasSince = first.Add(-time.Hour)
+	exposure.statuses[relayURL] = held
+	first = held.AliasSince
 	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting, publicURL: public, aliasURL: alias}, nil)
 	if got := status().AliasSince; !got.Equal(first) {
 		t.Fatalf("a burst moved the date from %v to %v", first, got)
