@@ -106,7 +106,7 @@ func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	gw, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Payment{})
+	gw, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Config{})
 	if err != nil {
 		t.Fatalf("ComposeHTTPRoutes() error = %v", err)
 	}
@@ -143,7 +143,7 @@ func TestApplicationAuthIdentityProofReachesRoutedUpstream(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
-	routes, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Payment{})
+	routes, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

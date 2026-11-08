@@ -242,49 +242,31 @@ describe("ServerCard comments interaction", () => {
     expect(openLink.getAttribute("href")).toBe("https://cool.relay.example.com/");
   });
 
-  it("toggles description disclosure via touch-accessible Info button without navigating", () => {
-    renderCardWithComments();
-    const infoButton = screen.getByRole("button", { name: "Show description" });
-    expect(infoButton.getAttribute("aria-expanded")).toBe("false");
+  it("renders description and tags in overlay alongside transport endpoints", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "tcp-srv",
+            name: "TCP Srv",
+            description: "Dedicated TCP game server",
+            tags: ["game"],
+            thumbnail: "",
+            owner: "admin",
+            online: true,
+            dns: "tcp.relay.example.com",
+            link: "",
+            tcpAddr: "tcp.relay.example.com:40000",
+          }}
+        />
+      </MemoryRouter>
+    );
 
-    // Open disclosure
-    fireEvent.click(infoButton);
-    expect(screen.getByRole("button", { name: "Hide description" })).toBeTruthy();
-    expect(screen.getByText("Tap to close")).toBeTruthy();
-    expect(screen.getByText("directory")).toBeTruthy();
-    expect(screen.queryByText("service detail")).toBeNull();
-
-    // Close disclosure by clicking X button
-    fireEvent.click(screen.getByRole("button", { name: "Hide description" }));
-    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
-    expect(screen.queryByText("Tap to close")).toBeNull();
-  });
-
-  it("closes description disclosure when tapping directly on the overlay without navigating into the app", () => {
-    renderCardWithComments();
-    const infoButton = screen.getByRole("button", { name: "Show description" });
-
-    // Open disclosure
-    fireEvent.click(infoButton);
-    expect(screen.getByText("Tap to close")).toBeTruthy();
-    expect(screen.queryByText("service detail")).toBeNull();
-
-    // Directly tap on the overlay ("Tap to close" text)
-    fireEvent.click(screen.getByText("Tap to close"));
-    expect(screen.queryByText("Tap to close")).toBeNull();
-    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
-    expect(screen.getByText("directory")).toBeTruthy();
-    expect(screen.queryByText("service detail")).toBeNull();
-
-    // Re-open and tap on the description paragraph text
-    fireEvent.click(screen.getByRole("button", { name: "Show description" }));
-    expect(screen.getByText("Tap to close")).toBeTruthy();
-
-    fireEvent.click(screen.getByText("A cool sandbox game"));
-    expect(screen.queryByText("Tap to close")).toBeNull();
-    expect(screen.getByRole("button", { name: "Show description" })).toBeTruthy();
-    expect(screen.getByText("directory")).toBeTruthy();
-    expect(screen.queryByText("service detail")).toBeNull();
+    expect(screen.getByTitle("tcp.relay.example.com:40000")).toBeTruthy();
+    expect(screen.getByText("Dedicated TCP game server")).toBeTruthy();
+    expect(screen.getByText("#game")).toBeTruthy();
+    expect(screen.getByText("tcp.relay.example.com:40000")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy TCP" })).toBeTruthy();
   });
 
   it("allows direct voting from the card without navigating into the service", async () => {
@@ -318,5 +300,33 @@ describe("ServerCard comments interaction", () => {
       fireEvent.click(screen.getByRole("button", { name: "Do not recommend app" }));
     });
     expect(onVote).toHaveBeenCalledWith("srv-1", "down");
+  });
+
+  it("does not render rating or comment controls when in admin mode or actions are omitted", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "srv-admin",
+            name: "admin-app",
+            description: "",
+            tags: [],
+            thumbnail: "",
+            owner: "",
+            online: true,
+            dns: "admin.relay.example.com",
+            link: "/server/srv-admin",
+          }}
+        >
+          <div>admin controls</div>
+        </ServerCard>
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByLabelText("Recommend app")).toBeNull();
+    expect(screen.queryByLabelText("Do not recommend app")).toBeNull();
+    expect(screen.queryByLabelText("Comments")).toBeNull();
+    expect(screen.getByText("admin-app")).toBeTruthy();
+    expect(screen.getByText("admin controls")).toBeTruthy();
   });
 });

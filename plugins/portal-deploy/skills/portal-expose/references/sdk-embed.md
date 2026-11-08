@@ -2,7 +2,7 @@
 
 Use this reference only when the app is written in Go and the user wants the tunnel to live inside the app process instead of running the `portal` CLI next to it. For every other language, and for most Go apps, the CLI path in `SKILL.md` is the right answer: it is what the relay websites, the docs, and the agent config all assume.
 
-Last checked against `gosuda/portal-tunnel` main commit `d38001ad` on 2026-09-22 (module `github.com/gosuda/portal-tunnel/v2`, release `v2.5.0`, `go 1.27`). The Go API is described in `docs/maintainer/architecture.md` and by the code's doc comments; the published docs site covers the CLI and the relay wire protocol, so read `sdk/expose.go`, `sdk/http.go`, `sdk/proxy.go`, `cmd/demo-app/main.go`, and `cmd/payment-app/` when something here does not match.
+Last checked against `gosuda/portal-tunnel` release `v2.7.3` (commit `e10679a5`) on 2026-11-08 (module `github.com/gosuda/portal-tunnel/v2`, `go 1.27.3`). The Go API is described in `docs/maintainer/architecture.md` and by the code's doc comments, and the docs site's SDK API page (`docs/src/routes/api-reference/sdk/+page.md`) covers the sign-in gate; read `sdk/expose.go`, `sdk/http.go`, `sdk/proxy.go`, `sdk/appauth/`, `cmd/demo-app/main.go`, and `cmd/payment-app/` when something here does not match.
 
 ## Smallest working program
 
@@ -59,16 +59,12 @@ func main() {
 ```
 module example.com/myapp
 
-go 1.27.0
+go 1.27.3
 
-require github.com/gosuda/portal-tunnel/v2 v2.5.0
+require github.com/gosuda/portal-tunnel/v2 v2.7.3
 ```
 
-Protocol 11 relays released before long-name support accept normalized DNS
-labels of at most 22 ASCII bytes; current relays accept up to 63.
-This example pins `v2.5.0`, which speaks protocol 10 and is incompatible with
-protocol-11 relays. Update the dependency after a protocol-11 release is
-published.
+The sign-in gate below needs `v2.7.3` or later.
 
 `sdk.Exposure` is a `net.Listener`, so `http.Serve(exposure, handler)` also works; `sdk.RunHTTP` adds header and idle timeouts, an optional second local listener, and a five-second graceful shutdown.
 
@@ -85,7 +81,7 @@ published.
 - `sdk.WithOverlay()` is the `--overlay` equivalent.
 - Read the public URL from `exposure.WaitReady(ctx)`, from `exposure.Relays()` (sorted snapshot), or from `exposure.Updates()` (buffered channel of size one; slow readers miss intermediate states and should re-read `Relays()`). The SDK also logs `service ready at <url>` with field `public_url`, exactly like the CLI.
 - `RelayStatus.Approval` is `pending` or `refused` while the relay refuses the lease, and `Message()` gives the wording to show. Empty never means approved. See the SDK API reference for old and new SDK and relay pairs.
-- `RelayStatus` carries `RelayURL`, `PublicURL`, `AliasURL`, `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
+- `RelayStatus` carries `RelayURL`, `PublicURL`, `AliasURL`, `AliasSince` (when the exposure came to hold `AliasURL`), `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
 - `PublicURL` is the identity-bound canonical URL; it always routes to this exposure. `AliasURL` is `<name>.<root host>` when the relay granted that alias to the lease, and empty when another identity owns the name or the exposure is unnamed. Both URLs stay set while the lease is held, including `connecting` while reverse sessions reconnect; a failed relay clears `AliasURL`. While `State` is `ready`, prefer `AliasURL` for user-facing links and sharing, falling back to `PublicURL` when empty. Never derive an alias by stripping the address suffix. The friendly alias always reaches the live origin; the opt-in relay cache serves only the canonical hostname.
 - Lease renewal, re-registration after a relay restart, and reverse-session pooling are handled inside the SDK. The app does nothing for them.
 
@@ -103,8 +99,9 @@ Use `github.com/gosuda/portal-tunnel/v2/sdk/appauth` when only chosen people sho
 
 ```go
 cfg := appauth.Config{
-	Provider: appauth.ProviderCredential,
-	Allow:    []string{"alice"},
+	Provider:    appauth.ProviderCredential,
+	Allow:       []string{"alice"},
+	PublicHosts: publicHosts(exposure),
 }
 gate, err := appauth.New(mux, id, cfg) // an error here is a mistake in cfg
 if err != nil {
@@ -115,9 +112,25 @@ if err := sdk.RunHTTP(ctx, exposure, gate, ""); err != nil {
 }
 ```
 
+```go
+// publicHosts lists the hosts the exposure holds now. The gate calls it on every request.
+func publicHosts(exposure *sdk.Exposure) func() []appauth.PublicHost {
+	return func() []appauth.PublicHost {
+		var hosts []appauth.PublicHost
+		for _, relay := range exposure.Relays() {
+			hosts = append(hosts,
+				appauth.PublicHost{URL: relay.PublicURL},
+				appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
+		}
+		return hosts
+	}
+}
+```
+
+- Set `Config.PublicHosts` for every provider, as above. With it the gate answers `421` for any host the exposure does not hold now, and a session or a sign-in on the alias must be newer than `AliasSince`, so visitors on the alias sign in again after a restart or a re-registration, while sessions on `PublicURL` stay. Without it the gate believes the request's `Host`, and `appauth.New` refuses `email`. Credentials are not dated, so issue them for `PublicURL`.
 - `appauth.New` reads no network. Call `appauth.Check(ctx, cfg)` at startup and show the result: a provider that cannot be reached still serves existing sessions.
 - The handler reads the visitor with `appauth.PrincipalFromContext(r.Context())`, which returns `Provider`, `Subject` and `Email`. It works without identity headers. Set `Config.IdentityHeaders` only when the handler proxies to something else that needs the `X-Portal-*` headers.
-- List `Allow` for `siwe` and `credential`, and `EmailList` for `oidc`, `saml` and `email`. `oidc`, `saml` and `email` refuse an empty list, but an empty `Allow` opens `siwe` to any wallet and `credential` to any credential issued from the identity, so always list who may open the app. `email` also needs `Config.PublicHosts`; the SDK API page has the snippet.
+- List `Allow` for `siwe` and `credential`, and `EmailList` for `oidc`, `saml` and `email`. `oidc`, `saml` and `email` refuse an empty list, but an empty `Allow` opens `siwe` to any wallet and `credential` to any credential issued from the identity, so always list who may open the app.
 - A gate built with the same identity and provider settings keeps existing sessions. Prefer one gate with `next` swapped behind it: a rebuild ends a SIWE login in progress and unused email links.
 - Store the identity with `identity.Marshal`, never `json.Marshal`, which leaves out the `TokenSecret` that session keys derive from.
 - Serve no routes of your own under `types.PathApplicationAuthPrefix` (`/_portal/auth/`).
@@ -127,8 +140,20 @@ if err := sdk.RunHTTP(ctx, exposure, gate, ""); err != nil {
 ## Raw TCP and UDP
 
 - `sdk.WithTCP()` requests a public TCP port; `exposure.WaitTCPReady(ctx)` returns snapshots with `TCPAddr`. Raw connections arrive on `exposure.Accept()` untouched, with no TLS, so do not serve such an exposure with `sdk.RunHTTP`: it labels every request it receives `https`, raw ones included.
-- `sdk.WithUDP()` enables datagrams; `exposure.WaitDatagramReady(ctx)` returns `UDPAddr`. The app receives `types.DatagramFrame` values from `exposure.AcceptDatagram()` and must reuse the accepted frame, replace only its `Payload`, and pass it to `exposure.SendDatagram` for replies; this preserves its local `LeaseDone` ownership token. `sdk.ProxyUDP` does this against a local UDP target. Flows idle for five minutes are dropped; datagrams above 1238 bytes are dropped.
+- `sdk.WithUDP()` enables datagrams; `exposure.WaitDatagramReady(ctx)` returns `UDPAddr`. The app receives `types.DatagramFrame` values from `exposure.AcceptDatagram()` and must reuse the accepted frame, replace only its `Payload`, and pass it to `exposure.SendDatagram` for replies; this preserves its local `LeaseDone` ownership token, and a fresh frame with only the flow ID and address is refused. A reply on a lease that has ended fails with an error wrapping `net.ErrClosed`, even after a new lease has reconnected: drop that reply and keep receiving. `sdk.ProxyUDP` does all this against a local UDP target. Flows idle for five minutes are dropped; datagrams above 1238 bytes are dropped.
 - Both wait functions error when the matching option was not set.
+
+A UDP reply inside the receive loop:
+
+```go
+frame.Payload = reply
+if err := exposure.SendDatagram(frame); err != nil {
+	if errors.Is(err, net.ErrClosed) {
+		continue // the lease that delivered frame has ended
+	}
+	return err
+}
+```
 
 ## Options and their limits
 
@@ -139,7 +164,7 @@ if err := sdk.RunHTTP(ctx, exposure, gate, ""); err != nil {
 ## Shutdown and errors
 
 - Cancel the context or call `exposure.Close()`; each listener unregisters its lease with a five-second budget, so hostnames free up on clean exit.
-- The SDK exports no sentinel errors. Match `net.ErrClosed` and `context.Canceled` as normal shutdown, and relay API failures with `errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict})` and the other codes in `types/error.go`. `hostname_conflict`, `feature_unavailable`, `transport_mismatch`, `udp_disabled`, and `tcp_port_disabled` are terminal for that relay; `lease_not_found`, `unauthorized`, `rate_limited`, and network errors are retried for you.
+- The SDK exports no sentinel errors. Match `net.ErrClosed` and `context.Canceled` as normal shutdown, and relay API failures with `errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict})` and the other codes in `types/error.go`. Any `4xx` at registration or renewal ends that relay with `Failure` `terminal`, for example `hostname_conflict`, `feature_unavailable`, `transport_mismatch`, `udp_disabled`, or `tcp_port_disabled`. The exceptions: `rate_limited` waits for `Retry-After`, and `lease_not_found` or `unauthorized` for a lease already held make the SDK register again. Network errors, `5xx`, and a reverse connection refused while approval is pending are retried for you.
 
 ## Paid routes
 
@@ -148,24 +173,3 @@ The SDK is payment-agnostic. The x402 gateway lives in `cmd/portal-tunnel/agent`
 ## Verify like the CLI
 
 Whatever the app logs, verify from outside exactly as `SKILL.md` step 6 says: one bounded request to the URL being handed off (`AliasURL` when granted, otherwise `PublicURL`), `401` or `403` counted as reachable, and the lease visible in `GET <relay>/api/state` with `ready > 0`.
-
-### SDK UDP reply compatibility (unreleased)
-
-UDP replies now require the accepted frame's local `LeaseDone` token. This is a
-breaking change for applications constructing a fresh `types.DatagramFrame`
-with only the flow ID and address fields. Reuse the accepted frame instead:
-
-```go
-frame.Payload = reply
-if err := exposure.SendDatagram(frame); err != nil {
-    if errors.Is(err, net.ErrClosed) {
-        // The originating lease ended; drop this reply and keep receiving.
-        continue
-    }
-    return err
-}
-```
-
-This metadata is not part of the QUIC wire format. Replies from an ended lease
-are rejected with an error wrapping `net.ErrClosed`, even if a new lease has
-already reconnected.

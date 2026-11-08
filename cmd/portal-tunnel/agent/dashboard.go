@@ -65,7 +65,6 @@ type agentDashboardModel struct {
 	selectedTunnelID string
 	selectedRelayURL string
 	activePane       agentDashboardPane
-	relayAttempts    map[relayAttemptKey]bool
 	confirmDelete    string // ID of the tunnel waiting for a delete answer
 	confirmStop      bool   // a stop-the-agent question waits for an answer
 	// stopsAgent says that closing the dashboard also stops the agent, as under
@@ -185,7 +184,6 @@ func (m agentDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clampSelection()
 			m.syncAccess()
 			m.ensureSelectedSettingsDraft()
-			m.syncRelayAttempts()
 			m.clampSidebarScroll()
 		}
 		return m, nil

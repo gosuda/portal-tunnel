@@ -210,17 +210,27 @@ func (h *HTTPRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL != nil {
 		path = r.URL.Path
 	}
-	path = utils.NormalizeURLPath(path)
+	_, handler := h.Match(path)
+	if handler == nil {
+		http.NotFound(w, r)
+		return
+	}
+	handler.ServeHTTP(w, r)
+}
 
+// Match returns the canonical prefix and handler of the longest matching route.
+// It returns an empty prefix and nil handler when no route matches. The handler
+// applies the same upstream path rewriting as ServeHTTP.
+func (h *HTTPRoutes) Match(path string) (string, http.Handler) {
+	path = utils.NormalizeURLPath(path)
 	for _, route := range h.routes {
 		if route.prefix != "/" && path != route.prefix && !strings.HasPrefix(path, route.prefix+"/") {
 			continue
 		}
 
-		route.handler.ServeHTTP(w, r)
-		return
+		return route.prefix, route.handler
 	}
-	http.NotFound(w, r)
+	return "", nil
 }
 
 type httpRoute struct {

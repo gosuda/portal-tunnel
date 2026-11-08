@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
+	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -36,10 +37,10 @@ func keyRunes(text string) tea.KeyMsg {
 // dashboard draws, not about what users name their tunnels.
 func testDashboardStatus() AgentStatusResponse {
 	relays := []AgentRelayStatus{
-		{RelayURL: "https://relay-one.example.com", PublicURL: "https://web.relay-one.example.com", Version: "v2.4.1", SupportsTCP: true, SupportsUDP: true},
-		{RelayURL: "https://relay-two.example.org:8443", Connecting: true, Version: "v2.4.0", SupportsTCP: true},
+		{RelayURL: "https://relay-one.example.com", PublicURL: "https://web.relay-one.example.com", Version: "v2.4.1", State: sdk.RelayReady},
+		{RelayURL: "https://relay-two.example.org:8443", State: sdk.RelayConnecting, Version: "v2.4.0"},
 		{RelayURL: "https://relay-three.example.net"},
-		{RelayURL: "https://banned.example.net", Banned: true},
+		{RelayURL: "https://failed.example.net", State: sdk.RelayFailed},
 	}
 	return AgentStatusResponse{
 		ConfigPath:    "/Users/someone/.config/portal/config.toml",
@@ -58,7 +59,7 @@ func testDashboardStatus() AgentStatusResponse {
 				Relays:     relays[:1],
 			},
 			{ID: "site", State: "running", Serve: "./public-site"},
-			{ID: "idle", Name: "idle", State: "stopped", MaxActiveRelays: 1, Relays: relays[2:]},
+			{ID: "idle", Name: "idle", State: "stopped", MaxActiveRelays: 1},
 		},
 	}
 }
@@ -540,11 +541,13 @@ func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 
 func TestDashboardDeleteQuestionIgnoresOtherClicks(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
-	// The idle tunnel's first relay is not connected, so its Connect button can be clicked.
-	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testDashboardStatus()}, keyDown, keyDown, keyDown, keyDown)
+	// A running tunnel with a failed relay has a clickable Connect button.
+	status := testDashboardStatus()
+	status.Tunnels[0].Relays = []AgentRelayStatus{{RelayURL: "https://failed.example.net", State: sdk.RelayFailed}}
+	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: status})
 	asked, _ := press(model, keyF8)
-	if !strings.Contains(asked.View(), `Delete tunnel "idle"?`) {
-		t.Fatal("F8 should ask before deleting the idle tunnel")
+	if !strings.Contains(asked.View(), `Delete tunnel "web"?`) {
+		t.Fatal("F8 should ask before deleting the web tunnel")
 	}
 
 	clicked := make(map[agentDashboardAction]bool)

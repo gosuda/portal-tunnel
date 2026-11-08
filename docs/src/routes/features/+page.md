@@ -17,7 +17,7 @@ Each capability lists its supported interfaces (**CLI**, **Agent**, **SDK**, **R
 | :--- | :--- | :--- | :--- | :--- |
 | **Exposure** | Public HTTPS localhost tunnel | CLI, Agent, SDK, Relay | Uncached stream path terminates TLS locally; relay routes by SNI | [Getting Started](/getting-started) |
 | **HTTP** | Multi-upstream routed HTTP | CLI, Agent, SDK | Managed locally in tunnel process; cannot mix with `--tcp` or `--udp` | [Concepts: Routed HTTP](/concepts#routed-http-mode) |
-| **Static** | Local static serving | CLI, Agent, SDK | Serves local files/SPA fallback; path traversal (`..`) refused, but symlinks inside root pointing outside are followed | [CLI Reference: Static Site](/cli-reference#serve-a-static-site) |
+| **Static** | Local static serving | CLI, Agent, SDK | Serves local files/SPA fallback; path traversal (`..`) refused, and a symlink pointing outside the root answers `404` | [CLI Reference: Static Site](/cli-reference#serve-a-static-site) |
 | **Cache** | Opt-in relay static cache | CLI, SDK, Relay | Explicitly trusts selected relays with files and browser TLS; uncached on origin | [Security Model: Static Cache](/security-model#opt-in-static-cache) |
 | **Transport** | Dedicated raw TCP | CLI, Agent, SDK, Relay | Requires relay port allocation; no TLS added by Portal | [TCP/UDP Tunneling](/tcp-udp-tunneling#dedicated-raw-tcp) |
 | **Transport** | UDP relay | CLI, Agent, SDK, Relay | Carried over QUIC DATAGRAM backhaul; requires relay UDP support | [TCP/UDP Tunneling](/tcp-udp-tunneling#udp-relay) |

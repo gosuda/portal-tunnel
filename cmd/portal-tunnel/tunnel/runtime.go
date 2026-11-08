@@ -81,7 +81,7 @@ type HTTPConfig struct {
 	Routes  []HTTPRoute
 	Serve   string
 	Auth    *appauth.Config
-	Payment gateway.X402Payment
+	Payment gateway.X402Config
 	Cache   *CacheConfig
 	// StripRequestHeaders lists client request headers removed before
 	// forwarding to every routed HTTP upstream. It requires at least one

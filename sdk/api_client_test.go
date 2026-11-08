@@ -325,7 +325,7 @@ func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
 				ExpiresAt:  time.Now().UTC().Add(time.Minute),
 			},
 			expiresAt: time.Now().UTC().Add(time.Minute),
-		}, listenerSnapshot.snapshot),
+		}),
 	}
 
 	err = listener.refreshReverseEndpointAfterFailure(context.Background(), "failed-capability")
@@ -349,7 +349,7 @@ func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
 		lease: utils.NewSnapshot(listenerSnapshot{
 			accessToken: "stale-access-token",
 			expiresAt:   time.Now().UTC().Add(time.Minute),
-		}, listenerSnapshot.snapshot),
+		}),
 	}
 
 	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
@@ -432,7 +432,7 @@ func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 			expiresAt:      expiresAt,
 			tenantTLS:      tenantTLS,
 			chainCheckedAt: time.Now(),
-		}, listenerSnapshot.snapshot),
+		}),
 	}
 	renew := func() {
 		t.Helper()
@@ -489,7 +489,7 @@ func TestRenewLeaseSaysItRepinsTheRelayChain(t *testing.T) {
 	}
 	listener := &listener{
 		api:   &apiClient{relayURL: relayURL, http: server.Client()},
-		lease: utils.NewSnapshot(listenerSnapshot{accessToken: "access-token", expiresAt: expiresAt}, listenerSnapshot.snapshot),
+		lease: utils.NewSnapshot(listenerSnapshot{accessToken: "access-token", expiresAt: expiresAt}),
 	}
 
 	_ = listener.renewLease(context.Background()) // only the request matters here
@@ -514,7 +514,7 @@ func TestRenewLeaseRegistersAgainWhenTheRelayAnswersLeaseNotFound(t *testing.T) 
 		lease: utils.NewSnapshot(listenerSnapshot{
 			accessToken: "pinned-once-access-token",
 			expiresAt:   time.Now().UTC().Add(time.Minute),
-		}, listenerSnapshot.snapshot),
+		}),
 	}
 	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
 		t.Fatalf("renewLease() error = %v, want lease refresh required", err)

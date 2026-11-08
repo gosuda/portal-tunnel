@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -39,9 +38,6 @@ var (
 	errTunnelIsRequired                    = errors.New("tunnel is required")
 	errSubjectIsRequired                   = errors.New("--subject is required")
 	errExpiresMustBePositive               = errors.New("--expires must be positive")
-	errPaymentAmountIsRequired             = errors.New("payment amount is required")
-	errPaymentMethodIsRequired             = errors.New("payment method is required")
-	errPaymentMethodsAreRequiredBefore     = errors.New("payment methods are required before ':'")
 	errNoRelayURLsConfigured               = errors.New("no relay URLs configured")
 )
 
@@ -209,33 +205,9 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 		return tunnel.Spec{}, errCacheTTLRequiresCache
 	}
 	for _, raw := range flags.httpRoutes {
-		fields := strings.Fields(raw)
-		if len(fields) == 0 || len(fields) > 2 {
-			return tunnel.Spec{}, fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
-		}
-		prefix, upstream, ok := strings.Cut(fields[0], "=")
-		if !ok {
-			return tunnel.Spec{}, fmt.Errorf("--http-route %q: expected PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", raw)
-		}
-		prefix = strings.TrimSpace(prefix)
-		if prefix == "" {
-			return tunnel.Spec{}, fmt.Errorf("--http-route %q: path is required", raw)
-		}
-		upstream = strings.TrimSpace(upstream)
-		if upstream == "" {
-			return tunnel.Spec{}, fmt.Errorf("--http-route %q: upstream is required", raw)
-		}
-		route := tunnel.HTTPRoute{
-			Prefix:   prefix,
-			Upstream: upstream,
-		}
-		if len(fields) == 2 {
-			methods, amount, err := parseHTTPRoutePayment(fields[1])
-			if err != nil {
-				return tunnel.Spec{}, fmt.Errorf("--http-route %q: %w", raw, err)
-			}
-			route.Methods = methods
-			route.Amount = amount
+		route, err := tunnel.ParseHTTPRoute(raw)
+		if err != nil {
+			return tunnel.Spec{}, fmt.Errorf("--http-route %q: %w", raw, err)
 		}
 		cfg.HTTPRoutes = append(cfg.HTTPRoutes, route)
 	}
@@ -327,39 +299,6 @@ func runAuthCommand(args []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "Credential: %s\nRedeem URL: %s\n", credential, redeemURL)
 	return nil
-}
-
-func parseHTTPRoutePayment(value string) ([]string, string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil, "", errPaymentAmountIsRequired
-	}
-	methodPart, amount, hasMethods := strings.Cut(value, ":")
-	if !hasMethods {
-		amount = value
-		methodPart = ""
-	}
-	amount = strings.TrimSpace(amount)
-	if amount == "" {
-		return nil, "", errPaymentAmountIsRequired
-	}
-	methods := []string(nil)
-	if hasMethods {
-		for rawMethod := range strings.SplitSeq(methodPart, ",") {
-			method := strings.ToUpper(strings.TrimSpace(rawMethod))
-			if method == "" {
-				return nil, "", errPaymentMethodIsRequired
-			}
-			exists := slices.Contains(methods, method)
-			if !exists {
-				methods = append(methods, method)
-			}
-		}
-		if len(methods) == 0 {
-			return nil, "", errPaymentMethodsAreRequiredBefore
-		}
-	}
-	return methods, amount, nil
 }
 
 func runUpdateCommand(args []string) error {

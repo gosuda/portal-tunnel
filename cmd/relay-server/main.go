@@ -53,6 +53,7 @@ type appConfig struct {
 	ApprovalMode      string
 	TrustProxyHeaders bool
 	TrustedProxyCIDRs string
+	TunnelSourceCIDRs string
 	FrontendDir       string
 	AdminToken        string
 	PprofEnabled      bool
@@ -111,6 +112,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.Int(fs, &cfg.Relay.SNIPort, "sni-port", 0, parsePortNumber, "local TCP SNI router listen port (0 follows the PORTAL_URL port when it names one, else 443)", "SNI_PORT")
 	env.Bool(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	env.String(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "explicit trusted proxy CIDR allowlist for forwarded headers, comma-separated; empty trusts no proxies", "TRUSTED_PROXY_CIDRS")
+	env.String(fs, &cfg.TunnelSourceCIDRs, "tunnel-source-cidrs", "", "networks that may register tunnels, comma-separated CIDRs; empty allows every network", "TUNNEL_SOURCE_CIDRS")
 
 	env.Bool(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
 	env.Bool(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")

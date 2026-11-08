@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Agent: relay status and configuration compatibility
+
+`/agent/status` now reports relay `state` (`ready`, `connecting`, or `failed`)
+and optional `failure` instead of the `connecting` boolean. Scripts should use
+`state == "connecting"` for that check. The previously unpopulated `explicit`,
+`bootstrap`, `banned`, `supports_udp`, and `supports_tcp` fields are removed.
+Stopped or retrying tunnels return no historical relay entries. A running
+tunnel's failed relays remain removable with **Disconnect** in the dashboard.
+
+HTTP route `methods` now rejects empty or whitespace-only entries, including
+entries on free routes. Previously those entries could disappear during
+normalization; on a paid route, an emptied list charged every method. Before
+upgrading, replace blank entries with the intended methods, or remove `methods`
+entirely when no method filter is needed. Free routes must omit `methods`.
+One invalid saved route prevents the entire agent configuration from loading,
+so correct it in the TOML configuration before restarting the upgraded agent.
+
+Discovery announcement attempts, including network failures, now log at debug
+level. An unreachable bootstrap target does not emit a warning every poll.
+
+### Relay: accept tunnels only from your networks
+
+`TUNNEL_SOURCE_CIDRS` lists the networks that may register tunnels. A tunnel from
+anywhere else gets `403 source_not_allowed` when it registers or renews, before
+the relay spends any pre-auth budget on it, and the SDK stops using that relay.
+Visitors are not affected, and the list applies under either approval mode, so a
+private relay can stay on `auto`. Empty, the default, accepts every network as
+before. Behind a reverse proxy the list needs `TRUST_PROXY_HEADERS` and
+`TRUSTED_PROXY_CIDRS`, or every tunnel appears to come from the proxy. An older
+relay ignores the setting, so a downgrade accepts every network again. See
+[Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks).
+
 ### Local relay: a certificate Safari can trust
 
 A local relay's self-signed certificate is now valid for 825 days instead of ten

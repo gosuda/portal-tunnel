@@ -286,6 +286,8 @@ address as a `/32`** (`/128` for IPv6). An empty allowlist trusts no proxies,
 including private and loopback peers, and Portal uses the socket address.
 Do not allowlist an entire private subnet: on a Docker host that would let
 other containers choose their client address and bypass source limits.
+`TUNNEL_SOURCE_CIDRS` matches this same resolved address, so a wrong proxy
+allowlist also lets the wrong tunnels in.
 
 That address has to be *fixed*. Compose assigns container addresses
 dynamically, so a `/32` matching whatever nginx got today stops matching the

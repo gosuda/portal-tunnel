@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -235,48 +234,14 @@ func agentDashboardParseAddHTTPRoutes(value string) ([]tunnel.HTTPRoute, error) 
 		if segment == "" {
 			continue
 		}
-		key, rest, ok := strings.Cut(segment, "=")
-		if !ok {
-			return nil, fmt.Errorf("route %q must be PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", segment)
+		route, err := tunnel.ParseHTTPRoute(segment)
+		if err != nil {
+			return nil, fmt.Errorf("route %q: %w", segment, err)
 		}
-		key = strings.TrimSpace(key)
-		rest = strings.TrimSpace(rest)
-		if strings.EqualFold(key, "payto") || strings.EqualFold(key, "x402_pay_to") {
-			return nil, fmt.Errorf("use the X402 Pay To field instead of %q in routes", key)
+		if _, ok := seen[route.Prefix]; ok {
+			return nil, fmt.Errorf("duplicate route path %q", route.Prefix)
 		}
-		if key == "" {
-			return nil, fmt.Errorf("route path is required")
-		}
-		if !strings.HasPrefix(key, "/") {
-			return nil, fmt.Errorf("route path %q must start with /", key)
-		}
-
-		parts := strings.Fields(rest)
-		if len(parts) == 0 || len(parts) > 2 {
-			return nil, fmt.Errorf("route %q must be PATH=UPSTREAM [METHOD[,METHOD...]:USDC_AMOUNT]", segment)
-		}
-		if parts[0] == "" {
-			return nil, fmt.Errorf("route %q upstream is required", key)
-		}
-
-		prefix := utils.NormalizeURLPath(key)
-		if _, ok := seen[prefix]; ok {
-			return nil, fmt.Errorf("duplicate route path %q", prefix)
-		}
-		seen[prefix] = struct{}{}
-
-		route := tunnel.HTTPRoute{
-			Prefix:   prefix,
-			Upstream: parts[0],
-		}
-		if len(parts) == 2 {
-			methods, amount, err := agentDashboardParseAddRoutePayment(parts[1])
-			if err != nil {
-				return nil, fmt.Errorf("route %q: %w", prefix, err)
-			}
-			route.Methods = methods
-			route.Amount = amount
-		}
+		seen[route.Prefix] = struct{}{}
 		routes = append(routes, route)
 	}
 
@@ -284,40 +249,6 @@ func agentDashboardParseAddHTTPRoutes(value string) ([]tunnel.HTTPRoute, error) 
 		return nil, fmt.Errorf("at least one http route is required")
 	}
 	return routes, nil
-}
-
-func agentDashboardParseAddRoutePayment(value string) ([]string, string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil, "", fmt.Errorf("payment amount is required")
-	}
-	methodPart, amount, hasMethods := strings.Cut(value, ":")
-	if !hasMethods {
-		amount = value
-		methodPart = ""
-	}
-	amount = strings.TrimSpace(amount)
-	if amount == "" {
-		return nil, "", fmt.Errorf("payment amount is required")
-	}
-	if !hasMethods {
-		return nil, amount, nil
-	}
-
-	methods := []string(nil)
-	for rawMethod := range strings.SplitSeq(methodPart, ",") {
-		method := strings.ToUpper(strings.TrimSpace(rawMethod))
-		if method == "" {
-			return nil, "", fmt.Errorf("payment method is required")
-		}
-		if !slices.Contains(methods, method) {
-			methods = append(methods, method)
-		}
-	}
-	if len(methods) == 0 {
-		return nil, "", fmt.Errorf("payment methods are required before ':'")
-	}
-	return methods, amount, nil
 }
 
 func (m agentDashboardModel) startOrAddTunnel() (tea.Model, tea.Cmd) {

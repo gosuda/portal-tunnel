@@ -323,6 +323,9 @@ with a status LED, explained in the legend beside the panes:
 | `[!]` | error |
 
 The bar at the bottom lists the keys that work in the active pane and state.
+Relay connect/disconnect commands require a running tunnel and apply to its
+current exposure. They survive metadata updates and adding or deleting other
+tunnels, but reset to the saved relay settings when that tunnel restarts.
 Terminals such as macOS Terminal often keep function keys for themselves, so
 every function key has a letter or key alias:
 
@@ -574,6 +577,13 @@ Control endpoints:
 Wallet auth endpoints also exist under `/agent/auth/*`. Wallet-authenticated
 requests are read-only and can only call `/agent/status`; mutating operations
 use the local bearer token from the state directory.
+
+Each relay in `/agent/status` carries `state` (`connecting`, `ready`, or
+`failed`), optional `failure` (`runtime`, `terminal`, or `mitm`), and optional
+`approval` (`pending` or `refused`). Use `state` for connection status; a failed
+relay can retain its last canonical URL. The Relays pane displays this state
+directly. A tunnel without a runtime has no relay entries, including while it
+is stopped or waiting to retry.
 
 ## Agent Wallet Access
 

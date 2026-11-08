@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -56,6 +57,42 @@ type Config struct {
 // fields called Config would shadow each other without a word.
 type AuthConfig = appauth.Config
 
+// ParseHTTPRoute parses one PATH=UPSTREAM [METHOD[,METHOD...]:AMOUNT] entry.
+// An amount without methods applies payment to every method.
+func ParseHTTPRoute(value string) (HTTPRoute, error) {
+	prefix, rest, ok := strings.Cut(value, "=")
+	if !ok {
+		return HTTPRoute{}, fmt.Errorf("expected PATH=UPSTREAM [METHOD[,METHOD...]:AMOUNT]")
+	}
+	prefix = strings.TrimSpace(prefix)
+	if !strings.HasPrefix(prefix, "/") {
+		return HTTPRoute{}, fmt.Errorf("route path %q must start with /", prefix)
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 || len(fields) > 2 {
+		return HTTPRoute{}, fmt.Errorf("expected an upstream and optional payment amount")
+	}
+	route := HTTPRoute{Prefix: utils.NormalizeURLPath(prefix), Upstream: fields[0]}
+	if len(fields) == 2 {
+		methods, amount, hasMethods := strings.Cut(fields[1], ":")
+		if !hasMethods {
+			amount = fields[1]
+		}
+		if amount == "" {
+			return HTTPRoute{}, fmt.Errorf("payment amount is required")
+		}
+		route.Amount = amount
+		if hasMethods {
+			var err error
+			route.Methods, err = gateway.NormalizePaymentMethods(strings.Split(methods, ","))
+			if err != nil {
+				return HTTPRoute{}, err
+			}
+		}
+	}
+	return route, nil
+}
+
 // Normalize puts c in the form a config stores: values without surrounding
 // spaces, relay URLs in their canonical form, the methods of an HTTP route in
 // upper case and once each, and each component as its owner normalizes it. Paths
@@ -68,10 +105,14 @@ func (c *Config) Normalize() error {
 	if c.HTTPRoutes != nil {
 		routes := make([]HTTPRoute, 0, len(c.HTTPRoutes))
 		for _, route := range c.HTTPRoutes {
+			methods, err := gateway.NormalizePaymentMethods(route.Methods)
+			if err != nil {
+				return fmt.Errorf("HTTP route %q: %w", route.Prefix, err)
+			}
 			routes = append(routes, HTTPRoute{
 				Prefix:   strings.TrimSpace(route.Prefix),
 				Upstream: strings.TrimSpace(route.Upstream),
-				Methods:  normalizeHTTPMethods(route.Methods),
+				Methods:  methods,
 				Amount:   strings.TrimSpace(route.Amount),
 			})
 		}
@@ -92,17 +133,6 @@ func (c *Config) Normalize() error {
 	}
 	c.X402Config = c.X402Config.Normalize()
 	return nil
-}
-
-func normalizeHTTPMethods(methods []string) []string {
-	var out []string
-	for _, method := range methods {
-		method = strings.ToUpper(strings.TrimSpace(method))
-		if method != "" && !slices.Contains(out, method) {
-			out = append(out, method)
-		}
-	}
-	return out
 }
 
 // Spec resolves c into the runtime description of the tunnel: it normalizes c,
@@ -135,7 +165,7 @@ func (c Config) Spec() (Spec, error) {
 			Serve:               c.Serve,
 			Routes:              c.HTTPRoutes,
 			StripRequestHeaders: c.StripRequestHeaders,
-			Payment:             gateway.X402Payment{X402Config: c.X402Config},
+			Payment:             c.X402Config,
 			Cache:               c.Cache,
 		}
 		if !auth.IsZero() {

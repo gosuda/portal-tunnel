@@ -23,6 +23,7 @@ const (
 	APIErrorCodeNotFound                = "not_found"
 	APIErrorCodeRateLimited             = "rate_limited"
 	APIErrorCodeReplicaConflict         = "replica_conflict"
+	APIErrorCodeSourceNotAllowed        = "source_not_allowed"
 	APIErrorCodeUnauthorized            = "unauthorized"
 	APIErrorCodeUDPPortExhausted        = "udp_port_exhausted"
 	APIErrorCodeUDPDisabled             = "udp_disabled"

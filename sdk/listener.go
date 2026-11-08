@@ -228,7 +228,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		tcpEnabled:    cfg.TCPEnabled,
 		cache:         cfg.Cache,
 		api:           &apiClient{relayURL: relayurl},
-		lease:         utils.NewSnapshot(listenerSnapshot{}, listenerSnapshot.snapshot),
+		lease:         utils.NewSnapshot(listenerSnapshot{}),
 		startedAt:     cfg.StartedAt,
 	}
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
@@ -502,10 +502,6 @@ type listenerSnapshot struct {
 	// chainCheckedAt is when the relay chain tenantTLS pins was last found
 	// current: at registration, and at each scheduled check that completed.
 	chainCheckedAt time.Time
-}
-
-func (s listenerSnapshot) snapshot() listenerSnapshot {
-	return s
 }
 
 func (s listenerSnapshot) hasRawEndpoint() bool {
