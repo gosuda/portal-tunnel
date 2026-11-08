@@ -80,4 +80,35 @@ describe("useServerList public snapshot", () => {
     unmount();
   });
 
+  it("keeps the same directory when a poll returns an unchanged snapshot", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ leases: [{ ...lease, ready: 1 }] });
+    const { result, unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+
+    const directory = result.current.filteredServers;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+    expect(apiClient.get).toHaveBeenCalledTimes(2);
+    expect(result.current.filteredServers).toBe(directory);
+    unmount();
+  });
+
+  it("stops polling while the tab is hidden and refreshes when it shows again", async () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    vi.mocked(apiClient.get).mockResolvedValue({ leases: [lease] });
+    const { unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+
+    hidden = true;
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+
+    hidden = false;
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(apiClient.get).toHaveBeenCalledTimes(2);
+    unmount();
+  });
 });

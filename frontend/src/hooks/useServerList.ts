@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BrowseView } from "@/types/filters";
 import { useList } from "@/hooks/useList";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -15,6 +15,7 @@ import type {
 } from "@/types/api";
 
 const DESKTOP_QUERY = "(min-width: 1024px)";
+const POLL_INTERVAL_MS = 1500;
 
 function normalizeHostname(hostname: string): string {
   return hostname.trim().toLowerCase();
@@ -61,12 +62,29 @@ export function useServerList() {
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
 
+  // The last snapshot as the relay sent it; an identical poll keeps the
+  // current state, so the directory does not filter, sort and re-render.
+  const lastSnapshot = useRef("");
+
   useEffect(() => {
     let cancelled = false;
-
     let timer: number | undefined;
+    let inFlight = false;
+
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = undefined;
+      // A hidden tab stops polling; becoming visible refreshes at once.
+      if (!cancelled && !document.hidden) {
+        timer = window.setTimeout(() => void refresh(), POLL_INTERVAL_MS);
+      }
+    };
 
     const refresh = async () => {
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
       try {
         const data = await apiClient.get<PublicStateResponse>(
           RELAY_API_PATHS.public.state
@@ -74,28 +92,46 @@ export function useServerList() {
         if (cancelled) {
           return;
         }
+        const leases = Array.isArray(data?.leases) ? data.leases : [];
+        const snapshot = JSON.stringify([leases, data?.reputation ?? null]);
+        if (snapshot === lastSnapshot.current) {
+          setPublicState((previous) =>
+            previous.stale ? { ...previous, stale: false } : previous
+          );
+          return;
+        }
+        lastSnapshot.current = snapshot;
         setSummaries(collectReputation(data?.reputation));
-        setPublicState({
-          leases: Array.isArray(data?.leases) ? data.leases : [],
-          stale: false,
-        });
+        setPublicState({ leases, stale: false });
       } catch (error) {
         console.error("Failed to load public relay state", error);
         if (!cancelled) {
-          setPublicState((previous) => ({ ...previous, stale: true }));
+          setPublicState((previous) =>
+            previous.stale ? previous : { ...previous, stale: true }
+          );
         }
       } finally {
-        if (!cancelled) {
-          timer = window.setTimeout(() => void refresh(), 1500);
-        }
+        inFlight = false;
+        schedule();
       }
     };
 
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      } else {
+        void refresh();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     void refresh();
 
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
@@ -114,6 +150,8 @@ export function useServerList() {
         typeof response?.down === "number" &&
         typeof response?.total === "number"
       ) {
+        // The next poll must apply the relay's count even if it matches the old snapshot.
+        lastSnapshot.current = "";
         setSummaries((current) => ({
           ...current,
           [key]: {
