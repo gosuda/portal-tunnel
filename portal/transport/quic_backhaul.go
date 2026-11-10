@@ -206,15 +206,11 @@ func awaitBackhaulRace(ctx context.Context, timer *time.Timer, results <-chan ba
 			firstErr = nextFirstErr
 			if !fallbackStarted {
 				fallbackStarted = true
-				launchBackhaulFallback(timer, startFallback)
+				timer.Stop()
+				startFallback()
 			}
 		}
 	}
-}
-
-func launchBackhaulFallback(timer *time.Timer, startFallback func()) {
-	timer.Stop()
-	startFallback()
 }
 
 func settleBackhaulResult(firstErr error, result backhaulRaceResult) (error, *quic.Conn, error, bool) {
