@@ -304,20 +304,21 @@ func (p *Provider) findZoneID(ctx context.Context, domain string) (string, error
 			return "", err
 		}
 		for _, z := range zones {
-			if strings.EqualFold(z.Name, candidate) {
-				zoneID := strings.TrimSpace(z.ID)
-				if zoneID == "" {
-					continue
-				}
-				zoneName := utils.NormalizeHostname(z.Name)
-				p.zones.UpdateCopy(func(zones *map[string]string) {
-					if *zones == nil {
-						*zones = make(map[string]string)
-					}
-					(*zones)[zoneName] = zoneID
-				})
-				return zoneID, nil
+			if !strings.EqualFold(z.Name, candidate) {
+				continue
 			}
+			zoneID := strings.TrimSpace(z.ID)
+			if zoneID == "" {
+				continue
+			}
+			zoneName := utils.NormalizeHostname(z.Name)
+			p.zones.UpdateCopy(func(zones *map[string]string) {
+				if *zones == nil {
+					*zones = make(map[string]string)
+				}
+				(*zones)[zoneName] = zoneID
+			})
+			return zoneID, nil
 		}
 	}
 	return "", fmt.Errorf("no cloudflare zone found for %s", domain)

@@ -9,16 +9,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// The sign-in pages share one shell, so every method looks like Portal and a new
-// method adds a body and a script instead of new CSS. Everything is inline except
-// the web fonts, which load from the CDN the relay frontend already uses; the
-// content security policy admits that one font host and nothing else.
 const signinContentSecurityPolicy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
 	"font-src https://fonts.bunny.net; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
-// signinShell holds the placeholders @@HOST@@ and @@FULLHOST@@ (the protected host,
-// filled per request and HTML-escaped), @@BODY@@ and @@SCRIPT@@ (the per-screen
-// parts, filled once at start).
 const signinShell = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark"><title>Sign in to continue</title><style>
@@ -100,12 +93,6 @@ a.btn{display:flex;align-items:center;justify-content:center;text-decoration:non
 @@SCRIPT@@
 </script></body></html>`
 
-// signinScriptPrelude holds what every method shares: switching between the
-// screens of a method, the post-login target check, and the request helper.
-// The target check refuses control characters and backslashes because browsers
-// drop tabs and newlines from URLs, so "/<TAB>/host" would become "//host".
-// done goes to the target of the login page, or to the one it is given, such as
-// the target an email link was requested with.
 const signinScriptPrelude = `const views=[...document.querySelectorAll('[data-view]')];
 const show=(name)=>{let shown;views.forEach((v)=>{v.hidden=v.dataset.view!==name;if(!v.hidden)shown=v});const h=shown&&shown.querySelector('h1');if(h)h.focus({preventScroll:true})};
 document.addEventListener('click',(e)=>{const b=e.target.closest('[data-go]');if(b)show(b.dataset.go)});
@@ -116,7 +103,6 @@ const fail=(message)=>{document.querySelector('#err-msg').textContent=message||'
 const post=async(path,body)=>{const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let data={};try{data=await response.json()}catch(e){}return{status:response.status,ok:response.ok,data}};
 `
 
-// Screens every method ends in, after its own screens.
 const signinCommonViews = `<section data-view="ok" hidden><div class="ico ok"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg></div><h1 tabindex="-1">You are signed in</h1><p class="body">Taking you to <span class="mono" id="dest"></span>.</p></section>
 <section data-view="error" hidden><div class="ico danger"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg></div><h1 tabindex="-1">Something went wrong</h1><p class="body" id="err-msg"></p><button type="button" class="btn" data-go="form">Try again</button></section>`
 
@@ -149,11 +135,6 @@ const v=await post('` + types.PathApplicationAuthVerify + `',{challenge_id:c.dat
 }catch(e){if(e&&e.code===4001){show('form');return}fail(e&&e.message)}};
 document.addEventListener('click',(e)=>{const b=e.target.closest('[data-connect]');if(b)connect(b.dataset.connect==='fresh')});`
 
-// The email screens: the form, the screens while a link is requested and after,
-// and the ones while a link from the mail is redeemed. The page answers the same
-// for every address, so the sent screen cannot say whether a mail went out. A
-// link waits for a click, because it works once and a mail scanner may open it
-// and run this page: a scanner must not use up the link of the visitor.
 const signinEmailBody = `<section data-view="form"><h1 tabindex="-1">Sign in with email</h1><p class="body">Enter your email address. If it has access to this app, you will get a one-time sign-in link.</p>
 <form id="email-form" novalidate><div class="field"><label for="email">Email address</label><input id="email" type="email" placeholder="you@example.com" autocomplete="email" autocapitalize="off" spellcheck="false">
 <p class="err" id="hint" role="alert" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"/></svg><span id="hint-msg"></span></p></div>
@@ -170,11 +151,6 @@ const warn=(message)=>{hintMsg.textContent=message;hint.hidden=false;show('form'
 document.querySelector('#email-form').addEventListener('submit',async(e)=>{e.preventDefault();const email=input.value.trim();hint.hidden=true;if(!email){warn('Enter your email address first.');return}show('sending');try{const r=await post('` + types.PathApplicationAuthEmailRequest + `',{email,next:next()});if(r.status===400){warn('Enter a valid email address.');return}if(!r.ok){fail(r.data.error);return}document.querySelector('#to').textContent=email;show('sent')}catch(e){fail()}});
 const fragment=new URLSearchParams(location.hash.slice(1));if(fragment.has('email_token')){const token=fragment.get('email_token');history.replaceState(null,'',location.pathname+location.search);show('confirm');document.querySelector('#redeem').addEventListener('click',()=>{show('checking');post('` + types.PathApplicationAuthEmailRedeem + `',{token}).then((r)=>{if(r.status===401){show('invalid');return}if(!r.ok){fail(r.data.error);return}done(r.data.next)},()=>fail())})}`
 
-// An OIDC or SAML login leaves for the provider at once, so its only screens
-// are the ways it can come back without a session. They are rendered by the
-// server and need no script. @@ISSUER@@ is the provider's host, @@RETRY@@ the login link
-// that keeps the visitor's target, and @@ACCOUNT@@ the account the provider
-// signed in, in the form an allowlist entry takes.
 const (
 	signinProviderExpiredBody = `<section><div class="ico info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-clock"/></svg></div><h1>Sign-in took too long</h1><p class="body">This sign-in expired, or a newer one was started in another tab. Start it again from here.</p><a class="btn" href="@@RETRY@@">Sign in again</a></section>`
 
@@ -200,8 +176,6 @@ func newSigninPage(body, script string) string {
 	return strings.NewReplacer("@@BODY@@", body, "@@SCRIPT@@", script).Replace(signinShell)
 }
 
-// setSigninHeaders marks a response as a sign-in page: never cached or sniffed,
-// and held to the sign-in content policy.
 func setSigninHeaders(h http.Header) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Security-Policy", signinContentSecurityPolicy)
@@ -209,10 +183,6 @@ func setSigninHeaders(h http.Header) {
 	h.Set("X-Content-Type-Options", "nosniff")
 }
 
-// writeSigninPage renders a sign-in page for the host the visitor reached, with
-// fields holding further placeholder and value pairs. The host and the values
-// come from the request or the provider, so they are escaped, and all of them
-// are filled in one pass so a value is never read as a placeholder.
 func writeSigninPage(w io.Writer, page, host string, fields ...string) {
 	host = strings.TrimSpace(host)
 	pairs := append([]string{"@@HOST@@", displayHost(host), "@@FULLHOST@@", host}, fields...)
@@ -222,8 +192,6 @@ func writeSigninPage(w io.Writer, page, host string, fields ...string) {
 	_, _ = io.WriteString(w, strings.NewReplacer(pairs...).Replace(page))
 }
 
-// displayHost shortens the identity-bound first label of a canonical host, such
-// as "home-ha-377e330d…4083d4.relay.example", to keep the host chip readable.
 func displayHost(host string) string {
 	label, rest, found := strings.Cut(host, ".")
 	runes := []rune(label)

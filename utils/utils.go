@@ -67,8 +67,10 @@ func CompactStrings(values []string) []string {
 }
 
 func TrimHexPrefix(raw string) string {
-	hasHexPrefix := len(raw) >= 2 && raw[0] == '0'
-	if hasHexPrefix && (raw[1] == 'x' || raw[1] == 'X') {
+	if len(raw) < 2 || raw[0] != '0' {
+		return raw
+	}
+	if raw[1] == 'x' || raw[1] == 'X' {
 		return raw[2:]
 	}
 	return raw
@@ -357,8 +359,6 @@ func ExtractCanonicalHostnameAddress(hostname string) (string, error) {
 	return "0x" + strings.ToLower(address), nil
 }
 
-// hasCanonicalShape reports whether label is shaped like a canonical label:
-// a 40-character hex address, alone or after a hyphen.
 func hasCanonicalShape(label string) bool {
 	if isHexAddress(label) {
 		return true
@@ -375,7 +375,6 @@ func isHexAddress(s string) bool {
 	return err == nil
 }
 
-// canonicalNameHash returns the name part of a long name's canonical label.
 func canonicalNameHash(label string) string {
 	h := sha256.New()
 	h.Write([]byte(types.CanonicalLeaseNameHashDomain))

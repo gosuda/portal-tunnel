@@ -36,21 +36,14 @@ const (
 	samlTestProtocolNS = "urn:oasis:names:tc:SAML:2.0:protocol"
 )
 
-// samlTestIdP is a stub identity provider: it publishes metadata naming its
-// signing certificate and signs responses that a test bends into each failure
-// the gateway must refuse.
 type samlTestIdP struct {
 	server   *httptest.Server
 	entityID string
 	key      *rsa.PrivateKey
 	cert     []byte
-	// metadata is served at /metadata; it holds the signing certificate
-	// unless a test replaces it.
 	metadata string
 }
 
-// newSAMLTestKey makes a signing key with a self-signed certificate that is
-// valid until notAfter.
 func newSAMLTestKey(t *testing.T, notAfter time.Time) (*rsa.PrivateKey, []byte) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -90,8 +83,6 @@ func newSAMLTestIdP(t *testing.T) *samlTestIdP {
 
 func (p *samlTestIdP) metadataURL() string { return p.server.URL + "/metadata" }
 
-// metadataXML describes the stub with the given base64 certificate, wrapped
-// in a list as some identity providers publish it.
 func (p *samlTestIdP) metadataXML(cert string) string {
 	return fmt.Sprintf(`<?xml version="1.0"?>
 <md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" Name="urn:test">
@@ -105,8 +96,6 @@ func (p *samlTestIdP) metadataXML(cert string) string {
 </md:EntitiesDescriptor>`, p.entityID, cert, p.server.URL)
 }
 
-// samlTestResponse is everything a test can bend in the stub's response. The
-// zero value of a field leaves out its element or attribute.
 type samlTestResponse struct {
 	issuer              string
 	status              string
@@ -125,15 +114,11 @@ type samlTestResponse struct {
 
 	signAssertion bool
 	signResponse  bool
-	// signKey and signCert sign instead of the stub's own key when set.
-	signKey  *rsa.PrivateKey
-	signCert []byte
-	// tamper changes the response after it was signed.
-	tamper func(response *etree.Element)
+	signKey       *rsa.PrivateKey
+	signCert      []byte
+	tamper        func(response *etree.Element)
 }
 
-// validResponse is a correct answer to login for alice@example.com, with a
-// signed assertion, the way Okta, Entra ID and ADFS sign by default.
 func (p *samlTestIdP) validResponse(login samlLogin) samlTestResponse {
 	now := time.Now()
 	return samlTestResponse{
@@ -179,7 +164,6 @@ func (p *samlTestIdP) sign(t *testing.T, r samlTestResponse, el *etree.Element) 
 	return signed
 }
 
-// encode builds, signs and encodes r as the SAMLResponse form value.
 func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
 	t.Helper()
 	now := time.Now()
@@ -254,8 +238,6 @@ func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
 	return base64.StdEncoding.EncodeToString(raw)
 }
 
-// newSAMLTestGate gates next behind idp. It admits only alice@example.com
-// unless configure changes the settings.
 func newSAMLTestGate(t *testing.T, idp *samlTestIdP, next http.Handler, configure func(*Config)) *applicationAuth {
 	t.Helper()
 	cfg := Config{
@@ -276,8 +258,6 @@ func newSAMLTestGate(t *testing.T, idp *samlTestIdP, next http.Handler, configur
 	return handler.(*applicationAuth)
 }
 
-// samlLogin is what a browser holds between the redirect to the identity
-// provider and the response it posts back.
 type samlLogin struct {
 	requestID string
 	cookie    *http.Cookie
@@ -311,7 +291,6 @@ func startSAMLLogin(t *testing.T, gate *applicationAuth, target string) samlLogi
 	return samlLogin{requestID: doc.Root().SelectAttrValue("ID", ""), cookie: cookies[0], request: doc.Root()}
 }
 
-// post is the browser posting encoded back to the ACS URL with the login state.
 func (l samlLogin) post(gate *applicationAuth, encoded string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, samlTestACSURL, strings.NewReader(url.Values{"SAMLResponse": {encoded}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -323,8 +302,6 @@ func (l samlLogin) post(gate *applicationAuth, encoded string) *httptest.Respons
 	return rec
 }
 
-// assertSAMLACS checks the status, that a session cookie exists exactly when
-// the login succeeded, and that the one-time state cookie is cleared.
 func assertSAMLACS(t *testing.T, rec *httptest.ResponseRecorder, want int) *http.Cookie {
 	t.Helper()
 	if rec.Code != want {
@@ -351,10 +328,6 @@ func assertSAMLACS(t *testing.T, rec *httptest.ResponseRecorder, want int) *http
 	return session
 }
 
-// A visitor without a session is sent to the identity provider, and the
-// signed assertion that answers that login lands them on their target with the
-// standard session; the identity headers then carry saml, never what the
-// visitor sent.
 func TestApplicationAuthSAMLLogin(t *testing.T) {
 	t.Parallel()
 
@@ -415,8 +388,6 @@ func TestApplicationAuthSAMLLogin(t *testing.T) {
 	}
 }
 
-// The login lands on the target the visitor asked for, carried in the signed
-// state, and a target that leaves the origin becomes /.
 func TestApplicationAuthSAMLLandsOnNext(t *testing.T) {
 	t.Parallel()
 
@@ -435,8 +406,6 @@ func TestApplicationAuthSAMLLandsOnNext(t *testing.T) {
 	}
 }
 
-// Every response that is not a signed, correctly addressed, timely answer to
-// this browser's login is refused, and no session is issued.
 func TestApplicationAuthSAMLRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -544,9 +513,6 @@ func TestApplicationAuthSAMLRefusals(t *testing.T) {
 	})
 }
 
-// Both signing forms that identity providers use by default are accepted: a
-// signed response with an unsigned assertion (Keycloak) and a signed assertion
-// in an unsigned response (Okta, Entra ID, ADFS).
 func TestApplicationAuthSAMLAcceptsEitherSignature(t *testing.T) {
 	t.Parallel()
 
@@ -569,8 +535,6 @@ func TestApplicationAuthSAMLAcceptsEitherSignature(t *testing.T) {
 	}
 }
 
-// An assertion is accepted once: presenting it again, even with the login
-// state it answered, is refused.
 func TestApplicationAuthSAMLRefusesReplay(t *testing.T) {
 	t.Parallel()
 
@@ -582,9 +546,6 @@ func TestApplicationAuthSAMLRefusesReplay(t *testing.T) {
 	assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
 }
 
-// The replay set is bounded: entries leave once the login state they answered
-// has expired, and a set still full of live entries refuses instead of
-// forgetting one early.
 func TestSAMLReplaySetIsBounded(t *testing.T) {
 	t.Parallel()
 
@@ -610,10 +571,6 @@ func TestSAMLReplaySetIsBounded(t *testing.T) {
 	}
 }
 
-// The subject is the NameID unless an attribute is named. Only a value shaped
-// like an email matches email and @domain entries, any value matches its sub:
-// entry, and the allowlist is checked again on every request, so removing an
-// entry ends the sessions it admitted.
 func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 	t.Parallel()
 
@@ -697,8 +654,6 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 	})
 }
 
-// A browser sees why its login ended without a session, on the shared sign-in
-// screens; the refused account is shown in the form its allowlist entry takes.
 func TestApplicationAuthSAMLFailureScreens(t *testing.T) {
 	t.Parallel()
 
@@ -727,10 +682,6 @@ func TestApplicationAuthSAMLFailureScreens(t *testing.T) {
 	}
 }
 
-// The service provider metadata names the entity ID and the ACS URL of the
-// host it is read at, or the configured entity ID. It does not claim to want
-// signed assertions, since a signed response is accepted too
-// (TestApplicationAuthSAMLAcceptsEitherSignature).
 func TestApplicationAuthSAMLMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -762,8 +713,6 @@ func TestApplicationAuthSAMLMetadata(t *testing.T) {
 	}
 }
 
-// The session lasts as the identity provider's session says, within the OIDC
-// bounds, and never follows the short validity of the assertion itself.
 func TestApplicationAuthSAMLSessionLifetime(t *testing.T) {
 	t.Parallel()
 
@@ -794,8 +743,6 @@ func TestApplicationAuthSAMLSessionLifetime(t *testing.T) {
 	}
 }
 
-// The startup check reads the metadata the first login needs, from a URL or a
-// file, so that unusable metadata shows when the tunnel starts.
 func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 	t.Parallel()
 
@@ -813,8 +760,6 @@ func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 	if err := os.WriteFile(noKey, []byte(strings.Replace(idp.metadata, `use="signing"`, `use="encryption"`, 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// The certificate expired before the check, as with an IdP that keeps a
-	// self-signed certificate past its NotAfter.
 	_, expiredCert := newSAMLTestKey(t, time.Now().Add(-time.Minute))
 	expired := filepath.Join(t.TempDir(), "expired.xml")
 	if err := os.WriteFile(expired, []byte(idp.metadataXML(base64.StdEncoding.EncodeToString(expiredCert))), 0o600); err != nil {
@@ -839,8 +784,6 @@ func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 	}
 }
 
-// A sub: entry decides who may sign in, not who the visitor is: the application
-// still learns the address the identity provider signed, when it signed one.
 func TestSAMLPrincipalCarriesTheVouchedEmail(t *testing.T) {
 	t.Parallel()
 

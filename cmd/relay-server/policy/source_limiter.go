@@ -58,9 +58,9 @@ func (l *SourceLimiter) Allow(source netip.Addr, cost int) (time.Duration, strin
 			}
 		}
 	}
-	// Check global capacity before allocating memory for a new source.
 	if l.globalRate > 0 {
-		if retry := l.global.retry(now, l.globalRate, l.globalBurst, cost); retry > 0 {
+		retry := l.global.retry(now, l.globalRate, l.globalBurst, cost)
+		if retry > 0 {
 			return retry, preAuthLayerGlobal
 		}
 	}

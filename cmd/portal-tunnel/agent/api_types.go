@@ -15,10 +15,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// Agent control-plane DTOs. These live in the agent package because both
-// their producers (the manager and control API in this package) and their
-// consumers (the agent CLI and dashboard) are application surfaces; shared
-// types stay agent-blind.
+// Agent control-plane DTOs.
 
 type AgentStatusResponse struct {
 	ConfigPath    string              `json:"config_path,omitempty"`
@@ -106,8 +103,6 @@ type AgentTunnelUpdateRequest struct {
 	Auth            map[string]json.RawMessage `json:"-"`
 }
 
-// agentTunnelUpdateFields encodes and decodes the named fields of an
-// AgentTunnelUpdateRequest without its JSON methods.
 type agentTunnelUpdateFields AgentTunnelUpdateRequest
 
 func (r *AgentTunnelUpdateRequest) UnmarshalJSON(data []byte) error {
@@ -125,8 +120,6 @@ func (r *AgentTunnelUpdateRequest) UnmarshalJSON(data []byte) error {
 		if key != "auth" && !strings.HasPrefix(key, "auth_") {
 			continue
 		}
-		// Field names match without regard to case, so two spellings of one
-		// field would leave the outcome to the order of the map.
 		if _, ok := auth[key]; ok {
 			return fmt.Errorf("auth field %q is sent more than once", key)
 		}
@@ -157,9 +150,6 @@ func (r AgentTunnelUpdateRequest) Empty() bool {
 	return r.MaxActiveRelays == nil && (r.Metadata == nil || r.Metadata.Empty()) && len(r.Auth) == 0
 }
 
-// applyAuth decodes the auth fields of the request over auth, the stored
-// settings, and refuses a field the settings do not have. An empty auth clears
-// the settings and refuses any other auth field next to it.
 func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.Config) error {
 	if len(r.Auth) == 0 {
 		return nil
@@ -178,8 +168,6 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.Config) error {
 	if err != nil {
 		return err
 	}
-	// Decoding reuses the backing array of a slice, which the stored settings
-	// may share.
 	next := *auth
 	next.Allow, next.EmailList = slices.Clone(next.Allow), slices.Clone(next.EmailList)
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -191,12 +179,6 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.Config) error {
 	return nil
 }
 
-// authChanges is the auth part of an update that turns the stored settings into
-// desired: each field that differs, and each emptied one with its empty value.
-// Both are compared as a status shows them, so a write-only secret is never
-// among the changes; a client that changes one names it itself. An update
-// decodes over the stored settings, so it can empty a string, a number, a
-// boolean or a list, and a setting must be one of these.
 func authChanges(stored, desired appauth.Config) map[string]json.RawMessage {
 	fields := func(auth appauth.Config) map[string]json.RawMessage {
 		data, _ := json.Marshal(auth.Public())
@@ -215,8 +197,6 @@ func authChanges(stored, desired appauth.Config) map[string]json.RawMessage {
 		if _, ok := to[key]; ok {
 			continue
 		}
-		// Every field is omitted when empty, so a field only stored is emptied,
-		// with the empty value of the type it is stored as.
 		var storedValue any
 		_ = json.Unmarshal(value, &storedValue)
 		switch storedValue.(type) {

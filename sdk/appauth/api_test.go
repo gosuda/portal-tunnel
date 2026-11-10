@@ -24,8 +24,6 @@ func testIdentity(secret string) types.Identity {
 	return types.Identity{Name: "embedder", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat(secret, 32)}
 }
 
-// gatedServer serves next behind a gate on a TLS listener, the way a browser
-// reaches it: over HTTPS, under the host the session is bound to.
 type gatedServer struct {
 	*httptest.Server
 	host   string
@@ -45,7 +43,6 @@ func startGate(t *testing.T, cfg appauth.Config, next http.Handler) *gatedServer
 	return &gatedServer{Server: server, host: server.Listener.Addr().String(), client: client}
 }
 
-// signIn redeems a credential and returns the session cookie.
 func (s *gatedServer) signIn(t *testing.T, subject string) *http.Cookie {
 	t.Helper()
 	credential, err := appauth.IssueCredential(testIdentity("k"), s.host, subject, time.Now().Add(time.Hour))
@@ -125,8 +122,6 @@ func TestRequestWithoutSessionNeverReachesTheApplication(t *testing.T) {
 	}
 }
 
-// An embedder's handler takes over the connection for a WebSocket, so the gate
-// must hand it the original ResponseWriter, not a wrapper without Hijack.
 func TestWebSocketWithSessionReachesTheApplication(t *testing.T) {
 	t.Parallel()
 
@@ -200,9 +195,6 @@ func TestNoPrincipalWithoutAGate(t *testing.T) {
 	}
 }
 
-// An embedder swaps its application during a redeploy. A gate built again from
-// the same identity and settings must accept the sessions of the last one, and
-// must still apply its own allowlist to them.
 func TestRebuiltGateKeepsItsSessionsAndChecksItsAllowlist(t *testing.T) {
 	t.Parallel()
 
@@ -235,8 +227,6 @@ func TestRebuiltGateKeepsItsSessionsAndChecksItsAllowlist(t *testing.T) {
 	}
 }
 
-// json.Marshal drops the token secret of an identity. A random secret would end
-// every session at each start without a word, so a gate refuses to run without.
 func TestGateRefusesAnIdentityWithoutItsTokenSecret(t *testing.T) {
 	t.Parallel()
 
@@ -247,8 +237,6 @@ func TestGateRefusesAnIdentityWithoutItsTokenSecret(t *testing.T) {
 	}
 }
 
-// oidcWithIssuer is a complete OIDC config, so a test of the issuer fails for the
-// issuer alone.
 func oidcWithIssuer(issuer string) appauth.Config {
 	return appauth.Config{
 		Provider:   appauth.ProviderOIDC,
@@ -279,9 +267,6 @@ func TestNewReportsAMistakeInTheConfig(t *testing.T) {
 	}
 }
 
-// New must not read the network: a rebuild during a provider outage would fail
-// although every session it has to serve needs no provider. Check reports the
-// outage instead.
 func TestProviderOutageFailsCheckButNotNew(t *testing.T) {
 	t.Parallel()
 
@@ -302,8 +287,6 @@ func TestProviderOutageFailsCheckButNotNew(t *testing.T) {
 	}
 }
 
-// A secret enters a gate as a value, so it must not leave one in a status or an
-// error an embedder is likely to show.
 func TestSecretsStayOutOfStatusAndErrors(t *testing.T) {
 	t.Parallel()
 

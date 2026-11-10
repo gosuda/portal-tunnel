@@ -5,8 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReputationSummary } from "@/types/api";
 import { ServerDetail } from "./ServerDetail";
 
-// The gate behavior is what matters here; the transition wrapper is a
-// passthrough so tests do not depend on ssgoi's browser internals.
 vi.mock("@ssgoi/react", () => ({
   SsgoiTransition: ({ children }: { children?: ReactNode }) => <>{children}</>,
 }));
@@ -69,8 +67,6 @@ describe("ServerDetail reputation gate", () => {
       vi.advanceTimersByTime(1500);
     });
 
-    // The auto-open writes this flag right before navigating; it must
-    // stay unset while the gate holds the visitor.
     expect(sessionStorage.getItem("isPush")).toBeNull();
     expect(screen.getByText(/negative community ratings/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /open anyway/i })).toBeTruthy();

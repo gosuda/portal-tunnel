@@ -10,7 +10,7 @@ A relay is the public edge of the Portal network: for ordinary tunnels it termin
 
 ## Why this matters
 
-The Portal network has no central operator. It exists because people contribute relays. Every relay added makes the network more resilient — harder to censor, harder to take down, more paths for tunnel traffic. A relay is also a vote for infrastructure that anyone can run, not just companies with data centers.
+The Portal network has no central operator. It exists because people contribute relays. Every relay added gives tunnel traffic another path.
 
 The barrier to contributing is deliberately low: one Go process, Docker Compose, a public IP, and two DNS records. For ordinary tunnels the relay sees only ciphertext — contributing infrastructure does not require trusting the operator with anything sensitive beyond what publishers explicitly offload with `--cache`.
 

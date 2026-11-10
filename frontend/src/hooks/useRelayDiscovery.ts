@@ -14,7 +14,6 @@ import type { DiscoveryResponse, DomainResponse } from "@/types/api";
 interface RelayDiscoveryState {
   knownRelays: KnownRelay[];
   relayReleases: RelayReleases;
-  /** The serving relay's release; empty until the relay reports one. */
   releaseVersion: string;
   loading: boolean;
 }
@@ -58,10 +57,6 @@ async function loadRelayDiscovery(
   };
 }
 
-/**
- * The relays this relay knows of and their releases, read once per page. An
- * unreachable discovery endpoint leaves only the serving relay.
- */
 export function useRelayDiscovery(): RelayDiscoveryState {
   const [state, setState] = useState<RelayDiscoveryState>({
     knownRelays: [],

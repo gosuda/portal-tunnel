@@ -77,9 +77,6 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			status.WalletAddress = walletAddress
 		}
 		if !bearerAuthenticated {
-			// A wallet session is read-only and may be open to any wallet, so it
-			// does not learn who may sign in to a tunnel, or which mail account
-			// sends the links. The check error of that account can name it too.
 			for i := range status.Tunnels {
 				tunnel := &status.Tunnels[i]
 				tunnel.Allow, tunnel.EmailList = nil, nil
@@ -145,10 +142,7 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		switch action {
 		case "relays":
-			switch r.Method {
-			case http.MethodPost:
-			case http.MethodDelete:
-			default:
+			if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 				utils.MethodNotAllowedError().Write(w)
 				return
 			}
@@ -176,10 +170,6 @@ func (s *controlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// trustedLocalRequest requires the listener's actual authority (or its
-// localhost alias). Browsers must also send the same Origin when they send
-// one; clients without an Origin header, such as the local CLI, remain valid.
-// Never use X-Forwarded-Host or DNS resolution to authorize an HTTP Host.
 func (s *controlHandler) trustedLocalRequest(r *http.Request) bool {
 	if s.authority == "" || r.Host == "" {
 		return false

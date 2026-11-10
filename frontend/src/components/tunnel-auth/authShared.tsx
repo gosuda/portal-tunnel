@@ -119,10 +119,6 @@ export interface RadioOptionProps {
   onClick: () => void;
 }
 
-/**
- * A radio group made of buttons: only the checked option is in the tab
- * order, and the arrow keys move to the next option and check it.
- */
 export function useRadioGroup<Id extends string>(
   ids: readonly Id[],
   value: Id,
@@ -136,13 +132,12 @@ export function useRadioGroup<Id extends string>(
     }
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
+    let step = 0;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      step = 1;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      step = -1;
+    } else {
       return;
     }
     event.preventDefault();
@@ -264,7 +259,6 @@ const FIELD_INPUT_CLASS = cn(
   "h-9 font-mono text-[13px] read-only:opacity-70"
 );
 
-/** A labelled text input with the issues for its field and optional help below. */
 export function TextField({
   label,
   optional = false,
@@ -286,7 +280,6 @@ export function TextField({
   field?: TunnelAuthField;
   inputMode?: "url";
   readOnly?: boolean;
-  /** Notices and help shown under the input. */
   children?: ReactNode;
 }) {
   const id = useId();
@@ -319,7 +312,6 @@ export function TextField({
   );
 }
 
-/** The prompt that reads a secret into the shell before the tunnel starts. */
 export function SecretPrompt({
   title,
   secret,
@@ -330,9 +322,7 @@ export function SecretPrompt({
 }: {
   title: string;
   secret: "oidc" | "email";
-  /** What is asked for, such as "client secret". */
   noun: string;
-  /** How the rest of the sentence refers to it, such as "secret". */
   shortNoun: string;
   copyLabel: string;
   os: TunnelCommandOS;
@@ -354,11 +344,6 @@ export function SecretPrompt({
   );
 }
 
-/**
- * What to register beyond the listed short URLs. The listed addresses exist
- * only once a Name is chosen; relay discovery can add relays, each with its
- * own addresses.
- */
 export function RegisterNote({
   listed,
   name,

@@ -53,18 +53,19 @@ func ProxyWithConfig(ctx context.Context, exposure *Exposure, config ProxyConfig
 		return errPortalSDKContextIsNil
 	}
 
-	var err error
 	if config.TCPTarget != "" {
-		config.TCPTarget, err = utils.NormalizeLoopbackTarget(config.TCPTarget)
+		target, err := utils.NormalizeLoopbackTarget(config.TCPTarget)
 		if err != nil {
 			return err
 		}
+		config.TCPTarget = target
 	}
 	if config.UDPTarget != "" {
-		config.UDPTarget, err = utils.NormalizeLoopbackTarget(config.UDPTarget)
+		target, err := utils.NormalizeLoopbackTarget(config.UDPTarget)
 		if err != nil {
 			return err
 		}
+		config.UDPTarget = target
 	}
 	workerCount := 0
 	if config.TCPTarget != "" {
@@ -237,7 +238,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 			_ = relayConn.Close()
 			_ = localConn.Close()
 		} else if tcpConn, ok := localConn.(*net.TCPConn); ok {
-			// EOF is a request half-close: origins may wait for it before replying.
+
 			_ = tcpConn.CloseWrite()
 		}
 		errCh <- err
@@ -252,7 +253,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 			_ = relayConn.Close()
 			_ = localConn.Close()
 		} else if half, ok := relayConn.(interface{ CloseWrite() error }); ok {
-			// Response EOF must leave the client's request upload open.
+
 			_ = half.CloseWrite()
 		}
 		errCh <- err
@@ -290,8 +291,6 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 	return err
 }
 
-// runUDPProxy waits for the exposure datagram plane and proxies it to the
-// configured local UDP target.
 func runUDPProxy(ctx context.Context, exposure *Exposure, udpTarget string) error {
 	udpRelays, err := exposure.WaitDatagramReady(ctx)
 	if err != nil {
@@ -317,8 +316,6 @@ func runUDPProxy(ctx context.Context, exposure *Exposure, udpTarget string) erro
 	return proxyExposureDatagrams(ctx, exposure, udpTarget)
 }
 
-// proxyExposureDatagrams receives datagrams from the exposure datagram plane
-// and forwards them to the local UDP service, relaying responses back.
 func proxyExposureDatagrams(ctx context.Context, exposure *Exposure, localAddr string) error {
 	resolvedAddr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
@@ -426,7 +423,6 @@ func (m *udpFlowManager) runCleanup(ctx context.Context) {
 	}
 }
 
-// Close releases sockets first to wake their readers, then joins every worker.
 func (m *udpFlowManager) Close() {
 	m.closeSockets()
 	m.workers.Wait()
@@ -495,8 +491,7 @@ func (m *udpFlowManager) removeFlow(key udpFlowKey, entry *udpFlowEntry) {
 
 func (m *udpFlowManager) readLoop(ctx context.Context, key udpFlowKey, entry *udpFlowEntry) {
 	defer m.removeFlow(key, entry)
-	// A lease can end while Read is blocked. Keep this watcher within the
-	// reader's lifetime and join it before returning.
+
 	readerDone := make(chan struct{})
 	watcherDone := make(chan struct{})
 	go func() {
@@ -528,13 +523,11 @@ func (m *udpFlowManager) readLoop(ctx context.Context, key udpFlowKey, entry *ud
 		entry.lastSeen = time.Now()
 		replyFrame := entry.frame
 		replyFrame.Payload = bytes.Clone(buf[:n])
-		// Snapshot only this reader's entry. Removal may follow, but a
-		// successor never supplies ownership or routing metadata for this reply.
+
 		m.mu.Unlock()
 		sendErr := m.exposure.SendDatagram(replyFrame)
 		if sendErr != nil {
-			// A temporary same-lease disconnection drops the reply, but must
-			// preserve the local socket and its conversation for reconnect.
+
 			select {
 			case <-key.leaseDone:
 				return

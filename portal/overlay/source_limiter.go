@@ -13,9 +13,6 @@ const (
 	maxSourceBuckets           = 65536
 )
 
-// sourceLimiter owns the overlay-local per-source request budget. It protects
-// overlay resources only: the resolved source value is supplied by the relay
-// ingress, and no IP history is persisted or promoted to authorization policy.
 type sourceLimiter struct {
 	mu                   sync.Mutex
 	buckets              map[netip.Addr]*sourceBucket
@@ -37,8 +34,6 @@ func newSourceLimiter(ratePerMinute, burst int) *sourceLimiter {
 	}
 }
 
-// Allow deducts cost only when the source budget admits the request and
-// returns the retry guidance otherwise.
 func (l *sourceLimiter) Allow(source netip.Addr, cost int) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()

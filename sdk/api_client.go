@@ -45,9 +45,6 @@ type apiClient struct {
 	cache          *types.StaticCacheLimits
 }
 
-// resetTransport tears down the cached HTTP client and TLS config so the next
-// API call creates fresh TCP connections. Call this after detecting a system
-// sleep/wake cycle where pooled connections are almost certainly dead.
 func (c *apiClient) resetTransport() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -101,16 +98,12 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 	return nil
 }
 
-// httpClient returns the cached HTTP client under the transport lock.
-// Callers must not mutate the returned client.
 func (c *apiClient) httpClient() *http.Client {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.http
 }
 
-// tlsConfigClone returns a cloned copy of the relay TLS config under
-// the transport lock, or nil if the transport has not been initialized.
 func (c *apiClient) tlsConfigClone() *tls.Config {
 	if c == nil {
 		return nil
@@ -141,8 +134,6 @@ func (c *apiClient) cacheLimits() (types.StaticCacheLimits, bool) {
 	return *c.cache, true
 }
 
-// register only performs the challenge and registration wire exchange.
-// The caller prepares lease metadata and capability flags beforehand.
 func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterResponse, error) {
 	if err := c.initHTTPTransport(ctx); err != nil {
 		return types.RegisterResponse{}, err
@@ -164,8 +155,6 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 					return types.RegisterResponse{}, err
 				}
 				request = types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature, ReportedIP: reportedIP}
-				// Challenge issuance succeeded; keep this signed request until admission
-				// succeeds or the challenge expires. A 429 must not buy another challenge.
 				continue
 			}
 		} else {
@@ -212,9 +201,6 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	return resp, nil
 }
 
-// aliasHostnameMatches reports whether hostname is the <name>.<root> alias
-// for name under canonicalHostname's root. An empty hostname (no alias) also
-// matches. Anything else is dropped so AliasURL never names another host.
 func aliasHostnameMatches(hostname, name, canonicalHostname string) bool {
 	if hostname == "" {
 		return true

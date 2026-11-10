@@ -101,13 +101,6 @@ func TestVerifyCertificateHostname(t *testing.T) {
 	}
 }
 
-// TestClientTerminateConnLoopback is the end-to-end proof of the rebuilt
-// tenant client: a loopback relay stand-in serves the transcript-bound
-// /v1/sign wire (POST JSON in the signrpc shape) behind HTTPS, the client
-// pins that endpoint's certificate chain, and TerminateConn completes a real
-// TLS 1.3 handshake against a stock crypto/tls counterpart. The relay-minted
-// binding and the access token must reach the sign endpoint untouched, and
-// the terminated connection must carry application data both ways.
 func TestClientTerminateConnLoopback(t *testing.T) {
 	const (
 		hostname        = "tunnel.test.example"
@@ -125,8 +118,6 @@ func TestClientTerminateConnLoopback(t *testing.T) {
 			}
 			return store
 		}(),
-		// Test-only: this stand-in's validator accepts every structurally
-		// valid request; the binding's presence and value are asserted below.
 		TranscriptValidator: ksigner.TranscriptValidatorFunc(func(context.Context, *signrpc.TranscriptSignRequest) error {
 			return nil
 		}),
@@ -274,9 +265,6 @@ func TestClientTerminateConnLoopback(t *testing.T) {
 	}
 }
 
-// mustSelfSignedCert generates one ECDSA P-256 self-signed server certificate
-// covering hostname (plus any extra IPs) and returns the private key, DER,
-// and PEM forms.
 func mustSelfSignedCert(t *testing.T, hostname string, ips []net.IP) (*ecdsa.PrivateKey, []byte, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -324,13 +312,6 @@ func (c *failingCloseResource) Close() error {
 	return errSignerCloseFailed
 }
 
-// TestClientTerminateConnExportsKeyingMaterial is the MITM self-probe
-// integration regression: the terminated t13server conn satisfies the
-// direct exporter capability the SDK's responder side asserts, and both
-// endpoints of the same probe session — the stock crypto/tls probe client
-// and the t13server responder conn — derive byte-identical keying material
-// for the same label. Exporter derivation itself is owned and tested by
-// keyless_tls; this pins the Portal-facing capability boundary.
 func TestClientTerminateConnExportsKeyingMaterial(t *testing.T) {
 	const (
 		hostname        = "probe.test.example"
@@ -347,9 +328,6 @@ func TestClientTerminateConnExportsKeyingMaterial(t *testing.T) {
 			}
 			return store
 		}(),
-		// Test-only: this stand-in's validator accepts every structurally
-		// valid request; the binding validator contract is covered by the
-		// loopback termination test.
 		TranscriptValidator: ksigner.TranscriptValidatorFunc(func(context.Context, *signrpc.TranscriptSignRequest) error {
 			return nil
 		}),
@@ -437,8 +415,6 @@ func TestClientTerminateConnExportsKeyingMaterial(t *testing.T) {
 	}
 }
 
-// captureWrites passes writes through until capture is set and keeps them
-// afterwards, so a test can hand a visitor's record to the tenant in parts.
 type captureWrites struct {
 	net.Conn
 	capture  bool
@@ -453,10 +429,6 @@ func (c *captureWrites) Write(p []byte) (int, error) {
 	return c.Conn.Write(p)
 }
 
-// The SDK reads the first bytes of every terminated connection under a short
-// deadline, to look for a channel binding request, before the application
-// reads it. A deadline that fires while the visitor's record is only partly
-// received must leave the stream intact (gosuda/keyless_tls#34).
 func TestTerminatedConnKeepsARecordAcrossAReadDeadline(t *testing.T) {
 	t.Parallel()
 
@@ -489,7 +461,7 @@ func TestTerminatedConnKeepsARecordAcrossAReadDeadline(t *testing.T) {
 		t.Fatalf("visitor write: %v", err)
 	}
 	record := wire.captured
-	const split = 10 // inside the record's payload
+	const split = 10
 
 	type readResult struct {
 		data string
@@ -515,8 +487,6 @@ func TestTerminatedConnKeepsARecordAcrossAReadDeadline(t *testing.T) {
 		}
 	}
 
-	// net.Pipe returns from Write only once the reader has taken every byte,
-	// so this part is with the tenant before its deadline fires.
 	first := read()
 	if _, err := relayEnd.Write(record[:split]); err != nil {
 		t.Fatalf("deliver the first part: %v", err)

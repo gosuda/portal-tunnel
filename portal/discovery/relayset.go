@@ -26,35 +26,12 @@ var (
 	errRelayDescriptorValidityWindowExceedsMaximum        = errors.New("relay descriptor validity window exceeds maximum")
 )
 
-// RelaySet owns the shared relay discovery view: configured bootstrap relay URLs,
-// the latest validated descriptor seen for each relay, and local runtime state
-// such as ban/failure tracking and observed discovery RTT.
-//
-// The relays map is keyed by APIHTTPSAddr (URL). The keyIndex map provides a
-// reverse lookup from signing identity (the EVM address derived from the
-// signing public key, lower-cased) to the most recent IssuedAt we have ever
-// accepted for that identity, along with a tombstone TombstoneUntil that
-// records how long the rollback anchor must be remembered. The keyIndex is
-// the rollback-defense gate: any descriptor whose IssuedAt is strictly older
-// than the recorded latest is rejected before reaching s.relays. Tracking by
-// signing key (rather than URL) means a single relay rotating its
-// APIHTTPSAddr cannot be tricked into accepting a stale rollback simply by
-// submitting it under a new URL.
-//
-// The keyIndex lifetime is deliberately decoupled from s.relays: evicting the
-// last URL slot for an identity (via LRU or explicit removal) MUST NOT forget
-// the rollback anchor, otherwise a captured older-but-unexpired descriptor
-// could be replayed after eviction. Tombstones expire once the replay window
-// closes, i.e. once now > IssuedAt + AnnounceMaxValidity. By that time any
-// descriptor whose IssuedAt is at or before the tombstoned value is expired and
-// cannot pass the announce validity check regardless.
-//
-// Both maps must always be read and written under s.mu. Mutators come in two
-// flavors: public methods that own the lock end-to-end, and *Locked methods
-// that assume the caller already holds s.mu as a write lock and never re-
-// acquire it themselves. This convention prevents nested-locking deadlocks
-// (notably from ApplyRelayDiscoveryResponse, which holds the write lock for
-// the entire batch).
+// RelaySet owns the shared relay discovery view, keyed by APIHTTPSAddr.
+// The keyIndex tracks the newest IssuedAt accepted per signing identity and
+// rejects older descriptors as rollbacks; anchors survive eviction until
+// their replay window closes. Both maps are read and written under s.mu:
+// public methods own the lock end-to-end, while *Locked methods assume the
+// caller already holds it as a write lock.
 type RelaySet struct {
 	mu              sync.RWMutex
 	relays          map[string]relayState
@@ -63,20 +40,11 @@ type RelaySet struct {
 	releaseVersions map[string]relayReleaseObservation
 }
 
-// keyIndexEntry records the rollback anchor for a signing identity.
-// IssuedAt is the newest descriptor IssuedAt the set has ever accepted
-// for this identity. TombstoneUntil is the wall-clock time at which the
-// rollback anchor may safely be forgotten. After that point, any
-// replayable descriptor with an older IssuedAt is itself expired.
 type keyIndexEntry struct {
 	IssuedAt       time.Time
 	TombstoneUntil time.Time
 }
 
-// relayReleaseObservation is one directly observed peer release. observedAt
-// is the observation's own direct-discovery clock: gossip and announce
-// ingestion never write it, so only a fresh direct poll keeps a release
-// alive.
 type relayReleaseObservation struct {
 	releaseVersion string
 	observedAt     time.Time
@@ -112,7 +80,6 @@ func NewRelaySet(bootstrapRelayURLs []string) *RelaySet {
 	return set
 }
 
-// currentRelayStates returns a copy of the set after expiring temporary pool bans.
 func (s *RelaySet) currentRelayStates(now time.Time) []relayState {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -128,8 +95,6 @@ func (s *RelaySet) currentRelayStates(now time.Time) []relayState {
 	return states
 }
 
-// refreshCandidates returns relays worth directly polling after applying local
-// pool-ban expiry. The refresher owns HTTP; RelaySet owns pool eligibility.
 func (s *RelaySet) refreshCandidates(now time.Time) []relayState {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -140,14 +105,8 @@ func (s *RelaySet) refreshCandidates(now time.Time) []relayState {
 		if state.Banned {
 			continue
 		}
-		if !state.hasObservedDescriptor() {
-			if !state.Bootstrap {
-				continue
-			}
-		} else if !state.Bootstrap {
-			if !state.nextDiscoveryRefreshAt.IsZero() && state.nextDiscoveryRefreshAt.After(now) {
-				continue
-			}
+		if !state.Bootstrap && (!state.hasObservedDescriptor() || state.nextDiscoveryRefreshAt.After(now)) {
+			continue
 		}
 		if state.Descriptor.APIHTTPSAddr == "" {
 			continue
@@ -187,8 +146,6 @@ func (s *RelaySet) banFromPoolLocked(relayURL string, now time.Time) {
 	state.Banned = true
 	state.suppressActiveUntil = now.Add(relayPoolBanTTL)
 	s.relays[relayURL] = state
-	// A local ban outranks protocol-mismatch visibility and drops the
-	// observed release: both return only after a fresh direct contact.
 	delete(s.incompatible, relayURL)
 	delete(s.releaseVersions, relayURL)
 }
@@ -197,9 +154,6 @@ func mergeLocalRelayState(record, existing relayState) relayState {
 	record.Bootstrap = record.Bootstrap || existing.Bootstrap
 	record.Banned = record.Banned || existing.Banned
 	record.Dead = record.Dead || existing.Dead
-	// Trust never transfers across an identity change on the same URL: a
-	// takeover after descriptor expiry must start over as a candidate. A
-	// genuine rotation re-verifies through the authoritative probe path.
 	sameIdentity := strings.EqualFold(
 		strings.TrimSpace(record.Descriptor.Address),
 		strings.TrimSpace(existing.Descriptor.Address),
@@ -243,9 +197,6 @@ func (s *RelaySet) descriptorRollbackResultLocked(
 	if !ok {
 		return 0, false
 	}
-	// Stale tombstone: no replayable descriptor could still be within its
-	// validity window, so drop the anchor and accept the fresh descriptor as
-	// if first-seen.
 	if !prev.TombstoneUntil.IsZero() && now.After(prev.TombstoneUntil) {
 		delete(s.keyIndex, address)
 		return 0, false
@@ -277,46 +228,20 @@ func (s *RelaySet) crossIdentityTakeoverBlockedLocked(relayURL, address string, 
 	return differentIdentity && unexpired
 }
 
-// upsertDescriptorLocked applies a fully-merged relayState to s.relays and
-// updates the keyIndex. The caller MUST already hold s.mu as a write lock.
-//
-// The returned status indicates whether the descriptor was accepted, ignored
-// as an already-superseded same-URL/same-identity announce, or rejected. The
-// upsert is rejected when:
-//
-//  1. The signing identity has previously published a strictly newer
-//     IssuedAt (rollback defense).
-//  2. The URL slot is already held by a DIFFERENT signing identity whose
-//     descriptor has not yet expired, and `allowCrossIdentityTakeover` is
-//     false. This blocks third-party gossip/announce from hijacking a URL
-//     binding established by direct authoritative contact.
-//  3. The retained descriptor at the same URL, identity and IssuedAt has
-//     different canonical signed contents (reported as upsertConflicting).
-//
-// `allowCrossIdentityTakeover` MUST be true only when the caller has
-// directly contacted the URL and verified the response is signed by the
-// announced identity (i.e. authoritative refresh). Gossip propagation and
-// the announce endpoint MUST pass false.
-//
-// Equal IssuedAt values at the same URL and signing identity must carry the
-// same canonical signed contents. Idempotent re-broadcasts may refresh local
-// telemetry, but conflicting statements cannot replace the retained observation.
 func (s *RelaySet) upsertDescriptorLocked(record relayState, now time.Time, allowCrossIdentityTakeover bool) upsertResult {
 	relayURL := record.Descriptor.APIHTTPSAddr
 	if relayURL == "" {
 		return upsertRejected
 	}
-	if existing, ok := s.relays[relayURL]; ok {
-		if existing.Banned {
-			return upsertRejected
-		}
-		previous := existing.Descriptor
-		if strings.EqualFold(previous.Address, record.Descriptor.Address) && previous.IssuedAt.Equal(record.Descriptor.IssuedAt) {
-			oldContents, oldErr := canonicalRelayDescriptorBytes(previous)
-			newContents, newErr := canonicalRelayDescriptorBytes(record.Descriptor)
-			if oldErr != nil || newErr != nil || !bytes.Equal(oldContents, newContents) {
-				return upsertConflicting
-			}
+	existing, hasExisting := s.relays[relayURL]
+	if hasExisting && existing.Banned {
+		return upsertRejected
+	}
+	if hasExisting && strings.EqualFold(existing.Descriptor.Address, record.Descriptor.Address) && existing.Descriptor.IssuedAt.Equal(record.Descriptor.IssuedAt) {
+		oldContents, oldErr := canonicalRelayDescriptorBytes(existing.Descriptor)
+		newContents, newErr := canonicalRelayDescriptorBytes(record.Descriptor)
+		if oldErr != nil || newErr != nil || !bytes.Equal(oldContents, newContents) {
+			return upsertConflicting
 		}
 	}
 	address := strings.ToLower(strings.TrimSpace(record.Descriptor.Address))
@@ -345,10 +270,6 @@ func (s *RelaySet) upsertDescriptorLocked(record relayState, now time.Time, allo
 			TombstoneUntil: tombstoneUntil,
 		}
 	}
-	// Shared untrusted-ingestion invariant: whichever path admitted the
-	// descriptor (announce, hop route, or gossiped discovery response), a
-	// single signing identity never holds more unverified entries than the
-	// per-identity cap. Verified entries are never evicted by this cap.
 	s.enforceIdentityCapLocked(address)
 	return upsertAccepted
 }
@@ -357,20 +278,12 @@ func (s *RelaySet) selectRelays(routeState routeState) []string {
 	return selectPriority(s.currentRelayStates(time.Now().UTC()), routeState)
 }
 
-// filterCandidatePool returns the auto-selected relay pool eligible for MOLS
-// ranking.
 func filterCandidatePool(states []relayState, routeState routeState, now time.Time) []relayState {
 	pool := make([]relayState, 0, len(states))
 	for _, state := range states {
 		relayURL := state.Descriptor.APIHTTPSAddr
-		if state.Trust != relayVerified {
-			// A bootstrap URL configured by the operator stays eligible as
-			// a URL-only single-hop fallback until a direct probe verifies
-			// it, but a descriptor squatted on a bootstrap URL by an
-			// untrusted candidate is not eligible at all.
-			if !state.Bootstrap || state.hasObservedDescriptor() {
-				continue
-			}
+		if state.Trust != relayVerified && (!state.Bootstrap || state.hasObservedDescriptor()) {
+			continue
 		}
 		if slices.Contains(routeState.ExplicitRelayURLs, relayURL) {
 			continue
@@ -378,13 +291,8 @@ func filterCandidatePool(states []relayState, routeState routeState, now time.Ti
 		if state.Banned || state.Dead {
 			continue
 		}
-		if state.hasObservedDescriptor() {
-			if !state.Descriptor.ExpiresAt.After(now) {
-				continue
-			}
-			if !state.supportsRequiredTransports(routeState, now) {
-				continue
-			}
+		if state.hasObservedDescriptor() && (!state.Descriptor.ExpiresAt.After(now) || !state.supportsRequiredTransports(routeState, now)) {
+			continue
 		}
 		if !state.suppressActiveUntil.IsZero() && state.suppressActiveUntil.After(now) {
 			continue
@@ -438,10 +346,7 @@ func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescript
 		add(self)
 	}
 	for _, state := range s.currentRelayStates(now) {
-		if state.Banned || state.Dead || !state.hasObservedDescriptor() {
-			continue
-		}
-		if state.Trust != relayVerified {
+		if state.Banned || state.Dead || !state.hasObservedDescriptor() || state.Trust != relayVerified {
 			continue
 		}
 		add(state.Descriptor)
@@ -460,8 +365,6 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	state.suppressActiveUntil = time.Time{}
 	state.Banned = true
 	s.relays[relayURL] = state
-	// A local ban outranks protocol-mismatch visibility and drops the
-	// observed release: both return only after a fresh direct contact.
 	delete(s.incompatible, relayURL)
 	delete(s.releaseVersions, relayURL)
 }
@@ -494,10 +397,8 @@ func (s *RelaySet) DeactivateRelayURL(relayURL string) {
 	s.relays[relayURL] = state
 }
 
-// EnsureRelayURL persists a candidate state for relayURL when none exists, so
-// explicit relays that never entered through discovery keep their failure and
-// suppression state durable. Existing states — discovered descriptors, bans,
-// suppression — are left untouched.
+// EnsureRelayURL persists a candidate state for relayURL when none exists,
+// leaving existing states untouched.
 func (s *RelaySet) EnsureRelayURL(relayURL string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -508,8 +409,6 @@ func (s *RelaySet) EnsureRelayURL(relayURL string) {
 	s.relays[relayURL] = newRelayState(relayURL)
 }
 
-// discoveryRelayStateLocked enforces signature and public-address policy for
-// discovery responses. The caller must hold s.mu for bootstrap and ban state.
 func (s *RelaySet) discoveryRelayStateLocked(
 	descriptor types.RelayDescriptor,
 	now time.Time,
@@ -521,8 +420,6 @@ func (s *RelaySet) discoveryRelayStateLocked(
 	}
 	relayURL := verified.APIHTTPSAddr
 	if err := requirePublicRelayURL(relayURL); err != nil {
-		// Only a direct response from an explicitly configured bootstrap
-		// relay may advertise its own local/private URL.
 		if relayURL != targetURL || !s.relays[relayURL].Bootstrap {
 			return relayState{}, "", false
 		}
@@ -538,10 +435,9 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		return false, fmt.Errorf("discovery response exceeds collection limits (relays: %d, metadata: %d)", MaxAnnouncedRelays+1, MaxAnnouncedRelays)
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
+		now = time.Now()
 	}
+	now = now.UTC()
 	protocolMismatch := resp.ProtocolVersion != types.DiscoveryVersion
 	authoritative := targetURL != ""
 
@@ -587,17 +483,9 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 
 		if upsert := s.upsertDescriptorLocked(record, now, isAuthoritativeTarget); upsert != upsertAccepted {
 			if upsert == upsertConflicting {
-				// A signed contradiction is not a successful recovery probe.
-				// Gossip cannot use it to mutate health or sanction the signer.
 				conflictingTarget = conflictingTarget || isAuthoritativeTarget
 				continue
 			}
-			// The monotonic-IssuedAt check rejected this descriptor as a
-			// rollback, or ignored it because a newer same-identity descriptor
-			// for this URL is already present. The cryptographic identity in
-			// s.relays is unchanged, but if we successfully reached the
-			// authoritative target we should still credit it as alive on its
-			// existing URL slot.
 			if isAuthoritativeTarget && hasExistingAtURL {
 				if existingAtURL.discoveryFailures != 0 || !existingAtURL.nextDiscoveryRefreshAt.IsZero() || !existingAtURL.unhealthySince.IsZero() {
 					existingAtURL = markDiscoveryVerified(existingAtURL)
@@ -613,11 +501,6 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		}
 	}
 	s.enforceCapLocked()
-	// Protocol mismatch outranks a missing target descriptor: the response
-	// arrived over HTTPS and its protocol version is the observation this
-	// package records, so the refresher must classify it as a mismatch
-	// (ErrProtocolMismatch) rather than a health failure even when the older
-	// relay omits its own descriptor from the response.
 	if protocolMismatch && authoritative {
 		return relaySetChanged, fmt.Errorf("%w: relay=%q client=%q", ErrProtocolMismatch, resp.ProtocolVersion, types.DiscoveryVersion)
 	}
@@ -628,15 +511,11 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 		return relaySetChanged, errTargetRelayDescriptorConflictsRetainedSigned
 	}
 	if authoritative {
-		// A compatible, non-conflicting target can retire a prior mismatch.
 		delete(s.incompatible, targetURL)
 	}
 	return relaySetChanged, nil
 }
 
-// recordIncompatibleRelayLocked remembers a directly contacted relay whose
-// discovery protocol version does not match ours. Banned relays stay hidden.
-// The caller must hold s.mu for writing.
 func (s *RelaySet) recordIncompatibleRelayLocked(relayURL, protocolVersion string, now time.Time) {
 	if relayURL == "" {
 		return
@@ -666,9 +545,6 @@ func (s *RelaySet) recordIncompatibleRelayLocked(relayURL, protocolVersion strin
 	}
 }
 
-// olderObservation reports whether the candidate observation is older than the
-// tracked oldest, breaking equal timestamps on the relay URL so eviction is
-// deterministic.
 func olderObservation(url string, observedAt time.Time, oldestURL string, oldestAt time.Time) bool {
 	if oldestURL == "" {
 		return true
@@ -679,10 +555,6 @@ func olderObservation(url string, observedAt time.Time, oldestURL string, oldest
 	return observedAt.Equal(oldestAt) && url < oldestURL
 }
 
-// pruneIncompatibleLocked drops incompatible-relay entries whose last direct
-// observation is older than AnnounceMaxValidity, matching the window in which
-// descriptors from that observation could still matter. The caller must hold
-// s.mu for writing.
 func (s *RelaySet) pruneIncompatibleLocked(now time.Time) {
 	for relayURL, entry := range s.incompatible {
 		if now.Sub(entry.LastSeenAt) > AnnounceMaxValidity {
@@ -691,9 +563,6 @@ func (s *RelaySet) pruneIncompatibleLocked(now time.Time) {
 	}
 }
 
-// pruneReleaseVersionsLocked drops release observations whose last direct
-// poll is older than AnnounceMaxValidity, so the map cannot grow without
-// bound as polled relay URLs churn. The caller must hold s.mu for writing.
 func (s *RelaySet) pruneReleaseVersionsLocked(now time.Time) {
 	for relayURL, observation := range s.releaseVersions {
 		if now.Sub(observation.observedAt) > AnnounceMaxValidity {
@@ -702,13 +571,6 @@ func (s *RelaySet) pruneReleaseVersionsLocked(now time.Time) {
 	}
 }
 
-// recordReleaseObservationLocked remembers the release a directly contacted
-// relay reported about itself. The authoritative refresher poll is the only
-// writer — gossip and announce batches carry no release of their own and
-// must not mint or refresh observations. It records regardless of protocol
-// match (#512: the protocol label is only a fallback when no release is
-// known). An empty value — an older build that stopped reporting — drops
-// the observation: latest direct observation wins.
 func (s *RelaySet) recordReleaseObservationLocked(relayURL, releaseVersion string, now time.Time) {
 	if relayURL == "" {
 		return
@@ -736,11 +598,9 @@ func (s *RelaySet) recordReleaseObservationLocked(relayURL, releaseVersion strin
 }
 
 // KnownIncompatibleRelays returns directly observed relays whose discovery
-// protocol version is incompatible with the local one. Entries are sorted by
-// URL for stable output, expire (per AnnounceMaxValidity) without a fresh
-// observation, and are suppressed while the relay is locally banned: a local
-// ban outranks protocol-mismatch visibility. They are informational only and
-// are never part of the routable descriptor set.
+// protocol version is incompatible. Entries expire without a fresh
+// observation and are suppressed while the relay is locally banned. They
+// are informational only, never part of the routable set.
 func (s *RelaySet) KnownIncompatibleRelays() []types.IncompatibleRelayEntry {
 	return s.knownIncompatibleRelaysAt(time.Now().UTC())
 }
@@ -763,14 +623,10 @@ func (s *RelaySet) knownIncompatibleRelaysAt(now time.Time) []types.Incompatible
 	return out
 }
 
-// KnownRelayReleaseVersions returns the release versions this relay observed
-// directly from peer relays' own /discovery responses, keyed by peer relay
-// URL. Like KnownIncompatibleRelays, entries expire (per AnnounceMaxValidity)
-// without a fresh direct observation, and a local ban drops the observation
-// outright rather than hiding it: it returns only after a fresh direct poll.
-// They are unsigned observation metadata: they never participate in routing,
-// trust, signature verification, or compatibility decisions, and are never
-// part of the routable descriptor set.
+// KnownRelayReleaseVersions returns peer release versions observed directly
+// from relay /discovery responses. Entries expire without a fresh direct
+// poll and are dropped outright by a local ban. They never participate in
+// routing, trust, or compatibility decisions.
 func (s *RelaySet) KnownRelayReleaseVersions() map[string]string {
 	return s.knownRelayReleaseVersionsAt(time.Now().UTC())
 }
@@ -804,28 +660,11 @@ func (s *RelaySet) RecordDiscoveryRTT(relayURL string, rtt time.Duration, measur
 	s.relays[relayURL] = state
 }
 
-// InsertCandidate ingests a single descriptor from an announce or gossiped
-// discovery response as a relayCandidate. The full validation
-// pipeline runs inline:
-//
-//  1. The descriptor signature is verified against the recovered public key
-//     and matched to the descriptor's Address field.
-//  2. The descriptor must be currently valid (ExpiresAt strictly in the
-//     future) and not significantly clock-skewed (IssuedAt no further into
-//     the future than AnnounceClockSkewTolerance, validity window no longer
-//     than AnnounceMaxValidity).
-//  3. Local merge preserves Bootstrap, Banned, Trust, discovery
-//     retry state, active suppression state, and telemetry from any
-//     pre-existing entry at the same URL.
-//  4. The shared upsertDescriptorLocked method enforces the
-//     same-URL/same-time signed-content consistency guard, the
-//     monotonic-IssuedAt-per-key rollback guard and the cross-identity
-//     URL-takeover guard, plus the per-identity candidate cap shared by
-//     every untrusted ingestion path.
-//
-// Candidates remain refresh-poll targets, but they stay out of Descriptors() and
-// automatic route planning until a direct authoritative probe of that exact
-// relay promotes them to relayVerified via ApplyRelayDiscoveryResponse.
+// InsertCandidate ingests one descriptor from an announce or gossiped
+// discovery response as a relayCandidate. It verifies the signature and
+// freshness, merges local state, and applies the rollback, takeover, and
+// identity-cap guards. Candidates stay out of Descriptors and route
+// planning until a direct authoritative probe promotes them to verified.
 func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -872,13 +711,6 @@ func (s *RelaySet) InsertCandidate(desc types.RelayDescriptor, now time.Time) er
 	return nil
 }
 
-// enforceIdentityCapLocked bounds how many candidate entries a single
-// signing identity holds in the set. Overflow evicts that identity's own
-// oldest candidates by LastSeenAt, so a flooding identity recycles its own
-// slots instead of displacing other relays through the global cap. Bootstrap,
-// banned, and verified entries are never evicted here;
-// the keyIndex rollback anchors survive eviction by design. The caller MUST
-// already hold s.mu as a write lock.
 func (s *RelaySet) enforceIdentityCapLocked(address string) {
 	address = strings.ToLower(strings.TrimSpace(address))
 	if address == "" {
@@ -934,15 +766,6 @@ func validateRelayDescriptorFreshness(desc types.RelayDescriptor, now time.Time)
 	return nil
 }
 
-// enforceCapLocked trims s.relays back to MaxAnnouncedRelays using a
-// two-tier eviction strategy: candidates are evicted first (oldest by
-// LastSeenAt), then verified entries as a last resort. Bootstrap and banned
-// entries are pinned.
-// An operator misconfig that lists more than MaxAnnouncedRelays bootstraps
-// is surfaced by the resulting overflow rather than silently violating
-// operator intent. Tombstone keyIndex entries whose replay window has
-// closed are swept opportunistically. The caller MUST already hold s.mu
-// as a write lock.
 func (s *RelaySet) enforceCapLocked() {
 	now := time.Now().UTC()
 	s.clearExpiredPoolBansLocked(now)
@@ -971,9 +794,6 @@ func (s *RelaySet) enforceCapLocked() {
 		})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		// Candidate entries evict first; verified entries are the
-		// last-resort tier. Within each tier, oldest
-		// LastSeenAt evicts first.
 		if candidates[i].protected != candidates[j].protected {
 			return !candidates[i].protected
 		}
@@ -1041,11 +861,8 @@ func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (b
 	return true, "active", state.activeFailures
 }
 
-// IsSuppressed reports whether relayURL is currently excluded from active
-// selection due to a prior active-listener failure backoff. Callers use this
-// to avoid recording duplicate failures while a suppression is still in
-// effect; once the backoff expires the relay becomes eligible again and a
-// new failure records.
+// IsSuppressed reports whether relayURL is excluded from active selection
+// by a prior active-listener failure backoff.
 func (s *RelaySet) IsSuppressed(relayURL string, now time.Time) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

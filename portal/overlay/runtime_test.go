@@ -175,12 +175,7 @@ func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
 			return nil, errDialFailed
 		},
 	}
-	// A fresh ingress signer is enough to pass signature checks. Source
-	// admission must still bound these requests without any discovery catalog.
 	gate.sourceLimiter = newSourceLimiter(1, 2)
-	// Within the per-source budget the request reaches the dial and reports
-	// the dial failure; past the budget it is rejected before any dial occurs
-	// — admission-before-dial is the resource invariant under rate pressure.
 	for range 2 {
 		response := httptest.NewRecorder()
 		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
@@ -244,7 +239,6 @@ func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("one source's full budget blocked a different source")
 	}
-	// Release pending calls, then prove their reservations are reusable.
 	close(release)
 	for range sourceConnectionLimit + 1 {
 		<-done
@@ -258,8 +252,6 @@ func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
 	}
 }
 
-// A lease that waits for approval must not read as a stale credential, or the
-// SDK re-registers for as long as the wait lasts.
 func TestGatewayKeepsTheRefusalReason(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -271,7 +263,7 @@ func TestGatewayKeepsTheRefusalReason(t *testing.T) {
 		{types.OverlayStatusDenied, http.StatusForbidden, types.APIErrorCodeLeaseDenied},
 		{types.OverlayStatusCapacity, http.StatusTooManyRequests, types.APIErrorCodeRateLimited},
 		{types.OverlayStatusUnavailable, http.StatusForbidden, types.APIErrorCodeUnauthorized},
-		{9, http.StatusForbidden, types.APIErrorCodeUnauthorized}, // a status from a newer peer
+		{9, http.StatusForbidden, types.APIErrorCodeUnauthorized},
 	} {
 		gate, capability := testGateway(t)
 		gate.sourceLimiter = newSourceLimiter(1000, 1000)
@@ -449,5 +441,39 @@ func TestUnavailableOverlayStartsAndShutsDownWithoutPeers(t *testing.T) {
 				t.Fatal("shutdown left the overlay available")
 			}
 		})
+	}
+}
+
+func TestGatewayTruncatedUpstreamResponseIsUnavailable(t *testing.T) {
+	t.Parallel()
+	gate, capability := testGateway(t)
+	gate.sourceLimiter = newSourceLimiter(1000, 1000)
+	gate.endpoint = endpointStub{
+		destination: testDestination("gateway"),
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			local, remote := net.Pipe()
+			go func() {
+				defer remote.Close()
+				var size uint16
+				if binary.Read(remote, binary.BigEndian, &size) != nil {
+					return
+				}
+				_, _ = io.CopyN(io.Discard, remote, int64(size))
+			}()
+			return peerConn{Conn: local, remote: ivnp.Addr{Hash: sha256.Sum256([]byte("ingress")), Port: 4017}}, nil
+		},
+	}
+	response := httptest.NewRecorder()
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusServiceUnavailable || body.Error.Code != types.APIErrorCodeFeatureUnavailable {
+		t.Fatalf("truncated upstream answered %d %q, want %d %q", response.Code, body.Error.Code, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable)
 	}
 }

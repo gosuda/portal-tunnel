@@ -25,8 +25,6 @@ const signatureLifetime = 24 * time.Hour
 const signatureRefresh = 12 * time.Hour
 const signatureSkew = 5 * time.Minute
 
-// A single file binds the private key to its zone and DNSKEY. Never regenerate
-// an unreadable or malformed existing key: the parent DS may already trust it.
 func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil, errDnssecKeyPathIsRequired
@@ -45,8 +43,6 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		// miekg/dns treats key tag zero as an unset signing parameter. Avoid
-		// persisting that otherwise-valid key, which this signer cannot use.
 		for key.KeyTag() == 0 {
 			private, err = key.Generate(256)
 			if err != nil {
@@ -104,7 +100,6 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if !ok {
 		return nil, nil, errInvalidDnssecPrivateKey
 	}
-	// The BIND parser does not check that the public and private keys match.
 	sig := &dns.RRSIG{KeyTag: loaded.KeyTag(), SignerName: zone, Algorithm: loaded.Algorithm, Inception: 1, Expiration: 2}
 	if err := sig.Sign(signer, []dns.RR{loaded}); err != nil {
 		return nil, nil, err
@@ -128,9 +123,6 @@ type signedZone struct {
 	records   map[string]map[uint16]signedRRSet
 }
 
-// signedZone is the one immutable authoritative snapshot. Mutations invalidate
-// it by serial; refresh is lazy, before answering, so idle zones cannot serve
-// expired signatures. Failed signing returns SERVFAIL, never unsigned data.
 func (p *Provider) signedZone(now time.Time) (*signedZone, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -158,9 +150,6 @@ func (p *Provider) signedZone(now time.Time) (*signedZone, error) {
 			add(p.txtRR(name, value))
 		}
 	}
-	// Include empty non-terminals. Materialize each address family and its
-	// wildcard at every closest encloser so explicit TXT records do not
-	// shadow zone-wide address synthesis (RFC 4592).
 	if p.ipv4 != nil {
 		add(p.aRR(p.nsName, p.ipv4))
 	}
@@ -192,8 +181,6 @@ func (p *Provider) signedZone(now time.Time) (*signedZone, error) {
 			if p.ipv6 != nil {
 				add(p.aaaaRR(name, p.ipv6))
 			}
-			// An explicit wildcard already represents synthesis at its parent, not a
-			// separate closest encloser requiring another wildcard beneath it.
 			if _, valid := dns.IsDomainName("*." + name); valid && !strings.HasPrefix(name, "*.") {
 				if p.ipv4 != nil {
 					add(p.aRR("*."+name, p.ipv4))
@@ -239,9 +226,6 @@ func parentName(name string) string {
 	return name[offset:]
 }
 
-// RFC 4034 section 6.1 orders labels from the root outward, by unsigned
-// unescaped octets, with a shorter label sorting first. Wire packing also
-// handles escaped labels in queries, not only hostname-style owner names.
 func compareDNSNames(a, b string) int {
 	var x, y [256]byte
 	var xi, yi [128]int

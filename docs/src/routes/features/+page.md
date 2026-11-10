@@ -5,8 +5,6 @@ description: Canonical inventory of supported Portal product capabilities, inter
 
 # Feature Inventory
 
-This is the canonical product capability inventory for Portal.
-
 Each capability lists its supported interfaces (**CLI**, **Agent**, **SDK**, **Relay**), its trust boundaries and key constraints, and links directly to its authoritative guide or reference.
 
 ---

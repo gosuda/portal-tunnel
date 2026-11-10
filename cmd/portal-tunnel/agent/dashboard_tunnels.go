@@ -9,11 +9,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// agentDashboardTunnelLead is the width of the row marker, the LED and the space after them.
 const agentDashboardTunnelLead = 5
 
-// askDeleteTunnel asks for confirmation before deleting the tunnel; an empty
-// tunnelID means the selected one.
 func (m agentDashboardModel) askDeleteTunnel(tunnelID string) (tea.Model, tea.Cmd) {
 	tunnelID = strings.TrimSpace(tunnelID)
 	if tunnelID == "" {
@@ -41,7 +38,6 @@ func (m agentDashboardModel) deleteTunnel(tunnelID string) (tea.Model, tea.Cmd) 
 	})
 }
 
-// agentDashboardStopQuestion asks before closing a dashboard that stops the agent.
 const agentDashboardStopQuestion = "Stop the agent? Every tunnel goes down."
 
 func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboardView {
@@ -87,8 +83,6 @@ func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboar
 		tail = append(tail, th.failed.Render(agentDashboardFit(th.glyph.ledFailed+" Error: "+tunnel.LastError, width)))
 	}
 
-	// What is left after the buttons, the table header and the error goes to
-	// the add form, if open, and to the table, which keeps at least one row.
 	room := rows - len(pane.lines) - 1 - len(tail)
 	var form agentDashboardView
 	if m.addingTunnel && !m.confirming() {
@@ -128,7 +122,6 @@ func (v *agentDashboardView) addTunnelRow(th *agentDashboardTheme, width int, tu
 	v.addClickRow(marker+led+" "+row, width, style, agentDashboardActionSelectTunnel, tunnel.ID, "")
 }
 
-// agentDashboardTunnelLook is the LED and the style a tunnel state is drawn with.
 func agentDashboardTunnelLook(th *agentDashboardTheme, state string) (string, lipgloss.Style) {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "running":
@@ -171,9 +164,6 @@ func tunnelDashboardTarget(tunnel AgentTunnelStatus) string {
 	return fmt.Sprintf("%d routes, %d paid", len(tunnel.HTTPRoutes), paid)
 }
 
-// agentDashboardTunnelRow lays out what follows the marker and the LED of a
-// tunnel row. The LED already shows the state, so the state word and then the
-// target are the first columns to go when the pane narrows.
 func agentDashboardTunnelRow(width int, state, target, name string) string {
 	if width < 24 {
 		return agentDashboardFit(name, width)

@@ -12,8 +12,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// portalHeaderNames lists the headers of h that a gateway reading underscores as
-// hyphens takes for a Portal header, in whatever spelling they arrived.
 func portalHeaderNames(h http.Header) []string {
 	var names []string
 	for key := range h {
@@ -51,7 +49,6 @@ func TestStripRequestHeaders(t *testing.T) {
 	if gotHeaders.Get("X-Keep") != "keep" {
 		t.Fatalf("X-Keep = %q, want keep", gotHeaders.Get("X-Keep"))
 	}
-	// Case-insensitive: lowercase input is also stripped.
 	req2 := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
 	req2.Header.Set("x-custom", "secret")
 	rec2 := httptest.NewRecorder()
@@ -59,7 +56,6 @@ func TestStripRequestHeaders(t *testing.T) {
 	if gotHeaders.Get("X-Custom") != "" {
 		t.Fatal("x-custom forwarded after case-insensitive strip")
 	}
-	// The underscore spelling goes too: CGI-style upstreams read it as the same header.
 	req3 := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
 	req3.Header["X_custom"] = []string{"secret"}
 	req3.Header["X_keep"] = []string{"keep"}
@@ -115,7 +111,6 @@ func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	req.Header.Set(types.HeaderPortalAuth, "spoofed-auth")
 	req.Header.Set(types.HeaderPortalProof, "spoofed-proof")
 	req.Header.Set(types.HeaderAccessCredential, "pcred_spoofed")
-	// The same headers spelled with underscores, which a CGI-style upstream reads as these.
 	for _, name := range []string{"X_Portal_User", "X_portal_auth", "x_portal_proof", "X_Portal_Access_Credential"} {
 		req.Header[name] = []string{"spoofed"}
 	}
@@ -132,8 +127,6 @@ func TestHTTPGatewayAlwaysStripsInboundPortalIdentityHeaders(t *testing.T) {
 	}
 }
 
-// The router in front of the upstream removes Portal identity headers the gate
-// did not verify, so the proof set by the gate must survive it.
 func TestApplicationAuthIdentityProofReachesRoutedUpstream(t *testing.T) {
 	t.Parallel()
 

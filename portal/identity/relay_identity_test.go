@@ -29,8 +29,6 @@ func TestLoadOrCreateRelayIdentityCreatesAndReloads(t *testing.T) {
 	}
 }
 
-// Relay identities written by older relays may carry a stale seed key that
-// no longer exists in the file schema; it must be ignored, not rejected.
 func TestLoadOrCreateRelayIdentityToleratesStaleSeed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, types.RelayIdentityFilename)

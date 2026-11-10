@@ -57,7 +57,6 @@ describe("useServerList public snapshot", () => {
     const lastDirectory = result.current.filteredServers;
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
     expect(result.current.leases).toBeNull();
-    // Keeping this input unchanged preserves the last directory and its tags.
     expect(result.current.filteredServers).toBe(lastDirectory);
     expect(result.current.filteredServers[0].online).toBe(true);
 

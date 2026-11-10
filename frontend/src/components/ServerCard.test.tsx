@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { Mock } from "vitest";
 import { describe, expect, it, vi } from "vitest";
 import type { ReputationSummary } from "@/types/api";
-import { ServerCard } from "./ServerCard";
+import { createConstellationData, ServerCard } from "./ServerCard";
 
 const TCP = "minecraft.relay.example.com:50000";
 const UDP = "minecraft.relay.example.com:50001";
@@ -32,9 +32,6 @@ function renderCard(props: { tcpAddr?: string; udpAddr?: string }) {
 function stubClipboard(writeText: Mock) {
   vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
 }
-// Their markup renders one row per endpoint: the address in a <code>, the copy
-// control beside it. Scope by address, because a copied button's label drops
-// the protocol and would otherwise match its sibling.
 function copyButton(address: string) {
   const row = screen.getByText(address).parentElement;
   if (!row) {
@@ -88,9 +85,6 @@ describe("ServerCard raw transport endpoints", () => {
     expect(screen.getByRole("link")).toBeTruthy();
   });
 
-  // The card once made the whole surface a <div onClick>, which no keyboard
-  // could reach. Wrapping these buttons back in a <Link> would nest
-  // interactive content instead, so pin both halves: reachable, not nested.
   it("keeps every copy control keyboard reachable and outside a link", () => {
     renderCard({ tcpAddr: TCP, udpAddr: UDP });
 
@@ -112,8 +106,6 @@ const REPUTATION: ReputationSummary = {
   comments: 5,
 };
 
-// Routes probe: the card sits on the directory route; navigation into
-// /server/srv-1 would swap in the "service detail" marker.
 function renderCardWithComments() {
   const onOpenComments = vi.fn();
   render(
@@ -328,5 +320,13 @@ describe("ServerCard comments interaction", () => {
     expect(screen.queryByLabelText("Comments")).toBeNull();
     expect(screen.getByText("admin-app")).toBeTruthy();
     expect(screen.getByText("admin controls")).toBeTruthy();
+  });
+});
+
+describe("createConstellationData determinism", () => {
+  it("renders the same sky for the same seed on every call", () => {
+    const first = createConstellationData("portal");
+    expect(createConstellationData("portal")).toEqual(first);
+    expect(createConstellationData("  PORTAL  ")).toEqual(first);
   });
 });

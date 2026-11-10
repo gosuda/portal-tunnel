@@ -133,8 +133,6 @@ func (s *DatagramSession) SendFrame(frame types.DatagramFrame) error {
 	if err != nil {
 		return err
 	}
-	// SendDatagram may block under backpressure. Keep the connection selected
-	// with the lease check, but let Clear/Close close it to interrupt the send.
 	return conn.SendDatagram(encodeDatagram(frame.FlowID, frame.Payload))
 }
 
@@ -209,17 +207,11 @@ func (s *DatagramSession) receiveLoop(conn *quic.Conn, leaseDone <-chan struct{}
 				recvErr = err
 			}
 			s.mu.Unlock()
-			// Loop exit is intentional: this receive generation reports its
-			// terminal error to its owner through recvDone.
 			return
 		}
 
 		frame, err := decodeDatagram(data)
-		if err != nil {
-			continue
-		}
-
-		if len(frame.Payload) > types.MaxUDPPayloadSize {
+		if err != nil || len(frame.Payload) > types.MaxUDPPayloadSize {
 			continue
 		}
 		frame.LeaseDone = leaseDone
@@ -242,7 +234,6 @@ func (s *DatagramSession) receiveLoop(conn *quic.Conn, leaseDone <-chan struct{}
 	}
 }
 
-// encodeDatagram serialises a flow-framed datagram for transmission.
 func encodeDatagram(flowID uint32, payload []byte) []byte {
 	var buf [binary.MaxVarintLen32]byte
 	n := binary.PutUvarint(buf[:], uint64(flowID))
@@ -252,7 +243,6 @@ func encodeDatagram(flowID uint32, payload []byte) []byte {
 	return out
 }
 
-// decodeDatagram deserialises a flow-framed datagram.
 func decodeDatagram(data []byte) (types.DatagramFrame, error) {
 	flowID, n := binary.Uvarint(data)
 	if n <= 0 {

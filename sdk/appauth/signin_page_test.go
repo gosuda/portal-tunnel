@@ -31,9 +31,6 @@ func getSigninPage(handler http.Handler, host string) *httptest.ResponseRecorder
 	return rec
 }
 
-// Every provider with a page of its own answers with the shared Portal shell and their own controls,
-// under a content policy that admits scripts and styles from the page itself and
-// fonts from one host only.
 func TestSigninPagesShareOneShell(t *testing.T) {
 	t.Parallel()
 
@@ -85,8 +82,6 @@ func TestSigninPageHeadCarriesNoBody(t *testing.T) {
 	}
 }
 
-// The host comes from the request, so it must never reach the page unescaped,
-// and a long identity-bound host is shortened for display only.
 func TestSigninPageEscapesAndShortensHost(t *testing.T) {
 	t.Parallel()
 
@@ -108,8 +103,6 @@ func TestSigninPageEscapesAndShortensHost(t *testing.T) {
 	}
 }
 
-// Browsers drop tabs and newlines from URLs, so a post-login target such as
-// "/<TAB>/host" would become "//host". Every page refuses control characters.
 func TestSigninPagesRefuseControlCharactersInNext(t *testing.T) {
 	t.Parallel()
 
@@ -120,8 +113,6 @@ func TestSigninPagesRefuseControlCharactersInNext(t *testing.T) {
 	}
 }
 
-// The visitor preview in the command builder shows the title, text and button
-// of the real sign-in pages, from signinCopy.json.
 func TestFrontendSigninPreviewMatchesThePages(t *testing.T) {
 	t.Parallel()
 

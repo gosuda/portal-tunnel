@@ -210,7 +210,6 @@ func TestHTTPRedirectTargetValidation(t *testing.T) {
 		})
 	}
 
-	// net/url accepts HTTPS schemes regardless of their spelling.
 	for _, hsts := range []bool{false, true} {
 		scheme := "HTTPS"
 		if hsts {
@@ -305,8 +304,6 @@ func TestRawPortsAreAllocatedPerIdentity(t *testing.T) {
 	}
 }
 
-// The WebSocket carrier takes its capability only from the subprotocols, beside the
-// marker; the raw carrier's header does not admit it.
 func TestConnectRejectsWebSocketWithoutCapability(t *testing.T) {
 	t.Parallel()
 
@@ -620,7 +617,6 @@ func TestRelayHTTPRedirectListener(t *testing.T) {
 		if err := occupied.Close(); err != nil {
 			t.Fatalf("release occupied redirect address: %v", err)
 		}
-		// A failed Start must not leak the SNI listener it had already bound.
 		rebound, err := net.Listen("tcp", sniAddr)
 		if err != nil {
 			t.Fatalf("failed Start leaked the SNI listener: %v", err)

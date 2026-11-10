@@ -9,9 +9,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// TestSubscriptionLimitsSurviveReplacedListenerClose pins subscription-entry
-// ownership: a replaced listener's late Close must not remove the live
-// replacement's limits entry.
 func TestSubscriptionLimitsSurviveReplacedListenerClose(t *testing.T) {
 	root := t.TempDir()
 	indexPath := filepath.Join(root, "index.html")
@@ -30,8 +27,6 @@ func TestSubscriptionLimitsSurviveReplacedListenerClose(t *testing.T) {
 	replacement := source.Subscribe(*relayURL, types.StaticCacheLimits{MaxExposureBytes: 1024, MaxObjectSize: 512})
 	replaced.Close()
 
-	// The late Close of the replaced generation must leave exactly the live
-	// replacement registered, keyed by its own subscription instance.
 	source.mu.Lock()
 	owned := len(source.limits) == 1 && source.limits[replacement] == replacement.limits
 	source.mu.Unlock()

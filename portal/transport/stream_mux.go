@@ -38,9 +38,7 @@ func IsReverseMuxRequest(r *http.Request) bool {
 }
 
 // ReverseMuxCapability returns the one capability a connector offered beside the
-// ReverseSubprotocol marker, or "" without the marker or with any other count. The
-// WebSocket constructor cannot set headers but can offer subprotocols, and keeping the
-// capability out of the URL keeps a bearer token out of access logs.
+// ReverseSubprotocol marker, or "" without the marker or with any other count.
 func ReverseMuxCapability(r *http.Request) string {
 	var marked bool
 	var capabilities []string
@@ -65,9 +63,6 @@ type ReverseMux struct {
 	session *yamux.Session
 }
 
-// reverseMuxConn maps yamux's Close (a send-side FIN) onto net.Conn's
-// separate half-close and full-close semantics. Full closure permanently
-// interrupts readers; a later deadline reset cannot reopen a revoked stream.
 type reverseMuxConn struct {
 	*yamux.Stream
 	mu     sync.Mutex
@@ -160,9 +155,6 @@ func (m *ReverseMux) Done() <-chan struct{} {
 	return m.session.CloseChan()
 }
 
-// authenticateReverseStream presents the current reverse capability on a newly
-// opened logical stream. A mux authenticates its lease at the WebSocket boundary,
-// but every stream must still prove that its short-lived capability is current.
 func authenticateReverseStream(ctx context.Context, conn net.Conn, capability string) error {
 	if conn == nil {
 		return errReverseStreamIsRequired
@@ -248,7 +240,7 @@ func ConfirmReverseStream(conn net.Conn, accepted bool) error {
 // session. Only the marker is selected, so the response never echoes the capability.
 func AcceptReverseMux(w http.ResponseWriter, r *http.Request) (*ReverseMux, error) {
 	socket, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // the capability is the credential; origin is not
+		InsecureSkipVerify: true,
 		Subprotocols:       []string{types.ReverseSubprotocol},
 	})
 	if err != nil {

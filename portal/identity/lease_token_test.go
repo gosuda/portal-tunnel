@@ -64,7 +64,6 @@ func TestLeaseAccessTokenClaimsRoundTrip(t *testing.T) {
 	if claims.LeaseID != testTokenLeaseID {
 		t.Fatalf("lease id = %q, want %q", claims.LeaseID, testTokenLeaseID)
 	}
-	// The wire identity claim carries only the public fields (name, address).
 	if claims.Identity.Name != leaseIdentity.Name || claims.Identity.Address != leaseIdentity.Address {
 		t.Fatalf("identity claim = %s/%s, want %s/%s", claims.Identity.Name, claims.Identity.Address, leaseIdentity.Name, leaseIdentity.Address)
 	}
@@ -125,11 +124,9 @@ func TestLeaseTokenAudiencesRejectEachOther(t *testing.T) {
 		t.Fatalf("IssueReverseCapability() error = %v", err)
 	}
 
-	// A lease access token must never authorize reverse-capability actions.
 	if _, err := VerifyReverseCapability(leaseToken, publicKey, testTokenIssuer, now); err == nil {
 		t.Fatal("lease access token accepted as a reverse capability: audiences are not mutually exclusive")
 	}
-	// A reverse capability must never authorize lease operations.
 	if _, err := VerifyLeaseAccessToken(reverseToken, publicKey, testTokenIssuer, now); err == nil {
 		t.Fatal("reverse capability accepted as a lease access token: audiences are not mutually exclusive")
 	}

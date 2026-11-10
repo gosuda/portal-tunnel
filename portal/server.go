@@ -63,11 +63,6 @@ const (
 	publicInspectionLimit        = 128
 )
 
-// backhaulPendingSources bounds concurrent pending-auth connections per
-// source: a /32 for IPv4 and a /64 for IPv6. One unauthenticated source
-// can therefore hold at most quicBackhaulPerSourceLimit of the global
-// quicBackhaulPendingLimit slots. Entries exist only while a connection
-// holds a pending-auth slot, so the map is bounded by the global limit.
 type backhaulPendingSources struct {
 	mu     sync.Mutex
 	counts map[netip.Prefix]int
@@ -82,7 +77,6 @@ func (p *backhaulPendingSources) acquire(remote net.Addr) bool {
 	defer p.mu.Unlock()
 	prefix, ok := backhaulSourcePrefix(remote)
 	if !ok {
-		// An unparseable source stays bounded by the global limit alone.
 		return true
 	}
 	if p.counts[prefix] >= quicBackhaulPerSourceLimit {
@@ -250,10 +244,6 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, selfRelayURL)
 
 	if cfg.SNIPort == 0 {
-		// SNI_PORT owns only the local bind. When PORTAL_URL names an explicit
-		// port, an unoverridden listener follows it so a single-setting
-		// deployment serves the port it advertises; mapping a different public
-		// port onto the local listener still sets SNI_PORT explicitly.
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
 	}
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
@@ -548,7 +538,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 				if cfg.HTTPRedirect.HSTS {
 					w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 				}
-				// Canonical portal only: never forward request hosts, paths, or queries.
 				http.Redirect(w, r, cfg.PortalURL, http.StatusMovedPermanently)
 			}),
 			ReadHeaderTimeout: 10 * time.Second,
@@ -621,9 +610,6 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 			}
 			return nil
 		})
-		// A status-byte write may wait for the reverse connection deadline. A
-		// fixed pool prevents one slow peer from blocking all lease admissions
-		// without creating unbounded admission goroutines.
 		for range reverseOfferAdmissionWorkers {
 			group.Go(func() error {
 				for {
@@ -676,8 +662,6 @@ func (s *Server) Wait() error {
 	return err
 }
 
-// admitReverseOffer composes overlay admission with the lease stream while a
-// reserved stream slot keeps the accepted status and queued session atomic.
 func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
 	lease, err := s.registry.admitLeaseIdentity(offer.ServiceIdentity, offer.LeaseID, time.Now().UTC(), false)
 	if err != nil {
@@ -922,7 +906,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 					shutdownErr = err
 				}
 			}
-			// Shutdown can precede the Serve goroutine registering its listener.
 			_ = s.redirectListener.Close()
 		}
 		if s.apiTLSClose != nil {
@@ -937,9 +920,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return shutdownErr
 }
 
-// prepareAPITLS loads the relay certificate and makes its acme manager the
-// relay's, which the listeners, the /v1/sign signer and the chain endpoint ask
-// for the current certificate, so a renewal needs no restart.
 func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
@@ -970,8 +950,6 @@ func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
 	return apiTLS, nil
 }
 
-// admitIngress reserves capacity before starting a public socket worker.
-// Root HTTP connections leave this owner after transfer to the HTTP server.
 func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 	s.ingressMu.Lock()
 	defer s.ingressMu.Unlock()
@@ -998,8 +976,6 @@ func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 	return true
 }
 
-// promoteIngress transfers an inspected tenant socket to the bridge budget.
-// Root/control-plane handoff never uses this budget, even at tenant capacity.
 func (s *Server) promoteIngress() bool {
 	s.ingressMu.Lock()
 	defer s.ingressMu.Unlock()
@@ -1063,10 +1039,6 @@ func (s *Server) runPublicIngress(ctx context.Context) error {
 				helloSpan := clientHello.HandshakeMessage
 
 				serverName := utils.NormalizeHostname(clientHello.ServerName)
-				// Go omits the SNI extension for IP-literal hosts and tenant
-				// hostnames are always DNS names, so a connection without a server
-				// name targets the canonical root origin; route it there instead
-				// of failing the handshake for IP-literal PORTAL_URL deployments.
 				if serverName == "" || serverName == s.identity.Name || s.registry.cache.Has(serverName) {
 					select {
 					case s.apiHandoff.conns <- wrappedConn:
@@ -1233,7 +1205,6 @@ func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
 		case errors.Is(err, errLeaseNotFound):
 			code, reason = types.APIErrorCodeLeaseNotFound, "lease not found"
 		case errors.Is(err, errLeaseRejected), errors.Is(err, errLeaseDenied):
-			// The SDK's QUIC loop reads no code here, so denied needs none of its own.
 			code, reason = types.APIErrorCodeLeaseRejected, "lease rejected"
 		case errors.Is(err, errUnauthorized):
 			code, reason = types.APIErrorCodeUnauthorized, "unauthorized"
@@ -1253,8 +1224,6 @@ func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
 		_ = conn.CloseWithError(1, "control response failed")
 		return
 	}
-	// The response is part of authentication. Keep its deadline through the
-	// write, then settle cancellation before publishing success.
 	if !stop() {
 		<-closed
 		return
@@ -1335,7 +1304,6 @@ func (s *Server) newSelfDescriptor(now time.Time) (types.RelayDescriptor, error)
 }
 
 func removeRelayURL(inputs []string, target string) []string {
-	// Both inputs and the server URL are already normalized by their owners.
 	var filtered []string
 	for _, input := range inputs {
 		if input != target {

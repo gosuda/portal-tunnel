@@ -31,21 +31,17 @@ type ReversePool struct {
 	closeOnce    sync.Once
 }
 
-// pooledConn coordinates the idle writer with acquisition and shutdown. It
-// never escapes the pool: acquired connections retain their original net.Conn.
 type pooledConn struct {
 	net.Conn
 	stop chan struct{}
 	done chan struct{}
-	err  error // published by closing done
+	err  error
 }
 
-// offerReservation protects the acknowledgement/commit boundary for overlay
-// admission. The caller owns conn until Commit and must Commit or Cancel.
 type offerReservation struct {
 	pool     *ReversePool
 	conn     net.Conn
-	finished bool // protected by pool.mu
+	finished bool
 }
 
 func NewReversePool(idleInterval time.Duration, readyLimit int) *ReversePool {
@@ -208,7 +204,7 @@ func (p *ReversePool) detachReadyLocked() []*pooledConn {
 
 func closeDetached(ready []*pooledConn) {
 	for _, c := range ready {
-		_ = c.Close() // interrupt an idle write before waiting for it
+		_ = c.Close()
 		<-c.done
 	}
 }

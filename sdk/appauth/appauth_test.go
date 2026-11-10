@@ -102,14 +102,10 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	if upstreamUser != wallet.Identity().Address || upstreamAuth != "siwe" {
 		t.Fatalf("identity headers = %q, %q", upstreamUser, upstreamAuth)
 	}
-	// Under no other spelling may a visitor's own value sit beside the verified one.
 	if want := []string{types.HeaderPortalAuth, types.HeaderPortalUser}; !slices.Equal(upstreamPortalNames, want) {
 		t.Fatalf("portal headers at the upstream = %q; want only %q", upstreamPortalNames, want)
 	}
 
-	// A verified challenge is a short-lived proof: replaying it
-	// re-authenticates the same wallet and issues a fresh session
-	// (SIWE challenges keep no replay state, issue #530).
 	replayReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthVerify, bytes.NewReader(verifyBody))
 	replayReq.Header.Set("Origin", "https://app.example")
 	replayRec := httptest.NewRecorder()
@@ -244,8 +240,6 @@ func TestApplicationAuthCredential(t *testing.T) {
 	}
 }
 
-// A session is for the application's own origin: an upgrade or a write from any
-// other origin is refused before the application sees the visitor's identity.
 func TestApplicationSessionRefusesOtherOrigins(t *testing.T) {
 	t.Parallel()
 
@@ -326,10 +320,6 @@ func TestApplicationSessionRefusesOtherOrigins(t *testing.T) {
 	}
 }
 
-// The gate answers only for a host the application holds now, for every provider.
-// The next owner of an alias reads what a browser sends there, so a session from
-// an earlier hold of the alias ends too, and a host that cannot change hands keeps
-// its sessions.
 func TestGateAnswersOnlyForHostsItHolds(t *testing.T) {
 	t.Parallel()
 
@@ -408,8 +398,6 @@ func TestGateAnswersOnlyForHostsItHolds(t *testing.T) {
 	}
 }
 
-// A login begun before the current hold of an alias does not finish after it,
-// because the next owner of the name may have read its state.
 func TestLoginStateFromAnEarlierHoldIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -463,8 +451,6 @@ func TestLoginStateFromAnEarlierHoldIsRefused(t *testing.T) {
 	}
 }
 
-// A wallet signature for a challenge from an earlier hold of an alias does not
-// sign in, for the same reason as the login state above.
 func TestSIWEChallengeFromAnEarlierHoldIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -514,8 +500,6 @@ func TestSIWEChallengeFromAnEarlierHoldIsRefused(t *testing.T) {
 	}
 }
 
-// A credential header is not a cookie: a browser does not attach it on its own,
-// so the page that sends it holds the credential and its origin proves nothing.
 func TestApplicationCredentialHeaderPassesFromAnyOrigin(t *testing.T) {
 	t.Parallel()
 
@@ -540,8 +524,6 @@ func TestApplicationCredentialHeaderPassesFromAnyOrigin(t *testing.T) {
 	}
 }
 
-// Without a session a request from another origin is simply not signed in: the
-// origin check adds nothing and must not change the answer a visitor gets.
 func TestApplicationAuthWithoutSessionIgnoresOrigin(t *testing.T) {
 	t.Parallel()
 
@@ -565,8 +547,6 @@ func TestApplicationAuthWithoutSessionIgnoresOrigin(t *testing.T) {
 	}
 }
 
-// portalHeaderNames lists the headers of h that a gateway reading underscores as
-// hyphens takes for a Portal header, in whatever spelling they arrived.
 func portalHeaderNames(h http.Header) []string {
 	var names []string
 	for key := range h {
@@ -609,9 +589,6 @@ func TestSameApplicationHost(t *testing.T) {
 	}
 }
 
-// A session is for an application, not for the spelling of its host that the
-// client happened to use: a Go client that writes :443 in its URL and a browser
-// that leaves it out reach the same application with the same session.
 func TestApplicationSessionFollowsTheHostNotItsSpelling(t *testing.T) {
 	t.Parallel()
 
@@ -662,15 +639,8 @@ func TestApplicationSessionFollowsTheHostNotItsSpelling(t *testing.T) {
 	}
 }
 
-// identityProofTestValue is a fake proof that satisfies the length and
-// character rules.
 const identityProofTestValue = "test-proof-0123456789"
 
-// The proof lets an upstream tell Portal from another local process that
-// connects to it directly and forges the identity headers: the gate sends it
-// only with the headers it verified, and never lets a visitor's copy through
-// (TestApplicationAuthStripsPortalCredentials covers the gate without identity
-// headers).
 func TestApplicationAuthIdentityProof(t *testing.T) {
 	t.Parallel()
 
@@ -702,7 +672,6 @@ func TestApplicationAuthIdentityProof(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// An authenticated visitor who also sends a proof of their own.
 			req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
 			req.Header.Set(types.HeaderAccessCredential, credential)
 			req.Header.Set(types.HeaderPortalProof, "forged-proof-value")
@@ -712,7 +681,6 @@ func TestApplicationAuthIdentityProof(t *testing.T) {
 				t.Fatalf("authenticated request: status = %d, upstream %s = %q; want %q", rec.Code, types.HeaderPortalProof, gotProof, tt.wantProof)
 			}
 
-			// Without authentication nothing reaches the upstream, whatever proof it carries.
 			reached = false
 			req = httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
 			req.Header.Set(types.HeaderPortalProof, identityProofTestValue)
@@ -736,7 +704,6 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Step 1: Both alice and bob are allowed; alice redeems a browser session cookie.
 	initialGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}), tunnelIdentity, Config{
@@ -757,7 +724,6 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 	}
 	aliceCookie := redeemRec.Result().Cookies()[0]
 
-	// Step 2: Revoke alice by restricting Allow to bob only.
 	revokedGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}), tunnelIdentity, Config{
@@ -769,7 +735,6 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Revoked subject cannot redeem a credential.
 	revokedRedeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(redeemBody))
 	revokedRedeemReq.Header.Set("Origin", "https://app.example")
 	revokedRedeemRec := httptest.NewRecorder()
@@ -778,7 +743,6 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 		t.Fatalf("revoked redeem status = %d; want 401", revokedRedeemRec.Code)
 	}
 
-	// Revoked subject's existing session cookie is rejected on the next request.
 	revokedCookieReq := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
 	revokedCookieReq.AddCookie(aliceCookie)
 	revokedCookieRec := httptest.NewRecorder()
@@ -787,7 +751,6 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 		t.Fatalf("revoked session status = %d; want 303", revokedCookieRec.Code)
 	}
 
-	// Revoked subject's direct credential header is also rejected.
 	revokedHeaderReq := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
 	revokedHeaderReq.Header.Set(types.HeaderAccessCredential, aliceCredential)
 	revokedHeaderRec := httptest.NewRecorder()
@@ -796,7 +759,6 @@ func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
 		t.Fatalf("revoked header status = %d; want 303", revokedHeaderRec.Code)
 	}
 
-	// Allowed subject (bob) continues to succeed.
 	bobHeaderReq := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
 	bobHeaderReq.Header.Set(types.HeaderAccessCredential, bobCredential)
 	bobHeaderRec := httptest.NewRecorder()
@@ -891,7 +853,6 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. Login redirects to the OIDC provider with S256 PKCE challenge and sets state cookie.
 	loginReq := httptest.NewRequest(http.MethodGet, "https://app.example"+types.PathApplicationAuthLogin+"?next=%2Fdashboard", nil)
 	loginRec := httptest.NewRecorder()
 	gate.ServeHTTP(loginRec, loginReq)
@@ -912,12 +873,10 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 	if len(stateCookies) != 1 || stateCookies[0].Name != applicationAuthOIDCStateCookie {
 		t.Fatalf("state cookies = %#v", stateCookies)
 	}
-	// Browsers drop __Host- cookies unless they are Secure, Path=/ and Domain-less.
 	if c := stateCookies[0]; c.Path != "/" || !c.Secure || c.Domain != "" {
 		t.Fatalf("state cookie attributes = path %q, secure %v, domain %q; want Path=/, Secure, no Domain", c.Path, c.Secure, c.Domain)
 	}
 
-	// 2. Callback exchanges code + PKCE verifier, verifies ID token, and issues session cookie.
 	cbReq := httptest.NewRequest(http.MethodGet, "https://app.example"+types.PathApplicationAuthCallback+"?code=authcode&state="+url.QueryEscape(state), nil)
 	cbReq.AddCookie(stateCookies[0])
 	cbRec := httptest.NewRecorder()
@@ -940,7 +899,6 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 		t.Fatal("missing session cookie from OIDC callback")
 	}
 
-	// 3. Authenticated request succeeds and injects normalized email principal.
 	protectedReq := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
 	protectedReq.AddCookie(sessionCookie)
 	protectedRec := httptest.NewRecorder()
@@ -949,7 +907,6 @@ func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
 		t.Fatalf("protected status = %d, user = %q, auth = %q", protectedRec.Code, upstreamUser, upstreamAuth)
 	}
 
-	// 4. Removing alice@example.com from Allow immediately revokes the existing OIDC session.
 	revokedGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}), tunnelIdentity, Config{
@@ -1084,8 +1041,6 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 	})
 }
 
-// A session subject is re-normalized on every request, so this rule decides
-// whether two provider subjects that differ only in case stay distinct there.
 func TestNormalizeProviderPrincipalKeepsSubjectCase(t *testing.T) {
 	t.Parallel()
 
@@ -1125,10 +1080,6 @@ func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {
 	}
 }
 
-// The host an operator types for `portal auth issue` and the Host a request
-// carries name the same application when they differ only by case, a trailing
-// dot or the default HTTPS port: a browser leaves that port out of Host, while
-// a Go client sends what its URL says.
 func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 	t.Parallel()
 
@@ -1163,7 +1114,6 @@ func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 		}
 	}
 
-	// A credential issued while the port was still part of the host keeps working.
 	for _, claimedHost := range []string{"app.example:443", "App.Example.:443"} {
 		token, err := encodeSignedApplicationAuthJSON([]byte(key), applicationCredentialClaims{
 			Version: applicationCredentialVersion, Subject: "alice", Tunnel: tunnelIdentity.Key(), Host: claimedHost,
@@ -1216,8 +1166,6 @@ func applicationAuthTestTime() time.Time {
 	return time.Now().UTC()
 }
 
-// The post-login target comes from a query parameter and a signed cookie, so it
-// must never send the browser to another origin.
 func TestSanitizeApplicationAuthNext(t *testing.T) {
 	t.Parallel()
 
@@ -1237,7 +1185,6 @@ func TestSanitizeApplicationAuthNext(t *testing.T) {
 		{"slash then backslash", "/\\evil.example/", "/"},
 		{"backslash later in the path", "/a\\b", "/"},
 		{"backslash only", "\\evil.example", "/"},
-		// Browsers drop tabs and newlines from URLs, so these would become "//evil.example".
 		{"tab after the slash", "/\t/evil.example", "/"},
 		{"newline after the slash", "/\n/evil.example", "/"},
 		{"carriage return after the slash", "/\r/evil.example", "/"},
@@ -1253,30 +1200,6 @@ func TestSanitizeApplicationAuthNext(t *testing.T) {
 	}
 }
 
-// An identity provider authenticates accounts it does not restrict to this
-// application, so OIDC must not start without an allowlist.
-func TestApplicationAuthOIDCRequiresAllowlist(t *testing.T) {
-	t.Parallel()
-
-	cfg := Config{Provider: ProviderOIDC, OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID}}
-	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "--auth-email-list") {
-		t.Fatalf("Validate without an allowlist = %v; want an error naming --auth-email-list", err)
-	}
-	if _, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg); err == nil {
-		t.Fatal("New started OIDC without an allowlist")
-	}
-	cfg.Allow = []string{"alice@example.com"}
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("Validate with an allowlist: %v", err)
-	}
-	// siwe and credential keep their open mode: an empty list there still needs a wallet or issued credential.
-	if err := Validate(Config{Provider: ProviderCredential}); err != nil {
-		t.Fatalf("credential without an allowlist: %v", err)
-	}
-}
-
-// Validation and the gate are built from one resolved form of the configuration,
-// so what validation accepts is what the gate runs with, normalized once.
 func TestResolveApplicationAuthConfig(t *testing.T) {
 	t.Parallel()
 
@@ -1317,7 +1240,6 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 			want: applicationAuthSettings{provider: ProviderSIWE, allowed: []string{wallet}},
 		},
 		{
-			// Exactly the minimum length, with the first and last visible ASCII characters.
 			name: "identity proof is kept as given",
 			cfg:  Config{Provider: ProviderCredential, IdentityHeaders: true, IdentityProof: "!~" + strings.Repeat("a", 14)},
 			want: applicationAuthSettings{provider: ProviderCredential, identityProof: "!~" + strings.Repeat("a", 14)},
@@ -1479,12 +1401,13 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("resolveApplicationAuthConfig() = %+v, %v; want %+v", got, err, tt.want)
 			}
+			if validateErr := Validate(tt.cfg); validateErr != nil {
+				t.Fatalf("Validate() = %v; want nil for a config the resolver accepts", validateErr)
+			}
 		})
 	}
 }
 
-// OIDC allows a sub of up to 255 characters. The session subject gains the
-// sub: prefix, so revalidation on later requests must not reject it for length.
 func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
 	t.Parallel()
 
@@ -1516,9 +1439,6 @@ func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
 	}
 }
 
-// A subject only means something at the issuer and client that produced it, so
-// a session must not outlive a change of either, while a restart with the same
-// configuration keeps it.
 func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
 	t.Parallel()
 

@@ -7,7 +7,6 @@ import { DEFAULT_SORT, type BrowseView, type SortOption } from "@/types/filters"
 const REPOSITORY_URL = "https://github.com/gosuda/portal-tunnel";
 const DOCS_URL = "https://gosuda.github.io/portal-tunnel";
 
-/** "full" is the 240px drawer; "mini" is the 72px rail shown on desktop when the drawer is closed. */
 export type SidebarVariant = "full" | "mini";
 
 export interface SidebarNavProps {
@@ -22,7 +21,6 @@ export interface SidebarNavProps {
 interface NavEntry {
   icon: LucideIcon;
   label: string;
-  /** The rail is narrow, so a long label gets a short form there. */
   shortLabel?: string;
   current?: boolean;
   badge?: number;
@@ -99,7 +97,6 @@ function NavGroup({
   );
 }
 
-/** The sidebar navigation; the drawer and the rail render the same entries. */
 export function SidebarNav({
   variant,
   browseView,

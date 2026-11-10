@@ -23,7 +23,6 @@ export function InviteBlock({
   os,
 }: {
   allow: string[];
-  /** The short URL on the first relay, shown as the placeholder; may be empty. */
   exampleURL: string;
   os: TunnelCommandOS;
 }) {

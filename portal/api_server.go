@@ -27,8 +27,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// handoffListener accepts already-inspected TLS connections without a TCP redial,
-// preserving the socket peer for both HTTP and hijacked reverse sessions.
 type handoffListener struct {
 	addr      net.Addr
 	conns     chan net.Conn
@@ -79,10 +77,6 @@ var (
 	errUnapprovedLeaseLimit     = &apiError{types.APIErrorCodeRateLimited, "too many unapproved leases from this source", http.StatusTooManyRequests}
 )
 
-// unapprovedLeaseRetryAfter spaces out retries that cost pre-auth budget, which
-// the same source's approved registrations also need. Each waiting client spends
-// a unit per retry and the default budget refills 10 a minute, so this keeps
-// dozens of waiting clients from draining it.
 const unapprovedLeaseRetryAfter = "300"
 
 func writeAPIErrorResponse(w http.ResponseWriter, err error) {
@@ -95,8 +89,6 @@ func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 
 func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.Server, io.Closer, error) {
 	if s.acmeManager.TLSMaterial() != nil {
-		// The manager picks the key of the certificate a tenant presents, so a
-		// renewal needs no new signer.
 		signer, err := keyless.NewSigner(s.registry.bindings, s.acmeManager.SigningKey)
 		if err != nil {
 			return nil, nil, fmt.Errorf("configure api signer: %w", err)
@@ -118,9 +110,6 @@ func (s *Server) newAPIServer(handler http.Handler, apiTLS *tls.Config) (*http.S
 // never reach the relay control plane. Route dispatch itself is composed by
 // the relay's policy package; this layer only owns portal data-path routing.
 func (s *Server) apiHandler(base http.Handler) http.Handler {
-	// A nil *http.ServeMux reaches this handler as a typed-nil interface: it
-	// compares non-nil, then panics on the first ServeHTTP call. Normalize it
-	// so the root fallback below still covers Start(ctx, nil).
 	if mux, ok := base.(*http.ServeMux); ok && mux == nil {
 		base = nil
 	}
@@ -132,14 +121,10 @@ func (s *Server) apiHandler(base http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := utils.NormalizeHostWithoutPort(r.Host)
-		// Bind a tenant TLS connection to its Host even if the next request
-		// tries to address a control-plane path or the canonical root host.
 		if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
 			s.serveCachedSite(w, r, host)
 			return
 		}
-		// An IP-literal Host carries no tenant identity (cache entries are
-		// keyed by hostname), so it stays on the control plane.
 		if s.registry.cache != nil && host != s.identity.Name && net.ParseIP(host) == nil {
 			s.serveCachedSite(w, r, host)
 			return
@@ -183,9 +168,6 @@ func (s *Server) HandleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// writeDiscoveryResponse keeps the response within the client byte limit.
-// On overflow, omit unsigned observations and retain the largest relay prefix,
-// preserving the serving relay at index zero.
 func writeDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryResponse) {
 	response.Relays = response.Relays[:min(len(response.Relays), types.MaxDiscoveryEntries+1)]
 	encoded, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: response})
@@ -197,8 +179,6 @@ func writeDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryRespo
 		response.IncompatibleRelays = nil
 		response.RelayReleaseVersions = nil
 		encoded = nil
-		// Serialized size grows with the prefix length. Search in at most
-		// eleven encodings for the bounded set of 1,025 descriptors.
 		for low, high := 1, len(response.Relays); low <= high; {
 			count := low + (high-low)/2
 			candidate := response
@@ -246,9 +226,6 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
-	// The relay's own URL is established locally, not through announces.
-	// RelaySet.InsertCandidate owns the public destination policy for all
-	// untrusted descriptors, including gossiped ones.
 	announceURL, err := url.Parse(desc.APIHTTPSAddr)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
@@ -309,7 +286,7 @@ func (s *Server) HandleDomain(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, s.DomainReport())
 }
 
-// handleCertificateChain serves the public chain already presented by the relay's
+// HandleCertificateChain serves the public chain already presented by the relay's
 // TLS endpoint to runtimes whose TLS stack does not expose peer certificates.
 func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
@@ -417,7 +394,6 @@ func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request,
 		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
 
-	// The lease holds the normalized identity, so the access decision is for that.
 	normalized, err := identity.NormalizeIdentity(req.Identity)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
@@ -514,8 +490,6 @@ func (s *Server) HandleReverseEndpoint(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, endpoint)
 }
 
-// serveReverseMux offers each stream the connector opens on session to the lease like
-// any other reverse connection. The lease owns the session, so it ends with the lease.
 func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseMux, sourceAddr netip.Addr) {
 	if err := lease.attachReverseMux(session); err != nil {
 		_ = session.Close()
@@ -535,7 +509,6 @@ func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseM
 			_ = stream.Close()
 			continue
 		}
-		// Offer closes a stream it turns away, as when the ready queue is full.
 		if err := lease.reverse.Offer(stream); err != nil {
 			continue
 		}
@@ -552,8 +525,6 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAdd
 		return
 	}
 
-	// The WebSocket carrier has its own credential grammar, and overlay routing only
-	// speaks the raw carrier, so it is told apart before either is read.
 	if transport.IsReverseMuxRequest(r) {
 		lease, err := s.registry.admitReverseCapability(transport.ReverseMuxCapability(r))
 		if err != nil {
@@ -633,8 +604,6 @@ func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
-	// Capture before the access check: revocation either rejects admission
-	// here or invalidates this generation before cache publication.
 	generation := s.registry.cache.Generation(record.id)
 	if !s.registry.isRoutable(record.ServiceKey()) {
 		writeAPIErrorResponse(w, errLeaseRejected)
@@ -658,8 +627,6 @@ func (s *Server) HandleSign(w http.ResponseWriter, r *http.Request) {
 	s.signer.ServeHTTP(w, r, leaseID)
 }
 
-// Tenant hosts never reach the relay control plane, including on a connection
-// with a mismatched Host header. TLS termination here is explicit cache opt-in.
 func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host string) {
 	if req.TLS == nil || utils.NormalizeHostname(req.TLS.ServerName) != host {
 		http.Error(w, "TLS name and request host must match", http.StatusMisdirectedRequest)
@@ -681,10 +648,6 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	httpTransport := &http.Transport{
 		DisableKeepAlives: true,
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			// The relay is the TLS client on this fallback: no routed
-			// client hello exists at issue time, so the binding starts
-			// pending and is pinned to the relay's own ClientHello on
-			// first write.
 			binding := s.registry.bindings.Issue(record.id, nil)
 			var upstream net.Conn
 			for {
@@ -699,8 +662,6 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 				}
 				_ = upstream.Close()
 			}
-			// The tenant presents the relay chain it pinned, which can be one a
-			// renewal replaced; trust what the relay still signs for.
 			conn := tls.Client(s.registry.bindings.FixHelloOnWrite(upstream, binding), s.acmeManager.TenantTLSConfig(host))
 			if err := conn.HandshakeContext(ctx); err != nil {
 				_ = conn.Close()

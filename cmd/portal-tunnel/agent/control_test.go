@@ -84,9 +84,6 @@ func TestControlHandlerRejectsUntrustedHostBeforeAuthorization(t *testing.T) {
 	}
 }
 
-// A wallet session is read-only, and any wallet may sign in while the dashboard
-// has no wallet allowlist, so it must not learn who may sign in to a tunnel or
-// which mail account sends its links. The control token still sees them.
 func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	tunnelCfg := testTunnel("web")
 	tunnelCfg.Provider = "credential"
@@ -165,5 +162,25 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	}
 	if got := signedIn["mail"]; len(got.EmailList) != 0 || got.EmailConfig != (appauth.EmailConfig{}) || got.AuthSMTPPasswordSet {
 		t.Fatalf("wallet session sees %+v, want no list and no mail account", got.AuthConfig)
+	}
+}
+
+func TestControlRelayEndpointsRefuseTheWrongMethod(t *testing.T) {
+	m, _ := testManager(t, testTunnel("web"))
+	handler := &controlHandler{
+		manager:            m,
+		token:              "secret",
+		authority:          "127.0.0.1:4018",
+		localhostAuthority: "localhost:4018",
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
+		req := httptest.NewRequest(method, types.PathAgentTunnelsPrefix+"web/relays", nil)
+		req.Host = "127.0.0.1:4018"
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s status = %d, want %d", method, rec.Code, http.StatusMethodNotAllowed)
+		}
 	}
 }

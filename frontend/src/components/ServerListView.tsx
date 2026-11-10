@@ -14,8 +14,6 @@ import { useRelayDiscovery } from "@/hooks/useRelayDiscovery";
 import { ROUTE_PATHS } from "@/lib/apiPaths";
 import type { Lease, ReputationVoteAction } from "@/types/api";
 
-// A card fades up the first time it comes into view on this page load; cards
-// that return through filters or a remount appear in place.
 const revealedServerIds = new Set<string>();
 const REVEAL_STAGGER_MS = 70;
 const REVEAL_STAGGER_MAX_STEPS = 7;
@@ -23,8 +21,6 @@ const REVEAL_KEYFRAMES: Keyframe[] = [
   { opacity: 0, translate: "0 14px" },
   { opacity: 1, translate: "0 0" },
 ];
-// Every named card becomes its own snapshot during a reorder, so an update that
-// could render more cards than this happens instantly.
 const REORDER_ANIMATION_MAX_CARDS = 60;
 
 function animateReorder(update: () => void, maxCards: number): void {
@@ -39,7 +35,6 @@ function animateReorder(update: () => void, maxCards: number): void {
   document.startViewTransition(() => flushSync(update));
 }
 
-/** The heading over the app grid: the view, then a search, then the order. */
 export function appListTitle(browseView: BrowseView, searchQuery: string, sortBy: SortOption): string {
   if (browseView === "favorites") return "Favorites";
   if (searchQuery.trim() !== "") return `Results for ${searchQuery}`;
@@ -47,7 +42,6 @@ export function appListTitle(browseView: BrowseView, searchQuery: string, sortBy
   return "Home";
 }
 
-/** Why the grid is empty: still connecting, filtered out, or nothing there yet. */
 export function emptyListMessage(
   browseView: BrowseView,
   connecting: boolean,
@@ -68,11 +62,8 @@ interface LiveAppCardProps {
 
 function LiveAppCard({ serverId, children }: LiveAppCardProps) {
   const viewTransitionName = useId();
-  // The set changes outside React, so the card reads it once when it mounts.
   const [revealOnView] = useState(() => !revealedServerIds.has(serverId));
 
-  // Off-screen cards skip layout and paint but stay mounted; 320px estimates the
-  // card's height until the browser remembers its rendered size.
   return (
     <div
       data-reveal={revealOnView ? serverId : undefined}
@@ -142,8 +133,6 @@ export function ServerListView({
   const gridRef = useRef<HTMLDivElement>(null);
   const hasActiveFilters =
     searchQuery.trim() !== "" || selectedTags.length > 0;
-  // leases is null before the relay first answers and after a failed poll; an
-  // active filter explains an empty list either way.
   const showConnecting = leases === null && !hasActiveFilters;
   const renderedServerIds = filteredServers.map((server) => server.id).join("\n");
 

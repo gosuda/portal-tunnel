@@ -53,50 +53,33 @@ var (
 
 const (
 	applicationAuthSAMLStateCookie = "__Host-portal_saml_state"
-	// samlMetadataBodyLimit leaves room for metadata with many certificates and
-	// attributes; an aggregate of many entities is not supported anyway.
-	samlMetadataBodyLimit = 1 << 20
-	// samlResponseBodyLimit leaves room for an assertion that lists many groups.
-	samlResponseBodyLimit = 512 << 10
-	// samlReplayLimit bounds the assertions remembered at once. Only an
-	// assertion the identity provider signed for this tunnel takes a place.
-	samlReplayLimit = 10000
-	// samlClockLeeway is how far the identity provider's clock may be off.
-	samlClockLeeway = time.Minute
-	// samlEntityIDLimit is the longest entity ID SAML allows (core 8.3.6).
-	samlEntityIDLimit         = 1024
-	samlSubjectAttributeLimit = 256
+	samlMetadataBodyLimit          = 1 << 20
+	samlResponseBodyLimit          = 512 << 10
+	samlReplayLimit                = 10000
+	samlClockLeeway                = time.Minute
+	samlEntityIDLimit              = 1024
+	samlSubjectAttributeLimit      = 256
 )
 
 type samlAuthenticator struct {
-	// Exactly one metadata source is set.
-	metadataURL  string
-	metadataFile string
-	// entityID is the configured SP entity ID; empty means the metadata URL of
-	// the host the visitor opened.
+	metadataURL      string
+	metadataFile     string
 	entityID         string
 	subjectAttribute string
-	// binding digests the metadata source, the entity ID and the subject
-	// attribute into every SAML session, since a subject only means something
-	// at the identity provider and in the form that produced it.
-	binding    string
-	stateKey   []byte
-	httpClient *http.Client
+	binding          string
+	stateKey         []byte
+	httpClient       *http.Client
 
 	metadata providerCache[samlIdentityProvider]
 	replay   samlReplaySet
 }
 
-// samlIdentityProvider is what the metadata says about the identity provider:
-// the issuer of its responses, where a login starts, and its signing keys.
 type samlIdentityProvider struct {
 	entityID string
 	ssoURL   string
 	certs    []*x509.Certificate
 }
 
-// samlStateClaims is the login in progress, kept in a signed cookie. The
-// request ID is what the response must answer (InResponseTo).
 type samlStateClaims struct {
 	RequestID string `json:"rid"`
 	Host      string `json:"host"`
@@ -104,31 +87,23 @@ type samlStateClaims struct {
 	ExpiresAt int64  `json:"exp"`
 }
 
-// samlReplaySet remembers each assertion this gate accepted until the login
-// state it answered expires; after that, the state check alone refuses it. A
-// full set refuses new logins instead of forgetting an assertion early.
 type samlReplaySet struct {
 	mu   sync.Mutex
 	seen map[string]time.Time
 }
 
-// samlSPMetadata is this tunnel's service provider metadata. It carries no
-// validUntil, so an identity provider that refreshes it never sees it expire.
 type samlSPMetadata struct {
 	XMLName         xml.Name `xml:"urn:oasis:names:tc:SAML:2.0:metadata EntityDescriptor"`
 	EntityID        string   `xml:"entityID,attr"`
 	SPSSODescriptor samltypes.SPSSODescriptor
 }
 
-// samlEntitiesDescriptor is metadata that wraps the identity provider in a
-// list, as some providers publish it.
 type samlEntitiesDescriptor struct {
 	XMLName  xml.Name                     `xml:"urn:oasis:names:tc:SAML:2.0:metadata EntitiesDescriptor"`
 	Entities []samltypes.EntityDescriptor `xml:"EntityDescriptor"`
 }
 
 func newSAMLAuthenticator(settings applicationAuthSettings, stateKey []byte) *samlAuthenticator {
-	// None of the settings can hold a NUL, so the separators keep them unambiguous.
 	binding := sha256.Sum256([]byte(settings.samlMetadataURL + "\x00" + settings.samlMetadataFile + "\x00" + settings.samlEntityID + "\x00" + settings.samlSubjectAttribute))
 	return &samlAuthenticator{
 		metadataURL:      settings.samlMetadataURL,
@@ -141,10 +116,6 @@ func newSAMLAuthenticator(settings applicationAuthSettings, stateKey []byte) *sa
 	}
 }
 
-// normalizeSAMLMetadataURL checks where the identity provider metadata is
-// fetched from. The metadata names the keys every assertion is verified
-// against, so it must come over https unless it is on a loopback host. Unlike
-// an OIDC issuer it may carry a query, as Entra ID's federation metadata does.
 func normalizeSAMLMetadataURL(raw string) (string, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -159,15 +130,10 @@ func normalizeSAMLMetadataURL(raw string) (string, error) {
 	return raw, nil
 }
 
-// secureSAMLProviderURL reports whether u reaches the identity provider over
-// https, or over http on a loopback host. The metadata and the login request
-// travel to these URLs.
 func secureSAMLProviderURL(u *url.URL) bool {
 	return u.Scheme == "https" || isLoopbackHTTP(u)
 }
 
-// validateSAMLName checks an optional setting that names something to the
-// identity provider: the SP entity ID or the subject attribute.
 func validateSAMLName(what, value string, limit int) error {
 	if len(value) > limit || strings.ContainsFunc(value, unicode.IsControl) {
 		return fmt.Errorf("%s must be at most %d characters without control characters", what, limit)
@@ -175,9 +141,6 @@ func validateSAMLName(what, value string, limit int) error {
 	return nil
 }
 
-// identityProvider returns the identity provider metadata, read again from its
-// source every providerMetadataCacheTTL so that a rotated signing key arrives
-// without a restart.
 func (s *samlAuthenticator) identityProvider(ctx context.Context) (samlIdentityProvider, error) {
 	return s.metadata.get(ctx, providerMetadataCacheTTL, s.fetchMetadata)
 }
@@ -230,10 +193,6 @@ func readSAMLMetadata(r io.Reader) ([]byte, error) {
 	return data, err
 }
 
-// parseSAMLMetadata reads the one identity provider the metadata describes.
-// The SSO service must take the HTTP-Redirect binding, the one the login
-// uses, and every certificate that may sign (use "signing" or no use) is
-// trusted; a signature by any other key is refused.
 func parseSAMLMetadata(data []byte) (samlIdentityProvider, error) {
 	var entities []samltypes.EntityDescriptor
 	var entity samltypes.EntityDescriptor
@@ -294,9 +253,6 @@ func parseSAMLMetadata(data []byte) (samlIdentityProvider, error) {
 	if len(idp.certs) == 0 {
 		return samlIdentityProvider{}, errSAMLMetadataNoSigningKey
 	}
-	// goxmldsig refuses a signature by a certificate outside its validity, so
-	// metadata whose certificates have all expired could never sign anyone in.
-	// Refusing it here makes the startup check report it.
 	now := time.Now()
 	if !slices.ContainsFunc(idp.certs, func(cert *x509.Certificate) bool {
 		return !now.Before(cert.NotBefore) && !now.After(cert.NotAfter)
@@ -306,8 +262,6 @@ func parseSAMLMetadata(data []byte) (samlIdentityProvider, error) {
 	return idp, nil
 }
 
-// spEntityID is the entity ID this tunnel presents at host: the configured
-// one, or else the metadata URL of host.
 func (s *samlAuthenticator) spEntityID(host string) string {
 	if s.entityID != "" {
 		return s.entityID
@@ -315,8 +269,6 @@ func (s *samlAuthenticator) spEntityID(host string) string {
 	return "https://" + host + types.PathApplicationAuthSAMLMetadata
 }
 
-// serviceProvider is this tunnel as a SAML service provider at host. The ACS
-// URL follows the host the visitor opened, like the OIDC redirect URI.
 func (s *samlAuthenticator) serviceProvider(idp samlIdentityProvider, host string) *saml2.SAMLServiceProvider {
 	entityID := s.spEntityID(host)
 	return &saml2.SAMLServiceProvider{
@@ -331,7 +283,6 @@ func (s *samlAuthenticator) serviceProvider(idp samlIdentityProvider, host strin
 	}
 }
 
-// issuerHost names the identity provider on the failure screens.
 func (s *samlAuthenticator) issuerHost(idp samlIdentityProvider) string {
 	switch {
 	case idp.ssoURL != "":
@@ -344,8 +295,6 @@ func (s *samlAuthenticator) issuerHost(idp samlIdentityProvider) string {
 }
 
 func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
-	// A login keeps its state in one cookie, so a request that never completes
-	// the login, like a HEAD probe, must not overwrite the state of one in progress.
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -366,8 +315,6 @@ func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sp := s.serviceProvider(idp, host)
-	// A browser still signed in to the refused account is let straight back in
-	// unless the identity provider is asked to authenticate the visitor again.
 	sp.ForceAuthn = r.URL.Query().Get("prompt") == accountChooserPrompt
 	request, err := sp.BuildAuthRequestDocumentNoSig()
 	if err != nil {
@@ -395,9 +342,6 @@ func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, authURL, http.StatusSeeOther)
 }
 
-// setSAMLStateCookie sets or, with maxAge -1, clears the login state. The
-// identity provider posts the response from its own site, and a browser sends
-// a SameSite=Lax cookie with no cross-site POST, so this one cookie is None.
 func setSAMLStateCookie(w http.ResponseWriter, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     applicationAuthSAMLStateCookie,
@@ -410,18 +354,12 @@ func setSAMLStateCookie(w http.ResponseWriter, value string, maxAge int) {
 	})
 }
 
-// serveSAMLACS is the assertion consumer service: the identity provider posts
-// the response here. Only a response to a login this browser started counts,
-// so a response the identity provider sends on its own (IdP-initiated SSO)
-// finds no state and is refused.
 func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	if a.provider != ProviderSAML || a.saml == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
 	var idp samlIdentityProvider
-	// A login that ends without a session shows a browser what happened and
-	// keeps the JSON error and status for every other caller.
 	fail := func(message, page, next string, fields ...string) {
 		if acceptsHTML(r) {
 			writeSigninFailurePage(w, r, http.StatusUnauthorized, page, a.saml.issuerHost(idp), next, fields...)
@@ -452,7 +390,6 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 		!sameApplicationHost(state.Host, host) ||
 		now.Unix() >= state.ExpiresAt ||
 		loginStateIssuedAt(state.ExpiresAt).Before(a.heldSince(host)) {
-		// Only a state that verified carries a target worth keeping.
 		next := "/"
 		if err == nil {
 			next = state.Next
@@ -480,19 +417,12 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 		fail("saml response verification failed", signinProviderFailedPage, state.Next)
 		return
 	}
-	// SAML has no email_verified: the value the identity provider signed is
-	// the email it vouches for when it has the shape of one.
 	subject, ok := a.resolveAllowedPrincipal(value, value)
 	if !ok {
 		fail("saml principal is not allowed", signinProviderDeniedPage, state.Next, "@@ACCOUNT@@", providerAccount(value, value))
 		return
 	}
 
-	// The session is separate from the assertion's validity, which only bounds
-	// when it may be presented: it follows the identity provider's
-	// SessionNotOnOrAfter when there is one, within providerMinSessionTTL and
-	// applicationAuthSessionTTL. The allowlist is checked on every request, so
-	// revoking a principal does not wait for the session to end.
 	lifetime := applicationAuthSessionTTL
 	if statement := assertion.AuthnStatement; statement != nil && statement.SessionNotOnOrAfter != nil {
 		lifetime = min(max(statement.SessionNotOnOrAfter.Sub(now), providerMinSessionTTL), applicationAuthSessionTTL)
@@ -504,14 +434,6 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, sanitizeApplicationAuthNext(state.Next), http.StatusSeeOther)
 }
 
-// verify returns the one assertion of a response to the login in state.
-// gosaml2 checks the XML signature (a signed response, or else every assertion
-// signed, never a mix), the issuer, the status, the bearer subject
-// confirmation and its recipient and expiry, and a destination that is
-// present. The rest is checked here: the destination must be present, the
-// response and its assertion must answer this login, the assertion must be
-// restricted to this service provider and within its time conditions, and it
-// must not have been used before.
 func (s *samlAuthenticator) verify(idp samlIdentityProvider, encodedResponse string, state samlStateClaims, now time.Time) (samltypes.Assertion, error) {
 	sp := s.serviceProvider(idp, state.Host)
 	response, err := sp.ValidateEncodedResponse(strings.TrimSpace(encodedResponse))
@@ -531,7 +453,6 @@ func (s *samlAuthenticator) verify(idp samlIdentityProvider, encodedResponse str
 	if assertion.ID == "" {
 		return samltypes.Assertion{}, errSAMLAssertionIDIsRequired
 	}
-	// gosaml2 refused an assertion without a bearer confirmation and its data.
 	if !sameSAMLRequestID(assertion.Subject.SubjectConfirmation.SubjectConfirmationData.InResponseTo, state.RequestID) {
 		return samltypes.Assertion{}, errSAMLInResponseToMismatch
 	}
@@ -544,15 +465,10 @@ func (s *samlAuthenticator) verify(idp samlIdentityProvider, encodedResponse str
 	return assertion, nil
 }
 
-// sameSAMLRequestID reports whether a response names the request of this
-// login. An empty InResponseTo answers no request.
 func sameSAMLRequestID(got, want string) bool {
 	return got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
-// checkSAMLConditions accepts an assertion restricted to audience and inside
-// its validity window, allowing samlClockLeeway of clock skew. NotOnOrAfter is
-// required, so that every assertion stops being presentable.
 func checkSAMLConditions(conditions *samltypes.Conditions, audience string, now time.Time) error {
 	if conditions == nil || conditions.NotOnOrAfter == "" {
 		return errSAMLConditionsAreRequired
@@ -573,25 +489,19 @@ func checkSAMLConditions(conditions *samltypes.Conditions, audience string, now 
 			return errSAMLAssertionNotYetValid
 		}
 	}
-	// A bearer assertion must name its audience (SAML profiles 4.1.4.2), and
-	// every restriction it carries must admit this service provider.
 	if len(conditions.AudienceRestrictions) == 0 {
 		return errSAMLAudienceMismatch
 	}
 	for _, restriction := range conditions.AudienceRestrictions {
-		admitted := false
-		for _, candidate := range restriction.Audiences {
-			admitted = admitted || strings.TrimSpace(candidate.Value) == audience
-		}
-		if !admitted {
+		if !slices.ContainsFunc(restriction.Audiences, func(candidate samltypes.Audience) bool {
+			return strings.TrimSpace(candidate.Value) == audience
+		}) {
 			return errSAMLAudienceMismatch
 		}
 	}
 	return nil
 }
 
-// subject is the value the session subject is made from: the NameID, or the
-// single value of the configured attribute.
 func (s *samlAuthenticator) subject(assertion samltypes.Assertion) (string, error) {
 	if s.subjectAttribute == "" {
 		if assertion.Subject.NameID == nil || assertion.Subject.NameID.Value == "" {
@@ -616,7 +526,6 @@ func (s *samlAuthenticator) subject(assertion samltypes.Assertion) (string, erro
 	return values[0], nil
 }
 
-// claim records an accepted assertion until until, or refuses one already recorded.
 func (r *samlReplaySet) claim(id string, until, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -640,12 +549,6 @@ func (r *samlReplaySet) claim(id string, until, now time.Time) error {
 	return nil
 }
 
-// serveSAMLMetadata publishes the service provider metadata for the host it
-// is read at, for the identity provider to import: the entity ID and the ACS
-// URL. It leaves WantAssertionsSigned false, because verify accepts a signed
-// response as well as signed assertions (never a response with neither), and
-// it offers no key, because this tunnel neither signs its requests nor accepts
-// encrypted assertions.
 func (a *applicationAuth) serveSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	if a.provider != ProviderSAML || a.saml == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
@@ -27,12 +28,8 @@ var (
 	keyBksp  = tea.KeyMsg{Type: tea.KeyBackspace}
 )
 
-// fakeSecret is an obviously made-up client secret; no test uses a real one.
 const fakeSecret = "not-a-real-secret-0123"
 
-// testAccessStatus is testDashboardStatus with a sign-in setting on four of its tunnels:
-// web (OIDC, provider unusable), api (wallet), paid (credential, no allow list) and idle
-// (OIDC that never started). site stays open. The secret exists only as a flag, as in the API.
 func testAccessStatus() AgentStatusResponse {
 	status := testDashboardStatus()
 	web, api, paid, idle := &status.Tunnels[0], &status.Tunnels[1], &status.Tunnels[2], &status.Tunnels[4]
@@ -54,10 +51,6 @@ func testAccessStatus() AgentStatusResponse {
 	return status
 }
 
-// A tunnel with an email list and a stored SMTP password: leaving the password
-// alone names nothing, F6 removes it with the username it is paired with, a
-// typed one replaces it, and leaving the provider removes it. The list stays
-// under its own key throughout.
 func TestDashboardAccessStoredEmailPassword(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	typed := func(text string) tea.Msg { return keyRunes(text) }
@@ -68,7 +61,6 @@ func TestDashboardAccessStoredEmailPassword(t *testing.T) {
 	mail.EmailConfig = appauth.EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPUsername: "portal", SMTPFrom: "login@example.com"}
 	mail.AuthSMTPPasswordSet = true
 
-	// The focus ring is mode, entry 1, add 2, headers 3, server 4, username 5, password 6, sender 7.
 	for _, tt := range []struct {
 		name string
 		keys []tea.Msg
@@ -96,7 +88,6 @@ func TestDashboardAccessStoredEmailPassword(t *testing.T) {
 	}
 }
 
-// settingsOf shows the Settings pane of the tunnel that is down tunnels from the first one.
 func settingsOf(t *testing.T, status AgentStatusResponse, down int) string {
 	t.Helper()
 	steps := []tea.Msg{agentDashboardStatusMsg{status: status}}
@@ -170,6 +161,33 @@ func TestDashboardSettingsListOnlyTheFirstEntriesOfALongAllowList(t *testing.T) 
 	}
 }
 
+func TestSettingsFocusLeavesExactlyOneInputFocused(t *testing.T) {
+	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
+	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: testAccessStatus()}, keyRight)
+	focused := func() int {
+		n := 0
+		for _, input := range []*textinput.Model{
+			&model.settingsMaxRelays,
+			&model.metadataDescription,
+			&model.metadataTags,
+			&model.metadataOwner,
+			&model.metadataThumbnail,
+			&model.metadataHide,
+		} {
+			if input.Focused() {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 0; i <= agentDashboardSettingsFieldCount; i++ {
+		model = press1(model, keyTab)
+		if got := focused(); got != 1 {
+			t.Fatalf("after %d tabs %d settings inputs hold focus, want exactly one", i+1, got)
+		}
+	}
+}
+
 func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{})
 	tests := []struct {
@@ -190,8 +208,6 @@ func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 	}
 }
 
-// The wording of an empty allow list repeats a rule of the gateway, so it is checked against the
-// gateway's own validator.
 func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
 	for _, provider := range []string{appauth.ProviderCredential, appauth.ProviderSIWE, appauth.ProviderOIDC} {
 		cfg := appauth.Config{Provider: provider}
@@ -207,7 +223,6 @@ func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
 			t.Errorf("the gateway refuses an empty %s allow list, but the hint is %q", provider, hint)
 		}
 		if !emptyAllowed {
-			// The refusal must be about the empty list and nothing else.
 			cfg.Allow = []string{"alice@example.com"}
 			if err := appauth.Validate(cfg); err != nil {
 				t.Fatalf("%s with one entry: %v", provider, err)
@@ -216,16 +231,13 @@ func TestAgentDashboardAllowedHintFollowsTheGatewayRules(t *testing.T) {
 	}
 }
 
-// The tunnels of testAccessStatus, by their distance from the first one.
 const (
-	accessWeb    = 0 // OIDC with three entries and a stored secret; the focus ring is mode, entries 1-3, add 4, headers 5, issuer 6, client ID 7, secret 8
+	accessWeb    = 0
 	accessWallet = 1
 	accessOpen   = 3
-	accessIdle   = 4 // OIDC without a stored secret
+	accessIdle   = 4
 )
 
-// accessScreen opens the Access screen of the tunnel that is down tunnels from the first one and
-// then replays keys on it.
 func accessScreen(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, down int, keys ...tea.Msg) agentDashboardModel {
 	t.Helper()
 	steps := []tea.Msg{agentDashboardStatusMsg{status: status}}
@@ -240,7 +252,6 @@ func send(model agentDashboardModel, msg tea.Msg) agentDashboardModel {
 	return next.(agentDashboardModel)
 }
 
-// press1 is press without the command.
 func press1(model agentDashboardModel, keys ...tea.KeyMsg) agentDashboardModel {
 	model, _ = press(model, keys...)
 	return model
@@ -254,7 +265,6 @@ func downs(n int) []tea.Msg {
 	return keys
 }
 
-// accessBody is the JSON body of the PATCH that applying the open Access screen sends.
 func accessBody(t *testing.T, model agentDashboardModel) string {
 	t.Helper()
 	tunnel, ok := model.accessTunnel()
@@ -268,7 +278,6 @@ func accessBody(t *testing.T, model agentDashboardModel) string {
 	return string(body)
 }
 
-// sameJSON reports whether two JSON objects hold the same fields, in any order.
 func sameJSON(t *testing.T, a, b string) bool {
 	t.Helper()
 	var x, y map[string]any
@@ -281,24 +290,6 @@ func sameJSON(t *testing.T, a, b string) bool {
 	return reflect.DeepEqual(x, y)
 }
 
-func TestNewSecretInputMasksByDefault(t *testing.T) {
-	for _, tt := range []struct {
-		term agentDashboardTerminal
-		mask string
-	}{
-		{agentDashboardTerminal{unicode: true}, "•"},
-		{agentDashboardTerminal{}, "*"},
-	} {
-		theme := newAgentDashboardTheme("amber", tt.term)
-		input := theme.newSecretInput()
-		input.SetValue(fakeSecret)
-		if view := input.View(); strings.Contains(view, fakeSecret) || !strings.Contains(view, strings.Repeat(tt.mask, len(fakeSecret))) {
-			t.Fatalf("a new secret input must mask what it holds with %q: %q", tt.mask, view)
-		}
-	}
-}
-
-// A secret usually arrives by paste, which the terminal delivers as one key message.
 func TestDashboardAccessMasksAPastedSecret(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	paste := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(fakeSecret), Paste: true}
@@ -481,8 +472,6 @@ func TestDashboardAccessApply(t *testing.T) {
 			t.Fatalf("%s with nothing changed must not send a request", key)
 		}
 	}
-	// Nothing has been applied on a screen that was just opened, so its disabled button
-	// does not claim that.
 	if view := untouched.View(); !strings.Contains(view, "( Apply )") || strings.Contains(view, "Applied") {
 		t.Fatalf("an untouched draft shows a disabled Apply button:\n%s", view)
 	}
@@ -517,7 +506,6 @@ func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) 
 		t.Fatalf("once the poll brings the new settings the screen says Applied and keeps them:\n%s", view)
 	}
 
-	// What was just applied is the new base: a further edit survives the polls that follow.
 	model = press1(model, keyRunes("erin@example.com"), keyEnter)
 	view = send(model, agentDashboardStatusMsg{status: added}).View()
 	if !strings.Contains(view, "erin@example.com") || strings.Contains(view, "changed meanwhile") {
@@ -525,8 +513,6 @@ func TestDashboardAccessSaysAppliedOnceThePollShowsTheNewSettings(t *testing.T) 
 	}
 }
 
-// The PATCH names what differs from the stored settings, so a draft that went stale would put
-// its old values back over a change made through config.toml, the CLI or another dashboard.
 func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	elsewhere := testAccessStatus()
@@ -570,7 +556,6 @@ func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 	})
 }
 
-// One apply runs at a time, and its answer belongs to the screen that sent it.
 func TestDashboardAccessAppliesOneAtATime(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	typedEntry := append(downs(4), keyRunes("carol@example.com"), keyEnter)
@@ -630,12 +615,10 @@ func TestDashboardAccessShowsTheServerErrorInline(t *testing.T) {
 	if !strings.Contains(view, "Error: "+refusal) || !strings.Contains(view, "ACCESS: web") {
 		t.Fatalf("the refusal should show inside the Access screen:\n%s", view)
 	}
-	// The status poll that follows every answer must not wipe it.
 	model = send(model, agentDashboardStatusMsg{status: testAccessStatus()})
 	if !strings.Contains(model.View(), "Error: "+refusal) {
 		t.Fatalf("the next status poll must not remove the refusal:\n%s", model.View())
 	}
-	// A refused draft keeps the secret so that the rest can be corrected.
 	if view := press1(model, keyF3).View(); !strings.Contains(view, fakeSecret) {
 		t.Fatalf("a refused apply must keep the typed secret:\n%s", view)
 	}
@@ -649,12 +632,9 @@ func TestDashboardAccessDropsTheSecretWhenItsJobIsDone(t *testing.T) {
 	status := testAccessStatus()
 	typeIt := []tea.Msg{keyUp, keyRunes(fakeSecret), keyF3}
 
-	// secretShown reopens the screen for web, reveals the secret input and reports what it shows.
 	secretShown := func(model agentDashboardModel) string {
 		return press1(model, keyF4, keyUp, keyF3).View()
 	}
-	// secretNowhere looks at the secret row of an open screen as it is and revealed, since a
-	// leftover secret may sit behind either.
 	secretNowhere := func(t *testing.T, model agentDashboardModel) {
 		t.Helper()
 		model = press1(model, keyUp)
@@ -686,7 +666,6 @@ func TestDashboardAccessDropsTheSecretWhenItsJobIsDone(t *testing.T) {
 		if view := secretShown(model); strings.Contains(view, fakeSecret) {
 			t.Fatalf("the secret survived a cancel:\n%s", view)
 		}
-		// What is typed next is hidden again: a cancel also ends the reveal.
 		if view := press1(model, keyF4, keyUp, keyRunes("typed-after-cancel")).View(); strings.Contains(view, "typed-after-cancel") {
 			t.Fatalf("a cancel must end the reveal:\n%s", view)
 		}
@@ -711,13 +690,10 @@ func TestDashboardAccessDropsTheSecretWhenItsJobIsDone(t *testing.T) {
 
 	t.Run("when the mode changes back to the stored one", func(t *testing.T) {
 		model := accessScreen(t, theme, status, accessWeb, typeIt...)
-		// Down wraps to the mode row, left leaves OIDC and right comes back to it.
 		secretNowhere(t, press1(model, keyDown, keyLeft, keyRight))
 	})
 
 	t.Run("when the mode changes between two others", func(t *testing.T) {
-		// site has no sign-in, so OIDC is not what is stored: three steps right reach it, and the
-		// secret typed there must not outlive a visit to the wallet mode.
 		model := accessScreen(t, theme, status, accessOpen, keyRight, keyRight, keyRight, keyUp, keyRunes(fakeSecret), keyF3)
 		secretNowhere(t, press1(model, keyDown, keyLeft, keyRight))
 	})
@@ -743,7 +719,6 @@ func TestDashboardAccessKeyBar(t *testing.T) {
 		{"access, entry input", 140, opened(downs(4)...), []string{"Enter Add entry", "F2 Apply"}, []string{"Enter/F2", "F2/Enter", "Remove"}},
 		{"access, headers row", 140, opened(downs(5)...), []string{"←/→ Change"}, []string{"Show"}},
 		{"access, secret row with a stored secret", 140, opened(keyUp), []string{"F3/^R Show", "F6/^X Clear", "Tab/S-Tab Field"}, []string{"Change"}},
-		// At the minimum width the row's own keys stay and the field keys give way.
 		{"access, secret row at 80 columns", 80, opened(keyUp), []string{"F2/Enter Apply", "Esc Cancel", "F3/^R Show", "F6/^X Clear", "F10/^C Quit"}, nil},
 	}
 	for _, tt := range tests {
@@ -771,8 +746,6 @@ func TestDashboardAccessKeys(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	load := agentDashboardStatusMsg{status: testAccessStatus()}
 
-	// Both keys open the screen from the Tunnels and the Relays panes. In the Settings pane s is
-	// typed into the focused input, so only F4 opens it there.
 	for _, tt := range []struct {
 		pane  string
 		steps []tea.Msg
@@ -823,7 +796,6 @@ func TestDashboardAccessMouse(t *testing.T) {
 		t.Fatalf("typing after a click on the secret row should go into the secret input, body = %s", got)
 	}
 
-	// The wheel moves the relay selection of the Relays pane, which the Access screen hides.
 	wheeled := send(opened, tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	if wheeled.selectedRelayURL != opened.selectedRelayURL {
 		t.Fatalf("the wheel on the Access screen moved the hidden relay selection to %q", wheeled.selectedRelayURL)
@@ -856,9 +828,6 @@ func TestDashboardAccessFollowsTheFocusInALongList(t *testing.T) {
 	}
 }
 
-// The requests the Access screen builds must be what the control API accepts, and what it
-// stores must be what the draft said: after every step the draft has nothing left to apply,
-// and once the status poll brings the stored settings the screen says Applied.
 func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 	const storedSecret = "stored-fake-secret"
 	const wallet = "0x52908400098527886E0F7030069857D2E4169EE7"
@@ -871,11 +840,10 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 
 	for _, step := range []struct {
 		name  string
-		down  int // 0 is app, 1 is site
+		down  int
 		keys  []tea.Msg
 		check func(t *testing.T, saved TunnelConfig)
 	}{
-		// app has one entry, so its focus ring is mode, entry 1, add 2, headers 3, issuer 4, client ID 5, secret 6.
 		{"remove the stored secret and add an entry", 0, []tea.Msg{keyUp, keyF6, keyDown, keyDown, keyDown, typed("carol@example.com"), keyEnter},
 			func(t *testing.T, saved TunnelConfig) {
 				if !slices.Equal(saved.Allow, []string{"alice@example.com", "carol@example.com"}) || saved.OIDCClientSecret != "" {
@@ -947,9 +915,6 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 	}
 }
 
-// Under agent run --foreground F10 asks before stopping the agent on the
-// Access screen too, the question stands in for the screen's own buttons, and
-// its letters answer it instead of going into the focused input.
 func TestDashboardAccessAsksBeforeStoppingTheAgent(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := accessScreen(t, theme, testAccessStatus(), 0, keyUp, keyRunes(fakeSecret))

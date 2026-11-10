@@ -89,8 +89,6 @@ func FormatSIWEMessage(m SIWEMessage) (string, error) {
 // the submitted message byte-for-byte. Domain, nonce and request ID are bound by
 // that message; parsing them back out would create a second validation path.
 func VerifySIWEMessage(message, signature, address string, expiresAt, now time.Time) error {
-	// The signed RFC3339 expiration has second precision. Preserve the existing
-	// inclusive cutoff even when the stored challenge timestamp has nanoseconds.
 	if now.After(expiresAt.Truncate(time.Second)) {
 		return errSIWEMessageExpired
 	}

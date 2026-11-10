@@ -63,11 +63,12 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (RelayIdentity, error) {
 		return RelayIdentity{}, fmt.Errorf("load identity: %w", err)
 	}
 
-	stored := relay
-	if rootHost != "" {
+	changed := created
+	if rootHost != "" && relay.Name != rootHost {
 		relay.Name = rootHost
+		changed = true
 	}
-	if created || relay != stored {
+	if changed {
 		if err := saveRelayIdentity(path, relay); err != nil {
 			return RelayIdentity{}, fmt.Errorf("persist identity: %w", err)
 		}

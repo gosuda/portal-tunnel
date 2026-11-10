@@ -11,12 +11,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// AddRelay and RemoveRelay each apply the whole user intent as one unit:
-// the explicit-list change plus the matching eligibility change.
-// RemoveRelay preserves the explicit-disconnect semantic (out of active
-// selection, verified descriptor kept as a future candidate); AddRelay
-// makes a re-added relay immediately selectable again without waiting out
-// the recovery backoff.
 func TestControllerRelayIntentOpsComposeAtomicUnits(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -42,9 +36,6 @@ func TestControllerRelayIntentOpsComposeAtomicUnits(t *testing.T) {
 	}
 }
 
-// A relay may serve discovery correctly while dropping tenant traffic. The
-// same runtime observation can also be an honest outage: neither establishes
-// intent, and a passing discovery response must not bypass local backoff.
 func TestControllerPassingDiscoveryDoesNotClearRuntimeSuppression(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const failed, healthy = "https://selective.example", "https://healthy.example"
@@ -58,7 +49,6 @@ func TestControllerPassingDiscoveryDoesNotClearRuntimeSuppression(t *testing.T) 
 		if !slices.Equal(selected, []string{healthy}) {
 			t.Fatalf("passing discovery bypassed runtime suppression: %v", selected)
 		}
-		// Ordinary outages recover without an operator override or a malice label.
 		synctest.Sleep(defaultDirectRecoveryBackoff + time.Second)
 		selected = controller.relaySet.selectRelays(routeState{})
 		if len(selected) != 2 || !slices.Contains(selected, healthy) || !slices.Contains(selected, failed) {
@@ -73,7 +63,6 @@ func TestControllerLocalSecurityBanSurvivesDiscoveryUntilOperatorOverride(t *tes
 	descriptor := mustRelayDescriptor(t, blocked)
 	mustApplyAuthoritative(t, controller.relaySet, descriptor)
 	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, healthy))
-	// Report is trusted local input here; this does not test exporter verification.
 	controller.Report(blocked, FailureMITM)
 	_, err := controller.relaySet.ApplyRelayDiscoveryResponse(blocked, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
@@ -93,12 +82,6 @@ func TestControllerLocalSecurityBanSurvivesDiscoveryUntilOperatorOverride(t *tes
 	}
 }
 
-// Concurrent AddRelay/RemoveRelay intents on the same relay must
-// linearize: the final state always matches one serial order, so the
-// relay is in the explicit list if and only if it is not suppressed. The
-// pre-atomicity shape — explicit-list change and eligibility change as
-// two separate critical sections — could end removed-but-allowed or
-// added-but-suppressed, which violates this invariant.
 func TestControllerRelayIntentOpsLinearizeUnderConcurrency(t *testing.T) {
 	const relayA = "https://relay-a.example"
 	controller := NewController(nil)
@@ -191,7 +174,6 @@ func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
 	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayB))
 
-	// MITM bans permanently — relay A is excluded even from explicit selection.
 	controller.Report(relayA, FailureMITM)
 	routes := controller.relaySet.selectRelays(routeState{
 		ExplicitRelayURLs: []string{relayA, relayB},
@@ -202,24 +184,15 @@ func TestControllerReportMITMVsRuntimeDistinctOutcomes(t *testing.T) {
 		}
 	}
 
-	// Runtime failure temporarily suppresses relay B without banning it.
 	controller.Report(relayB, FailureRuntime)
 	if !controller.relaySet.IsSuppressed(relayB, time.Now().UTC()) {
 		t.Fatal("relay B should be suppressed after runtime failure")
 	}
-	// Verify relay A is NOT suppressed (ban ≠ suppression).
 	if controller.relaySet.IsSuppressed(relayA, time.Now().UTC()) {
 		t.Fatal("relay A should not be suppressed (MITM is a ban, not suppression)")
 	}
 }
 
-// A custom explicit relay that never entered through discovery must hold a
-// durable RelaySet candidate state: a reported failure suppresses it, and
-// Next() publishes the reconciled membership — relay B only — instead of
-// keeping a selected URL with no live listener. The transition must be
-// observed through the controller's publication boundary, so a broken
-// Report() state change or a Next() that stops publishing the new desired
-// set both fail the deadline.
 func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -228,8 +201,6 @@ func TestControllerExplicitRelayFailureRepublishesMembership(t *testing.T) {
 	controller := NewController(nil)
 	controller.SetExplicitRelays([]string{relayA, relayB})
 
-	// With no discovery candidates the refresher is a no-op, so Next()
-	// publishes the explicit selection directly.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 

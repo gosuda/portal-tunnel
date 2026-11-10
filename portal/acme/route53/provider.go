@@ -99,12 +99,7 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 		return err
 	}
 
-	client, err := newClient(ctx, p.cfg)
-	if err != nil {
-		return err
-	}
-
-	hostedZoneID, err := p.findHostedZoneID(ctx, client, baseDomain)
+	client, hostedZoneID, err := p.clientAndZone(ctx, baseDomain)
 	if err != nil {
 		return err
 	}
@@ -126,12 +121,7 @@ func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP strin
 		return err
 	}
 
-	client, err := newClient(ctx, p.cfg)
-	if err != nil {
-		return err
-	}
-
-	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
+	client, hostedZoneID, err := p.clientAndZone(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -150,12 +140,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 		return err
 	}
 
-	client, err := newClient(ctx, p.cfg)
-	if err != nil {
-		return err
-	}
-
-	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
+	client, hostedZoneID, err := p.clientAndZone(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -185,12 +170,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 		return err
 	}
 
-	client, err := newClient(ctx, p.cfg)
-	if err != nil {
-		return err
-	}
-
-	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
+	client, hostedZoneID, err := p.clientAndZone(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -209,12 +189,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 		return err
 	}
 
-	client, err := newClient(ctx, p.cfg)
-	if err != nil {
-		return err
-	}
-
-	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
+	client, hostedZoneID, err := p.clientAndZone(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -233,12 +208,7 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 		return "", "", "", err
 	}
 
-	client, err := newClient(ctx, p.cfg)
-	if err != nil {
-		return "", "", "", err
-	}
-
-	hostedZoneID, err := p.findHostedZoneID(ctx, client, baseDomain)
+	client, hostedZoneID, err := p.clientAndZone(ctx, baseDomain)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -298,6 +268,18 @@ func newClient(ctx context.Context, cfg Config) (*awsroute53.Client, error) {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
 	return awsroute53.NewFromConfig(awsCfg), nil
+}
+
+func (p *Provider) clientAndZone(ctx context.Context, name string) (*awsroute53.Client, string, error) {
+	client, err := newClient(ctx, p.cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	hostedZoneID, err := p.findHostedZoneID(ctx, client, name)
+	if err != nil {
+		return nil, "", err
+	}
+	return client, hostedZoneID, nil
 }
 
 func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Client, domain string) (string, error) {

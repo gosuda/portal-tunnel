@@ -27,8 +27,7 @@ Portal is an open-source tunnel runtime and relay network for publishing service
 - **No Accounts, No API Keys** - Authentication uses local secp256k1 cryptographic identities (`identity.json`) with SIWE challenge signing.
 - **Native x402 Payments** - Route-level micropayments using gasless Sui USDC, Casper wCSPR, or Nano XNO without traditional payment processors.
 
-> 📖 **Explore the Complete Product Capabilities**:
-> For the complete matrix of all 20+ supported capabilities across CLI, Agent, SDK, and Relay—including interface support and trust boundaries—see the **[Canonical Feature Inventory](https://gosuda.github.io/portal-tunnel/features)**.
+> The **[Feature Inventory](https://gosuda.github.io/portal-tunnel/features)** lists all 20+ capabilities across CLI, Agent, SDK, and Relay, with interface support and trust boundaries.
 
 ## Comparison
 

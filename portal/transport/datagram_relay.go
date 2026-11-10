@@ -153,8 +153,6 @@ func (d *RelayDatagram) touchFlow(addr netip.AddrPort, now time.Time) (id uint32
 		return 0, false, false
 	}
 
-	// The bounded table always leaves a free uint32 ID. Skip live IDs when
-	// the counter wraps; zero is also a valid wire ID.
 	for {
 		id = d.nextFlow
 		d.nextFlow++
@@ -278,8 +276,6 @@ func (d *RelayDatagram) forgetFlow(flowID uint32) {
 }
 
 func (d *RelayDatagram) readLoop() {
-	// A full UDP receive buffer avoids Unix prefix forwarding and Windows
-	// WSAEMSGSIZE errors. Unsupported payloads are dropped whole below.
 	buf := make([]byte, 65535)
 	for {
 		n, clientAddr, err := d.conn.ReadFromUDPAddrPort(buf)
@@ -298,8 +294,6 @@ func (d *RelayDatagram) readLoop() {
 	}
 }
 
-// forwardDatagram admits state only for usable backhauls. A failed first send
-// rolls the new entry back; its admission token remains spent to bound churn.
 func (d *RelayDatagram) forwardDatagram(addr netip.AddrPort, payload []byte) {
 	if !d.enabled.Load() || len(payload) > types.MaxUDPPayloadSize || !d.session.Connected() {
 		return

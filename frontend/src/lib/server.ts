@@ -5,7 +5,6 @@ import {
 } from "@/lib/metadata";
 import type { Lease, ReputationSummary } from "@/types/api";
 
-/** One app in the directory, built from a relay lease. */
 export interface BaseServer {
   id: string;
   name: string;
@@ -26,11 +25,6 @@ export interface BaseServer {
   reputation?: ReputationSummary;
 }
 
-/**
- * The directory entry for a lease. The id is the canonical hostname, so it
- * stays stable when the short name changes. A raw TCP or UDP app has no web
- * page, so it gets no link.
- */
 export function leaseToServer(row: Lease): BaseServer {
   const metadata = parseLeaseMetadata(row.metadata);
   const payment = resolveLeasePayment(metadata);

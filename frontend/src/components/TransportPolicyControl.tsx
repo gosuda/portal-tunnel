@@ -2,7 +2,6 @@ import { useState } from "react";
 import type { PortSettings } from "@/hooks/useAdmin";
 
 interface TransportPolicyControlProps {
-  /** Short transport name shown in the labels, such as "UDP". */
   label: string;
   settings: PortSettings;
   disabled: boolean;
@@ -14,10 +13,8 @@ const SEGMENT_CLASS =
 const SELECTED_CLASS = "bg-primary text-primary-foreground";
 const UNSELECTED_CLASS = "bg-secondary text-secondary-foreground hover:bg-secondary/80";
 
-/** The on/off switch and lease limit of one relay transport. */
 export function TransportPolicyControl({ label, settings, disabled, onChange }: TransportPolicyControlProps) {
   const [maxLeasesInput, setMaxLeasesInput] = useState(String(settings.maxLeases));
-  // A saved or refreshed limit replaces what is typed.
   const [savedMaxLeases, setSavedMaxLeases] = useState(settings.maxLeases);
   if (savedMaxLeases !== settings.maxLeases) {
     setSavedMaxLeases(settings.maxLeases);

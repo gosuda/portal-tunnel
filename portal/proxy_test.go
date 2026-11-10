@@ -35,8 +35,6 @@ func TestIdentityBPSDefaultAndOverrides(t *testing.T) {
 	}
 }
 
-// Concurrent stream consumers share one identity budget, while another
-// identity retains its own budget. The clock advances without wall-time waits.
 func TestConcurrentStreamsShareDefaultIdentityBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		manager := NewBPSManager(100)
@@ -76,8 +74,6 @@ func TestConcurrentStreamsShareDefaultIdentityBudget(t *testing.T) {
 	})
 }
 
-// Reapplying unrelated policy must not discard a default-limited identity's
-// accrued credit; the identity has no entry in the override map.
 func TestDefaultBPSRetainsCreditAcrossPolicyUpdates(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		manager := NewBPSManager(100)

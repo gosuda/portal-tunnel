@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// Every HTTP client owns its mutable transport state: clients never share a
-// *http.Transport, and a caller's *tls.Config is cloned so later mutations by
-// the caller cannot leak into an already-built client.
 func TestNewHTTPClientOwnsItsMutableState(t *testing.T) {
 	t.Parallel()
 
@@ -36,15 +33,13 @@ func TestNewHTTPClientOwnsItsMutableState(t *testing.T) {
 	}
 }
 
-// A gateway that reads underscores as hyphens takes X_Portal_User for
-// X-Portal-User, so every such spelling goes with the header and nothing else does.
 func TestDelHeaderSpellings(t *testing.T) {
 	t.Parallel()
 
 	h := http.Header{
 		"X-Portal-User":  {"a"},
 		"X_Portal_User":  {"b"},
-		"X_portal_user":  {"c"}, // how net/http keeps it after reading it from a connection
+		"X_portal_user":  {"c"},
 		"x-portal-user":  {"d"},
 		"X-Portal-Auth":  {"e"},
 		"X_Portal_Other": {"f"},

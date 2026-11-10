@@ -28,8 +28,6 @@ import (
 
 const oidcTestClientID = "portal-client"
 
-// oidcTestIdP is a stub identity provider whose ID token can be bent into each
-// failure the gateway must refuse.
 type oidcTestIdP struct {
 	server    *httptest.Server
 	issuerURL string
@@ -37,17 +35,12 @@ type oidcTestIdP struct {
 	key       *ecdsa.PrivateKey
 	query     string
 
-	// clientSecret is what the gateway is configured with, authMethods what
-	// discovery advertises for client authentication at the token endpoint.
 	clientSecret string
 	authMethods  []string
 
-	// Request counters for the endpoints the gateway must not hit needlessly.
 	discoveryHits atomic.Int32
 	jwksHits      atomic.Int32
 
-	// When discoveryRelease is set, discovery requests answer only after it is
-	// closed; discoveryEntered learns that a request has arrived.
 	discoveryEntered chan struct{}
 	discoveryRelease chan struct{}
 
@@ -59,20 +52,18 @@ type oidcTestIdP struct {
 	mutate        func(*oidcIDTokenClaims)
 	signWith      jose.Signer
 	rawToken      func(valid string) string
-	emailVerified json.RawMessage // sent verbatim as the email_verified claim when non-nil
+	emailVerified json.RawMessage
 	omitToken     bool
 	tokenStatus   int
 	tokenRequests []oidcTokenCredentials
 }
 
-// oidcTokenCredentials is how one token request authenticated the client.
 type oidcTokenCredentials struct {
 	inHeader     bool
 	clientID     string
 	clientSecret string
 }
 
-// tokenCredentials lists the client credentials of every token request so far.
 func (p *oidcTestIdP) tokenCredentials() []oidcTokenCredentials {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -156,14 +147,12 @@ func (p *oidcTestIdP) holdDiscovery(r *http.Request) {
 	}
 }
 
-// update changes the provider's behavior between logins.
 func (p *oidcTestIdP) update(change func(*oidcTestIdP)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	change(p)
 }
 
-// rotate replaces the signing key, as a provider does on key rotation.
 func (p *oidcTestIdP) rotate(t *testing.T, kid string) {
 	t.Helper()
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -244,10 +233,6 @@ func (p *oidcTestIdP) expect(challenge, nonce string) {
 	p.challenge, p.nonce = challenge, nonce
 }
 
-// TestApplicationAuthOIDCCallbackRefusals protects the checks that keep a
-// forged or replayed login from becoming a session: each case must answer 401
-// without issuing a session cookie, and the one-time state cookie must be
-// cleared either way. The control case proves the harness reaches a session.
 func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -330,9 +315,6 @@ func TestApplicationAuthOIDCCallbackRefusals(t *testing.T) {
 	}
 }
 
-// A browser that returns from the provider without a session sees a page that
-// says why, while any other caller keeps the JSON error. The status is the same
-// for both, and neither gets a session.
 func TestApplicationAuthOIDCFailureScreens(t *testing.T) {
 	t.Parallel()
 
@@ -394,8 +376,6 @@ func TestApplicationAuthOIDCFailureScreens(t *testing.T) {
 	}
 }
 
-// The not-allowed screen tells the visitor which account to have added, in the
-// form an allowlist entry takes, and never what the allowlist holds.
 func TestApplicationAuthOIDCDeniedScreenShowsOnlyTheVisitorsAccount(t *testing.T) {
 	t.Parallel()
 
@@ -441,9 +421,6 @@ func TestApplicationAuthOIDCDeniedScreenShowsOnlyTheVisitorsAccount(t *testing.T
 	}
 }
 
-// The not-allowed page's retry carries prompt=select_account, so a browser still
-// signed in to the refused account gets the provider's account chooser, and the
-// retry keeps the deep link. No other login sends the prompt.
 func TestApplicationAuthOIDCRetryAsksForAccountChooser(t *testing.T) {
 	t.Parallel()
 
@@ -457,7 +434,6 @@ func TestApplicationAuthOIDCRetryAsksForAccountChooser(t *testing.T) {
 	denied := httptest.NewRecorder()
 	gate.ServeHTTP(denied, req)
 	assertOIDCCallback(t, denied, http.StatusUnauthorized)
-	// the page escapes the attribute, so the & between the query's parameters is written &amp;
 	retry := `href="` + types.PathApplicationAuthLogin + `?next=%2Fdocs%3Fpage%3D2&amp;prompt=select_account"`
 	if !strings.Contains(denied.Body.String(), retry) {
 		t.Fatalf("retry link is not the account-chooser login: %q", denied.Body.String())
@@ -491,9 +467,6 @@ func TestApplicationAuthOIDCRetryAsksForAccountChooser(t *testing.T) {
 	}
 }
 
-// A provider that cannot be reached when the login starts gives a browser a
-// page that offers to try again and keeps its target, and any other caller the
-// plain-text error. Neither starts a login.
 func TestApplicationAuthOIDCUnreachableProviderScreen(t *testing.T) {
 	t.Parallel()
 
@@ -544,9 +517,6 @@ func TestApplicationAuthOIDCEndpointQueries(t *testing.T) {
 	assertOIDCCallback(t, callback, http.StatusSeeOther)
 }
 
-// TestApplicationAuthOIDCDiscoveryIsShared protects login availability while the
-// provider is slow: concurrent logins share one discovery fetch, a caller that
-// gives up stops waiting at once without cancelling the fetch for the others.
 func TestApplicationAuthOIDCDiscoveryIsShared(t *testing.T) {
 	t.Parallel()
 
@@ -557,7 +527,6 @@ func TestApplicationAuthOIDCDiscoveryIsShared(t *testing.T) {
 	t.Cleanup(releaseDiscovery)
 	oidc := newOIDCTestGate(t, idp).oidc
 
-	// One caller starts the fetch and another joins it; both then give up.
 	abandoned, abandon := context.WithCancel(t.Context())
 	defer abandon()
 	abandonedDone := make(chan error, 2)
@@ -598,9 +567,6 @@ func TestApplicationAuthOIDCDiscoveryIsShared(t *testing.T) {
 	}
 }
 
-// TestApplicationAuthOIDCKeysAreFetchedForVerificationOnly protects login
-// availability: starting a login needs only the discovery document, so it must
-// not depend on the provider's key endpoint.
 func TestApplicationAuthOIDCKeysAreFetchedForVerificationOnly(t *testing.T) {
 	t.Parallel()
 	idp := newOIDCTestIdP(t, nil)
@@ -617,9 +583,6 @@ func TestApplicationAuthOIDCKeysAreFetchedForVerificationOnly(t *testing.T) {
 	}
 }
 
-// TestApplicationAuthOIDCRefreshesKeysOnlyForKeyErrors protects the provider
-// from refetch storms: only a failure that new keys can fix refetches the key
-// set, and at most once per refresh interval. Discovery is never refetched.
 func TestApplicationAuthOIDCRefreshesKeysOnlyForKeyErrors(t *testing.T) {
 	t.Parallel()
 
@@ -627,8 +590,6 @@ func TestApplicationAuthOIDCRefreshesKeysOnlyForKeyErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// warmedIdP completes one login so the key set is cached, then makes the
-	// cache old enough that only the failure's cause can hold back a refetch.
 	warmedIdP := func(t *testing.T) (*oidcTestIdP, *applicationAuth) {
 		t.Helper()
 		idp := newOIDCTestIdP(t, nil)
@@ -699,9 +660,6 @@ func TestApplicationAuthOIDCRefreshesKeysOnlyForKeyErrors(t *testing.T) {
 	})
 }
 
-// TestApplicationAuthOIDCTokenWithoutKeyID protects logins at providers that
-// omit the kid while signing with a single key, without letting a token pick
-// among several keys or weakening the algorithm allowlist.
 func TestApplicationAuthOIDCTokenWithoutKeyID(t *testing.T) {
 	t.Parallel()
 
@@ -743,9 +701,6 @@ func TestApplicationAuthOIDCTokenWithoutKeyID(t *testing.T) {
 	}
 }
 
-// TestApplicationAuthOIDCTokenRequestAuthentication protects the one-time
-// authorization code: the token request names how the client authenticates, as
-// the provider advertises, and is never sent a second time to probe another style.
 func TestApplicationAuthOIDCTokenRequestAuthentication(t *testing.T) {
 	t.Parallel()
 
@@ -791,11 +746,6 @@ func TestApplicationAuthOIDCTokenRequestAuthentication(t *testing.T) {
 	}
 }
 
-// TestApplicationAuthOIDCRefusesCleartextProviderURLs protects the
-// authorization code, PKCE verifier and client secret: an https issuer must not
-// send the gateway to a cleartext endpoint, whether discovery names one or the
-// provider redirects to one. Loopback http is accepted only under a loopback
-// http issuer, which every other test in this file relies on.
 func TestApplicationAuthOIDCRefusesCleartextProviderURLs(t *testing.T) {
 	t.Parallel()
 
@@ -808,11 +758,9 @@ func TestApplicationAuthOIDCRefusesCleartextProviderURLs(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		name string
-		// document is what discovery publishes, given the https issuer and a
-		// loopback http URL.
+		name     string
 		document func(issuer, cleartext string) oidcDiscoveryDocument
-		redirect bool // the https discovery URL redirects to the cleartext server
+		redirect bool
 		want     int
 	}{
 		{"control: https endpoints", secure, false, http.StatusSeeOther},
@@ -864,8 +812,6 @@ func TestApplicationAuthOIDCRefusesCleartextProviderURLs(t *testing.T) {
 	}
 }
 
-// TestApplicationAuthOIDCStopsRedirectLoops keeps a misbehaving provider from
-// holding a login on an endless redirect chain.
 func TestApplicationAuthOIDCStopsRedirectLoops(t *testing.T) {
 	t.Parallel()
 	var hits atomic.Int32
@@ -883,9 +829,6 @@ func TestApplicationAuthOIDCStopsRedirectLoops(t *testing.T) {
 	}
 }
 
-// newOIDCTLSGate gates an application behind an https provider that answers
-// every request with serve. It keeps the gateway's own HTTP client, with its
-// timeout and redirect policy, and only makes it trust the test certificate.
 func newOIDCTLSGate(t *testing.T, serve func(w http.ResponseWriter, r *http.Request, issuer string)) *applicationAuth {
 	t.Helper()
 	provider := httptest.NewUnstartedServer(nil)
@@ -905,18 +848,11 @@ func newOIDCTLSGate(t *testing.T, serve func(w http.ResponseWriter, r *http.Requ
 	return gate
 }
 
-// oidcRawEmailVerifiedClaims signs an arbitrary JSON value as email_verified:
-// the outer field shadows the embedded claim of the same JSON name, and omitting
-// it leaves the claim absent.
 type oidcRawEmailVerifiedClaims struct {
 	oidcIDTokenClaims
 	EmailVerified json.RawMessage `json:"email_verified,omitempty"`
 }
 
-// TestApplicationAuthOIDCEmailVerifiedDecoding protects logins at providers
-// that send email_verified as a string, and fails closed on anything else: an
-// unrecognized value never verifies the email, yet it must not break the claims
-// decode, or even sub: allowlists would lock out.
 func TestApplicationAuthOIDCEmailVerifiedDecoding(t *testing.T) {
 	t.Parallel()
 
@@ -951,7 +887,6 @@ func TestApplicationAuthOIDCEmailVerifiedDecoding(t *testing.T) {
 	}
 }
 
-// completeOIDCLogin runs the login and the callback at app.example.
 func completeOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP) *httptest.ResponseRecorder {
 	t.Helper()
 	login := startOIDCLogin(t, gate, idp, "app.example", types.PathApplicationAuthLogin)
@@ -960,15 +895,12 @@ func completeOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP) *h
 	return rec
 }
 
-// ageOIDCKeys makes the cached key set look two refresh intervals old.
 func ageOIDCKeys(gate *applicationAuth) {
 	gate.oidc.jwks.mu.Lock()
 	defer gate.oidc.jwks.mu.Unlock()
 	gate.oidc.jwks.fetchedAt = gate.oidc.jwks.fetchedAt.Add(-2 * oidcJWKSRefreshInterval)
 }
 
-// awaitOIDC receives from ch, failing the test instead of hanging when the
-// awaited event never happens.
 func awaitOIDC[T any](t *testing.T, ch <-chan T, what string) T {
 	t.Helper()
 	select {
@@ -981,8 +913,6 @@ func awaitOIDC[T any](t *testing.T, ch <-chan T, what string) T {
 	return zero
 }
 
-// newOIDCTestGate gates a stub application behind idp. It admits only the
-// verified email alice@example.com unless allowed lists other principals.
 func newOIDCTestGate(t *testing.T, idp *oidcTestIdP, allowed ...string) *applicationAuth {
 	t.Helper()
 	if len(allowed) == 0 {
@@ -999,14 +929,11 @@ func newOIDCTestGate(t *testing.T, idp *oidcTestIdP, allowed ...string) *applica
 	return handler.(*applicationAuth)
 }
 
-// oidcLogin is the state a browser holds between the login redirect and the callback.
 type oidcLogin struct {
 	state  string
 	cookie *http.Cookie
 }
 
-// startOIDCLogin performs the login step and tells the stub IdP which PKCE
-// challenge and nonce the callback must carry.
 func startOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP, host, path string) oidcLogin {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -1023,7 +950,6 @@ func startOIDCLogin(t *testing.T, gate *applicationAuth, idp *oidcTestIdP, host,
 	return oidcLogin{state: authRedirect.Query().Get("state"), cookie: cookies[0]}
 }
 
-// callbackRequest is the browser's return from the IdP at app.example, optionally tampered with.
 func (l oidcLogin) callbackRequest(t *testing.T, gate *applicationAuth, tamper oidcTamper) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "https://app.example"+types.PathApplicationAuthCallback+"?code=authcode&state="+url.QueryEscape(l.state), nil)
@@ -1034,8 +960,6 @@ func (l oidcLogin) callbackRequest(t *testing.T, gate *applicationAuth, tamper o
 	return tamper(t, gate, l, req)
 }
 
-// assertOIDCCallback checks the status, that a session cookie exists exactly
-// when the login succeeded, and that the one-time state cookie is cleared.
 func assertOIDCCallback(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 	t.Helper()
 	if rec.Code != want {
@@ -1058,7 +982,6 @@ func assertOIDCCallback(t *testing.T, rec *httptest.ResponseRecorder, want int) 
 	}
 }
 
-// oidcTamper adjusts the callback request after a valid login redirect.
 type oidcTamper func(t *testing.T, gate *applicationAuth, login oidcLogin, req *http.Request) *http.Request
 
 func withQuery(query string) oidcTamper {
@@ -1068,8 +991,6 @@ func withQuery(query string) oidcTamper {
 	}
 }
 
-// withStateCookie replaces the state cookie with the rewritten value, or drops
-// it when rewrite is nil.
 func withStateCookie(rewrite func(t *testing.T, gate *applicationAuth, value string) string) oidcTamper {
 	return func(t *testing.T, gate *applicationAuth, login oidcLogin, req *http.Request) *http.Request {
 		req.Header.Del("Cookie")
@@ -1080,7 +1001,6 @@ func withStateCookie(rewrite func(t *testing.T, gate *applicationAuth, value str
 	}
 }
 
-// expireOIDCState re-signs a state cookie so it has already expired.
 func expireOIDCState(t *testing.T, gate *applicationAuth, value string) string {
 	t.Helper()
 	var claims oidcStateClaims
@@ -1095,8 +1015,6 @@ func expireOIDCState(t *testing.T, gate *applicationAuth, value string) string {
 	return expired
 }
 
-// A login keeps its state in one cookie. A HEAD request never completes a
-// login, so it must not start one and overwrite the state of a login in progress.
 func TestApplicationAuthOIDCLoginStartsOnlyOnGet(t *testing.T) {
 	t.Parallel()
 	gate := newOIDCTestGate(t, newOIDCTestIdP(t, nil))
@@ -1107,9 +1025,6 @@ func TestApplicationAuthOIDCLoginStartsOnlyOnGet(t *testing.T) {
 	}
 }
 
-// The deep link travels in the state cookie, which a browser drops silently
-// once it nears 4 KB, failing the login at the callback. A link that does not
-// fit is replaced by / so the login still completes.
 func TestApplicationAuthOIDCStateCookieStaysWithinBrowserLimit(t *testing.T) {
 	t.Parallel()
 
@@ -1151,10 +1066,6 @@ func TestApplicationAuthOIDCStateCookieStaysWithinBrowserLimit(t *testing.T) {
 	}
 }
 
-// The session follows the ID token's lifetime, but lasts at least
-// providerMinSessionTTL, so a token about to expire cannot produce a session that
-// is invalid on arrival and sends the visitor through the provider again, and
-// at most applicationAuthSessionTTL.
 func TestApplicationAuthOIDCSessionLifetime(t *testing.T) {
 	t.Parallel()
 
@@ -1187,7 +1098,6 @@ func TestApplicationAuthOIDCSessionLifetime(t *testing.T) {
 	}
 }
 
-// oidcSessionExpiry returns when the session cookie in rec expires.
 func oidcSessionExpiry(t *testing.T, gate *applicationAuth, rec *httptest.ResponseRecorder) time.Time {
 	t.Helper()
 	for _, c := range rec.Result().Cookies() {
@@ -1204,9 +1114,6 @@ func oidcSessionExpiry(t *testing.T, gate *applicationAuth, rec *httptest.Respon
 	return time.Time{}
 }
 
-// Check lets the tunnel report at startup a provider
-// that visitors could not sign in with, instead of leaving the first login to
-// find out.
 func TestCheckApplicationAuthProvider(t *testing.T) {
 	t.Parallel()
 
@@ -1257,8 +1164,6 @@ func TestCheckApplicationAuthProvider(t *testing.T) {
 	})
 }
 
-// A sub: entry decides who may sign in, not who the visitor is: the application
-// still learns the address the provider vouches for, and never an unverified one.
 func TestOIDCPrincipalCarriesTheVouchedEmail(t *testing.T) {
 	t.Parallel()
 

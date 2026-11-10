@@ -14,8 +14,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// Requests from the relay listener are public, so Portal identity headers they
-// carry are forged and must not reach the handler.
 func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -46,7 +44,7 @@ func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 	req.Header.Set(types.HeaderPortalUser, "forged-user")
 	req.Header.Set(types.HeaderPortalAuth, "forged-auth")
 	req.Header.Set(types.HeaderPortalProof, "forged-proof")
-	// A CGI-style upstream reads these as the headers above.
+
 	for _, name := range []string{"X_Portal_User", "X_portal_auth", "x_portal_proof"} {
 		req.Header[name] = []string{"forged"}
 	}
@@ -68,7 +66,7 @@ func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 			t.Errorf("handler received forged %s = %q", key, values)
 		}
 	}
-	// The tunnel ended TLS, so a client cannot say otherwise in any spelling.
+
 	if got := header.Values("X-Forwarded-Proto"); len(got) != 1 || got[0] != "https" {
 		t.Errorf("handler X-Forwarded-Proto = %q; want only https", got)
 	}
@@ -149,8 +147,6 @@ func TestHTTPRoutesRewriteResponseHeaders(t *testing.T) {
 func TestHTTPRoutesRewriteRedirectsToThePublicAuthority(t *testing.T) {
 	t.Parallel()
 
-	// The upstream receives the public Host, so an app that builds an absolute
-	// Location from it names the public authority, with whichever scheme it assumes.
 	tests := []struct {
 		name     string
 		location string
@@ -216,9 +212,6 @@ func TestHTTPRoutePreservesPublicHostForEveryUpstream(t *testing.T) {
 	}
 }
 
-// Go removes the canonical X-Forwarded-* headers of the inbound request, and the
-// route sets its own; a client's underscore spelling of one must not reach an
-// upstream that reads it as the same header.
 func TestHTTPRouteRemovesOtherSpellingsOfTheForwardedHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -274,8 +267,6 @@ func newStaticSiteDir(t *testing.T, name, content string) string {
 	return root
 }
 
-// Static route behavior is covered in utils; these cases pin the wiring from
-// HTTPRouteConfig through to the static handler.
 func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 	t.Parallel()
 
@@ -296,5 +287,24 @@ func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != "<html>main</html>" {
 		t.Fatalf("body = %q, want the configured entry file", got)
+	}
+}
+
+func TestHTTPRouteRewriteKeepsEscapedRawPath(t *testing.T) {
+	t.Parallel()
+
+	route, err := newHTTPRoute(HTTPRouteConfig{Prefix: "/app", Upstream: "http://127.0.0.1:3000"})
+	if err != nil {
+		t.Fatalf("newHTTPRoute() error = %v", err)
+	}
+	in := httptest.NewRequest(http.MethodGet, "http://app.relay.example/app/%41", nil)
+	pr := &httputil.ProxyRequest{In: in, Out: in.Clone(t.Context())}
+	route.rewriteProxyRequest(pr)
+
+	if pr.Out.URL.Path != "/A" {
+		t.Fatalf("outbound Path = %q, want %q", pr.Out.URL.Path, "/A")
+	}
+	if got := pr.Out.URL.EscapedPath(); got != "/%41" {
+		t.Fatalf("outbound EscapedPath = %q, want %q", got, "/%41")
 	}
 }
