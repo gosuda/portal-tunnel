@@ -116,20 +116,20 @@ func resolveApplicationAuthConfig(cfg Config) (applicationAuthSettings, error) {
 }
 
 func buildGateSettings(provider string, allowed []string, proof string, cfg Config) (applicationAuthSettings, error) {
-	issuer := strings.TrimSpace(cfg.OIDCIssuerURL)
-	clientID := strings.TrimSpace(cfg.OIDCClientID)
-	clientSecret := strings.TrimSpace(cfg.OIDCClientSecret)
-	metadataURL := strings.TrimSpace(cfg.SAMLMetadataURL)
-	metadataFile := strings.TrimSpace(cfg.SAMLMetadataFile)
-	entityID := strings.TrimSpace(cfg.SAMLEntityID)
-	subjectAttribute := strings.TrimSpace(cfg.SAMLSubjectAttribute)
-	smtpAddr := strings.TrimSpace(cfg.SMTPAddr)
-	smtpUsername := strings.TrimSpace(cfg.SMTPUsername)
-	smtpPassword := strings.TrimSpace(cfg.SMTPPassword)
-	from := strings.TrimSpace(cfg.SMTPFrom)
-	hasOIDCSettings := issuer != "" || clientID != "" || clientSecret != ""
-	hasSAMLSettings := metadataURL != "" || metadataFile != "" || entityID != "" || subjectAttribute != ""
-	hasEmailSettings := smtpAddr != "" || smtpUsername != "" || smtpPassword != "" || from != ""
+	cfg.OIDCIssuerURL = strings.TrimSpace(cfg.OIDCIssuerURL)
+	cfg.OIDCClientID = strings.TrimSpace(cfg.OIDCClientID)
+	cfg.OIDCClientSecret = strings.TrimSpace(cfg.OIDCClientSecret)
+	cfg.SAMLMetadataURL = strings.TrimSpace(cfg.SAMLMetadataURL)
+	cfg.SAMLMetadataFile = strings.TrimSpace(cfg.SAMLMetadataFile)
+	cfg.SAMLEntityID = strings.TrimSpace(cfg.SAMLEntityID)
+	cfg.SAMLSubjectAttribute = strings.TrimSpace(cfg.SAMLSubjectAttribute)
+	cfg.SMTPAddr = strings.TrimSpace(cfg.SMTPAddr)
+	cfg.SMTPUsername = strings.TrimSpace(cfg.SMTPUsername)
+	cfg.SMTPPassword = strings.TrimSpace(cfg.SMTPPassword)
+	cfg.SMTPFrom = strings.TrimSpace(cfg.SMTPFrom)
+	hasOIDCSettings := cfg.OIDCIssuerURL != "" || cfg.OIDCClientID != "" || cfg.OIDCClientSecret != ""
+	hasSAMLSettings := cfg.SAMLMetadataURL != "" || cfg.SAMLMetadataFile != "" || cfg.SAMLEntityID != "" || cfg.SAMLSubjectAttribute != ""
+	hasEmailSettings := cfg.SMTPAddr != "" || cfg.SMTPUsername != "" || cfg.SMTPPassword != "" || cfg.SMTPFrom != ""
 	if hasOIDCSettings && provider != ProviderOIDC {
 		return applicationAuthSettings{}, errOIDCSettingsRequireOIDCApplicationAuth
 	}
@@ -190,19 +190,16 @@ func completeOIDCSettings(settings *applicationAuthSettings, cfg Config) error {
 	if len(settings.allowed) == 0 {
 		return errOIDCRequiresEmailList
 	}
-	issuer := strings.TrimSpace(cfg.OIDCIssuerURL)
-	clientID := strings.TrimSpace(cfg.OIDCClientID)
-	clientSecret := strings.TrimSpace(cfg.OIDCClientSecret)
-	issuerURL, err := normalizeOIDCIssuerURL(issuer)
+	issuerURL, err := normalizeOIDCIssuerURL(cfg.OIDCIssuerURL)
 	if err != nil {
 		return err
 	}
-	if clientID == "" {
+	if cfg.OIDCClientID == "" {
 		return errOIDCClientIDIsRequired
 	}
 	settings.issuerURL = issuerURL
-	settings.clientID = clientID
-	settings.clientSecret = clientSecret
+	settings.clientID = cfg.OIDCClientID
+	settings.clientSecret = cfg.OIDCClientSecret
 	return nil
 }
 
@@ -210,32 +207,28 @@ func completeSAMLSettings(settings *applicationAuthSettings, cfg Config) error {
 	if len(settings.allowed) == 0 {
 		return errSAMLRequiresEmailList
 	}
-	metadataURL := strings.TrimSpace(cfg.SAMLMetadataURL)
-	metadataFile := strings.TrimSpace(cfg.SAMLMetadataFile)
-	entityID := strings.TrimSpace(cfg.SAMLEntityID)
-	subjectAttribute := strings.TrimSpace(cfg.SAMLSubjectAttribute)
 	switch {
-	case metadataURL == "" && metadataFile == "":
+	case cfg.SAMLMetadataURL == "" && cfg.SAMLMetadataFile == "":
 		return errSAMLMetadataIsRequired
-	case metadataURL != "" && metadataFile != "":
+	case cfg.SAMLMetadataURL != "" && cfg.SAMLMetadataFile != "":
 		return errSAMLMetadataSourcesConflict
-	case metadataURL != "":
-		samlMetadataURL, err := normalizeSAMLMetadataURL(metadataURL)
+	case cfg.SAMLMetadataURL != "":
+		samlMetadataURL, err := normalizeSAMLMetadataURL(cfg.SAMLMetadataURL)
 		if err != nil {
 			return err
 		}
 		settings.samlMetadataURL = samlMetadataURL
 	default:
-		settings.samlMetadataFile = metadataFile
+		settings.samlMetadataFile = cfg.SAMLMetadataFile
 	}
-	if err := validateSAMLName("saml entity id", entityID, samlEntityIDLimit); err != nil {
+	if err := validateSAMLName("saml entity id", cfg.SAMLEntityID, samlEntityIDLimit); err != nil {
 		return err
 	}
-	if err := validateSAMLName("saml subject attribute", subjectAttribute, samlSubjectAttributeLimit); err != nil {
+	if err := validateSAMLName("saml subject attribute", cfg.SAMLSubjectAttribute, samlSubjectAttributeLimit); err != nil {
 		return err
 	}
-	settings.samlEntityID = entityID
-	settings.samlSubjectAttribute = subjectAttribute
+	settings.samlEntityID = cfg.SAMLEntityID
+	settings.samlSubjectAttribute = cfg.SAMLSubjectAttribute
 	return nil
 }
 
@@ -243,30 +236,26 @@ func completeEmailSettings(settings *applicationAuthSettings, cfg Config) error 
 	if len(settings.allowed) == 0 {
 		return errEmailRequiresEmailList
 	}
-	smtpAddr := strings.TrimSpace(cfg.SMTPAddr)
-	smtpUsername := strings.TrimSpace(cfg.SMTPUsername)
-	smtpPassword := strings.TrimSpace(cfg.SMTPPassword)
-	from := strings.TrimSpace(cfg.SMTPFrom)
-	if smtpAddr == "" {
+	if cfg.SMTPAddr == "" {
 		return errSMTPAddrIsRequired
 	}
-	if err := validateSMTPAddr(smtpAddr); err != nil {
+	if err := validateSMTPAddr(cfg.SMTPAddr); err != nil {
 		return err
 	}
-	if from == "" {
+	if cfg.SMTPFrom == "" {
 		return errSMTPFromIsRequired
 	}
-	emailFrom, err := parseSMTPFrom(from)
+	emailFrom, err := parseSMTPFrom(cfg.SMTPFrom)
 	if err != nil {
 		return err
 	}
 	settings.emailFrom = emailFrom
-	if (smtpUsername == "") != (smtpPassword == "") {
+	if (cfg.SMTPUsername == "") != (cfg.SMTPPassword == "") {
 		return errEmailSMTPCredentialsArePaired
 	}
-	settings.emailSMTPAddr = smtpAddr
-	settings.emailSMTPUsername = smtpUsername
-	settings.emailSMTPPassword = smtpPassword
+	settings.emailSMTPAddr = cfg.SMTPAddr
+	settings.emailSMTPUsername = cfg.SMTPUsername
+	settings.emailSMTPPassword = cfg.SMTPPassword
 	return nil
 }
 
