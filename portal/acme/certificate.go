@@ -38,17 +38,10 @@ var (
 )
 
 const (
-	// localDevelopmentCertificateValidity is the longest validity Apple
-	// platforms accept for a TLS server certificate, even from a root the user
-	// trusts. Safari refuses a longer one however it is trusted.
 	localDevelopmentCertificateValidity = 825 * 24 * time.Hour
 	defaultRenewThreshold               = 30 * 24 * time.Hour
-	// maxRenewExpiryFloor bounds how long ARI may defer renewal: a certificate
-	// with less lifetime left is renewed whatever the CA suggests.
-	maxRenewExpiryFloor = 7 * 24 * time.Hour
-	// minARIRecheckDelay keeps a CA's Retry-After from driving the renewal
-	// check faster than hourly.
-	minARIRecheckDelay = time.Hour
+	maxRenewExpiryFloor                 = 7 * 24 * time.Hour
+	minARIRecheckDelay                  = time.Hour
 )
 
 type acmeUser struct {
@@ -57,9 +50,6 @@ type acmeUser struct {
 	Email        string
 }
 
-// shouldRenew reports whether the certificate on disk should be renewed now,
-// the RFC 9773 ReplacesCertID to renew it with, and how long the maintenance
-// loop should wait before checking again.
 func (m *Manager) shouldRenew(ctx context.Context) (bool, string, time.Duration) {
 	certFile, _ := m.certificateFiles()
 	cert, err := loadCertificate(certFile)
@@ -69,7 +59,6 @@ func (m *Manager) shouldRenew(ctx context.Context) (bool, string, time.Duration)
 	domains := certificateDomains(m.cfg.BaseDomain)
 	now := time.Now().UTC()
 	var ari *certificate.RenewalInfoResponse
-	// A certificate that is no longer usable is replaced without consulting ARI.
 	if certificateUsable(cert, domains, now) {
 		client, clientErr := m.newClient(ctx)
 		if clientErr == nil {
@@ -86,13 +75,6 @@ func certificateDomains(baseDomain string) []string {
 	return []string{baseDomain, "*." + baseDomain}
 }
 
-// evaluateRenewal decides whether cert should be renewed now. It returns the
-// RFC 9773 ReplacesCertID when the CA's ARI response guided the renewal, and
-// the delay before the next check.
-//
-// ARI schedules renewals only while cert is unexpired and covers domains and
-// the CA returned a usable window; otherwise the 30-day remaining-lifetime
-// threshold applies. ARI never defers renewal past the expiry floor.
 func evaluateRenewal(cert *x509.Certificate, domains []string, ari *certificate.RenewalInfoResponse, now time.Time) (renew bool, replacesCertID string, recheck time.Duration) {
 	recheck = defaultRenewInterval
 	if cert == nil {
@@ -106,24 +88,17 @@ func evaluateRenewal(cert *x509.Certificate, domains []string, ari *certificate.
 		return remaining < defaultRenewThreshold, "", recheck
 	}
 
-	// MakeARICertID fails only for certificates without an authority key id;
-	// those still renew, just without naming the certificate they replace.
 	certID, _ := certificate.MakeARICertID(cert)
 	if ari.RetryAfter > 0 {
 		recheck = min(max(ari.RetryAfter, minARIRecheckDelay), defaultRenewInterval)
 	}
 	floor := renewExpiryFloor(cert)
-	// ShouldRenewAt returns nil only when the time it picked in the window
-	// falls after the next check; anything else is due before then, so
-	// renew now (RFC 9773, section 4.1).
 	if remaining < floor || ari.ShouldRenewAt(now, recheck) != nil {
 		return true, certID, recheck
 	}
 	return false, "", min(recheck, remaining-floor)
 }
 
-// renewExpiryFloor is the remaining lifetime below which cert is renewed
-// regardless of ARI: a tenth of its lifetime, at most maxRenewExpiryFloor.
 func renewExpiryFloor(cert *x509.Certificate) time.Duration {
 	if lifetime := cert.NotAfter.Sub(cert.NotBefore); lifetime > 0 {
 		return min(maxRenewExpiryFloor, lifetime/10)
@@ -147,10 +122,6 @@ func loadCertificate(certFile string) (*x509.Certificate, error) {
 	return utils.ParseCertificatePEM(certPEM)
 }
 
-// reusableCertificate returns the stored certificate of the configured CA
-// directory when it can be served at now. Each directory keeps its own
-// certificate, so the file of a CA used before may have expired while another
-// directory was configured.
 func (m *Manager) reusableCertificate(now time.Time) (certFile, keyFile string, ok bool) {
 	certFile, keyFile, err := m.TLSFiles()
 	if err != nil {
@@ -163,12 +134,6 @@ func (m *Manager) reusableCertificate(now time.Time) (certFile, keyFile string, 
 	return certFile, keyFile, certificateUsable(cert, certificateDomains(m.cfg.BaseDomain), now)
 }
 
-// certificateUsable reports whether cert can be served at now: it covers
-// domains and has not expired. A stored certificate that is not usable is
-// replaced instead of reused. NotBefore is deliberately not checked: a
-// certificate that is not valid yet on this clock was issued moments ago, and
-// ordering another would not help but would count against the CA's
-// duplicate-certificate rate limit on every start.
 func certificateUsable(cert *x509.Certificate, domains []string, now time.Time) bool {
 	return certificateCoversDomains(cert, domains) && now.Before(cert.NotAfter)
 }
@@ -186,8 +151,8 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 }
 
 // NormalizeCADirURL validates an optional ACME CA directory URL and defaults
-// an empty value to Let's Encrypt production. ACME requires HTTPS (RFC 8555)
-// and lego refuses any other scheme, so no other URL can work, loopback or not.
+// an empty value to Let's Encrypt production. Only HTTPS directories are
+// accepted; it returns the canonical form used to name the CA's files.
 func NormalizeCADirURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -203,17 +168,10 @@ func NormalizeCADirURL(raw string) (string, error) {
 	if parsed.Scheme != "https" {
 		return "", errACMECADirectoryURLMustUse
 	}
-	// The scheme and host are case-insensitive, and the files of a CA are named
-	// after this string, so two spellings of one directory must not look like two CAs.
 	parsed.Host = strings.ToLower(parsed.Host)
 	return parsed.String(), nil
 }
 
-// registrationFilePath returns where the account registration for the CA
-// directory is persisted. An account exists only at the CA that created it,
-// and lego signs requests with the stored account URL, so each directory keeps
-// its own file. Let's Encrypt production keeps the legacy name so existing
-// installations keep their registration.
 func registrationFilePath(keyDir, caDirURL string) string {
 	if caDirURL == lego.LEDirectoryProduction {
 		return filepath.Join(keyDir, registrationFileName)
@@ -221,11 +179,6 @@ func registrationFilePath(keyDir, caDirURL string) string {
 	return filepath.Join(keyDir, "acme-registration-"+caDirectoryDigest(caDirURL)+".json")
 }
 
-// certificateFilePaths returns where the certificate chain and private key
-// issued by the CA directory are stored. Only a certificate that the configured
-// CA issued may be served or renewed, so each directory keeps its own pair and
-// changing the CA leaves the others on disk, unused. Let's Encrypt production
-// keeps the legacy names, which also hold operator-supplied certificates.
 func certificateFilePaths(keyDir, caDirURL string) (certFile, keyFile string) {
 	if caDirURL == lego.LEDirectoryProduction {
 		return filepath.Join(keyDir, fullChainFileName), filepath.Join(keyDir, keyFileName)
@@ -234,14 +187,11 @@ func certificateFilePaths(keyDir, caDirURL string) (certFile, keyFile string) {
 	return filepath.Join(keyDir, "fullchain-"+digest+".pem"), filepath.Join(keyDir, "privatekey-"+digest+".pem")
 }
 
-// caDirectoryDigest names a CA directory inside file names.
 func caDirectoryDigest(caDirURL string) string {
 	sum := sha256.Sum256([]byte(caDirURL))
 	return fmt.Sprintf("%x", sum[:8])
 }
 
-// certificateFiles returns the certificate files of the configured CA. A local
-// development certificate involves no CA and always uses the legacy names.
 func (m *Manager) certificateFiles() (certFile, keyFile string) {
 	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return certificateFilePaths(m.cfg.KeyDir, lego.LEDirectoryProduction)
@@ -282,9 +232,6 @@ func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create acme client: %w", err)
 	}
-	// An account is registered without External Account Binding, which some
-	// CAs (ZeroSSL and Google Trust Services among them) demand, so say so here
-	// instead of failing inside the registration exchange.
 	if user.Registration == nil && client.GetExternalAccountRequired() {
 		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
 	}
@@ -385,9 +332,9 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	for _, domain := range domains {
 		if ip := net.ParseIP(domain); ip != nil {
 			template.IPAddresses = append(template.IPAddresses, ip)
-			continue
+		} else {
+			template.DNSNames = append(template.DNSNames, domain)
 		}
-		template.DNSNames = append(template.DNSNames, domain)
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
@@ -411,12 +358,6 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	return nil
 }
 
-// localDevelopmentCertificateReusable reports whether the stored local
-// development certificate is kept at startup: it covers domains, has more than
-// the renewal threshold left, and is valid for no longer than Apple platforms
-// accept. Any other certificate is replaced, including the ten-year one older
-// relays issued. A local relay renews only at startup, so the threshold keeps
-// a relay that restarts at least monthly from serving an expired certificate.
 func localDevelopmentCertificateReusable(cert *x509.Certificate, domains []string, now time.Time) bool {
 	return certificateUsable(cert, domains, now.Add(defaultRenewThreshold)) &&
 		cert.NotAfter.Sub(cert.NotBefore) <= localDevelopmentCertificateValidity

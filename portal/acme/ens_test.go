@@ -14,12 +14,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// fakeZone models what the real providers do to a zone rather than which calls
-// they received, so a test can assert on the records an operator would see.
-//
-// EnsureTXTRecord appends when the value differs, matching cloudflare, njalla
-// and route53. DNS-01 depends on that, and it is also what lets ENS records
-// pile up, so a fake that replaced instead would hide the bug under test.
 type fakeZone struct {
 	mu  sync.Mutex
 	txt map[string][]string
@@ -120,8 +114,6 @@ func ensTXTValues(t *testing.T, zone *fakeZone, name string) []string {
 	return ens
 }
 
-// A hostname carries exactly one ENS1 record. Publishing a second address must
-// leave that one record holding the new address, not two records disagreeing.
 func TestENSGaslessAddressChangeLeavesOneRecord(t *testing.T) {
 	const host = "portal.example.com"
 	const challengeValue = "acme-challenge-token"
@@ -159,8 +151,6 @@ func TestENSGaslessAddressChangeLeavesOneRecord(t *testing.T) {
 	}
 }
 
-// A normal lease deletion cannot establish that ENS owns the hostname's A
-// record, so disabling ENS must keep that path from deleting unrelated DNS.
 func TestENSGaslessLeaseRemovalDoesNotRunWhenDisabled(t *testing.T) {
 	const host = "lease.portal.example.com"
 
@@ -184,8 +174,6 @@ func TestENSGaslessLeaseRemovalDoesNotRunWhenDisabled(t *testing.T) {
 	}
 }
 
-// The startup reconcile is the only thing that reaches hostnames tracked by an
-// earlier run, so it has to keep running after the feature is switched off.
 func TestENSGaslessReconcileRunsWhenDisabled(t *testing.T) {
 	const (
 		baseDomain = "portal.example.com"

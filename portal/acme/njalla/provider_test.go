@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// The njalla API returns record ids as either a JSON string or a JSON number;
-// both forms must keep decoding.
 func TestRecordIDUnmarshal(t *testing.T) {
 	t.Parallel()
 
@@ -26,7 +24,6 @@ func TestRecordIDUnmarshal(t *testing.T) {
 	}
 }
 
-// Changing one address family must preserve the other family and unrelated records.
 func TestEnsureRecordPreservesOtherAddressFamily(t *testing.T) {
 	t.Parallel()
 

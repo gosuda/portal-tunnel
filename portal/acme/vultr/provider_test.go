@@ -13,8 +13,6 @@ import (
 	"github.com/vultr/govultr/v3"
 )
 
-// Registrars reject SHA-1 DS records; the SHA-256 digest must be preferred
-// whenever the zone publishes both.
 func TestPreferredDSRecordPrefersSHA256(t *testing.T) {
 	t.Parallel()
 
@@ -28,7 +26,6 @@ func TestPreferredDSRecordPrefersSHA256(t *testing.T) {
 	}
 }
 
-// Changing one address family must preserve the other family and unrelated records.
 func TestEnsureRecordPreservesOtherAddressFamily(t *testing.T) {
 	t.Parallel()
 
@@ -114,5 +111,35 @@ func TestEnsureRecordPreservesOtherAddressFamily(t *testing.T) {
 				t.Fatalf("records = %#v, want %#v", records, want)
 			}
 		})
+	}
+}
+
+func TestFindZoneMatchesParentCandidate(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v2/domains" {
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"domains": []map[string]any{{"domain": "example.com"}},
+			"meta":    map[string]any{"total": 1},
+		})
+	}))
+	defer server.Close()
+
+	client := govultr.NewClient(server.Client())
+	if err := client.SetBaseURL(server.URL); err != nil {
+		t.Fatal(err)
+	}
+	provider := New("test-key")
+
+	zone, err := provider.findZone(context.Background(), client, "relay.example.com")
+	if err != nil || zone != "example.com" {
+		t.Fatalf("findZone(relay.example.com) = %q, %v; want example.com", zone, err)
+	}
+	if _, err := provider.findZone(context.Background(), client, "relay.other.example"); err == nil || !strings.Contains(err.Error(), "no vultr domain found") {
+		t.Fatalf("findZone outside every listed domain = %v; want a no-domain refusal", err)
 	}
 }

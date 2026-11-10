@@ -69,11 +69,7 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 		return err
 	}
 
-	client, err := p.newClient(ctx)
-	if err != nil {
-		return err
-	}
-	zone, err := p.findZone(ctx, client, baseDomain)
+	client, zone, err := p.clientAndZone(ctx, baseDomain)
 	if err != nil {
 		return err
 	}
@@ -245,6 +241,10 @@ func (p *Provider) findZone(ctx context.Context, client *govultr.Client, domain 
 	}
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
+	candidateSet := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidateSet[candidate] = struct{}{}
+	}
 
 	zones := p.zones.Load()
 	for _, candidate := range candidates {
@@ -261,18 +261,16 @@ func (p *Provider) findZone(ctx context.Context, client *govultr.Client, domain 
 		}
 		for _, item := range domains {
 			zone := utils.NormalizeBaseDomain(item.Domain)
-			for _, candidate := range candidates {
-				if zone != candidate {
-					continue
-				}
-				p.zones.UpdateCopy(func(zones *map[string]string) {
-					if *zones == nil {
-						*zones = make(map[string]string)
-					}
-					(*zones)[candidate] = zone
-				})
-				return zone, nil
+			if _, ok := candidateSet[zone]; !ok {
+				continue
 			}
+			p.zones.UpdateCopy(func(zones *map[string]string) {
+				if *zones == nil {
+					*zones = make(map[string]string)
+				}
+				(*zones)[zone] = zone
+			})
+			return zone, nil
 		}
 		if meta == nil || meta.Links == nil || meta.Links.Next == "" {
 			break

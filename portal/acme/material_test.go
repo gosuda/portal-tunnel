@@ -21,19 +21,22 @@ import (
 	"github.com/go-acme/lego/v4/lego"
 )
 
-// Every issuance carries a new private key, so the chain, the key and the
-// certificate a TLS handshake presents must change together, and a pair that
-// cannot be loaded must leave what is being served alone.
-func TestTLSMaterialFollowsTheStoredCertificate(t *testing.T) {
-	t.Parallel()
-
-	const baseDomain = "portal.example.com"
-	keyDir := t.TempDir()
-	certFile, keyFile := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+func newRoute53BackedManager(t *testing.T, baseDomain string) (manager *Manager, keyDir, certFile, keyFile string) {
+	t.Helper()
+	keyDir = t.TempDir()
+	certFile, keyFile = certificateFilePaths(keyDir, lego.LEDirectoryProduction)
 	manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53})
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
+	return manager, keyDir, certFile, keyFile
+}
+
+func TestTLSMaterialFollowsTheStoredCertificate(t *testing.T) {
+	t.Parallel()
+
+	const baseDomain = "portal.example.com"
+	manager, keyDir, certFile, keyFile := newRoute53BackedManager(t, baseDomain)
 
 	if manager.TLSMaterial() != nil {
 		t.Fatal("TLSMaterial() != nil before anything was loaded")
@@ -73,7 +76,6 @@ func TestTLSMaterialFollowsTheStoredCertificate(t *testing.T) {
 		t.Fatal("a renewal made through loadTLSMaterial dropped the key of the replaced certificate")
 	}
 
-	// A chain with a key from another issuance does not form a pair.
 	otherCert, otherKey := filepath.Join(keyDir, "other.pem"), filepath.Join(keyDir, "other.key")
 	if err := writeRelayCertificate(t, otherCert, otherKey, baseDomain, notAfter); err != nil {
 		t.Fatalf("writeRelayCertificate(other) error = %v", err)
@@ -92,23 +94,14 @@ func TestTLSMaterialFollowsTheStoredCertificate(t *testing.T) {
 	}
 }
 
-// A tenant pins the chain the relay served when it registered and keeps
-// presenting it to visitors after a renewal, so the relay must keep signing for
-// the replaced certificate, and only for as long as it is valid.
 func TestSigningKeyFollowsTheServedAndTheUnexpiredCertificates(t *testing.T) {
 	t.Parallel()
 
 	const baseDomain = "portal.example.com"
-	keyDir := t.TempDir()
-	certFile, keyFile := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
-	manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53})
-	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
-	}
+	manager, _, certFile, keyFile := newRoute53BackedManager(t, baseDomain)
 	if manager.SigningKey([]byte("anything")) != nil {
 		t.Fatal("SigningKey() != nil before anything was loaded")
 	}
-
 	issue := func(notAfter time.Time) *TLSMaterial {
 		t.Helper()
 		if err := writeRelayCertificate(t, certFile, keyFile, baseDomain, notAfter); err != nil {
@@ -144,15 +137,12 @@ func TestSigningKeyFollowsTheServedAndTheUnexpiredCertificates(t *testing.T) {
 			t.Errorf("SigningKey(%s certificate) is not the key of that certificate", name)
 		}
 	}
-	// Neither a certificate the relay never served nor garbage gets a key.
 	for name, leafDER := range map[string][]byte{"another": leaf(issue(valid)), "garbage": []byte("not a certificate"), "empty": nil} {
 		if manager.SigningKey(leafDER) != nil {
 			t.Errorf("SigningKey(%s certificate) != nil, want none", name)
 		}
 	}
 
-	// An expired certificate is dropped when it is replaced, with its key. One
-	// that expires while it is retired is refused as well.
 	expired := issue(time.Now().Add(-time.Hour))
 	manager.serve(expired)
 	manager.serve(issue(valid))
@@ -167,18 +157,11 @@ func TestSigningKeyFollowsTheServedAndTheUnexpiredCertificates(t *testing.T) {
 	}
 }
 
-// A startup provision serves the issued pair and EnsureTLSMaterial then loads
-// the same pair from disk; the copy it replaces is not a replaced certificate.
 func TestServingTheSameCertificateAgainRetiresNothing(t *testing.T) {
 	t.Parallel()
 
 	const baseDomain = "portal.example.com"
-	keyDir := t.TempDir()
-	certFile, keyFile := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
-	manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53})
-	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
-	}
+	manager, _, certFile, keyFile := newRoute53BackedManager(t, baseDomain)
 	if err := writeRelayCertificate(t, certFile, keyFile, baseDomain, time.Now().Add(30*24*time.Hour)); err != nil {
 		t.Fatalf("writeRelayCertificate() error = %v", err)
 	}
@@ -192,20 +175,11 @@ func TestServingTheSameCertificateAgainRetiresNothing(t *testing.T) {
 	}
 }
 
-// The cache fallback reaches a tenant over TLS, and the tenant presents the
-// relay chain it pinned, which can be one a renewal replaced. The fallback must
-// trust exactly what SigningKey signs for: the served certificate and the
-// replaced ones that have not expired, under the requested name.
 func TestTenantTLSConfigTrustsWhatTheRelaySignsFor(t *testing.T) {
 	t.Parallel()
 
 	const baseDomain = "portal.example.com"
-	keyDir := t.TempDir()
-	certFile, keyFile := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
-	manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53})
-	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
-	}
+	manager, _, certFile, keyFile := newRoute53BackedManager(t, baseDomain)
 	issue := func(notAfter time.Time) *TLSMaterial {
 		t.Helper()
 		if err := writeRelayCertificate(t, certFile, keyFile, baseDomain, notAfter); err != nil {
@@ -225,9 +199,6 @@ func TestTenantTLSConfigTrustsWhatTheRelaySignsFor(t *testing.T) {
 		}
 		return material
 	}
-	// reach runs a handshake with a tenant that presents material. Loopback TCP
-	// rather than net.Pipe: a refusing client must be able to send its alert
-	// while the tenant is still writing its flight.
 	reach := func(material *TLSMaterial, serverName string) error {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -274,10 +245,6 @@ func TestTenantTLSConfigTrustsWhatTheRelaySignsFor(t *testing.T) {
 	}
 }
 
-// An SDK that pins the relay chain once verifies its /v1/sign connection
-// against that chain. A renewal by the same intermediate still verifies; one by
-// another intermediate does not, and neither does a certificate for another
-// name.
 func TestTrustedByFollowsTheIssuingIntermediate(t *testing.T) {
 	t.Parallel()
 
@@ -292,8 +259,6 @@ func TestTrustedByFollowsTheIssuingIntermediate(t *testing.T) {
 		"same intermediate":             {intermediate.issue(t, relayHost), intermediate.issue(t, relayHost), true},
 		"another intermediate":          {intermediate.issue(t, relayHost), otherIntermediate.issue(t, relayHost), false},
 		"same intermediate, other name": {intermediate.issue(t, relayHost), intermediate.issue(t, "other.example.com"), false},
-		// A bundle that also carries the root lets the presented intermediate
-		// of a renewal reach that root.
 		"another intermediate under a root the pinned bundle carries": {underRoot.issue(t, relayHost), otherUnderRoot.issue(t, relayHost), true},
 	} {
 		if got := test.renewed.TrustedBy(test.pinned.CertPEM, relayHost); got != test.want {
@@ -308,8 +273,6 @@ type testIntermediate struct {
 	parent *testIntermediate
 }
 
-// newTestIntermediate returns an issuing CA, standing for one intermediate of
-// the relay's CA, issued by parent or self-signed when parent is nil.
 func newTestIntermediate(t *testing.T, name string, parent *testIntermediate) testIntermediate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -340,8 +303,6 @@ func newTestIntermediate(t *testing.T, name string, parent *testIntermediate) te
 	return testIntermediate{cert: cert, key: key, parent: parent}
 }
 
-// issue returns relay material for host with a new key, served as the leaf
-// followed by this intermediate and its parents, as an ACME bundle is.
 func (i testIntermediate) issue(t *testing.T, host string) *TLSMaterial {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

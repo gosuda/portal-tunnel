@@ -30,9 +30,6 @@ func (p *Provider) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	p.writeResponse(w, r, m)
 	event := log.Debug()
 	if m.Rcode == dns.RcodeServerFailure {
-		// SERVFAIL is the only internal failure; client-caused codes (REFUSED,
-		// FORMERR, NOTIMP) stay at Debug — :53 is a public listener and every
-		// query can be flooded (issue #518 review).
 		event = log.Warn()
 	}
 	event.
@@ -46,9 +43,6 @@ func (p *Provider) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		Msg("embedded dns query")
 }
 
-// answerQuery resolves an IN-class query against the current signed snapshot
-// and sets the response code. It reports whether the answer was synthesized
-// from a wildcard owner.
 func (p *Provider) answerQuery(m *dns.Msg, r *dns.Msg, question dns.Question) bool {
 	name := dns.CanonicalName(question.Name)
 	if question.Qclass != dns.ClassINET || !dns.IsSubDomain(p.zone, name) {
@@ -71,15 +65,11 @@ func (p *Provider) answerQuery(m *dns.Msg, r *dns.Msg, question dns.Question) bo
 	return p.answer(m, z, name, question.Qtype, edns != nil && edns.Do())
 }
 
-// answer fills the response for the queried name from the signed snapshot. It
-// reports whether the answer was synthesized from a wildcard owner.
 func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, do bool) bool {
 	source := name
 	sets, exists := z.records[name]
 	var nextCloser string
 	if !exists {
-		// Walk to the closest existing ancestor, not merely the apex: explicit
-		// records and empty non-terminals both block more distant wildcards.
 		closest := name
 		for z.records[closest] == nil {
 			nextCloser = closest
@@ -90,7 +80,6 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 	}
 	if exists {
 		if qtype == dns.TypeRRSIG {
-			// RRSIG is directly queryable even without DO (RFC 4035 section 3.1.1).
 			types := make([]uint16, 0, len(sets))
 			for typ := range sets {
 				types = append(types, typ)
@@ -107,11 +96,6 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 	} else if len(z.records["*."+p.zone][dns.TypeA].records) != 0 || len(z.records["*."+p.zone][dns.TypeAAAA].records) != 0 {
 		m.Rcode = dns.RcodeNameError
 	} else {
-		// The snapshot carries no synthesized addresses, so every missing name
-		// is a tenant name whose answer is still pending the public IP sync.
-		// REFUSED without an SOA keeps resolvers from negative-caching it for
-		// the whole sync window (issue #516); NXDOMAIN stays reserved for the
-		// genuinely-missing-name case once the zone is address-capable.
 		m.Rcode = dns.RcodeRefused
 		return false
 	}
@@ -131,9 +115,6 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 			addProof(z.denial(nextCloser))
 		}
 		if len(m.Answer) == 0 {
-			// Exact/wildcard NODATA proves the missing type at its actual owner.
-			// NXDOMAIN additionally proves that the closest-encloser wildcard is
-			// absent. Together with next-closer denial this covers deep names too.
 			addProof(z.denial(source))
 		}
 	}
