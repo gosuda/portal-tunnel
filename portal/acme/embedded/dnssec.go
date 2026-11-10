@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -29,83 +30,127 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil, errDnssecKeyPathIsRequired
 	}
-	key := &dns.DNSKEY{Hdr: dns.RR_Header{Name: zone, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: recordTTL}, Flags: 257, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}
-	type storedKey struct {
-		DNSKEY     string
-		PrivateKey string
-	}
+	key := loadSigningKeyTemplate(zone)
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, nil, fmt.Errorf("read dnssec key: %w", err)
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		private, err := key.Generate(256)
-		if err != nil {
-			return nil, nil, err
-		}
-		for key.KeyTag() == 0 {
-			private, err = key.Generate(256)
-			if err != nil {
-				return nil, nil, err
-			}
-		}
-		data, err = json.Marshal(storedKey{key.String(), key.PrivateKeyString(private)})
-		if err != nil {
-			return nil, nil, err
-		}
-		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return nil, nil, err
-		}
-		f, err := os.CreateTemp(dir, ".dnssec-key-*")
-		if err != nil {
-			return nil, nil, fmt.Errorf("create dnssec key: %w", err)
-		}
-		tmp := f.Name()
-		defer func() { _ = os.Remove(tmp) }()
-		_, writeErr := f.Write(data)
-		syncErr := f.Sync()
-		closeErr := f.Close()
-		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-			return nil, nil, fmt.Errorf("persist dnssec key: %w", err)
-		}
-		if err := os.Rename(tmp, path); err != nil {
-			return nil, nil, fmt.Errorf("publish dnssec key: %w", err)
-		}
-		return key, private.(crypto.Signer), nil
+		return loadSigningKeyCreate(path, key)
 	}
-	var stored storedKey
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return nil, nil, fmt.Errorf("decode dnssec key: %w", err)
+	return loadSigningKeyOpen(zone, key, data)
+}
+
+type loadSigningKeyStored struct {
+	DNSKEY     string
+	PrivateKey string
+}
+
+func loadSigningKeyTemplate(zone string) *dns.DNSKEY {
+	return &dns.DNSKEY{Hdr: dns.RR_Header{Name: zone, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: recordTTL}, Flags: 257, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}
+}
+
+func loadSigningKeyFresh(key *dns.DNSKEY) (crypto.PrivateKey, error) {
+	private, err := key.Generate(256)
+	if err != nil {
+		return nil, err
 	}
+	for key.KeyTag() == 0 {
+		if private, err = key.Generate(256); err != nil {
+			return nil, err
+		}
+	}
+	return private, nil
+}
+
+func loadSigningKeyStore(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".dnssec-key-*")
+	if err != nil {
+		return fmt.Errorf("create dnssec key: %w", err)
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	_, writeErr := f.Write(data)
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		return fmt.Errorf("persist dnssec key: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("publish dnssec key: %w", err)
+	}
+	return nil
+}
+
+func loadSigningKeyCreate(path string, key *dns.DNSKEY) (*dns.DNSKEY, crypto.Signer, error) {
+	private, err := loadSigningKeyFresh(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := json.Marshal(loadSigningKeyStored{key.String(), key.PrivateKeyString(private)})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := loadSigningKeyStore(path, data); err != nil {
+		return nil, nil, err
+	}
+	return key, private.(crypto.Signer), nil
+}
+
+func loadSigningKeyParse(zone string, template *dns.DNSKEY, stored loadSigningKeyStored) (*dns.DNSKEY, error) {
 	rr, err := dns.NewRR(stored.DNSKEY)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse dnskey: %w", err)
+		return nil, fmt.Errorf("parse dnskey: %w", err)
 	}
 	loaded, ok := rr.(*dns.DNSKEY)
 	if !ok {
-		return nil, nil, errDnssecKeyDoesNotMatchZone
+		return nil, errDnssecKeyDoesNotMatchZone
 	}
-	matchesZone := loaded.Hdr.Name == zone && loaded.Hdr.Class == dns.ClassINET
-	matchesCSK := loaded.Flags == key.Flags && loaded.Protocol == key.Protocol && loaded.Algorithm == key.Algorithm
-	if !matchesZone || !matchesCSK {
-		return nil, nil, errDnssecKeyDoesNotMatchZone
+	if loaded.Hdr.Name != zone || loaded.Hdr.Class != dns.ClassINET {
+		return nil, errDnssecKeyDoesNotMatchZone
+	}
+	if loaded.Flags != template.Flags || loaded.Protocol != template.Protocol || loaded.Algorithm != template.Algorithm {
+		return nil, errDnssecKeyDoesNotMatchZone
 	}
 	loaded.Hdr.Ttl = recordTTL
-	private, err := loaded.NewPrivateKey(stored.PrivateKey)
+	return loaded, nil
+}
+
+func loadSigningKeyVerifyPair(zone string, loaded *dns.DNSKEY, privateKey string) (crypto.Signer, error) {
+	private, err := loaded.NewPrivateKey(privateKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse dnssec private key: %w", err)
+		return nil, fmt.Errorf("parse dnssec private key: %w", err)
 	}
 	signer, ok := private.(crypto.Signer)
 	if !ok {
-		return nil, nil, errInvalidDnssecPrivateKey
+		return nil, errInvalidDnssecPrivateKey
 	}
 	sig := &dns.RRSIG{KeyTag: loaded.KeyTag(), SignerName: zone, Algorithm: loaded.Algorithm, Inception: 1, Expiration: 2}
 	if err := sig.Sign(signer, []dns.RR{loaded}); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := sig.Verify(loaded, []dns.RR{loaded}); err != nil {
-		return nil, nil, fmt.Errorf("dnssec public/private key mismatch: %w", err)
+		return nil, fmt.Errorf("dnssec public/private key mismatch: %w", err)
+	}
+	return signer, nil
+}
+
+func loadSigningKeyOpen(zone string, template *dns.DNSKEY, data []byte) (*dns.DNSKEY, crypto.Signer, error) {
+	var stored loadSigningKeyStored
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return nil, nil, fmt.Errorf("decode dnssec key: %w", err)
+	}
+	loaded, err := loadSigningKeyParse(zone, template, stored)
+	if err != nil {
+		return nil, nil, err
+	}
+	signer, err := loadSigningKeyVerifyPair(zone, loaded, stored.PrivateKey)
+	if err != nil {
+		return nil, nil, err
 	}
 	return loaded, signer, nil
 }
@@ -130,92 +175,117 @@ func (p *Provider) signedZone(now time.Time) (*signedZone, error) {
 		return z, nil
 	}
 	z := &signedZone{serial: p.serial, refresh: now.Add(signatureRefresh), inception: now.Add(-signatureSkew), records: make(map[string]map[uint16]signedRRSet)}
-	add := func(rr dns.RR) {
-		h := rr.Header()
-		if z.records[h.Name] == nil {
-			z.records[h.Name] = make(map[uint16]signedRRSet)
-		}
-		set := z.records[h.Name][h.Rrtype]
-		if (h.Rrtype == dns.TypeA || h.Rrtype == dns.TypeAAAA) && len(set.records) != 0 {
-			return
-		}
-		set.records = append(set.records, rr)
-		z.records[h.Name][h.Rrtype] = set
+	p.signedZoneBaseLocked(z)
+	p.signedZoneParentsLocked(z)
+	p.signedZoneSynthesizeLocked(z)
+	signedZoneSealLocked(z)
+	if err := p.signedZoneSignLocked(z, now); err != nil {
+		return nil, err
 	}
-	add(p.nsRR())
-	add(p.soaRRLocked())
-	add(p.key)
+	p.signed = z
+	return z, nil
+}
+
+func signedZoneAddLocked(z *signedZone, rr dns.RR) {
+	h := rr.Header()
+	if z.records[h.Name] == nil {
+		z.records[h.Name] = make(map[uint16]signedRRSet)
+	}
+	set := z.records[h.Name][h.Rrtype]
+	if (h.Rrtype == dns.TypeA || h.Rrtype == dns.TypeAAAA) && len(set.records) != 0 {
+		return
+	}
+	set.records = append(set.records, rr)
+	z.records[h.Name][h.Rrtype] = set
+}
+
+func (p *Provider) signedZoneBaseLocked(z *signedZone) {
+	signedZoneAddLocked(z, p.nsRR())
+	signedZoneAddLocked(z, p.soaRRLocked())
+	signedZoneAddLocked(z, p.key)
 	for name, values := range p.txt {
 		for _, value := range values {
-			add(p.txtRR(name, value))
+			signedZoneAddLocked(z, p.txtRR(name, value))
 		}
 	}
 	if p.ipv4 != nil {
-		add(p.aRR(p.nsName, p.ipv4))
+		signedZoneAddLocked(z, p.aRR(p.nsName, p.ipv4))
 	}
 	if p.ipv6 != nil {
-		add(p.aaaaRR(p.nsName, p.ipv6))
+		signedZoneAddLocked(z, p.aaaaRR(p.nsName, p.ipv6))
 	}
-	for name := range z.records {
-		z.names = append(z.names, name)
-	}
+}
+
+func (p *Provider) signedZoneParentsLocked(z *signedZone) {
+	z.names = slices.Collect(maps.Keys(z.records))
 	for _, name := range z.names {
 		for parent := parentName(name); dns.IsSubDomain(p.zone, parent); parent = parentName(parent) {
 			if z.records[parent] == nil {
 				z.records[parent] = make(map[uint16]signedRRSet)
 			}
-			if parent == p.zone {
-				break
-			}
 		}
 	}
-	if p.ipv4 != nil || p.ipv6 != nil {
-		nodes := make([]string, 0, len(z.records))
-		for name := range z.records {
-			nodes = append(nodes, name)
+}
+
+func (p *Provider) signedZoneSynthesizeLocked(z *signedZone) {
+	nodes := slices.Collect(maps.Keys(z.records))
+	for _, name := range nodes {
+		p.signedZoneSynthesizeAddressLocked(z, name)
+	}
+}
+
+func (p *Provider) signedZoneSynthesizeAddressLocked(z *signedZone, name string) {
+	if p.ipv4 != nil {
+		signedZoneAddLocked(z, p.aRR(name, p.ipv4))
+	}
+	if p.ipv6 != nil {
+		signedZoneAddLocked(z, p.aaaaRR(name, p.ipv6))
+	}
+	if _, valid := dns.IsDomainName("*." + name); valid && !strings.HasPrefix(name, "*.") {
+		if p.ipv4 != nil {
+			signedZoneAddLocked(z, p.aRR("*."+name, p.ipv4))
 		}
-		for _, name := range nodes {
-			if p.ipv4 != nil {
-				add(p.aRR(name, p.ipv4))
-			}
-			if p.ipv6 != nil {
-				add(p.aaaaRR(name, p.ipv6))
-			}
-			if _, valid := dns.IsDomainName("*." + name); valid && !strings.HasPrefix(name, "*.") {
-				if p.ipv4 != nil {
-					add(p.aRR("*."+name, p.ipv4))
-				}
-				if p.ipv6 != nil {
-					add(p.aaaaRR("*."+name, p.ipv6))
-				}
-			}
+		if p.ipv6 != nil {
+			signedZoneAddLocked(z, p.aaaaRR("*."+name, p.ipv6))
 		}
 	}
-	z.names = z.names[:0]
-	for name := range z.records {
-		z.names = append(z.names, name)
-	}
+}
+
+func signedZoneSealLocked(z *signedZone) {
+	z.names = slices.Collect(maps.Keys(z.records))
 	slices.SortFunc(z.names, compareDNSNames)
 	for i, name := range z.names {
-		types := []uint16{dns.TypeNSEC, dns.TypeRRSIG}
-		for typ := range z.records[name] {
-			types = append(types, typ)
-		}
-		slices.Sort(types)
-		add(&dns.NSEC{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: recordTTL}, NextDomain: z.names[(i+1)%len(z.names)], TypeBitMap: types})
+		types := signedZoneSealTypesLocked(z, name)
+		signedZoneAddLocked(z, &dns.NSEC{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: recordTTL}, NextDomain: z.names[(i+1)%len(z.names)], TypeBitMap: types})
 	}
+}
+
+func signedZoneSealTypesLocked(z *signedZone, name string) []uint16 {
+	types := []uint16{dns.TypeNSEC, dns.TypeRRSIG}
+	types = append(types, slices.Collect(maps.Keys(z.records[name]))...)
+	slices.Sort(types)
+	return types
+}
+
+func (p *Provider) signedZoneSignLocked(z *signedZone, now time.Time) error {
 	for name, sets := range z.records {
-		for typ, set := range sets {
-			sig := &dns.RRSIG{Hdr: dns.RR_Header{Ttl: recordTTL}, KeyTag: p.key.KeyTag(), SignerName: p.zone, Algorithm: p.key.Algorithm, Inception: uint32(z.inception.Unix()), Expiration: uint32(now.Add(signatureLifetime).Unix())}
-			if err := sig.Sign(p.signer, set.records); err != nil {
-				return nil, fmt.Errorf("sign %s %s: %w", name, dns.TypeToString[typ], err)
-			}
-			set.signature = sig
-			sets[typ] = set
+		if err := p.signedZoneSignNameLocked(z, name, sets, now); err != nil {
+			return err
 		}
 	}
-	p.signed = z
-	return z, nil
+	return nil
+}
+
+func (p *Provider) signedZoneSignNameLocked(z *signedZone, name string, sets map[uint16]signedRRSet, now time.Time) error {
+	for typ, set := range sets {
+		sig := &dns.RRSIG{Hdr: dns.RR_Header{Ttl: recordTTL}, KeyTag: p.key.KeyTag(), SignerName: p.zone, Algorithm: p.key.Algorithm, Inception: uint32(z.inception.Unix()), Expiration: uint32(now.Add(signatureLifetime).Unix())}
+		if err := sig.Sign(p.signer, set.records); err != nil {
+			return fmt.Errorf("sign embedded dns zone %s %s: %w", name, dns.TypeToString[typ], err)
+		}
+		set.signature = sig
+		sets[typ] = set
+	}
+	return nil
 }
 
 func parentName(name string) string {

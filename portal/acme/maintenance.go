@@ -35,178 +35,223 @@ func nextSyncDelay(consecutiveFailures int) time.Duration {
 	return dnsRetryBackoffs[consecutiveFailures-1]
 }
 
+type maintenanceLoopState struct {
+	pendingENS             map[string]ensDNSCommand
+	lastPublicIPs          map[bool]string
+	consecutiveDNSFailures int
+	renewTimer             *time.Timer
+	dnsTicker              *time.Ticker
+	retryTimer             *time.Timer
+}
+
 func (m *Manager) maintenanceLoop(ctx context.Context) {
 	defer m.wg.Done()
-	pendingENS := make(map[string]ensDNSCommand)
-	lastPublicIPs := make(map[bool]string)
-	syncChangedAddressRecords := func(ctx context.Context, publicIPs []string) error {
-		var syncErr error
-		for _, publicIP := range publicIPs {
-			ipv4 := net.ParseIP(publicIP).To4() != nil
-			if publicIP == lastPublicIPs[ipv4] {
-				continue
-			}
-			if m.cfg.ENSGaslessEnabled {
-				if err := m.syncTrackedENSGaslessHostAddressRecords(ctx, publicIP); err != nil {
-					syncErr = errors.Join(syncErr, err)
-					continue
-				}
-			}
-			lastPublicIPs[ipv4] = publicIP
-		}
-		return syncErr
-	}
-	flushCommands := func(ctx context.Context) error {
-	drainENS:
-		for {
-			select {
-			case command := <-m.ensCommands:
-				pendingENS[command.hostname] = command
-			default:
-				break drainENS
-			}
-		}
-
-		var err error
-		for hostname, command := range pendingENS {
-			if commandErr := m.applyENSCommand(ctx, command); commandErr != nil {
-				err = errors.Join(err, commandErr)
-			} else {
-				delete(pendingENS, hostname)
-				if !command.remove {
-					clear(lastPublicIPs)
-				}
-			}
-		}
-		return err
-	}
-
-	renewTimer := time.NewTimer(defaultRenewInterval)
-	dnsTicker := time.NewTicker(defaultManagedDNSSyncInterval)
-	m.commandMu.RLock()
-	consecutiveDNSFailures := 0
-	if m.pendingDNSAddress {
-		consecutiveDNSFailures = 1
-		log.Info().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address pending: refusing queries until the public ip syncs")
-	}
-	m.commandMu.RUnlock()
-	retryTimer := time.NewTimer(nextSyncDelay(consecutiveDNSFailures))
-	defer renewTimer.Stop()
-	defer dnsTicker.Stop()
-	defer retryTimer.Stop()
-
-	rearmRetryTimer := func() {
-		if !retryTimer.Stop() {
-			select {
-			case <-retryTimer.C:
-			default:
-			}
-		}
-		retryTimer.Reset(nextSyncDelay(consecutiveDNSFailures))
-	}
-	syncDNSAttempt := func(ctx context.Context) ([]string, error) {
-		publicIPs, err := m.syncDNS(ctx)
-		m.commandMu.RLock()
-		pendingDNSAddress := m.pendingDNSAddress
-		m.commandMu.RUnlock()
-		if pendingDNSAddress {
-			if consecutiveDNSFailures == 0 {
-				log.Info().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address pending: refusing queries until the public ip syncs")
-			}
-			consecutiveDNSFailures++
-		} else {
-			if consecutiveDNSFailures > 0 {
-				log.Debug().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address synced")
-			}
-			consecutiveDNSFailures = 0
-		}
-		rearmRetryTimer()
-		return publicIPs, err
-	}
-
-	syncRetryTick := func(syncCtx context.Context) error {
-		m.commandMu.RLock()
-		pendingDNSAddress := m.pendingDNSAddress
-		m.commandMu.RUnlock()
-		var publicIPs []string
-		var err error
-		if pendingDNSAddress {
-			publicIPs, err = syncDNSAttempt(syncCtx)
-			m.commandMu.RLock()
-			pendingDNSAddress = m.pendingDNSAddress
-			m.commandMu.RUnlock()
-		} else {
-			consecutiveDNSFailures = 0
-			rearmRetryTimer()
-			if m.cfg.ENSGaslessEnabled {
-				publicIPs, err = utils.ResolvePublicIPs(syncCtx)
-			}
-		}
-		if !pendingDNSAddress && err != nil {
-			err = fmt.Errorf("detect public ip: %w", err)
-		}
-		err = errors.Join(err, syncChangedAddressRecords(syncCtx, publicIPs))
-		if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
-			err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
-		}
-		return errors.Join(err, flushCommands(syncCtx))
-	}
-	renewTick := func(ctx context.Context) time.Duration {
-		if _, _, manual, err := m.manualCertificateOverride(); err != nil || manual {
-			return defaultRenewInterval
-		}
-		renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-		defer cancel()
-		needsRenewal, replacesCertID, recheck := m.shouldRenew(renewCtx)
-		if !needsRenewal {
-			return recheck
-		}
-		if err := m.provision(renewCtx, replacesCertID); err != nil {
-			log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
-		}
-		return defaultRenewInterval
-	}
-
+	state := m.maintenanceLoopNewState()
+	defer state.renewTimer.Stop()
+	defer state.dnsTicker.Stop()
+	defer state.retryTimer.Stop()
 	for {
 		select {
 		case <-m.stopCh:
-			syncCtx, cancel := context.WithTimeout(m.stopCtx, defaultSyncTimeout)
-			m.stopErr = flushCommands(syncCtx)
-			cancel()
-			if m.stopErr != nil {
-				log.Warn().Err(m.stopErr).Str("base_domain", m.cfg.BaseDomain).Msg("flush dns records")
-			}
+			m.maintenanceLoopHandleStop(state)
 			return
 		case command := <-m.ensCommands:
-			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := m.applyENSCommand(syncCtx, command)
-			cancel()
-			if err != nil {
-				pendingENS[command.hostname] = command
-				log.Warn().Err(err).Str("hostname", command.hostname).Msg("apply ENS dns command")
-			} else {
-				delete(pendingENS, command.hostname)
-				if !command.remove {
-					clear(lastPublicIPs)
-				}
-			}
-		case <-dnsTicker.C:
-			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			publicIPs, err := syncDNSAttempt(syncCtx)
-			err = errors.Join(err, syncChangedAddressRecords(syncCtx, publicIPs))
-			cancel()
-			if err != nil {
-				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync managed dns records")
-			}
-		case <-retryTimer.C:
-			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := syncRetryTick(syncCtx)
-			cancel()
-			if err != nil {
-				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
-			}
-		case <-renewTimer.C:
-			renewTimer.Reset(renewTick(ctx))
+			m.maintenanceLoopHandleENSCommand(ctx, state, command)
+		case <-state.dnsTicker.C:
+			m.maintenanceLoopHandleDNSTick(ctx, state)
+		case <-state.retryTimer.C:
+			m.maintenanceLoopHandleRetryTick(ctx, state)
+		case <-state.renewTimer.C:
+			state.renewTimer.Reset(m.maintenanceLoopRenewTick(ctx))
 		}
+	}
+}
+
+func (m *Manager) maintenanceLoopNewState() *maintenanceLoopState {
+	state := &maintenanceLoopState{
+		pendingENS:    make(map[string]ensDNSCommand),
+		lastPublicIPs: make(map[bool]string),
+	}
+	m.commandMu.RLock()
+	state.consecutiveDNSFailures = 0
+	if m.pendingDNSAddress {
+		state.consecutiveDNSFailures = 1
+		log.Info().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address pending: refusing queries until the public ip syncs")
+	}
+	m.commandMu.RUnlock()
+	state.renewTimer = time.NewTimer(defaultRenewInterval)
+	state.dnsTicker = time.NewTicker(defaultManagedDNSSyncInterval)
+	state.retryTimer = time.NewTimer(nextSyncDelay(state.consecutiveDNSFailures))
+	return state
+}
+
+func (m *Manager) syncChangedAddressRecords(ctx context.Context, state *maintenanceLoopState, publicIPs []string) error {
+	var syncErr error
+	for _, publicIP := range publicIPs {
+		ipv4 := net.ParseIP(publicIP).To4() != nil
+		if publicIP == state.lastPublicIPs[ipv4] {
+			continue
+		}
+		if m.cfg.ENSGaslessEnabled {
+			if err := m.syncTrackedENSGaslessHostAddressRecords(ctx, publicIP); err != nil {
+				syncErr = errors.Join(syncErr, err)
+				continue
+			}
+		}
+		state.lastPublicIPs[ipv4] = publicIP
+	}
+	return syncErr
+}
+
+func (m *Manager) maintenanceLoopDrainENSCommands(state *maintenanceLoopState) {
+drainENS:
+	for {
+		select {
+		case command := <-m.ensCommands:
+			state.pendingENS[command.hostname] = command
+		default:
+			break drainENS
+		}
+	}
+}
+
+func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *maintenanceLoopState) error {
+	var err error
+	for hostname, command := range state.pendingENS {
+		if commandErr := m.applyENSCommand(ctx, command); commandErr != nil {
+			err = errors.Join(err, commandErr)
+		} else {
+			delete(state.pendingENS, hostname)
+			if !command.remove {
+				clear(state.lastPublicIPs)
+			}
+		}
+	}
+	return err
+}
+
+func (m *Manager) maintenanceLoopFlushCommands(ctx context.Context, state *maintenanceLoopState) error {
+	m.maintenanceLoopDrainENSCommands(state)
+	return m.maintenanceLoopApplyPendingENS(ctx, state)
+}
+
+func (m *Manager) maintenanceLoopRearmRetryTimer(state *maintenanceLoopState) {
+	if !state.retryTimer.Stop() {
+		select {
+		case <-state.retryTimer.C:
+		default:
+		}
+	}
+	state.retryTimer.Reset(nextSyncDelay(state.consecutiveDNSFailures))
+}
+
+func (m *Manager) maintenanceLoopSyncDNSAttempt(ctx context.Context, state *maintenanceLoopState) ([]string, error) {
+	publicIPs, err := m.syncDNS(ctx)
+	m.commandMu.RLock()
+	pendingDNSAddress := m.pendingDNSAddress
+	m.commandMu.RUnlock()
+	if pendingDNSAddress {
+		if state.consecutiveDNSFailures == 0 {
+			log.Info().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address pending: refusing queries until the public ip syncs")
+		}
+		state.consecutiveDNSFailures++
+	} else {
+		if state.consecutiveDNSFailures > 0 {
+			log.Debug().Str("base_domain", m.cfg.BaseDomain).Msg("embedded dns address synced")
+		}
+		state.consecutiveDNSFailures = 0
+	}
+	m.maintenanceLoopRearmRetryTimer(state)
+	return publicIPs, err
+}
+
+func (m *Manager) syncRetryTickAttempt(ctx context.Context, state *maintenanceLoopState) ([]string, bool, error) {
+	m.commandMu.RLock()
+	pendingDNSAddress := m.pendingDNSAddress
+	m.commandMu.RUnlock()
+	if pendingDNSAddress {
+		publicIPs, err := m.maintenanceLoopSyncDNSAttempt(ctx, state)
+		m.commandMu.RLock()
+		pendingDNSAddress = m.pendingDNSAddress
+		m.commandMu.RUnlock()
+		return publicIPs, pendingDNSAddress, err
+	}
+	state.consecutiveDNSFailures = 0
+	m.maintenanceLoopRearmRetryTimer(state)
+	if m.cfg.ENSGaslessEnabled {
+		publicIPs, err := utils.ResolvePublicIPs(ctx)
+		return publicIPs, pendingDNSAddress, err
+	}
+	return nil, pendingDNSAddress, nil
+}
+
+func (m *Manager) maintenanceLoopSyncRetryTick(ctx context.Context, state *maintenanceLoopState) error {
+	publicIPs, pendingDNSAddress, err := m.syncRetryTickAttempt(ctx, state)
+	if !pendingDNSAddress && err != nil {
+		err = fmt.Errorf("detect public ip: %w", err)
+	}
+	err = errors.Join(err, m.syncChangedAddressRecords(ctx, state, publicIPs))
+	if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
+		err = errors.Join(err, m.syncENSDNSSEC(ctx))
+	}
+	return errors.Join(err, m.maintenanceLoopFlushCommands(ctx, state))
+}
+
+func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
+	if _, _, manual, err := m.manualCertificateOverride(); err != nil || manual {
+		return defaultRenewInterval
+	}
+	renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+	defer cancel()
+	needsRenewal, replacesCertID, recheck := m.shouldRenew(renewCtx)
+	if !needsRenewal {
+		return recheck
+	}
+	if err := m.provision(renewCtx, replacesCertID); err != nil {
+		log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
+	}
+	return defaultRenewInterval
+}
+
+func (m *Manager) maintenanceLoopHandleStop(state *maintenanceLoopState) {
+	syncCtx, cancel := context.WithTimeout(m.stopCtx, defaultSyncTimeout)
+	m.stopErr = m.maintenanceLoopFlushCommands(syncCtx, state)
+	cancel()
+	if m.stopErr != nil {
+		log.Warn().Err(m.stopErr).Str("base_domain", m.cfg.BaseDomain).Msg("flush dns records")
+	}
+}
+
+func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *maintenanceLoopState, command ensDNSCommand) {
+	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+	err := m.applyENSCommand(syncCtx, command)
+	cancel()
+	if err != nil {
+		state.pendingENS[command.hostname] = command
+		log.Warn().Err(err).Str("hostname", command.hostname).Msg("apply ENS dns command")
+	} else {
+		delete(state.pendingENS, command.hostname)
+		if !command.remove {
+			clear(state.lastPublicIPs)
+		}
+	}
+}
+
+func (m *Manager) maintenanceLoopHandleDNSTick(ctx context.Context, state *maintenanceLoopState) {
+	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+	publicIPs, err := m.maintenanceLoopSyncDNSAttempt(syncCtx, state)
+	err = errors.Join(err, m.syncChangedAddressRecords(syncCtx, state, publicIPs))
+	cancel()
+	if err != nil {
+		log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync managed dns records")
+	}
+}
+
+func (m *Manager) maintenanceLoopHandleRetryTick(ctx context.Context, state *maintenanceLoopState) {
+	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+	err := m.maintenanceLoopSyncRetryTick(syncCtx, state)
+	cancel()
+	if err != nil {
+		log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
 	}
 }

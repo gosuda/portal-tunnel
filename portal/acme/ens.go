@@ -171,33 +171,46 @@ func (m *Manager) queueENSCommand(ctx context.Context, command ensDNSCommand) er
 
 func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) error {
 	if command.remove {
-		if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
-			return err
-		}
-		if err := m.dns.DeleteAddressRecords(ctx, command.hostname); err != nil {
-			return err
-		}
-		return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
-			return slices.DeleteFunc(hostnames, func(hostname string) bool { return hostname == command.hostname })
-		})
+		return m.applyENSCommandRemove(ctx, command)
 	}
-
 	if command.hostname != m.cfg.BaseDomain {
-		publicIPs, err := utils.ResolvePublicIPs(ctx)
-		if err != nil {
-			return fmt.Errorf("detect public ip: %w", err)
-		}
-		var addressErr error
-		for _, publicIP := range publicIPs {
-			if err := m.dns.EnsureAddressRecord(ctx, command.hostname, publicIP); err != nil {
-				addressErr = errors.Join(addressErr, err)
-			}
-		}
-		if addressErr != nil {
-			return fmt.Errorf("ensure ens gasless address records for %s: %w", command.hostname, addressErr)
+		if err := m.ensureENSCommandAddresses(ctx, command); err != nil {
+			return err
 		}
 	}
+	return m.applyENSCommandStoreGaslessTXT(ctx, command)
+}
 
+func (m *Manager) applyENSCommandRemove(ctx context.Context, command ensDNSCommand) error {
+	if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
+		return err
+	}
+	if err := m.dns.DeleteAddressRecords(ctx, command.hostname); err != nil {
+		return err
+	}
+	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
+		return slices.DeleteFunc(hostnames, func(hostname string) bool { return hostname == command.hostname })
+	})
+}
+
+func (m *Manager) ensureENSCommandAddresses(ctx context.Context, command ensDNSCommand) error {
+	publicIPs, err := utils.ResolvePublicIPs(ctx)
+	if err != nil {
+		return fmt.Errorf("detect public ip: %w", err)
+	}
+	var addressErr error
+	for _, publicIP := range publicIPs {
+		if err := m.dns.EnsureAddressRecord(ctx, command.hostname, publicIP); err != nil {
+			addressErr = errors.Join(addressErr, err)
+		}
+	}
+	if addressErr != nil {
+		return fmt.Errorf("ensure ens gasless address records for %s: %w", command.hostname, addressErr)
+	}
+	return nil
+}
+
+func (m *Manager) applyENSCommandStoreGaslessTXT(ctx context.Context, command ensDNSCommand) error {
 	value := gaslessENSTXTPrefix + defaultENSGaslessResolver + " " + strings.TrimSpace(command.address)
 	if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
 		return err
@@ -209,29 +222,40 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		return append(hostnames, command.hostname)
 	})
 }
-
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
+	cleanupErr := m.withdrawDisabledENSBaseTXT(ctx)
+	return m.withdrawTrackedENSHosts(ctx, cleanupErr)
+}
 
-	var cleanupErr error
+func (m *Manager) withdrawDisabledENSBaseTXT(ctx context.Context) error {
 	if !m.cfg.ENSGaslessEnabled && strings.TrimSpace(m.cfg.ENSGaslessAddress) != "" {
 		if err := m.dns.DeleteTXTRecords(ctx, m.cfg.BaseDomain, gaslessENSTXTPrefix); err != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", m.cfg.BaseDomain, err))
+			return fmt.Errorf("delete ens gasless txt for %s: %w", m.cfg.BaseDomain, err)
 		}
 	}
+	return nil
+}
+
+func (m *Manager) deleteTrackedENSHost(ctx context.Context, hostname string) error {
+	if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
+		return fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err)
+	}
+	if err := m.dns.DeleteAddressRecords(ctx, hostname); err != nil {
+		return fmt.Errorf("delete ens gasless address record for %s: %w", hostname, err)
+	}
+	return nil
+}
+
+func (m *Manager) withdrawTrackedENSHosts(ctx context.Context, cleanupErr error) error {
 	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
 		remaining := hostnames[:0]
 		for _, hostname := range hostnames {
-			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
+			if err := m.deleteTrackedENSHost(ctx, hostname); err != nil {
 				remaining = append(remaining, hostname)
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
-				continue
-			}
-			if err := m.dns.DeleteAddressRecords(ctx, hostname); err != nil {
-				remaining = append(remaining, hostname)
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless address record for %s: %w", hostname, err))
+				cleanupErr = errors.Join(cleanupErr, err)
 			}
 		}
 		return remaining

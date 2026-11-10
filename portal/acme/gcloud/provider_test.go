@@ -3,18 +3,18 @@ package gcloud
 import (
 	"testing"
 
-	gdns "google.golang.org/api/dns/v1"
+	"google.golang.org/api/dns/v1"
 )
 
 func TestDNSKeyDSRecordPrefersSHA256(t *testing.T) {
 	t.Parallel()
 
-	record, ok := dnsKeyDSRecord(&gdns.DnsKey{
+	record, ok := dnsKeyDSRecord(&dns.DnsKey{
 		Algorithm: "ecdsap256sha256",
 		KeyTag:    12345,
 		Type:      "keySigning",
 		IsActive:  true,
-		Digests: []*gdns.DnsKeyDigest{
+		Digests: []*dns.DnsKeyDigest{
 			{Type: "sha1", Digest: "AAAA"},
 			{Type: "sha256", Digest: "BBBB"},
 		},
@@ -30,15 +30,15 @@ func TestDNSKeyDSRecordPrefersSHA256(t *testing.T) {
 func TestDNSSECStatusFromZoneUsesActiveKeySigningKey(t *testing.T) {
 	t.Parallel()
 
-	state, dsRecord, _, err := dnssecStatusFromZone(&gdns.ManagedZone{
-		DnssecConfig: &gdns.ManagedZoneDnsSecConfig{State: "on"},
-	}, []*gdns.DnsKey{
+	state, dsRecord, _, err := dnssecStatusFromZone(&dns.ManagedZone{
+		DnssecConfig: &dns.ManagedZoneDnsSecConfig{State: "on"},
+	}, []*dns.DnsKey{
 		{
 			Algorithm: "rsasha256",
 			KeyTag:    100,
 			Type:      "zoneSigning",
 			IsActive:  true,
-			Digests: []*gdns.DnsKeyDigest{
+			Digests: []*dns.DnsKeyDigest{
 				{Type: "sha256", Digest: "IGNORE"},
 			},
 		},
@@ -47,7 +47,7 @@ func TestDNSSECStatusFromZoneUsesActiveKeySigningKey(t *testing.T) {
 			KeyTag:    200,
 			Type:      "keySigning",
 			IsActive:  true,
-			Digests: []*gdns.DnsKeyDigest{
+			Digests: []*dns.DnsKeyDigest{
 				{Type: "sha256", Digest: "USEME"},
 			},
 		},

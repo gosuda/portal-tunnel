@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"maps"
 	"net"
 	"slices"
 	"strings"
@@ -66,30 +67,10 @@ func (p *Provider) answerQuery(m *dns.Msg, r *dns.Msg, question dns.Question) bo
 }
 
 func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, do bool) bool {
-	source := name
-	sets, exists := z.records[name]
-	var nextCloser string
-	if !exists {
-		closest := name
-		for z.records[closest] == nil {
-			nextCloser = closest
-			closest = parentName(closest)
-		}
-		source = "*." + closest
-		sets, exists = z.records[source]
-	}
+	source, sets, exists, nextCloser := p.answerResolveSource(z, name)
 	if exists {
 		if qtype == dns.TypeRRSIG {
-			types := make([]uint16, 0, len(sets))
-			for typ := range sets {
-				types = append(types, typ)
-			}
-			slices.Sort(types)
-			for _, typ := range types {
-				sig := dns.Copy(sets[typ].signature)
-				sig.Header().Name = name
-				m.Answer = append(m.Answer, sig)
-			}
+			answerRRSIGSets(m, sets, name)
 		} else {
 			m.Answer = appendRRSet(m.Answer, sets[qtype], name, do)
 		}
@@ -103,26 +84,60 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 		m.Ns = appendRRSet(m.Ns, z.records[p.zone][dns.TypeSOA], "", do)
 	}
 	if do {
-		proofs := make(map[string]bool)
-		addProof := func(set signedRRSet) {
-			owner := set.records[0].Header().Name
-			if !proofs[owner] {
-				m.Ns = appendRRSet(m.Ns, set, "", true)
-				proofs[owner] = true
-			}
-		}
-		if nextCloser != "" {
-			addProof(z.denial(nextCloser))
-		}
-		if len(m.Answer) == 0 {
-			addProof(z.denial(source))
-		}
+		p.answerProofs(m, z, source, nextCloser)
 	}
 	if qtype == dns.TypeNS && name == p.zone {
-		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeA], "", do)
-		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeAAAA], "", do)
+		p.answerGlue(m, z, do)
 	}
 	return exists && source != name
+}
+
+func (p *Provider) answerResolveSource(z *signedZone, name string) (string, map[uint16]signedRRSet, bool, string) {
+	sets, exists := z.records[name]
+	if exists {
+		return name, sets, true, ""
+	}
+	closest := name
+	var nextCloser string
+	for z.records[closest] == nil {
+		nextCloser = closest
+		closest = parentName(closest)
+	}
+	source := "*." + closest
+	sets, exists = z.records[source]
+	return source, sets, exists, nextCloser
+}
+
+func answerRRSIGSets(m *dns.Msg, sets map[uint16]signedRRSet, name string) {
+	types := slices.Collect(maps.Keys(sets))
+	slices.Sort(types)
+	for _, typ := range types {
+		sig := dns.Copy(sets[typ].signature)
+		sig.Header().Name = name
+		m.Answer = append(m.Answer, sig)
+	}
+}
+
+func (p *Provider) answerProofs(m *dns.Msg, z *signedZone, source, nextCloser string) {
+	proofs := make(map[string]bool)
+	addProof := func(set signedRRSet) {
+		owner := set.records[0].Header().Name
+		if !proofs[owner] {
+			m.Ns = appendRRSet(m.Ns, set, "", true)
+			proofs[owner] = true
+		}
+	}
+	if nextCloser != "" {
+		addProof(z.denial(nextCloser))
+	}
+	if len(m.Answer) == 0 {
+		addProof(z.denial(source))
+	}
+}
+
+func (p *Provider) answerGlue(m *dns.Msg, z *signedZone, do bool) {
+	m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeA], "", do)
+	m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeAAAA], "", do)
 }
 
 func (p *Provider) writeResponse(w dns.ResponseWriter, query, m *dns.Msg) {

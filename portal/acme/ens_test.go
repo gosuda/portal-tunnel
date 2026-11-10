@@ -131,13 +131,21 @@ func TestENSGaslessAddressChangeLeavesOneRecord(t *testing.T) {
 
 	first := "0x1111111111111111111111111111111111111111"
 	second := "0x2222222222222222222222222222222222222222"
+	applyGaslessAddressChange(t, manager, host, first, second)
+	checkGaslessAddressSingleRecord(t, zone, host, second, challengeValue)
+}
+
+func applyGaslessAddressChange(t *testing.T, manager *Manager, host, first, second string) {
+	t.Helper()
 	for _, address := range []string{first, second} {
-		err := manager.applyENSCommand(context.Background(), ensDNSCommand{hostname: host, address: address})
-		if err != nil {
+		if err := manager.applyENSCommand(context.Background(), ensDNSCommand{hostname: host, address: address}); err != nil {
 			t.Fatalf("applyENSCommand(%s): %v", address, err)
 		}
 	}
+}
 
+func checkGaslessAddressSingleRecord(t *testing.T, zone *fakeZone, host, second, challengeValue string) {
+	t.Helper()
 	ens := ensTXTValues(t, zone, host)
 	if len(ens) != 1 {
 		t.Fatalf("ENS1 records = %v, want exactly one", ens)
@@ -145,12 +153,10 @@ func TestENSGaslessAddressChangeLeavesOneRecord(t *testing.T) {
 	if !strings.HasSuffix(ens[0], second) {
 		t.Fatalf("ENS1 record = %q, want the current address %s", ens[0], second)
 	}
-
 	if !slices.Contains(zone.txtValues(host), challengeValue) {
 		t.Fatalf("TXT records = %v, want the DNS-01 record left untouched", zone.txtValues(host))
 	}
 }
-
 func TestENSGaslessLeaseRemovalDoesNotRunWhenDisabled(t *testing.T) {
 	const host = "lease.portal.example.com"
 
@@ -182,21 +188,9 @@ func TestENSGaslessReconcileRunsWhenDisabled(t *testing.T) {
 
 	keyDir := t.TempDir()
 	trackedPath := filepath.Join(keyDir, ensGaslessHostnamesFileName)
-	if err := utils.WriteJSONFile(trackedPath, []string{host}, 0o600); err != nil {
-		t.Fatalf("seed tracked hostnames: %v", err)
-	}
-
 	ctx := context.Background()
 	zone := newFakeZone()
-	if err := zone.EnsureTXTRecord(ctx, baseDomain, gaslessENSTXTPrefix+"resolver 0x3333"); err != nil {
-		t.Fatalf("seed base ENS record: %v", err)
-	}
-	if err := zone.EnsureTXTRecord(ctx, host, gaslessENSTXTPrefix+"resolver 0x4444"); err != nil {
-		t.Fatalf("seed ENS record: %v", err)
-	}
-	if err := zone.EnsureAddressRecord(ctx, host, "203.0.113.11"); err != nil {
-		t.Fatalf("seed A record: %v", err)
-	}
+	seedDisabledReconcileZone(t, zone, baseDomain, host, trackedPath)
 
 	manager := newTestENSManager(Config{
 		BaseDomain:        baseDomain,
@@ -208,10 +202,31 @@ func TestENSGaslessReconcileRunsWhenDisabled(t *testing.T) {
 	if err := manager.reconcileTrackedENSGaslessHostnames(ctx); err != nil {
 		t.Fatalf("reconcileTrackedENSGaslessHostnames(): %v", err)
 	}
+	checkDisabledReconcileWithdrawn(t, zone, baseDomain, host, trackedPath)
+}
+
+func seedDisabledReconcileZone(t *testing.T, zone *fakeZone, baseDomain, host, trackedPath string) {
+	t.Helper()
+	if err := utils.WriteJSONFile(trackedPath, []string{host}, 0o600); err != nil {
+		t.Fatalf("seed tracked hostnames: %v", err)
+	}
+	ctx := context.Background()
+	if err := zone.EnsureTXTRecord(ctx, baseDomain, gaslessENSTXTPrefix+"resolver 0x3333"); err != nil {
+		t.Fatalf("seed base ENS record: %v", err)
+	}
+	if err := zone.EnsureTXTRecord(ctx, host, gaslessENSTXTPrefix+"resolver 0x4444"); err != nil {
+		t.Fatalf("seed ENS record: %v", err)
+	}
+	if err := zone.EnsureAddressRecord(ctx, host, "203.0.113.11"); err != nil {
+		t.Fatalf("seed A record: %v", err)
+	}
+}
+
+func checkDisabledReconcileWithdrawn(t *testing.T, zone *fakeZone, baseDomain, host, trackedPath string) {
+	t.Helper()
 	if ens := ensTXTValues(t, zone, baseDomain); len(ens) != 0 {
 		t.Fatalf("base ENS1 records = %v, want them withdrawn", ens)
 	}
-
 	if ens := ensTXTValues(t, zone, host); len(ens) != 0 {
 		t.Fatalf("ENS1 records = %v, want them withdrawn", ens)
 	}

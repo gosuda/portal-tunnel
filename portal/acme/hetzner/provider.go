@@ -211,36 +211,57 @@ func (p *Provider) findZone(ctx context.Context, client *hcloud.Client, domain s
 	}
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
+	if zoneName, ok := lookupFindZoneCache(p.zones.Load(), candidates); ok {
+		return &hcloud.Zone{Name: zoneName}, nil
+	}
+	return searchFindZoneCandidates(ctx, p, client, candidates, domain)
+}
 
-	zones := p.zones.Load()
+func lookupFindZoneCache(cached map[string]string, candidates []string) (string, bool) {
 	for _, candidate := range candidates {
-		if zoneName := zones[candidate]; zoneName != "" {
-			return &hcloud.Zone{Name: zoneName}, nil
+		if zoneName := cached[candidate]; zoneName != "" {
+			return zoneName, true
 		}
 	}
+	return "", false
+}
 
+func searchFindZoneCandidates(ctx context.Context, p *Provider, client *hcloud.Client, candidates []string, domain string) (*hcloud.Zone, error) {
 	for _, candidate := range candidates {
-		zone, _, err := client.Zone.GetByName(ctx, candidate)
+		zone, err := fetchFindZoneCandidate(ctx, p, client, candidate)
 		if err != nil {
-			return nil, fmt.Errorf("get hetzner zone %s: %w", candidate, err)
+			return nil, err
 		}
-		if zone == nil {
-			continue
+		if zone != nil {
+			return zone, nil
 		}
-		zoneName := utils.NormalizeBaseDomain(zone.Name)
-		if zoneName == "" {
-			continue
-		}
-		p.zones.UpdateCopy(func(zones *map[string]string) {
-			if *zones == nil {
-				*zones = make(map[string]string)
-			}
-			(*zones)[candidate] = zoneName
-		})
-		return zone, nil
 	}
-
 	return nil, fmt.Errorf("no hetzner zone found for %s", domain)
+}
+
+func fetchFindZoneCandidate(ctx context.Context, p *Provider, client *hcloud.Client, candidate string) (*hcloud.Zone, error) {
+	zone, _, err := client.Zone.GetByName(ctx, candidate)
+	if err != nil {
+		return nil, fmt.Errorf("get hetzner zone %s: %w", candidate, err)
+	}
+	if zone == nil {
+		return nil, nil
+	}
+	zoneName := utils.NormalizeBaseDomain(zone.Name)
+	if zoneName == "" {
+		return nil, nil
+	}
+	storeFindZoneEntry(p, candidate, zoneName)
+	return zone, nil
+}
+
+func storeFindZoneEntry(p *Provider, candidate, zoneName string) {
+	p.zones.UpdateCopy(func(cached *map[string]string) {
+		if *cached == nil {
+			*cached = make(map[string]string)
+		}
+		(*cached)[candidate] = zoneName
+	})
 }
 
 func ensureRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn string, recordType hcloud.ZoneRRSetType, value string) error {
@@ -248,9 +269,8 @@ func ensureRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone,
 	if err != nil {
 		return err
 	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return errRecordValueIsRequired
+	if value, err = normalizeRecordValueHetzner(value); err != nil {
+		return err
 	}
 	desired := []hcloud.ZoneRRSetRecord{{Value: value}}
 
@@ -260,21 +280,36 @@ func ensureRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone,
 	}
 	if existing == nil {
 		ttl := defaultRecordTTL
-		result, _, err := client.Zone.CreateRRSet(ctx, zone, hcloud.ZoneRRSetCreateOpts{
+		return createRecordHetzner(ctx, client, zone, hcloud.ZoneRRSetCreateOpts{
 			Name:    recordName,
 			Type:    recordType,
 			TTL:     &ttl,
 			Records: desired,
 		})
-		if err != nil {
-			return err
-		}
-		return waitAction(ctx, client, result.Action)
 	}
+	return replaceRecordHetzner(ctx, client, existing, desired)
+}
+
+func normalizeRecordValueHetzner(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errRecordValueIsRequired
+	}
+	return value, nil
+}
+
+func createRecordHetzner(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, opts hcloud.ZoneRRSetCreateOpts) error {
+	result, _, err := client.Zone.CreateRRSet(ctx, zone, opts)
+	if err != nil {
+		return err
+	}
+	return waitAction(ctx, client, result.Action)
+}
+
+func replaceRecordHetzner(ctx context.Context, client *hcloud.Client, existing *hcloud.ZoneRRSet, desired []hcloud.ZoneRRSetRecord) error {
 	if sameRecords(existing.Records, desired) {
 		return nil
 	}
-
 	action, _, err := client.Zone.SetRRSetRecords(ctx, existing, hcloud.ZoneRRSetSetRecordsOpts{Records: desired})
 	if err != nil {
 		return err
@@ -295,18 +330,26 @@ func ensureTXTRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zo
 		return err
 	}
 	if existing == nil {
-		ttl := defaultRecordTTL
-		result, _, err := client.Zone.CreateRRSet(ctx, zone, hcloud.ZoneRRSetCreateOpts{
-			Name:    recordName,
-			Type:    hcloud.ZoneRRSetTypeTXT,
-			TTL:     &ttl,
-			Records: desired,
-		})
-		if err != nil {
-			return err
-		}
-		return waitAction(ctx, client, result.Action)
+		return createTXTRecordHetzner(ctx, client, zone, recordName, desired)
 	}
+	return appendTXTRecordHetzner(ctx, client, existing, desired, value)
+}
+
+func createTXTRecordHetzner(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, recordName string, desired []hcloud.ZoneRRSetRecord) error {
+	ttl := defaultRecordTTL
+	result, _, err := client.Zone.CreateRRSet(ctx, zone, hcloud.ZoneRRSetCreateOpts{
+		Name:    recordName,
+		Type:    hcloud.ZoneRRSetTypeTXT,
+		TTL:     &ttl,
+		Records: desired,
+	})
+	if err != nil {
+		return err
+	}
+	return waitAction(ctx, client, result.Action)
+}
+
+func appendTXTRecordHetzner(ctx context.Context, client *hcloud.Client, existing *hcloud.ZoneRRSet, desired []hcloud.ZoneRRSetRecord, value string) error {
 	for _, record := range existing.Records {
 		if txtContent(record.Value) == value {
 			return nil
@@ -356,17 +399,25 @@ func deleteTXTRecords(ctx context.Context, client *hcloud.Client, zone *hcloud.Z
 	if existing == nil {
 		return nil
 	}
+	remaining := filterRemainingTXTRecordsHetzner(existing.Records, matchPrefix)
+	if len(remaining) == len(existing.Records) {
+		return nil
+	}
+	return storeRemainingTXTRecordsHetzner(ctx, client, existing, remaining)
+}
 
-	remaining := existing.Records[:0]
-	for _, record := range existing.Records {
+func filterRemainingTXTRecordsHetzner(records []hcloud.ZoneRRSetRecord, matchPrefix string) []hcloud.ZoneRRSetRecord {
+	remaining := make([]hcloud.ZoneRRSetRecord, 0, len(records))
+	for _, record := range records {
 		if strings.HasPrefix(txtContent(record.Value), matchPrefix) {
 			continue
 		}
 		remaining = append(remaining, record)
 	}
-	if len(remaining) == len(existing.Records) {
-		return nil
-	}
+	return remaining
+}
+
+func storeRemainingTXTRecordsHetzner(ctx context.Context, client *hcloud.Client, existing *hcloud.ZoneRRSet, remaining []hcloud.ZoneRRSetRecord) error {
 	if len(remaining) == 0 {
 		result, _, err := client.Zone.DeleteRRSet(ctx, existing)
 		if err != nil {
