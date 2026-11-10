@@ -12,8 +12,9 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/challenge"
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/vultr/govultr/v3"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 )
 
 func TestChallengeLostResponse(t *testing.T)      { testChallengeLifecycle(t, "lost response") }

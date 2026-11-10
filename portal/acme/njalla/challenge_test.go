@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/challenge"
+
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 )
 
