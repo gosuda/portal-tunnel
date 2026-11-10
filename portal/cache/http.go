@@ -51,7 +51,11 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		utils.InvalidRequestError(err).Write(w)
 		return
 	}
-	defer resetHandleReadDeadline(controller, &err)
+	defer func() {
+		if err == nil {
+			_ = controller.SetReadDeadline(time.Time{})
+		}
+	}()
 	if c.serveHandlePostCacheRequest(w, req, site, generation) {
 		return
 	}
@@ -121,12 +125,6 @@ func (c *Manager) serveHandlePostCacheRequest(w http.ResponseWriter, req *http.R
 	c.mu.Unlock()
 	utils.WriteAPIData(w, http.StatusOK, status)
 	return true
-}
-
-func resetHandleReadDeadline(controller *http.ResponseController, err *error) {
-	if *err == nil {
-		_ = controller.SetReadDeadline(time.Time{})
-	}
 }
 
 func (c *Manager) retireHandleUnpublished(site *cachedSite) {
