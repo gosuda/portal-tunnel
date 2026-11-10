@@ -69,6 +69,7 @@ func TestPortalExposeStdinLifetime(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build portal: %v\n%s", err, out)
 	}
+
 	t.Run("requires-pipe", func(t *testing.T) {
 		input, err := os.Open(os.DevNull)
 		if err != nil {
@@ -81,204 +82,285 @@ func TestPortalExposeStdinLifetime(t *testing.T) {
 			t.Fatalf("non-pipe stdin: err=%v output=%s", err, out)
 		}
 	})
+	t.Run("closed", func(t *testing.T) {
+		relay := startMembershipRelay(t, t.Context())
+		process := newStdinLifetimeProcess(t, bin, relay.relayURL, "--exit-on-stdin-eof")
+		process.stdin.Close()
+		process.start(t, "")
+		process.waitExit(t)
+	})
+	t.Run("startup", func(t *testing.T) {
+		contacted := make(chan struct{}, 1)
+		relay := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			select {
+			case contacted <- struct{}{}:
+			default:
+			}
+			<-r.Context().Done()
+		}))
+		t.Cleanup(relay.Close)
+		process := newStdinLifetimeProcess(t, bin, relay.URL, "--exit-on-stdin-eof")
+		process.start(t, "")
+		select {
+		case <-contacted:
+		case <-time.After(30 * time.Second):
+			t.Fatal("portal never contacted the relay during startup")
+		}
+		process.stdin.Close()
+		process.waitExit(t)
+	})
+	t.Run("ready", func(t *testing.T) {
+		relay := startMembershipRelay(t, t.Context())
+		process := newStdinLifetimeProcess(t, bin, relay.relayURL, "--exit-on-stdin-eof")
+		process.start(t, "")
+		publicURL := process.waitReady(t, relay)
+		if _, err := io.WriteString(process.stdin, "ignored bytes\n"); err != nil {
+			t.Fatal(err)
+		}
+		process.assertRunning(t)
+		waitServesMarker(t, "after stdin bytes", relay, publicURL, 15*time.Second)
+		process.stdin.Close()
+		process.waitExit(t)
+		if _, served := tenantGet(relay.sniAddr, relay.certPath, publicURL); served {
+			t.Fatal("tunnel still served after owner shutdown")
+		}
+	})
+	t.Run("reconnect", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		relay := startMembershipRelay(t, ctx)
+		process := newStdinLifetimeProcess(t, bin, relay.relayURL, "--exit-on-stdin-eof")
+		process.start(t, "")
+		process.waitReady(t, relay)
+		cancel()
+		stopJSONRelay(t, relay.sniAddr)
+		waitLifecycleRecord(t, process.records, func(r map[string]any) bool {
+			return r["event"] == "relay_status" && r["state"] == "connecting"
+		}, 30*time.Second)
+		process.stdin.Close()
+		process.waitExit(t)
+	})
+	t.Run("failed", func(t *testing.T) {
+		// An incompatible relay is a permanent SDK failure, without retries.
+		relay := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ok":true,"data":{"protocol_version":"incompatible"}}`)
+		}))
+		t.Cleanup(relay.Close)
+		process := newStdinLifetimeProcess(t, bin, relay.URL, "--exit-on-stdin-eof")
+		process.start(t, "")
+		waitLifecycleRecord(t, process.records, func(r map[string]any) bool {
+			return r["event"] == "relay_status" && r["state"] == "failed"
+		}, 30*time.Second)
+		process.stdin.Close()
+		process.waitExit(t)
+	})
+	t.Run("parent-exit", func(t *testing.T) {
+		relay := startMembershipRelay(t, t.Context())
+		process := newStdinLifetimeProcess(t, bin, relay.relayURL, "--exit-on-stdin-eof")
+		process.start(t, "owner")
+		publicURL := process.waitReady(t, relay)
+		process.stdin.Close()
+		process.waitExit(t)
+		if _, served := tenantGet(relay.sniAddr, relay.certPath, publicURL); served {
+			t.Fatal("tunnel still served after parent exit")
+		}
+	})
+	t.Run("parent-kill", func(t *testing.T) {
+		relay := startMembershipRelay(t, t.Context())
+		process := newStdinLifetimeProcess(t, bin, relay.relayURL, "--exit-on-stdin-eof")
+		process.start(t, "owner")
+		publicURL := process.waitReady(t, relay)
+		if err := process.cmd.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+		process.waitOutputClosed(t)
+		if _, served := tenantGet(relay.sniAddr, relay.certPath, publicURL); served {
+			t.Fatal("tunnel still served after parent kill")
+		}
+	})
+	t.Run("retained-writer", func(t *testing.T) {
+		relay := startMembershipRelay(t, t.Context())
+		process := newStdinLifetimeProcess(t, bin, relay.relayURL, "--exit-on-stdin-eof")
+		process.start(t, "retain")
+		publicURL := process.waitReady(t, relay)
+		if err := process.cmd.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+		// Killing the owner cannot deliver EOF while the holder keeps a writer.
+		process.assertRunning(t)
+		waitServesMarker(t, "with inherited writer", relay, publicURL, 15*time.Second)
+		process.stdin.Close()
+		process.waitOutputClosed(t)
+		if _, served := tenantGet(relay.sniAddr, relay.certPath, publicURL); served {
+			t.Fatal("tunnel still served after the last writer closed")
+		}
+	})
+	t.Run("default", func(t *testing.T) {
+		relay := startMembershipRelay(t, t.Context())
+		process := newStdinLifetimeProcess(t, bin, relay.relayURL)
+		process.start(t, "")
+		publicURL := process.waitReady(t, relay)
+		process.stdin.Close()
+		process.assertRunning(t)
+		waitServesMarker(t, "without lifetime flag", relay, publicURL, 15*time.Second)
+	})
+}
 
-	for _, mode := range []string{"closed", "startup", "ready", "reconnect", "failed", "parent-exit", "parent-kill", "retained-writer", "default"} {
-		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			relay := startMembershipRelay(t, ctx)
-			service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = io.WriteString(w, marker)
-			}))
-			defer service.Close()
-			args := []string{bin, "expose", "--log-format=json", "--discovery=false",
-				"--relays", relay.relayURL, "--identity-path", filepath.Join(t.TempDir(), "identity.json"),
-				"--http-route", "/=" + service.URL}
-			if mode != "default" {
-				args = append(args, "--exit-on-stdin-eof")
-			}
-			var contacted <-chan struct{}
-			if mode == "startup" || mode == "failed" {
-				requests := make(chan struct{}, 1)
-				unavailable := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					select {
-					case requests <- struct{}{}:
-					default:
-					}
-					if mode == "startup" {
-						<-r.Context().Done()
-						return
-					}
-					// An incompatible relay is a permanent SDK failure, without retries.
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = io.WriteString(w, `{"ok":true,"data":{"protocol_version":"incompatible"}}`)
-				}))
-				t.Cleanup(unavailable.Close)
-				args[5] = unavailable.URL
-				contacted = requests
-			}
+// stdinLifetimeProcess owns real subprocess pipes and cleanup. Scenarios choose
+// when to close stdin, kill the owner, or stop the relay themselves.
+type stdinLifetimeProcess struct {
+	args         []string
+	inputReader  *os.File
+	stdin        *os.File
+	cmd          *exec.Cmd
+	records      <-chan map[string]any
+	done         <-chan error
+	descendants  []*os.Process
+	ready        map[string]any
+	outputClosed bool
+}
 
-			cmd := exec.Command(args[0], args[1:]...)
-			owner := mode == "parent-exit" || mode == "parent-kill" || mode == "retained-writer"
-			if owner {
-				helperArgs, err := json.Marshal(args)
-				if err != nil {
-					t.Fatal(err)
-				}
-				cmd = exec.Command(os.Args[0], "-test.run=^TestPortalStdinOwnerProcess$")
-				role := "owner"
-				if mode == "retained-writer" {
-					role = "retain"
-				}
-				cmd.Env = append(os.Environ(), "PORTAL_STDIN_LIFETIME_HELPER="+role,
-					"PORTAL_STDIN_LIFETIME_ARGS="+string(helperArgs))
+func newStdinLifetimeProcess(t *testing.T, bin, relayURL string, flags ...string) *stdinLifetimeProcess {
+	t.Helper()
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, marker)
+	}))
+	t.Cleanup(service.Close)
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		reader.Close()
+		writer.Close()
+	})
+	args := []string{bin, "expose", "--log-format=json", "--discovery=false",
+		"--relays", relayURL, "--identity-path", filepath.Join(t.TempDir(), "identity.json"),
+		"--http-route", "/=" + service.URL}
+	return &stdinLifetimeProcess{args: append(args, flags...), inputReader: reader, stdin: writer}
+}
+
+func (p *stdinLifetimeProcess) start(t *testing.T, ownerRole string) {
+	t.Helper()
+	cmd := exec.Command(p.args[0], p.args[1:]...)
+	if ownerRole != "" {
+		helperArgs, err := json.Marshal(p.args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd = exec.Command(os.Args[0], "-test.run=^TestPortalStdinOwnerProcess$")
+		cmd.Env = append(os.Environ(), "PORTAL_STDIN_LIFETIME_HELPER="+ownerRole,
+			"PORTAL_STDIN_LIFETIME_ARGS="+string(helperArgs))
+	}
+	// Keep reading after the owner's Wait: an orphan child still owns stdout.
+	stdout, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stdout.Close() })
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = p.inputReader, writer, os.Stderr
+	if err := cmd.Start(); err != nil {
+		writer.Close()
+		t.Fatal(err)
+	}
+	p.inputReader.Close()
+	writer.Close()
+	p.cmd = cmd
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	p.done = done
+	records := make(chan map[string]any, 64)
+	go readLifecycleRecords(t, stdout, records)
+	p.records = records
+	t.Cleanup(func() {
+		p.stdin.Close()
+		if !p.outputClosed {
+			_ = cmd.Process.Kill()
+			for _, process := range p.descendants {
+				_ = process.Kill()
 			}
-			inputReader, stdin, err := os.Pipe()
-			if err != nil {
-				t.Fatal(err)
+		}
+		for _, process := range p.descendants {
+			_ = process.Release()
+		}
+		for range p.records {
+		}
+	})
+	if ownerRole == "" {
+		return
+	}
+	record := waitLifecycleRecord(t, p.records, func(r map[string]any) bool {
+		if r["event"] == "relay_status" && r["state"] == "ready" {
+			p.ready = r
+		}
+		return r["child_pid"] != nil
+	}, 30*time.Second)
+	for _, field := range []string{"child_pid", "holder_pid"} {
+		pid := int(record[field].(float64))
+		if pid == 0 {
+			continue
+		}
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.descendants = append(p.descendants, process)
+	}
+}
+
+func (p *stdinLifetimeProcess) waitReady(t *testing.T, relay membershipRelay) string {
+	t.Helper()
+	if p.ready == nil {
+		p.ready = waitLifecycleRecord(t, p.records, func(r map[string]any) bool {
+			return r["event"] == "relay_status" && r["state"] == "ready"
+		}, 60*time.Second)
+	}
+	publicURL := p.ready["public_url"].(string)
+	waitServesMarker(t, "before owner shutdown", relay, publicURL, 15*time.Second)
+	return publicURL
+}
+
+func (p *stdinLifetimeProcess) assertRunning(t *testing.T) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case <-deadline:
+			return
+		case _, ok := <-p.records:
+			if !ok {
+				t.Fatal("portal stopped while it should still be running")
 			}
-			defer inputReader.Close()
-			defer stdin.Close()
-			cmd.Stdin = inputReader
-			// Keep reading after the owner's Wait: an orphan child still owns stdout.
-			stdout, outputWriter, err := os.Pipe()
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { stdout.Close() })
-			cmd.Stdout, cmd.Stderr = outputWriter, os.Stderr
-			if mode == "closed" {
-				stdin.Close()
-			}
-			if err := cmd.Start(); err != nil {
-				outputWriter.Close()
-				t.Fatal(err)
-			}
-			inputReader.Close()
-			outputWriter.Close()
-			done := make(chan error, 1)
-			go func() { done <- cmd.Wait() }()
-			records := make(chan map[string]any, 64)
-			go readLifecycleRecords(t, stdout, records)
-			var descendants []*os.Process
-			outputClosed := false
-			t.Cleanup(func() {
-				stdin.Close()
-				_ = cmd.Process.Kill()
-				for _, process := range descendants {
-					if !outputClosed {
-						_ = process.Kill()
-					}
-					_ = process.Release()
-				}
-				for range records {
-				}
-			})
-			var ready map[string]any
-			if owner {
-				record := waitLifecycleRecord(t, records, func(r map[string]any) bool {
-					if r["event"] == "relay_status" && r["state"] == "ready" {
-						ready = r
-					}
-					return r["child_pid"] != nil
-				}, 30*time.Second)
-				for _, field := range []string{"child_pid", "holder_pid"} {
-					if field == "holder_pid" && mode != "retained-writer" {
-						continue
-					}
-					process, err := os.FindProcess(int(record[field].(float64)))
-					if err != nil {
-						t.Fatal(err)
-					}
-					descendants = append(descendants, process)
-				}
-			}
-			publicURL := ""
-			if mode == "startup" {
-				select {
-				case <-contacted:
-				case <-time.After(30 * time.Second):
-					t.Fatal("portal never contacted the relay during startup")
-				}
-			} else if mode == "failed" {
-				waitLifecycleRecord(t, records, func(r map[string]any) bool {
-					return r["event"] == "relay_status" && r["state"] == "failed"
-				}, 30*time.Second)
-			} else if mode != "closed" {
-				if ready == nil {
-					ready = waitLifecycleRecord(t, records, func(r map[string]any) bool {
-						return r["event"] == "relay_status" && r["state"] == "ready"
-					}, 60*time.Second)
-				}
-				publicURL = ready["public_url"].(string)
-				waitServesMarker(t, "before owner shutdown", relay, publicURL, 15*time.Second)
-			}
-			if mode == "reconnect" {
-				cancel()
-				stopJSONRelay(t, relay.sniAddr)
-				waitLifecycleRecord(t, records, func(r map[string]any) bool {
-					return r["event"] == "relay_status" && r["state"] == "connecting"
-				}, 30*time.Second)
-			}
-			if mode == "parent-kill" || mode == "retained-writer" {
-				if err := cmd.Process.Kill(); err != nil {
-					t.Fatal(err)
-				}
-				<-done
-				if mode == "retained-writer" {
-					// EOF must wait for the extra writer, even after the owner dies.
-					observe := time.NewTimer(time.Second)
-				observeWriter:
-					for {
-						select {
-						case <-observe.C:
-							break observeWriter
-						case _, ok := <-records:
-							if !ok {
-								t.Fatal("portal stopped while another process retained a writer")
-							}
-						}
-					}
-					waitServesMarker(t, "with inherited writer", relay, publicURL, 15*time.Second)
-				}
-			}
-			if mode != "closed" {
-				if _, err := io.WriteString(stdin, "ignored bytes\n"); err != nil && !owner {
-					t.Fatal(err)
-				}
-			}
-			stdin.Close()
-			if mode == "default" {
-				waitServesMarker(t, "without lifetime flag", relay, publicURL, 15*time.Second)
-				select {
-				case err := <-done:
-					t.Fatalf("default expose stopped on EOF: %v", err)
-				case <-time.After(time.Second):
-				}
+		}
+	}
+}
+
+func (p *stdinLifetimeProcess) waitOutputClosed(t *testing.T) {
+	t.Helper()
+	deadline := time.After(20 * time.Second)
+	for {
+		select {
+		case _, ok := <-p.records:
+			if !ok {
+				p.outputClosed = true
 				return
 			}
-			deadline := time.After(20 * time.Second)
-			for {
-				select {
-				case _, ok := <-records:
-					if !ok {
-						outputClosed = true
-						if mode != "parent-kill" && mode != "retained-writer" {
-							if err := <-done; err != nil {
-								t.Fatalf("owner shutdown failed: %v", err)
-							}
-						}
-						if publicURL != "" && mode != "reconnect" {
-							if _, served := tenantGet(relay.sniAddr, relay.certPath, publicURL); served {
-								t.Fatal("tunnel still served after owner shutdown")
-							}
-						}
-						return
-					}
-				case <-deadline:
-					t.Fatal("portal did not close its output after owner shutdown")
-				}
-			}
-		})
+		case <-deadline:
+			t.Fatal("portal did not close its output after owner shutdown")
+		}
+	}
+}
+
+func (p *stdinLifetimeProcess) waitExit(t *testing.T) {
+	t.Helper()
+	p.waitOutputClosed(t)
+	select {
+	case err := <-p.done:
+		if err != nil {
+			t.Fatalf("owner shutdown failed: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("owner did not exit after closing its output")
 	}
 }
