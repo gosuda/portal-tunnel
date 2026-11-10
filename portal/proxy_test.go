@@ -35,16 +35,15 @@ func TestIdentityBPSDefaultAndOverrides(t *testing.T) {
 	}
 }
 
+type sharedBudgetStreamResult struct {
+	key     types.ServiceIdentityKey
+	elapsed time.Duration
+}
+
 func TestConcurrentStreamsShareDefaultIdentityBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		manager := NewBPSManager(100)
-		shared := types.NewServiceIdentityKey("shared", "address")
-		other := types.NewServiceIdentityKey("other", "address")
-		type completion struct {
-			key     types.ServiceIdentityKey
-			elapsed time.Duration
-		}
-		done := make(chan completion, 3)
+		manager, shared, other := newSharedBudgetManager(t)
+		done := make(chan sharedBudgetStreamResult, 3)
 		start := time.Now()
 		for _, key := range []types.ServiceIdentityKey{shared, shared, other} {
 			go func() {
@@ -56,22 +55,35 @@ func TestConcurrentStreamsShareDefaultIdentityBudget(t *testing.T) {
 					}
 					remaining -= n
 				}
-				done <- completion{key: key, elapsed: time.Since(start)}
+				done <- sharedBudgetStreamResult{key: key, elapsed: time.Since(start)}
 			}()
 		}
-		var sharedElapsed time.Duration
-		for range 3 {
-			finished := <-done
-			if finished.key == shared {
-				sharedElapsed = max(sharedElapsed, finished.elapsed)
-			} else if finished.elapsed != 500*time.Millisecond {
-				t.Errorf("independent identity's 50 bytes took %v, want 500ms", finished.elapsed)
-			}
-		}
-		if sharedElapsed != time.Second {
-			t.Fatalf("two streams' combined 100 bytes took %v, want 1s", sharedElapsed)
-		}
+		checkSharedBudgetElapsed(t, done, shared)
 	})
+}
+
+func newSharedBudgetManager(t *testing.T) (*BPSManager, types.ServiceIdentityKey, types.ServiceIdentityKey) {
+	t.Helper()
+	manager := NewBPSManager(100)
+	shared := types.NewServiceIdentityKey("shared", "address")
+	other := types.NewServiceIdentityKey("other", "address")
+	return manager, shared, other
+}
+
+func checkSharedBudgetElapsed(t *testing.T, done <-chan sharedBudgetStreamResult, shared types.ServiceIdentityKey) {
+	t.Helper()
+	var sharedElapsed time.Duration
+	for range 3 {
+		finished := <-done
+		if finished.key == shared {
+			sharedElapsed = max(sharedElapsed, finished.elapsed)
+		} else if finished.elapsed != 500*time.Millisecond {
+			t.Errorf("independent identity's 50 bytes took %v, want 500ms", finished.elapsed)
+		}
+	}
+	if sharedElapsed != time.Second {
+		t.Fatalf("two streams' combined 100 bytes took %v, want 1s", sharedElapsed)
+	}
 }
 
 func TestDefaultBPSRetainsCreditAcrossPolicyUpdates(t *testing.T) {
