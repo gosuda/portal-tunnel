@@ -132,11 +132,21 @@ func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
 			p.ready = p.ready[1:]
 			close(c.stop)
 			p.mu.Unlock()
-			conn, ok, err := settleAcquiredForAcquire(ctx, c)
-			if !ok {
+			select {
+			case <-c.done:
+			case <-ctx.Done():
+				_ = c.Close()
+				<-c.done
+				return nil, ctx.Err()
+			}
+			if c.err != nil {
 				continue
 			}
-			return conn, err
+			if err := ctx.Err(); err != nil {
+				_ = c.Close()
+				return nil, err
+			}
+			return c.Conn, nil
 		}
 		notify := p.notify
 		p.mu.Unlock()
@@ -144,24 +154,6 @@ func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
 			return nil, ctx.Err()
 		}
 	}
-}
-
-func settleAcquiredForAcquire(ctx context.Context, c *pooledConn) (net.Conn, bool, error) {
-	select {
-	case <-c.done:
-	case <-ctx.Done():
-		_ = c.Close()
-		<-c.done
-		return nil, true, ctx.Err()
-	}
-	if c.err == nil {
-		if err := ctx.Err(); err != nil {
-			_ = c.Close()
-			return nil, true, err
-		}
-		return c.Conn, true, nil
-	}
-	return nil, false, nil
 }
 
 func waitNotifyForAcquire(ctx context.Context, notify <-chan struct{}) error {

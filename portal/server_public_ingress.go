@@ -13,19 +13,6 @@ import (
 func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 	inspecting := true
 	defer func() { s.releaseIngress(conn, inspecting) }()
-	wrappedConn, helloSpan, serverName, ok := s.inspectPublicIngressHello(ctx, conn)
-	if !ok {
-		return
-	}
-	if !s.promoteIngress() {
-		_ = wrappedConn.Close()
-		return
-	}
-	inspecting = false
-	s.bridgePublicIngressLease(ctx, wrappedConn, serverName, helloSpan)
-}
-
-func (s *Server) inspectPublicIngressHello(ctx context.Context, conn net.Conn) (net.Conn, []byte, string, bool) {
 	clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
 	if err != nil {
 		if wrappedConn != nil {
@@ -33,7 +20,7 @@ func (s *Server) inspectPublicIngressHello(ctx context.Context, conn net.Conn) (
 		} else {
 			_ = conn.Close()
 		}
-		return nil, nil, "", false
+		return
 	}
 	helloSpan := clientHello.HandshakeMessage
 	serverName := utils.NormalizeHostname(clientHello.ServerName)
@@ -45,9 +32,14 @@ func (s *Server) inspectPublicIngressHello(ctx context.Context, conn net.Conn) (
 		case <-ctx.Done():
 			_ = wrappedConn.Close()
 		}
-		return nil, nil, "", false
+		return
 	}
-	return wrappedConn, helloSpan, serverName, true
+	if !s.promoteIngress() {
+		_ = wrappedConn.Close()
+		return
+	}
+	inspecting = false
+	s.bridgePublicIngressLease(ctx, wrappedConn, serverName, helloSpan)
 }
 
 func (s *Server) bridgePublicIngressLease(ctx context.Context, wrappedConn net.Conn, serverName string, helloSpan []byte) {

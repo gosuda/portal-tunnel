@@ -54,41 +54,31 @@ func prepareAppConfig(cfg *appConfig, issues []cli.EnvIssue) (*policy.Ingress, x
 	return applyPrepareAppConfigTransport(cfg)
 }
 
-func parseLoadEnvFileLine(path, line string, lineNo int) (envFileEntry, bool, error) {
-	if line == "" || strings.HasPrefix(line, "#") {
-		return envFileEntry{}, true, nil
-	}
-	line = strings.TrimPrefix(line, "export ")
-	name, value, found := strings.Cut(line, "=")
-	if !found {
-		return envFileEntry{}, false, fmt.Errorf("%s:%d: not an assignment: %q", path, lineNo, line)
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return envFileEntry{}, false, fmt.Errorf("%s:%d: assignment has no name: %q", path, lineNo, line)
-	}
-	value = strings.TrimSpace(value)
-	doubleQuoted := len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"'
-	singleQuoted := len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\''
-	if doubleQuoted || singleQuoted {
-		value = value[1 : len(value)-1]
-	}
-	return envFileEntry{Name: name, Value: value}, false, nil
-}
-
 func scanLoadEnvFileEntries(scanner *bufio.Scanner, path string) ([]envFileEntry, error) {
 	var entries []envFileEntry
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
-		entry, skip, err := parseLoadEnvFileLine(path, strings.TrimSpace(scanner.Text()), lineNo)
-		if err != nil {
-			return nil, err
-		}
-		if skip {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		entries = append(entries, entry)
+		line = strings.TrimPrefix(line, "export ")
+		name, value, found := strings.Cut(line, "=")
+		if !found {
+			return nil, fmt.Errorf("%s:%d: not an assignment: %q", path, lineNo, line)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, fmt.Errorf("%s:%d: assignment has no name: %q", path, lineNo, line)
+		}
+		value = strings.TrimSpace(value)
+		doubleQuoted := len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"'
+		singleQuoted := len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\''
+		if doubleQuoted || singleQuoted {
+			value = value[1 : len(value)-1]
+		}
+		entries = append(entries, envFileEntry{Name: name, Value: value})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err

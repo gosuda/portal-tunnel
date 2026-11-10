@@ -199,11 +199,13 @@ func awaitBackhaulRace(ctx context.Context, timer *time.Timer, results <-chan ba
 			fallbackStarted = true
 			startFallback()
 		case result := <-results:
-			nextFirstErr, retConn, retErr, done := settleBackhaulResult(firstErr, result)
-			if done {
-				return retConn, retErr
+			if result.err == nil {
+				return result.conn, nil
 			}
-			firstErr = nextFirstErr
+			if firstErr != nil {
+				return nil, errors.Join(firstErr, result.err)
+			}
+			firstErr = result.err
 			if !fallbackStarted {
 				fallbackStarted = true
 				timer.Stop()
@@ -211,16 +213,6 @@ func awaitBackhaulRace(ctx context.Context, timer *time.Timer, results <-chan ba
 			}
 		}
 	}
-}
-
-func settleBackhaulResult(firstErr error, result backhaulRaceResult) (error, *quic.Conn, error, bool) {
-	if result.err == nil {
-		return firstErr, result.conn, nil, true
-	}
-	if firstErr != nil {
-		return firstErr, nil, errors.Join(firstErr, result.err), true
-	}
-	return result.err, nil, nil, false
 }
 
 func backhaulRejectionCode(errText string) string {

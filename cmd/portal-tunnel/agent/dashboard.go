@@ -225,20 +225,13 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 		m.sidebarDragX = event.X
 		return m, nil
 	}
-	if model, cmd, ok := m.clickLayoutRegion(event); ok {
-		return model, cmd
-	}
-	return m, nil
-}
-
-func (m agentDashboardModel) clickLayoutRegion(event tea.MouseEvent) (tea.Model, tea.Cmd, bool) {
 	for _, region := range m.layout().regions {
 		if event.Y == region.y && event.X >= region.x0 && event.X < region.x1 {
 			model, cmd := m.activateLayoutRegion(region)
-			return model, cmd, true
+			return model, cmd
 		}
 	}
-	return m, nil, false
+	return m, nil
 }
 
 func (m agentDashboardModel) activateLayoutRegion(region agentDashboardRegion) (tea.Model, tea.Cmd) {

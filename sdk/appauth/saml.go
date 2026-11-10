@@ -266,9 +266,15 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 		a.writeJSONError(w, http.StatusBadRequest, "invalid request host")
 		return
 	}
-	state, next, ok := a.decodeServeSAMLACSState(stateCookie.Value, host, now)
-	if !ok {
-		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "invalid or expired saml login state", page: signinProviderExpiredPage, next: next, idp: samlIdentityProvider{}})
+	var state samlStateClaims
+	if err := decodeSignedApplicationAuthJSON(a.saml.stateKey, stateCookie.Value, &state); err != nil {
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "invalid or expired saml login state", page: signinProviderExpiredPage, next: "/", idp: samlIdentityProvider{}})
+		return
+	}
+	if !sameApplicationHost(state.Host, host) ||
+		now.Unix() >= state.ExpiresAt ||
+		loginStateIssuedAt(state.ExpiresAt).Before(a.heldSince(host)) {
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "invalid or expired saml login state", page: signinProviderExpiredPage, next: state.Next, idp: samlIdentityProvider{}})
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, samlResponseBodyLimit)
@@ -295,31 +301,6 @@ func (a *applicationAuth) failServeSAMLACS(w http.ResponseWriter, r *http.Reques
 	a.writeJSONError(w, http.StatusUnauthorized, failure.message)
 }
 
-func (a *applicationAuth) verifyServeSAMLACSAssertion(idp samlIdentityProvider, encodedResponse string, state samlStateClaims, now time.Time) (samltypes.Assertion, string, *serveSAMLACSFailure) {
-	assertion, err := a.saml.verify(idp, encodedResponse, state, now)
-	if err != nil {
-		return samltypes.Assertion{}, "", &serveSAMLACSFailure{message: "saml response verification failed", page: signinProviderFailedPage, next: state.Next, idp: idp}
-	}
-	value, err := a.saml.subject(assertion)
-	if err != nil {
-		return samltypes.Assertion{}, "", &serveSAMLACSFailure{message: "saml response verification failed", page: signinProviderFailedPage, next: state.Next, idp: idp}
-	}
-	return assertion, value, nil
-}
-
-func (a *applicationAuth) decodeServeSAMLACSState(cookieValue, host string, now time.Time) (samlStateClaims, string, bool) {
-	var state samlStateClaims
-	if err := decodeSignedApplicationAuthJSON(a.saml.stateKey, cookieValue, &state); err != nil {
-		return samlStateClaims{}, "/", false
-	}
-	if !sameApplicationHost(state.Host, host) ||
-		now.Unix() >= state.ExpiresAt ||
-		loginStateIssuedAt(state.ExpiresAt).Before(a.heldSince(host)) {
-		return state, state.Next, false
-	}
-	return state, state.Next, true
-}
-
 func (a *applicationAuth) finishServeSAMLACSLogin(w http.ResponseWriter, r *http.Request, req serveSAMLACSRequest) {
 	var idp samlIdentityProvider
 	idp, err := a.saml.identityProvider(r.Context())
@@ -327,9 +308,14 @@ func (a *applicationAuth) finishServeSAMLACSLogin(w http.ResponseWriter, r *http
 		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "saml metadata is not available", page: signinProviderFailedPage, next: req.state.Next, idp: idp})
 		return
 	}
-	assertion, value, failure := a.verifyServeSAMLACSAssertion(idp, r.PostForm.Get("SAMLResponse"), req.state, req.now)
-	if failure != nil {
-		a.failServeSAMLACS(w, r, *failure)
+	assertion, err := a.saml.verify(idp, r.PostForm.Get("SAMLResponse"), req.state, req.now)
+	if err != nil {
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "saml response verification failed", page: signinProviderFailedPage, next: req.state.Next, idp: idp})
+		return
+	}
+	value, err := a.saml.subject(assertion)
+	if err != nil {
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "saml response verification failed", page: signinProviderFailedPage, next: req.state.Next, idp: idp})
 		return
 	}
 	subject, ok := a.resolveAllowedPrincipal(value, value)

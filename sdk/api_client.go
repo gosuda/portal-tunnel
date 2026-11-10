@@ -151,8 +151,16 @@ func (c *apiClient) exchangeRegister(ctx context.Context, registerReq types.Regi
 	var resp types.RegisterResponse
 	for {
 		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
-			if err := c.reloadRegisterChallenge(ctx, registerReq, reportedIP, &challenge, &request); err != nil {
-				return types.RegisterResponse{}, err
+			var reloadErr error
+			if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
+				reloadErr = pauseRegisterRetry(ctx, err)
+			} else if signed, err := signRegisterChallenge(challenge, c.relayURL, registerReq, reportedIP); err != nil {
+				reloadErr = err
+			} else {
+				request = signed
+			}
+			if reloadErr != nil {
+				return types.RegisterResponse{}, reloadErr
 			}
 			continue
 		}
@@ -164,18 +172,6 @@ func (c *apiClient) exchangeRegister(ctx context.Context, registerReq types.Regi
 			return types.RegisterResponse{}, pauseErr
 		}
 	}
-}
-
-func (c *apiClient) reloadRegisterChallenge(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string, challenge *types.RegisterChallengeResponse, request *types.RegisterRequest) error {
-	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, challenge); err != nil {
-		return pauseRegisterRetry(ctx, err)
-	}
-	signed, err := signRegisterChallenge(*challenge, c.relayURL, registerReq, reportedIP)
-	if err != nil {
-		return err
-	}
-	*request = signed
-	return nil
 }
 
 func pauseRegisterRetry(ctx context.Context, err error) error {

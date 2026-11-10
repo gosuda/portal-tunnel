@@ -224,10 +224,17 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	desc, host, ok := parseAnnounceDescriptor(w, req.Descriptor)
-	if !ok {
+	desc, err := discovery.NormalizeRelayDescriptor(req.Descriptor)
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
+	announceURL, err := url.Parse(desc.APIHTTPSAddr)
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+		return
+	}
+	host := utils.NormalizeHostname(announceURL.Hostname())
 	if s.rejectAnnounceSelf(w, desc, host) {
 		return
 	}
@@ -251,20 +258,6 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		ProtocolVersion: types.DiscoveryVersion,
 		Accepted:        true,
 	})
-}
-
-func parseAnnounceDescriptor(w http.ResponseWriter, descriptor types.RelayDescriptor) (types.RelayDescriptor, string, bool) {
-	desc, err := discovery.NormalizeRelayDescriptor(descriptor)
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-		return types.RelayDescriptor{}, "", false
-	}
-	announceURL, err := url.Parse(desc.APIHTTPSAddr)
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-		return types.RelayDescriptor{}, "", false
-	}
-	return desc, utils.NormalizeHostname(announceURL.Hostname()), true
 }
 
 func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescriptor, host string) bool {

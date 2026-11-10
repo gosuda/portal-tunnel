@@ -101,10 +101,11 @@ collect:
 		select {
 		case result := <-results:
 			addresses[result.index], errs[result.index] = result.address, result.err
-			done, nextFamily, timer := advanceCollectFamilyResultsWait(result.address, familyWait, remainingFamily)
-			if timer != nil {
+			done := result.address != "" && familyWait == 0
+			if result.address != "" && remainingFamily == nil && familyWait != 0 {
+				timer := time.NewTimer(familyWait)
 				defer timer.Stop()
-				remainingFamily = nextFamily
+				remainingFamily = timer.C
 			}
 			if done {
 				break collect
@@ -116,20 +117,6 @@ collect:
 		}
 	}
 	return addresses, errs, nil
-}
-
-func advanceCollectFamilyResultsWait(address string, familyWait time.Duration, remainingFamily <-chan time.Time) (bool, <-chan time.Time, *time.Timer) {
-	if address == "" {
-		return false, remainingFamily, nil
-	}
-	if familyWait == 0 {
-		return true, remainingFamily, nil
-	}
-	if remainingFamily != nil {
-		return false, remainingFamily, nil
-	}
-	timer := time.NewTimer(familyWait)
-	return false, timer.C, timer
 }
 
 func finalizeFamilyResults(ctx context.Context, addresses [2]string, errs [2]error) ([]string, error) {

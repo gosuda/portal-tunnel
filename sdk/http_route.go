@@ -318,7 +318,13 @@ func (r *httpRoute) rewriteProxyCookiesValue(value, publicDomain string) string 
 	if err != nil {
 		return value
 	}
-	changed := r.rewriteProxyCookiesPath(cookie)
+	changed := false
+	if cookie.Path != "" {
+		if rewritten := r.mapPublicPath(cookie.Path); rewritten != cookie.Path {
+			cookie.Path = rewritten
+			changed = true
+		}
+	}
 	domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
 	rewriteDomain := domain != "" && domain != publicDomain &&
 		(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain))
@@ -330,15 +336,4 @@ func (r *httpRoute) rewriteProxyCookiesValue(value, publicDomain string) string 
 		return cookie.String()
 	}
 	return value
-}
-
-func (r *httpRoute) rewriteProxyCookiesPath(cookie *http.Cookie) bool {
-	if cookie.Path == "" {
-		return false
-	}
-	if rewritten := r.mapPublicPath(cookie.Path); rewritten != cookie.Path {
-		cookie.Path = rewritten
-		return true
-	}
-	return false
 }

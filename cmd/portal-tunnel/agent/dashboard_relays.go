@@ -62,30 +62,11 @@ func (m agentDashboardModel) openRelayTunnelURL(tunnelID, relayURL string) (tea.
 
 func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboardView {
 	th := &m.theme
-	pane, tunnel, tableRows, selected, ok := m.relaySectionHead(th, width, rows)
-	if !ok {
-		return pane
-	}
-	start, end := agentDashboardRowWindow(selected, len(tunnel.Relays), tableRows)
-	for i := start; i < end; i++ {
-		relay := tunnel.Relays[i]
-		marker := th.glyph.unselected
-		if i == selected {
-			marker = th.glyph.selected
-		}
-		line := marker + " " + agentDashboardRelayRow(width-agentDashboardRelayLead, relayDashboardMode(relay), relayDashboardVersion(relay), relayDashboardURL(relay))
-		style := agentDashboardRelayStyle(th, i == selected, relay)
-		pane.addClickRow(line, width, style, agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
-	}
-	return pane
-}
-
-func (m agentDashboardModel) relaySectionHead(th *agentDashboardTheme, width, rows int) (agentDashboardView, AgentTunnelStatus, int, int, bool) {
 	var pane agentDashboardView
 	tunnel, ok := m.selectedTunnelStatus()
 	if !ok {
 		pane.addStyled(width, th.muted, "select a tunnel")
-		return pane, AgentTunnelStatus{}, 0, 0, false
+		return pane
 	}
 	relay, hasRelay := m.selectedRelayStatus()
 	connectDisabled := !hasRelay || tunnel.State != "running" || relay.State == sdk.RelayReady || relay.State == sdk.RelayConnecting
@@ -99,13 +80,25 @@ func (m agentDashboardModel) relaySectionHead(th *agentDashboardTheme, width, ro
 	pane.addLine(th.strong.Render(strings.Repeat(" ", agentDashboardRelayLead) + header))
 	if len(tunnel.Relays) == 0 {
 		pane.addStyled(width, th.muted, "no relays")
-		return pane, tunnel, 0, 0, false
+		return pane
 	}
 	tableRows := len(tunnel.Relays)
 	if rows > 0 {
 		tableRows = max(1, rows-len(pane.lines))
 	}
-	return pane, tunnel, tableRows, m.selectedRelayIndex(tunnel), true
+	selected := m.selectedRelayIndex(tunnel)
+	start, end := agentDashboardRowWindow(selected, len(tunnel.Relays), tableRows)
+	for i := start; i < end; i++ {
+		relay := tunnel.Relays[i]
+		marker := th.glyph.unselected
+		if i == selected {
+			marker = th.glyph.selected
+		}
+		line := marker + " " + agentDashboardRelayRow(width-agentDashboardRelayLead, relayDashboardMode(relay), relayDashboardVersion(relay), relayDashboardURL(relay))
+		style := agentDashboardRelayStyle(th, i == selected, relay)
+		pane.addClickRow(line, width, style, agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
+	}
+	return pane
 }
 
 func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, relay AgentRelayStatus) lipgloss.Style {

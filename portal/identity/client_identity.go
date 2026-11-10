@@ -48,12 +48,15 @@ func LoadOrCreate(name, path, rawJSON string) (types.Identity, error) {
 	}
 
 	if path != "" {
-		stored, loaded, err := loadClientIdentityFile(path)
-		if err != nil {
-			return types.Identity{}, err
+		if err := utils.EnsurePrivateFile(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return types.Identity{}, fmt.Errorf("secure identity file: %w", err)
 		}
-		if loaded {
-			return stored, nil
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return Parse(data)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 		}
 	}
 
@@ -79,19 +82,4 @@ func persistClientIdentity(path string, generated types.Identity) (types.Identit
 		return types.Identity{}, fmt.Errorf("write identity file: %w", err)
 	}
 	return generated, nil
-}
-
-func loadClientIdentityFile(path string) (types.Identity, bool, error) {
-	if err := utils.EnsurePrivateFile(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return types.Identity{}, false, fmt.Errorf("secure identity file: %w", err)
-	}
-	data, err := os.ReadFile(path)
-	if err == nil {
-		stored, parseErr := Parse(data)
-		return stored, true, parseErr
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return types.Identity{}, false, fmt.Errorf("read identity file: %w", err)
-	}
-	return types.Identity{}, false, nil
 }

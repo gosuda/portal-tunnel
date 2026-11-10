@@ -12,18 +12,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func holderRefuseChallengeOverBudget(record *leaseRecord, challengeID string, source netip.Addr) (types.ServiceIdentityKey, bool, bool) {
-	switch {
-	case record.registerChallenge != nil && record.sourceAddr == source:
-		holder := record.registerChallenge.Request.Identity.ServiceKey()
-		return holder, true, record.registerChallenge.ChallengeID == challengeID
-	case record.reverse != nil && record.registerSource == source:
-		return record.ServiceKey(), true, false
-	default:
-		return types.ServiceIdentityKey{}, false, false
-	}
-}
-
 func (r *leaseRegistry) enforceRefuseChallengeBudgetLocked(held int, issued int) error {
 	if held < r.unapprovedPerSource {
 		return nil
@@ -48,8 +36,15 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 		if record == nil || record.isExpired(now) {
 			continue
 		}
-		holder, ok, isIssued := holderRefuseChallengeOverBudget(record, challengeID, source)
-		if !ok {
+		var holder types.ServiceIdentityKey
+		var isIssued bool
+		switch {
+		case record.registerChallenge != nil && record.sourceAddr == source:
+			holder = record.registerChallenge.Request.Identity.ServiceKey()
+			isIssued = record.registerChallenge.ChallengeID == challengeID
+		case record.reverse != nil && record.registerSource == source:
+			holder = record.ServiceKey()
+		default:
 			continue
 		}
 		if isIssued {
