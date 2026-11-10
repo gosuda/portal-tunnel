@@ -33,13 +33,6 @@ func (s *Server) closeSNIServer() error {
 	return nil
 }
 
-func (s *Server) shutdownAPIServer(ctx context.Context) error {
-	if s.apiServer == nil {
-		return nil
-	}
-	return s.apiServer.Shutdown(ctx)
-}
-
 func (s *Server) shutdownRedirectServer(ctx context.Context) error {
 	if s.redirectServer == nil {
 		return nil

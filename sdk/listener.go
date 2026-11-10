@@ -430,9 +430,14 @@ func (l *listener) runCloseCleanup() error {
 	}
 	lease := l.clearLease("")
 	l.drainCloseAccepted()
-	l.stopCloseDatagram()
+	if l.datagram != nil {
+		l.datagram.Close("listener closed")
+	}
 	unregisterErr := l.unregisterCloseLease(lease)
-	tenantErr := l.terminateCloseTenantTLS(lease)
+	var tenantErr error
+	if lease != nil && lease.tenantTLS != nil {
+		tenantErr = lease.tenantTLS.Close()
+	}
 	if l.api != nil {
 		l.api.resetTransport()
 	}
@@ -452,24 +457,11 @@ func (l *listener) drainCloseAccepted() {
 	}
 }
 
-func (l *listener) stopCloseDatagram() {
-	if l.datagram != nil {
-		l.datagram.Close("listener closed")
-	}
-}
-
 func (l *listener) unregisterCloseLease(lease *listenerSnapshot) error {
 	if lease != nil && lease.hostname != "" && l.identity.Key() != "" && lease.accessToken != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return l.api.unregister(ctx, lease.accessToken)
-	}
-	return nil
-}
-
-func (l *listener) terminateCloseTenantTLS(lease *listenerSnapshot) error {
-	if lease != nil && lease.tenantTLS != nil {
-		return lease.tenantTLS.Close()
 	}
 	return nil
 }

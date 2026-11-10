@@ -37,7 +37,8 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 		handler = http.NotFoundHandler()
 	}
 	driver := newRunHTTPDriver(relayListener, handler, localAddr)
-	return driver.serveRunHTTP(ctx)
+	driver.launchRunHTTPservers()
+	return driver.waitRunHTTPResult(ctx)
 }
 
 type serveRunHTTPDriver struct {
@@ -85,11 +86,6 @@ func (d *serveRunHTTPDriver) launchRunHTTPservers() {
 			d.results <- normalizeHTTPServeError(d.relaySrv.Serve(d.relayListener), "serve relay http")
 		}()
 	}
-}
-
-func (d *serveRunHTTPDriver) serveRunHTTP(ctx context.Context) error {
-	d.launchRunHTTPservers()
-	return d.waitRunHTTPResult(ctx)
 }
 
 func (d *serveRunHTTPDriver) waitRunHTTPResult(ctx context.Context) error {

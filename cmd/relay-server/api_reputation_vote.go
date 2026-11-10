@@ -15,13 +15,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func requestVoterCookieID(r *http.Request) string {
-	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
-		return cookie.Value
-	}
-	return ""
-}
-
 func (api *RelayAPI) serveVote(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
@@ -58,7 +51,10 @@ func (api *RelayAPI) serveVote(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
 		return
 	}
-	voterCookieID := requestVoterCookieID(r)
+	voterCookieID := ""
+	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
+		voterCookieID = cookie.Value
+	}
 	summary, minted, err := api.reputation.Vote(identity, req.ID, req.Vote, voterCookieID, sourceAddr)
 	if err != nil {
 		writeVoteErrorResponse(w, err)

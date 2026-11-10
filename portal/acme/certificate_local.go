@@ -26,9 +26,9 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	if err := utils.EnsureParentDir(keyFile); err != nil {
 		return err
 	}
-	privateKey, err := generateLocalDevKey()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return err
+		return fmt.Errorf("generate local dev private key: %w", err)
 	}
 	return issueLocalDevCertWithKey(certFile, keyFile, baseHost, domains, privateKey)
 }
@@ -39,14 +39,6 @@ func needLocalDevCertRenewal(keyFile, certFile string, domains []string) bool {
 	}
 	cert, err := loadCertificate(certFile)
 	return err != nil || !localDevelopmentCertificateReusable(cert, domains, time.Now().UTC())
-}
-
-func generateLocalDevKey() (*ecdsa.PrivateKey, error) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate local dev private key: %w", err)
-	}
-	return privateKey, nil
 }
 
 func issueLocalDevCertWithKey(certFile, keyFile, baseHost string, domains []string, privateKey *ecdsa.PrivateKey) error {

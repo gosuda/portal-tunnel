@@ -10,7 +10,7 @@ func agentDashboardRenderButtons(th *agentDashboardTheme, width, y, x int, butto
 	if width <= 0 {
 		width = 1
 	}
-	accum := newButtonLineAccum(width, y, x)
+	accum := &agentDashboardButtonLine{lineY: y, lineX: x, width: width, x: x}
 	for i, button := range buttons {
 		face := newAgentDashboardButtonFace(th, width, button)
 		space := 0
@@ -20,7 +20,10 @@ func agentDashboardRenderButtons(th *agentDashboardTheme, width, y, x int, butto
 		space = accum.wrapButtonLine(space, face.width)
 		accum.appendButtonFace(face, space)
 	}
-	return finishAgentDashboardButtonLine(&accum.line, accum.lines), accum.regions
+	if accum.line.Len() > 0 || len(accum.lines) == 0 {
+		accum.lines = append(accum.lines, accum.line.String())
+	}
+	return accum.lines, accum.regions
 }
 
 type agentDashboardButtonLine struct {
@@ -31,10 +34,6 @@ type agentDashboardButtonLine struct {
 	lineX   int
 	width   int
 	x       int
-}
-
-func newButtonLineAccum(width, y, x int) *agentDashboardButtonLine {
-	return &agentDashboardButtonLine{lineY: y, lineX: x, width: width, x: x}
 }
 
 func (a *agentDashboardButtonLine) wrapButtonLine(space, faceWidth int) int {
@@ -87,11 +86,4 @@ func (f agentDashboardButtonFace) region(lineX, lineY, width int) (agentDashboar
 		return agentDashboardRegion{}, false
 	}
 	return agentDashboardRegion{x0: lineX, x1: min(lineX+f.width, width), y: lineY, action: f.action}, true
-}
-
-func finishAgentDashboardButtonLine(line *strings.Builder, lines []string) []string {
-	if line.Len() > 0 || len(lines) == 0 {
-		lines = append(lines, line.String())
-	}
-	return lines
 }

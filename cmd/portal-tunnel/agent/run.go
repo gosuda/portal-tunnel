@@ -88,7 +88,7 @@ func (m *manager) openControlServer(runtimeCtx context.Context, cancel context.C
 }
 
 func (s *agentControlServer) publishEndpoint(token string) error {
-	if err := writeAgentEndpointFile(s.endpointPath, s.listenAddr, token); err != nil {
+	if err := utils.WriteJSONFile(s.endpointPath, endpoint{ControlAddr: s.listenAddr, Token: token}, 0o600); err != nil {
 		_ = s.listener.Close()
 		_ = s.server.Shutdown(context.Background())
 		return err
@@ -107,7 +107,11 @@ func prepareAgentCredentials(cfg Config) (agentCredentials, error) {
 	if err != nil {
 		return agentCredentials{}, err
 	}
-	walletAuth, err := newAgentWalletAuth(cfg)
+	walletAuth, err := newWalletAuthenticator(walletAuthConfig{
+		AllowedAddresses: cfg.Agent.AllowedWallets,
+		AllowAnyAddress:  len(cfg.Agent.AllowedWallets) == 0,
+		Statement:        "Sign in to Portal agent",
+	})
 	if err != nil {
 		return agentCredentials{}, err
 	}
@@ -127,14 +131,6 @@ func secureAgentState(cfg Config) (string, string, error) {
 		return "", "", fmt.Errorf("secure existing agent endpoint: %w", err)
 	}
 	return endpointStateDir, utils.RandomID("agent_"), nil
-}
-
-func newAgentWalletAuth(cfg Config) (*walletAuthenticator, error) {
-	return newWalletAuthenticator(walletAuthConfig{
-		AllowedAddresses: cfg.Agent.AllowedWallets,
-		AllowAnyAddress:  len(cfg.Agent.AllowedWallets) == 0,
-		Statement:        "Sign in to Portal agent",
-	})
 }
 
 func listenAgentControl(runtimeCtx context.Context, controlAddr string) (net.Listener, string, string, error) {
@@ -164,13 +160,6 @@ func listenAgentControl(runtimeCtx context.Context, controlAddr string) (net.Lis
 	listenAddr := listener.Addr().String()
 	localhostAuthority := fmt.Sprintf("localhost:%d", listener.Addr().(*net.TCPAddr).Port)
 	return listener, listenAddr, localhostAuthority, nil
-}
-
-func writeAgentEndpointFile(endpointPath, listenAddr, token string) error {
-	return utils.WriteJSONFile(endpointPath, endpoint{
-		ControlAddr: listenAddr,
-		Token:       token,
-	}, 0o600)
 }
 
 func (s *agentControlServer) serve(runtimeCtx context.Context) error {

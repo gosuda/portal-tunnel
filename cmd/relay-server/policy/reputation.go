@@ -273,9 +273,6 @@ func (s *ReputationStore) selectVoteLedgerLocked(identity, commentID string) (ma
 	}
 	return s.state.Comments.Votes, commentID, nil
 }
-func isVoteRepeatLocked(previous map[string]string, hash, vote string) bool {
-	return previous[hash] == vote || (vote == VoteClear && previous[hash] == "")
-}
 
 func checkVoteCapacityLocked(previous map[string]string, hash, vote, commentID string) error {
 	if !voterCapacityExceededLocked(previous, hash, vote) {
@@ -297,10 +294,6 @@ func (s *ReputationStore) persistVoteBallotLocked(commentID, key, hash, vote str
 		return VoteSummary{}, err
 	}
 	return summarizeVotes(votes, hash), nil
-}
-
-func isVoteChoiceValid(vote string) bool {
-	return vote == VoteUp || vote == VoteDown || vote == VoteClear
 }
 
 func (s *ReputationStore) prepareVoteBallotLocked(cookieID, identity, commentID string, source netip.Addr) (map[string]map[string]string, string, map[string]string, string, string, error) {
@@ -327,7 +320,7 @@ func (s *ReputationStore) admitVoteNewVoterLocked(source netip.Addr, minted, com
 
 func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, source netip.Addr) (VoteSummary, string, error) {
 	vote = strings.TrimSpace(vote)
-	if !isVoteChoiceValid(vote) {
+	if vote != VoteUp && vote != VoteDown && vote != VoteClear {
 		return VoteSummary{}, "", ErrVoteChoice
 	}
 	s.mu.Lock()
@@ -336,7 +329,7 @@ func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, sourc
 	if err != nil {
 		return VoteSummary{}, "", err
 	}
-	if isVoteRepeatLocked(previous, hash, vote) {
+	if previous[hash] == vote || (vote == VoteClear && previous[hash] == "") {
 		return summarizeVotes(previous, hash), minted, nil
 	}
 	if err := checkVoteCapacityLocked(previous, hash, vote, commentID); err != nil {

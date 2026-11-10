@@ -84,7 +84,10 @@ func (r *Runtime) selectGateway(leaseID, failedURL string, candidates []types.Re
 	if origin := endpointOrigin(failedURL); origin != "" {
 		failed[origin] = now.Add(gatewayRetryDelay)
 	}
-	candidates = selectGatewayEligible(candidates, failed)
+	candidates = slices.DeleteFunc(candidates, func(candidate types.RelayDescriptor) bool {
+		_, rejected := failed[endpointOrigin(candidate.APIHTTPSAddr)]
+		return rejected
+	})
 	if len(candidates) == 0 {
 		delete(r.assignments, leaseID)
 		return types.RelayDescriptor{}, false
@@ -180,13 +183,6 @@ func selectGatewayPrune(failed map[string]time.Time, now time.Time) {
 			delete(failed, origin)
 		}
 	}
-}
-
-func selectGatewayEligible(candidates []types.RelayDescriptor, failed map[string]time.Time) []types.RelayDescriptor {
-	return slices.DeleteFunc(candidates, func(candidate types.RelayDescriptor) bool {
-		_, rejected := failed[endpointOrigin(candidate.APIHTTPSAddr)]
-		return rejected
-	})
 }
 
 func (r *Runtime) selectGatewayAssign(leaseID string, failedURL string, candidates []types.RelayDescriptor) (types.RelayDescriptor, bool) {

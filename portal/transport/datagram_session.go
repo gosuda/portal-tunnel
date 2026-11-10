@@ -202,16 +202,18 @@ func (s *DatagramSession) receiveLoop(conn *quic.Conn, leaseDone <-chan struct{}
 		data, err := conn.ReceiveDatagram(context.Background())
 		if err != nil {
 			s.mu.Lock()
-			recvErr = s.detachConnLocked(conn, err)
+			if s.conn == conn {
+				s.conn = nil
+				recvErr = err
+			}
 			s.mu.Unlock()
 			return
 		}
-		frame, ok := decodeDatagramFrame(data)
-		if !ok {
+		frame, err := decodeDatagram(data)
+		if err != nil || len(frame.Payload) > types.MaxUDPPayloadSize {
 			continue
 		}
 		frame.LeaseDone = leaseDone
-
 		if s.forwardDatagramFrame(conn, frame) {
 			return
 		}
@@ -234,22 +236,6 @@ func (s *DatagramSession) forwardDatagramFrame(conn *quic.Conn, frame types.Data
 	case <-conn.Context().Done():
 		return true
 	}
-}
-
-func (s *DatagramSession) detachConnLocked(conn *quic.Conn, err error) error {
-	if s.conn == conn {
-		s.conn = nil
-		return err
-	}
-	return nil
-}
-
-func decodeDatagramFrame(data []byte) (types.DatagramFrame, bool) {
-	frame, err := decodeDatagram(data)
-	if err != nil || len(frame.Payload) > types.MaxUDPPayloadSize {
-		return types.DatagramFrame{}, false
-	}
-	return frame, true
 }
 
 func encodeDatagram(flowID uint32, payload []byte) []byte {

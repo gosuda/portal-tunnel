@@ -89,8 +89,9 @@ func (v *agentDashboardView) addAccessBodyFields(th *agentDashboardTheme, inner 
 		case agentDashboardAccessRowEntry:
 			v.addAccessEntryRow(th, inner, a.allowed[field.entry], index, focused)
 		case agentDashboardAccessRowAdd:
-			label, input := a.accessAddField()
-			v.addInputRow(th, inner, label, input, agentDashboardActionFocusAccessField, index, focused)
+			input := a.add
+			input.Placeholder = agentDashboardAccessEntryPlaceholder(a.provider)
+			v.addInputRow(th, inner, "Add entry", input, agentDashboardActionFocusAccessField, index, focused)
 		case agentDashboardAccessRowHeaders:
 			v.addAccessChoice(th, inner, "Headers", agentDashboardIdentityHeaders(a.headers), index, focused)
 		case agentDashboardAccessRowSecret:
@@ -125,12 +126,6 @@ func (a agentDashboardAccess) providerInput(field agentDashboardAccessRow) (stri
 		return "", textinput.Model{}, false
 	}
 	return "", textinput.Model{}, false
-}
-
-func (a agentDashboardAccess) accessAddField() (string, textinput.Model) {
-	input := a.add
-	input.Placeholder = agentDashboardAccessEntryPlaceholder(a.provider)
-	return "Add entry", input
 }
 
 func (a agentDashboardAccess) accessSecretField(tunnel AgentTunnelStatus) (string, textinput.Model) {

@@ -84,7 +84,7 @@ func runTCPCommand(args []string) error {
 		printTCPUsage(os.Stderr)
 		return err
 	}
-	cfg, err := normalizeRunTCPCommandName(cfg)
+	cfg, err := normalizeDemoName(cfg)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func runTCPCommand(args []string) error {
 	return runTCPDemo(ctx, cfg)
 }
 
-func normalizeRunTCPCommandName(cfg demoConfig) (demoConfig, error) {
+func normalizeDemoName(cfg demoConfig) (demoConfig, error) {
 	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
 	if err != nil {
 		return cfg, fmt.Errorf("invalid --name value: %w", err)
@@ -130,7 +130,7 @@ func runUDPCommand(args []string) error {
 		printUDPUsage(os.Stderr)
 		return err
 	}
-	cfg, err := normalizeRunUDPCommandName(cfg)
+	cfg, err := normalizeDemoName(cfg)
 	if err != nil {
 		return err
 	}
@@ -139,15 +139,6 @@ func runUDPCommand(args []string) error {
 	defer stop()
 
 	return runUDPDemo(ctx, cfg)
-}
-
-func normalizeRunUDPCommandName(cfg demoConfig) (demoConfig, error) {
-	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
-	if err != nil {
-		return cfg, fmt.Errorf("invalid --name value: %w", err)
-	}
-	cfg.name = normalizedName
-	return cfg, nil
 }
 
 func registerRunUDPCommandFlags(fs *flag.FlagSet, cfg *demoConfig) {

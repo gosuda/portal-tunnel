@@ -39,7 +39,8 @@ func listenDNSCompanionPort(addr, host string, listenConfig net.ListenConfig) (n
 		if err != nil {
 			return nil, nil, fmt.Errorf("listen embedded dns udp %s: %w", addr, err)
 		}
-		listener, err := listenDNSCompanionTCP(host, packetConn, listenConfig)
+		port := packetConn.LocalAddr().(*net.UDPAddr).Port
+		listener, err := listenConfig.Listen(context.Background(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 		if err == nil {
 			return packetConn, listener, nil
 		}
@@ -47,9 +48,4 @@ func listenDNSCompanionPort(addr, host string, listenConfig net.ListenConfig) (n
 		_ = packetConn.Close()
 	}
 	return nil, nil, fmt.Errorf("listen embedded dns tcp companion port: %w", lastErr)
-}
-
-func listenDNSCompanionTCP(host string, packetConn net.PacketConn, listenConfig net.ListenConfig) (net.Listener, error) {
-	port := packetConn.LocalAddr().(*net.UDPAddr).Port
-	return listenConfig.Listen(context.Background(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 }

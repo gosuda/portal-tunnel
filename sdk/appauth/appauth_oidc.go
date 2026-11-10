@@ -259,9 +259,9 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		a.failServeOIDCCallback(w, r, *failure)
 		return
 	}
-	verified, failure := a.exchangeServeOIDCCallbackClaims(r.Context(), code, stateClaims, now)
-	if failure != nil {
-		a.failServeOIDCCallback(w, r, *failure)
+	verified, err := a.oidc.exchangeAndVerify(r.Context(), code, stateClaims, now)
+	if err != nil {
+		a.failServeOIDCCallback(w, r, serveOIDCCallbackFailure{message: "oidc token verification failed", page: signinProviderFailedPage, next: stateClaims.Next})
 		return
 	}
 	a.finishServeOIDCCallbackSession(w, r, serveOIDCCallbackSession{verified: verified, state: stateClaims, now: now})
@@ -311,14 +311,6 @@ func (a *applicationAuth) validateServeOIDCCallbackState(r *http.Request, stateC
 		return oidcStateClaims{}, "", &serveOIDCCallbackFailure{message: "invalid oidc callback state", page: signinProviderExpiredPage, next: stateClaims.Next}, false
 	}
 	return stateClaims, code, nil, false
-}
-
-func (a *applicationAuth) exchangeServeOIDCCallbackClaims(ctx context.Context, code string, stateClaims oidcStateClaims, now time.Time) (oidcIDTokenClaims, *serveOIDCCallbackFailure) {
-	verified, err := a.oidc.exchangeAndVerify(ctx, code, stateClaims, now)
-	if err != nil {
-		return oidcIDTokenClaims{}, &serveOIDCCallbackFailure{message: "oidc token verification failed", page: signinProviderFailedPage, next: stateClaims.Next}
-	}
-	return verified, nil
 }
 
 type serveOIDCCallbackSession struct {

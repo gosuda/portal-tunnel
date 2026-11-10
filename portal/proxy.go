@@ -112,7 +112,10 @@ func (p *proxy) copy(ctx context.Context, dst, src net.Conn, identityKey types.S
 			}
 		}
 		if readErr != nil {
-			return copyProxyReadError(readErr)
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return readErr
 		}
 	}
 }
@@ -126,13 +129,6 @@ func (p *proxy) copyProxyDrain(ctx context.Context, dst net.Conn, identityKey ty
 		}
 	}
 	return nil
-}
-
-func copyProxyReadError(readErr error) error {
-	if errors.Is(readErr, io.EOF) {
-		return nil
-	}
-	return readErr
 }
 
 func (p *proxy) copyProxyWriteChunk(ctx context.Context, dst net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager, data []byte) ([]byte, error) {

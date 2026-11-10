@@ -124,15 +124,6 @@ func applyValidateServerConfigACME(cfg ServerConfig) (ServerConfig, error) {
 	return cfg, nil
 }
 
-func applyValidateServerConfigRedirect(cfg ServerConfig) (ServerConfig, error) {
-	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
-	if err != nil {
-		return ServerConfig{}, err
-	}
-	cfg.HTTPRedirect = redirect
-	return cfg, nil
-}
-
 func applyValidateServerConfigRelayURLs(cfg ServerConfig) (ServerConfig, error) {
 	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {
@@ -184,11 +175,9 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 	cfg = next
-	next, err = applyValidateServerConfigRedirect(cfg)
-	if err != nil {
+	if cfg.HTTPRedirect, err = NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL); err != nil {
 		return ServerConfig{}, err
 	}
-	cfg = next
 	next, err = applyValidateServerConfigRelayURLs(cfg)
 	if err != nil {
 		return ServerConfig{}, err

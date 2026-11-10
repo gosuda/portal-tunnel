@@ -37,8 +37,10 @@ func (s *Server) closeRelayServers(ctx context.Context) error {
 	if err := s.closeSNIServer(); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if err := s.shutdownAPIServer(ctx); err != nil && firstErr == nil {
-		firstErr = err
+	if s.apiServer != nil {
+		if err := s.apiServer.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	if err := s.shutdownRedirectServer(ctx); err != nil && firstErr == nil {
 		firstErr = err

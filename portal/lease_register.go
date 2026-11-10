@@ -116,14 +116,6 @@ func (r *leaseRegistry) checkRegisterLeaseTTL(req types.RegisterChallengeRequest
 	return requestedLeaseTTL(req.TTL)
 }
 
-func (r *leaseRegistry) issueRegisterLeaseToken(leaseIdentity types.Identity, leaseID string, ttl time.Duration) (string, time.Time, time.Time, error) {
-	accessToken, claims, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, ttl)
-	if err != nil {
-		return "", time.Time{}, time.Time{}, err
-	}
-	return accessToken, claims.Expiry.Time().UTC(), claims.IssuedAt.Time().UTC(), nil
-}
-
 func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, served *acme.TLSMaterial) (*leaseRecord, string, error) {
 	leaseIdentity := req.Identity
 	ttl, err := r.checkRegisterLeaseTTL(req)
@@ -143,10 +135,12 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 		return nil, "", errTCPPortDisabled
 	}
 	leaseID := utils.RandomID("lease_")
-	accessToken, expiresAt, issuedAt, err := r.issueRegisterLeaseToken(leaseIdentity, leaseID, ttl)
+	accessToken, claims, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, leaseIdentity, leaseID, ttl)
 	if err != nil {
 		return nil, "", err
 	}
+	expiresAt := claims.Expiry.Time().UTC()
+	issuedAt := claims.IssuedAt.Time().UTC()
 	record := &leaseRecord{
 		Identity:          leaseIdentity,
 		id:                leaseID,

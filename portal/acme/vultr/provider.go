@@ -281,9 +281,10 @@ func searchFindZonePages(ctx context.Context, p *Provider, client *govultr.Clien
 		if zone, ok := matchFindZonePage(p, domains, candidateSet); ok {
 			return zone, nil
 		}
-		if pageDoneFindZone(meta, listOptions) {
+		if meta == nil || meta.Links == nil || meta.Links.Next == "" {
 			break
 		}
+		listOptions.Cursor = meta.Links.Next
 	}
 	return "", fmt.Errorf("no vultr domain found for %s", domain)
 }
@@ -307,14 +308,6 @@ func storeFindZoneEntry(p *Provider, zone string) {
 		}
 		(*cached)[zone] = zone
 	})
-}
-
-func pageDoneFindZone(meta *govultr.Meta, listOptions *govultr.ListOptions) bool {
-	if meta == nil || meta.Links == nil || meta.Links.Next == "" {
-		return true
-	}
-	listOptions.Cursor = meta.Links.Next
-	return false
 }
 
 func ensureRecord(ctx context.Context, client *govultr.Client, zone, fqdn, recordType, data string) error {
@@ -433,9 +426,10 @@ func listRecords(ctx context.Context, client *govultr.Client, zone, fqdn, record
 			return nil, err
 		}
 		filtered = appendListRecordsVultr(filtered, records, want)
-		if pageDoneListRecordsVultr(meta, listOptions) {
+		if meta == nil || meta.Links == nil || meta.Links.Next == "" {
 			break
 		}
+		listOptions.Cursor = meta.Links.Next
 	}
 	return filtered, nil
 }
@@ -491,12 +485,4 @@ func normalizeDSRecord(raw string) string {
 		return strings.Join(fields, " ")
 	}
 	return ""
-}
-
-func pageDoneListRecordsVultr(meta *govultr.Meta, listOptions *govultr.ListOptions) bool {
-	if meta == nil || meta.Links == nil || meta.Links.Next == "" {
-		return true
-	}
-	listOptions.Cursor = meta.Links.Next
-	return false
 }

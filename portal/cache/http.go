@@ -49,7 +49,8 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	if c.serveHandlePostCacheRequest(w, req, site, generation) {
 		return
 	}
-	if !c.reserveHandleUploadCapacity(w, site) {
+	if err := c.reserve(site.bytes); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	published := false
@@ -128,14 +129,6 @@ func resetHandleReadDeadline(controller *http.ResponseController, err *error) {
 	if *err == nil {
 		_ = controller.SetReadDeadline(time.Time{})
 	}
-}
-
-func (c *Manager) reserveHandleUploadCapacity(w http.ResponseWriter, site *cachedSite) bool {
-	if err := c.reserve(site.bytes); err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return false
-	}
-	return true
 }
 
 func (c *Manager) retireHandleUnpublished(site *cachedSite) {

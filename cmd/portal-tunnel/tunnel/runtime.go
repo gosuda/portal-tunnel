@@ -170,13 +170,6 @@ func validateStripRequestHeaders(spec Spec) error {
 	return nil
 }
 
-func validateHTTPPayment(config *HTTPConfig) error {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(config.Payment.Network)), "casper:") && strings.TrimSpace(config.Payment.Asset) == "" {
-		return errCasperPaymentsRequireAnAsset
-	}
-	return nil
-}
-
 func (spec Spec) Validate() error {
 	target := strings.TrimSpace(spec.Transport.Target)
 	if spec.HTTP == nil {
@@ -197,8 +190,8 @@ func (spec Spec) Validate() error {
 	if err := validateStripRequestHeaders(spec); err != nil {
 		return err
 	}
-	if err := validateHTTPPayment(spec.HTTP); err != nil {
-		return err
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(spec.HTTP.Payment.Network)), "casper:") && strings.TrimSpace(spec.HTTP.Payment.Asset) == "" {
+		return errCasperPaymentsRequireAnAsset
 	}
 	if auth := spec.HTTP.Auth; auth != nil {
 		if err := appauth.Validate(*auth); err != nil {
@@ -315,15 +308,6 @@ func establishStartRuntime(ctx context.Context, spec Spec) (*Runtime, types.Iden
 	return runtime, listenerIdentity, routes, nil
 }
 
-func attachStartRuntimeHandler(spec Spec, runtime *Runtime, listenerIdentity types.Identity, routes []gateway.ExposedHTTPRoute) error {
-	handler, err := composeTunnelHandler(spec, runtime, listenerIdentity, routes)
-	if err != nil {
-		return err
-	}
-	runtime.handler = handler
-	return nil
-}
-
 func monitorStartRuntimeAuth(ctx context.Context, spec Spec, runtime *Runtime) {
 	if spec.HTTP.Auth == nil {
 		return
@@ -348,7 +332,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	if spec.HTTP == nil {
 		return runtime, nil
 	}
-	if err := attachStartRuntimeHandler(spec, runtime, listenerIdentity, routes); err != nil {
+	if runtime.handler, err = composeTunnelHandler(spec, runtime, listenerIdentity, routes); err != nil {
 		return nil, err
 	}
 	monitorStartRuntimeAuth(ctx, spec, runtime)

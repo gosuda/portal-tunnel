@@ -154,7 +154,7 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
-		if isNormalizeFlagArgsPositional(arg) {
+		if arg == "" || arg == "-" || !strings.HasPrefix(arg, "-") {
 			positionals = append(positionals, args[i])
 			continue
 		}
@@ -171,10 +171,6 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 	}
 
 	return append(flags, positionals...)
-}
-
-func isNormalizeFlagArgsPositional(arg string) bool {
-	return arg == "" || arg == "-" || !strings.HasPrefix(arg, "-")
 }
 
 func consumeSingleFlagArg(fs *flag.FlagSet, args []string, i int, flags []string) ([]string, int, bool) {
