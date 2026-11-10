@@ -1,0 +1,392 @@
+{
+  "id": null,
+  "uid": "portal-relay",
+  "title": "Portal Relay",
+  "tags": [
+    "portal",
+    "relay"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "job",
+        "type": "query",
+        "label": "Job",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "portal-prometheus"
+        },
+        "query": "label_values(portal_relay_active_leases, job)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Scrape health",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "min(up{job=~\"$job\"})",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "description": "1 means every selected relay target is reachable and authenticated."
+    },
+    {
+      "id": 2,
+      "title": "Active leases",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "sum(portal_relay_active_leases{job=~\"$job\"})",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Active stream connections",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "sum(portal_relay_active_connections{job=~\"$job\"})",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "description": "SNI-routed and raw TCP streams; this is an aggregate count."
+    },
+    {
+      "id": 4,
+      "title": "Active UDP flows",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "sum(portal_relay_active_udp_flows{job=~\"$job\"})",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "description": "Tracked flows, including idle flows until expiry."
+    },
+    {
+      "id": 5,
+      "title": "Forwarded stream throughput",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "sum(rate(portal_relay_forwarded_stream_bytes_total{job=~\"$job\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "Bytes/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "description": "Successful SNI and raw TCP stream writes in both directions. UDP payloads are excluded."
+    },
+    {
+      "id": 6,
+      "title": "Relay HTTP requests by status",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "sum by (code) (rate(portal_relay_http_requests_total{job=~\"$job\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "{{code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "description": "Requests to the relay HTTP handler, including API and frontend; excludes tenant SNI streams."
+    },
+    {
+      "id": 7,
+      "title": "Relay HTTP latency · P95 / P99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(portal_relay_http_request_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "P95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(portal_relay_http_request_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "refId": "B",
+          "legendFormat": "P99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Relay HTTP handler duration in seconds, not forwarded application latency."
+    },
+    {
+      "id": 8,
+      "title": "Process CPU",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "rate(process_cpu_seconds_total{job=~\"$job\"}[$__rate_interval]) * 100",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "description": "100% equals one fully used CPU core."
+    },
+    {
+      "id": 9,
+      "title": "Process resident memory",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "process_resident_memory_bytes{job=~\"$job\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "title": "Goroutines",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "go_goroutines{job=~\"$job\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Active relay state",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "portal-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "sum(portal_relay_active_leases{job=~\"$job\"})",
+          "refId": "A",
+          "legendFormat": "Leases"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "sum(portal_relay_active_connections{job=~\"$job\"})",
+          "refId": "B",
+          "legendFormat": "Streams"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "portal-prometheus"
+          },
+          "expr": "sum(portal_relay_active_udp_flows{job=~\"$job\"})",
+          "refId": "C",
+          "legendFormat": "UDP flows"
+        }
+      ],
+      "description": "These aggregates have different meanings and are shown together only to compare trends."
+    }
+  ]
+}
