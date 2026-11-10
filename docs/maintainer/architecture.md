@@ -114,6 +114,8 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   register again, through `lease_not_found` at its next renewal, when the relay
   serves a certificate the chain it registered under does not verify.
 
+Constraints these packages must keep for protocol, security, or platform reasons are recorded in [implementation-invariants.md](implementation-invariants.md).
+
 ## Identity Challenges
 
 `portal/identity` owns the EIP-4361 message model, formatting, and verification
