@@ -23,6 +23,8 @@ import (
 )
 
 var (
+	errAutomaticTLSStateRequired           = errors.New("automatic TLS requires a certificate state directory")
+	errAutomaticTLSFilesConflict           = errors.New("automatic TLS cannot be combined with manual certificate files")
 	errLocalTLSCertificatePairRequired     = errors.New("tenant TLS requires both certificate and key files")
 	errLocalTLSModeUnsupported             = errors.New("local tenant TLS cannot be combined with relay cache, raw TCP, or the browser runtime")
 	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
@@ -166,14 +168,17 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
-	TLSCertFile string
-	TLSKeyFile  string
-	Cache       *cache.SourceConfig
-	UDPEnabled  bool
-	TCPEnabled  bool
-	BanMITM     bool
-	Overlay     bool
-	Metadata    types.LeaseMetadata
+	AutomaticTLS    bool
+	TLSStateDir     string
+	TLSRequireLocal bool
+	TLSCertFile     string
+	TLSKeyFile      string
+	Cache           *cache.SourceConfig
+	UDPEnabled      bool
+	TCPEnabled      bool
+	BanMITM         bool
+	Overlay         bool
+	Metadata        types.LeaseMetadata
 
 	discoveryEnabled bool
 	maxActiveRelays  int
@@ -197,6 +202,18 @@ func WithTLSCertificate(certFile, keyFile string) Option {
 	return func(opts *options) {
 		opts.TLSCertFile = certFile
 		opts.TLSKeyFile = keyFile
+	}
+}
+
+// WithAutomaticTLS obtains and renews tenant certificates through the relay.
+// The tunnel generates and persists private keys in directory. requireLocal
+// prevents Keyless bootstrap, including when persisted material is missing.
+// This is local-key ownership, not independent authentication of the relay.
+func WithAutomaticTLS(directory string, requireLocal bool) Option {
+	return func(opts *options) {
+		opts.AutomaticTLS = true
+		opts.TLSStateDir = directory
+		opts.TLSRequireLocal = requireLocal
 	}
 }
 
@@ -243,7 +260,8 @@ func WithDiscovery(maxActiveRelays int) Option {
 }
 
 // Expose constructs a relay-backed network endpoint from an already-resolved
-// identity and concrete relay URLs. It never creates or persists keys.
+// identity and concrete relay URLs. It never creates or persists identity keys.
+// WithAutomaticTLS persists tenant TLS keys separately in its configured directory.
 //
 // When WithDiscovery is applied, Exposure delegates relay selection to an
 // internal discovery.Controller. The explicit relays are always retained;
@@ -274,8 +292,17 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 		return nil, errLocalTLSCertificatePairRequired
 	}
+	if cfg.AutomaticTLS {
+		if strings.TrimSpace(cfg.TLSStateDir) == "" {
+			return nil, errAutomaticTLSStateRequired
+		}
+		if cfg.TLSCertFile != "" {
+			return nil, errAutomaticTLSFilesConflict
+		}
+	}
+	localTLSConfigured := cfg.TLSCertFile != "" || cfg.AutomaticTLS
 	localTLSUnsupported := cfg.Cache != nil || cfg.TCPEnabled || runtime.GOOS == "js"
-	if cfg.TLSCertFile != "" && localTLSUnsupported {
+	if localTLSConfigured && localTLSUnsupported {
 		return nil, errLocalTLSModeUnsupported
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
@@ -1176,16 +1203,18 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
-			Cache:       e.cache,
-			Identity:    e.identity,
-			Overlay:     e.options.Overlay,
-			UDPEnabled:  e.options.UDPEnabled,
-			TCPEnabled:  e.options.TCPEnabled,
-			BanMITM:     e.options.BanMITM,
-			TLSCertFile: e.options.TLSCertFile,
-			TLSKeyFile:  e.options.TLSKeyFile,
-			Metadata:    e.metadata.Copy(),
-			StartedAt:   e.startedAt,
+			Cache:           e.cache,
+			Identity:        e.identity,
+			Overlay:         e.options.Overlay,
+			UDPEnabled:      e.options.UDPEnabled,
+			TCPEnabled:      e.options.TCPEnabled,
+			BanMITM:         e.options.BanMITM,
+			TLSCertFile:     e.options.TLSCertFile,
+			TLSKeyFile:      e.options.TLSKeyFile,
+			TLSStateDir:     e.options.TLSStateDir,
+			TLSRequireLocal: e.options.TLSRequireLocal,
+			Metadata:        e.metadata.Copy(),
+			StartedAt:       e.startedAt,
 		})
 		if err != nil {
 			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err})

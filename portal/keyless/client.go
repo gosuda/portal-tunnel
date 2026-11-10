@@ -44,6 +44,8 @@ type ClientConfig struct {
 	Hostname            string
 	AlternativeHostname string
 	AccessToken         string
+	CertificateDir      string
+	RequireLocal        bool
 	// CertFile and KeyFile select local-only signing; both must be supplied.
 	CertFile string
 	KeyFile  string
@@ -66,7 +68,11 @@ type Client struct {
 	hostname            string
 	alternativeHostname string
 
-	refreshMu sync.Mutex
+	refreshMu      sync.Mutex
+	certificateDir string
+	workerCancel   context.CancelFunc
+	workerDone     chan struct{}
+	ready          chan struct{}
 }
 
 type pinnedChain struct {
@@ -106,6 +112,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		alternativeHostname: strings.TrimSpace(config.AlternativeHostname),
 		certFile:            config.CertFile,
 		keyFile:             config.KeyFile,
+		certificateDir:      config.CertificateDir,
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -113,6 +120,18 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 	if (client.certFile == "") != (client.keyFile == "") {
 		return nil, errTenantCertificatePairRequired
+	}
+	if config.RequireLocal && config.CertificateDir == "" && config.CertFile == "" {
+		return nil, errAutomaticCertificateDirectoryRequired
+	}
+	if config.CertificateDir != "" {
+		if config.CertFile != "" {
+			return nil, errAutomaticAndManualCertificateConflict
+		}
+		if err := client.startAutomatic(ctx, config.RequireLocal); err != nil {
+			return nil, err
+		}
+		return client, nil
 	}
 	if client.pin, err = client.loadPin(ctx); err != nil {
 		return nil, err
@@ -189,33 +208,66 @@ func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
 }
 
 func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, error) {
-	if c.pinned() == nil {
+	if c.pinned() == nil && c.certificateDir == "" {
 		return false, errKeylessClientIsUnavailable
 	}
-	c.refreshMu.Lock()
-	defer c.refreshMu.Unlock()
+	bootstrapRecovery := c.certificateDir != "" && stale != nil && stale.signer != nil
+	// Stale bootstrap recovery must not wait for an ACME operation. Its
+	// compare-and-swap below cannot overwrite a concurrently activated local pin.
+	if !bootstrapRecovery {
+		if c.certificateDir != "" {
+			if !c.refreshMu.TryLock() {
+				return false, errAutomaticCertificateBusy
+			}
+		} else {
+			c.refreshMu.Lock()
+		}
+		defer c.refreshMu.Unlock()
+	}
 	if stale != nil && c.pinned() != stale {
 		return false, nil
 	}
 	current := c.pinned()
-	next, err := c.loadPin(ctx)
-	if err != nil {
-		return false, err
+	var next *pinnedChain
+	var err error
+	if bootstrapRecovery {
+		var chain []byte
+		chain, err = relayChain(ctx, c.relayURL, c.serverName)
+		if err == nil {
+			next, err = c.newPin(chain)
+		}
+	} else {
+		next, err = c.loadPin(ctx)
 	}
-	if bytes.Equal(next.chainPEM, current.chainPEM) {
+	var issuanceErr error
+	if err != nil && !bootstrapRecovery && c.certificateDir != "" && current != nil && current.signer != nil {
+		issuanceErr = err
+		// Bootstrap is still allowed: preserve normal relay certificate rotation
+		// during an issuance outage. Local activation never takes this path.
+		var chain []byte
+		chain, err = relayChain(ctx, c.relayURL, c.serverName)
+		if err == nil {
+			next, err = c.newPin(chain)
+		}
+	}
+	if err != nil {
+		return false, errors.Join(issuanceErr, err)
+	}
+	if current != nil && bytes.Equal(next.chainPEM, current.chainPEM) {
 		if next.signer != nil {
 			_ = next.signer.Close()
 		}
-		return false, nil
+		return false, issuanceErr
 	}
 	c.mu.Lock()
-	if c.closed {
+	if c.closed || (bootstrapRecovery && c.pin != stale) {
 		c.mu.Unlock()
 		if next.signer != nil {
 			_ = next.signer.Close()
 		}
 		return false, nil
 	}
+	current = c.pin
 	// Retain only public verification material. The handshake owns its server
 	// and local key for as long as it needs them.
 	live := c.retired[:0]
@@ -224,15 +276,20 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 			live = append(live, old)
 		}
 	}
-	c.retired = append(live, &pinnedChain{pool: current.pool, leaf: current.leaf})
+	c.retired = live
+	if current != nil {
+		c.retired = append(c.retired, &pinnedChain{pool: current.pool, leaf: current.leaf})
+	} else if c.ready != nil {
+		close(c.ready)
+	}
 	c.pin = next
 	c.mu.Unlock()
 	// RemoteSigner.Close only closes idle HTTP connections; it neither cancels
 	// an in-flight signature nor prevents one on an already captured server.
-	if current.signer != nil {
+	if current != nil && current.signer != nil {
 		_ = current.signer.Close()
 	}
-	return true, nil
+	return true, issuanceErr
 }
 
 func pinIsStale(err error) bool {
@@ -288,8 +345,14 @@ func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
+		if c.workerCancel != nil {
+			c.workerCancel()
+		}
 		pins := append([]*pinnedChain{c.pin}, c.retired...)
 		c.mu.Unlock()
+		if c.workerDone != nil {
+			<-c.workerDone
+		}
 		for _, pin := range pins {
 			if pin != nil && pin.signer != nil {
 				c.closeErr = errors.Join(c.closeErr, pin.signer.Close())
@@ -323,6 +386,9 @@ func (c *Client) loadPin(ctx context.Context) (*pinnedChain, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if c.certificateDir != "" {
+		return c.automaticPin(ctx)
+	}
 	if c.certFile == "" {
 		chain, err := relayChain(ctx, c.relayURL, c.serverName)
 		if err != nil {
@@ -338,6 +404,10 @@ func (c *Client) loadPin(ctx context.Context) (*pinnedChain, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read tenant key: %w", err)
 	}
+	return c.localPin(certPEM, keyPEM)
+}
+
+func (c *Client) localPin(certPEM, keyPEM []byte) (*pinnedChain, error) {
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("load tenant certificate/key: %w", err)

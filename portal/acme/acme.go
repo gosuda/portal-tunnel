@@ -56,19 +56,21 @@ type Config struct {
 }
 
 type Manager struct {
-	stopCh       chan struct{}
-	stopCtx      context.Context
-	stopErr      error
-	workerCancel context.CancelFunc
-	cfg          Config
-	wg           sync.WaitGroup
-	commandMu    sync.RWMutex
-	dns          dnsProvider
-	startOnce    sync.Once
-	stopOnce     sync.Once
-	ensStatus    *utils.Snapshot[types.ENSStatus]
-	ensCommands  chan ensDNSCommand
-	material     *utils.Snapshot[servedMaterial]
+	tenantOrderAttempts map[string]time.Time
+	issuanceMu          sync.Mutex
+	stopCh              chan struct{}
+	stopCtx             context.Context
+	stopErr             error
+	workerCancel        context.CancelFunc
+	cfg                 Config
+	wg                  sync.WaitGroup
+	commandMu           sync.RWMutex
+	dns                 dnsProvider
+	startOnce           sync.Once
+	stopOnce            sync.Once
+	ensStatus           *utils.Snapshot[types.ENSStatus]
+	ensCommands         chan ensDNSCommand
+	material            *utils.Snapshot[servedMaterial]
 
 	pendingDNSAddress bool
 }
@@ -267,6 +269,8 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 }
 
 func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
+	m.issuanceMu.Lock()
+	defer m.issuanceMu.Unlock()
 	certFile, keyFile := m.certificateFiles()
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
 	domains := certificateDomains(m.cfg.BaseDomain)

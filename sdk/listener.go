@@ -60,16 +60,18 @@ const (
 )
 
 type listenerConfig struct {
-	TLSCertFile string
-	TLSKeyFile  string
-	Cache       *cache.Source
-	Identity    types.Identity
-	Overlay     bool
-	UDPEnabled  bool
-	TCPEnabled  bool
-	BanMITM     bool
-	Metadata    types.LeaseMetadata
-	StartedAt   time.Time
+	TLSStateDir     string
+	TLSRequireLocal bool
+	TLSCertFile     string
+	TLSKeyFile      string
+	Cache           *cache.Source
+	Identity        types.Identity
+	Overlay         bool
+	UDPEnabled      bool
+	TCPEnabled      bool
+	BanMITM         bool
+	Metadata        types.LeaseMetadata
+	StartedAt       time.Time
 }
 
 type listenerStatus struct {
@@ -142,11 +144,13 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 }
 
 type listener struct {
-	tlsCertFile string
-	tlsKeyFile  string
-	cancel      context.CancelFunc
-	doneCh      <-chan struct{}
-	closeOnce   sync.Once
+	tlsStateDir     string
+	tlsRequireLocal bool
+	tlsCertFile     string
+	tlsKeyFile      string
+	cancel          context.CancelFunc
+	doneCh          <-chan struct{}
+	closeOnce       sync.Once
 
 	startedAt time.Time
 
@@ -189,20 +193,22 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 	l := &listener{
-		cancel:        cancel,
-		doneCh:        listenerCtx.Done(),
-		metadata:      cfg.Metadata.Copy(),
-		identity:      cfg.Identity,
-		overlay:       cfg.Overlay,
-		statusUpdates: make(chan listenerStatus),
-		udpEnabled:    cfg.UDPEnabled,
-		tcpEnabled:    cfg.TCPEnabled,
-		cache:         cfg.Cache,
-		tlsCertFile:   cfg.TLSCertFile,
-		tlsKeyFile:    cfg.TLSKeyFile,
-		api:           &apiClient{relayURL: relayurl},
-		lease:         utils.NewSnapshot(listenerSnapshot{}),
-		startedAt:     cfg.StartedAt,
+		cancel:          cancel,
+		doneCh:          listenerCtx.Done(),
+		metadata:        cfg.Metadata.Copy(),
+		identity:        cfg.Identity,
+		overlay:         cfg.Overlay,
+		statusUpdates:   make(chan listenerStatus),
+		udpEnabled:      cfg.UDPEnabled,
+		tcpEnabled:      cfg.TCPEnabled,
+		cache:           cfg.Cache,
+		tlsCertFile:     cfg.TLSCertFile,
+		tlsKeyFile:      cfg.TLSKeyFile,
+		tlsStateDir:     cfg.TLSStateDir,
+		tlsRequireLocal: cfg.TLSRequireLocal,
+		api:             &apiClient{relayURL: relayurl},
+		lease:           utils.NewSnapshot(listenerSnapshot{}),
+		startedAt:       cfg.StartedAt,
 	}
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
@@ -706,6 +712,9 @@ func (l *listener) runLease(ctx context.Context) error {
 }
 
 func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, reverseTransport *leaseReverseTransport, probeReady chan<- struct{}) error {
+	if err := tenantTLS.WaitReady(ctx); err != nil {
+		return err
+	}
 	var retries int
 	for {
 		lease, _ := l.leaseSnapshot()
@@ -1198,6 +1207,7 @@ func (l *listener) refreshTenantChain(ctx context.Context, tenantTLS *keyless.Cl
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	registerReq := types.RegisterChallengeRequest{
 		AllowCanonicalFallback: true,
+		CanonicalOnly:          l.tlsStateDir != "",
 		Identity:               l.identity,
 		Metadata:               l.metadataSnapshot(),
 		Overlay:                l.overlay,
@@ -1212,6 +1222,11 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return err
 	}
 	canonicalHostname := resp.CanonicalHostname
+	if l.tlsStateDir != "" {
+		// Automatic certificates cannot safely outlive a reassigned alias.
+		// Older relays may ignore CanonicalOnly; never advertise that alias.
+		resp.Hostname = ""
+	}
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
@@ -1230,6 +1245,8 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		AccessToken:         resp.AccessToken,
 		CertFile:            l.tlsCertFile,
 		KeyFile:             l.tlsKeyFile,
+		CertificateDir:      l.tlsStateDir,
+		RequireLocal:        l.tlsRequireLocal,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)

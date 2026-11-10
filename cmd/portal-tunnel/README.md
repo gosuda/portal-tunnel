@@ -125,6 +125,9 @@ The PEM chain and matching private key must be supplied together. The certificat
 must be valid for the identity's canonical hostname on each selected relay.
 Include any short alias hostname visitors use in the certificate SANs too;
 a certificate for only the alias does not cover the canonical hostname.
+Use alias certificates only where the operator controls their continuing
+authority: releasing or reassigning an alias does not revoke an already issued
+certificate or remove the former owner's private key.
 Choose explicit relays and disable discovery unless the certificate covers all
 additional relay hostnames. Public browsers still require a publicly trusted
 certificate chain.
@@ -168,6 +171,82 @@ independent visitor authentication or complete MITM prevention: the relay still
 provides routing and availability, authoritative DNS control can permit competing
 certificate issuance, and a relay wildcard certificate can also cover tenant
 names.
+
+## Automatic tunnel certificates
+
+Automatic issuance is opt-in while operators measure issuance latency, renewal
+reliability, and shared CA quota use:
+
+```sh
+portal expose 3000 --tls-auto --identity-path identity.json
+```
+
+The tunnel generates and retains its private key locally. It sends only a CSR to
+the authenticated relay API; the relay uses its existing ACME account and DNS
+provider to obtain the hostname certificate. Automatic mode publishes only the
+stable identity-derived canonical URL; it neither reserves nor advertises a
+short alias. The identity's name is retained. The CSR endpoint accepts only the
+current lease's exact canonical hostname and rejects short aliases, wildcard,
+apex, and sibling requests. An automatic certificate therefore grants no
+short-alias authority that could outlive reassignment.
+
+The relay must support this issuance endpoint and enable `--tenant-certificates`.
+Relay-side issuance is off by default to protect the operator's shared CA quota.
+An older or disabled relay leaves bootstrap-allowed clients on Keyless TLS;
+a `--tls-require-local` client stays unready until a local certificate is available.
+
+By default, an automatic tunnel with no usable persisted certificate can begin
+with Keyless TLS while issuance runs in the background. Valid local material is
+installed for new handshakes and reused after restart. Existing connections are
+not upgraded retroactively. Renewal failure preserves a still-valid local
+certificate; an expired certificate cannot serve new handshakes. Once local
+material has been issued, renewal failure or expiry does not restore Keyless
+signing. Corrupt saved material fails closed. If all saved state is deleted,
+a bootstrap-allowed restart can bootstrap again; use --tls-require-local
+to prohibit that downgrade even after state loss.
+
+To prohibit Keyless bootstrap, add `--tls-require-local`. The tunnel must obtain
+or load usable local material before accepting traffic. This setting remains in
+the persistent agent configuration across restarts; lost, corrupt, or expired
+state does not remove it. Local-key ownership is not independent visitor
+authentication.
+
+Automatic state defaults to the identity file path plus `.tls`, for example
+`identity.json.tls`. Use `--tls-state-dir` to choose another directory.
+An in-memory identity supplied by `--identity-json` requires an explicit state
+directory, even when `--identity-path` also has a value. Keep this state on
+durable private storage and back it up securely. Certificate material follows
+stable hostnames, rather than individual leases; multiple relay hostnames have
+separate material. The key is saved before the first CSR and reused during
+renewal; the matching certificate and key are stored as one atomic private
+bundle. An operating-system lock serializes concurrent issuers for that hostname.
+Issuance retries back off from one minute to one hour; successful state is checked
+hourly, or earlier when renewal is due.
+
+For a persistent agent:
+
+```toml
+[[tunnels]]
+id = "web"
+target = "3000"
+identity_path = "identity.json"
+tls_auto = true
+tls_state_dir = "certificates"
+tls_require_local = true
+```
+
+Explicit relative paths resolve from the agent config directory. If
+`tls_state_dir` is omitted, its default follows the resolved identity path.
+The state directory alone does not enable automatic issuance. Automatic mode
+cannot be combined with manually supplied `tls_cert`/`tls_key`, relay cache,
+or raw TCP. Manual certificate files already prohibit relay-signing fallback.
+
+CSR issuance leaves CA account authority with the relay operator. The relay's
+existing wildcard and control of authoritative DNS can still permit competing
+certificates. The gains are client-only possession of the legitimate tunnel key
+and removal of the online `/v1/sign` dependency after activation. CAA and
+CT/precertificate monitoring remain complementary follow-up work; this mode
+does not claim prevention of malicious-relay impersonation.
 
 ## Canonical Documentation Links
 

@@ -129,6 +129,16 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	mux.HandleFunc(types.PathSDKConnect, withSource(s.HandleConnect))
 	mux.HandleFunc(types.PathSDKCache, s.HandleStaticCache)
 	mux.HandleFunc(types.PathV1Sign, s.HandleSign)
+	// Certificate orders have a separate budget from routine lease traffic:
+	// at most two orders per source burst and ten globally, replenished slowly.
+	tenantOrders := NewSourceLimiter(1, 2, 2, 10)
+	mux.HandleFunc(types.PathV1TenantCertificate, requireMethod(http.MethodPost, tunnelSource(func(w http.ResponseWriter, r *http.Request) {
+		if retry, _ := tenantOrders.Allow(ingress.SourceAddr(r), 1); retry > 0 {
+			WriteRetryAfter(w, retry, "tenant certificate issuance budget exhausted")
+			return
+		}
+		s.HandleTenantCertificate(w, r)
+	})))
 	mux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
 		if !s.DiscoveryEnabled() {
 			fallback.ServeHTTP(w, r)

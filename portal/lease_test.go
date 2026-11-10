@@ -1527,3 +1527,85 @@ func TestPublicLeasesOmitsHiddenLease(t *testing.T) {
 		t.Fatalf("PublicLeases() length = %d, want 1 with the hidden lease omitted", len(leases))
 	}
 }
+
+func TestCanonicalOnlyRegistrationDoesNotAcquireAlias(t *testing.T) {
+	t.Parallel()
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "named")
+	record, response, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: owner, CanonicalOnly: true,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := utils.CanonicalLeaseHostname(owner.Name, owner.Address, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Hostname != "" || response.CanonicalHostname != expected {
+		t.Fatalf("canonical-only hostnames = %q, %q", response.Hostname, response.CanonicalHostname)
+	}
+	if got, ok := registry.Lookup(expected); !ok || got != record {
+		t.Fatal("canonical route missing")
+	}
+	if _, ok := registry.Lookup("named.example.com"); ok {
+		t.Fatal("canonical-only registration acquired friendly route")
+	}
+	if leases := registry.PublicLeases(time.Now()); len(leases) != 1 || leases[0].Hostname != "" {
+		t.Fatalf("canonical-only registration advertised alias: %+v", leases)
+	}
+
+	other := newTestLeaseIdentity(t, "named")
+	_, aliasResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: other},
+		netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("unreserved alias unavailable to another identity: %v", err)
+	}
+	if aliasResponse.Hostname != "named.example.com" {
+		t.Fatalf("other owner's alias = %q", aliasResponse.Hostname)
+	}
+	_, reconnected, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: owner, CanonicalOnly: true,
+	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconnected.CanonicalHostname != expected || reconnected.Hostname != "" {
+		t.Fatalf("canonical-only reconnect changed routing: %+v", reconnected)
+	}
+	if alias, ok := registry.Lookup("named.example.com"); !ok || alias.ServiceKey() != other.ServiceKey() {
+		t.Fatal("canonical-only reconnect disturbed another alias owner")
+	}
+}
+
+func TestCanonicalOnlyReplacementReleasesFriendlyAlias(t *testing.T) {
+	t.Parallel()
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "release")
+	_, first, err := registry.Register(types.RegisterChallengeRequest{Identity: owner},
+		netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, next, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: owner, CanonicalOnly: true,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.CanonicalHostname != first.CanonicalHostname || next.Hostname != "" {
+		t.Fatalf("replacement changed canonical identity or kept alias: %+v", next)
+	}
+	if _, ok := registry.Lookup(first.Hostname); ok {
+		t.Fatal("old alias still routes after canonical-only replacement")
+	}
+	other := newTestLeaseIdentity(t, owner.Name)
+	_, acquired, err := registry.Register(types.RegisterChallengeRequest{Identity: other},
+		netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("released alias cannot be acquired: %v", err)
+	}
+	if acquired.Hostname != first.Hostname {
+		t.Fatal("replacement did not release prior friendly alias")
+	}
+}

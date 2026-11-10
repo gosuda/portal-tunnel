@@ -71,8 +71,10 @@ type RegisterRequest struct {
 }
 
 type RegisterChallengeRequest struct {
-	Cache    bool `json:"cache,omitempty"`
-	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	// CanonicalOnly requests only the identity-bound hostname, without acquiring a friendly alias.
+	CanonicalOnly bool `json:"canonical_only,omitempty"`
+	Cache         bool `json:"cache,omitempty"`
+	CacheTTL      int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
 	// AllowCanonicalFallback permits registration to continue without the friendly alias.
 	AllowCanonicalFallback bool          `json:"allow_canonical_fallback,omitempty"`
 	Identity               Identity      `json:"identity"`

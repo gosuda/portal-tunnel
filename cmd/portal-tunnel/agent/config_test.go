@@ -79,6 +79,9 @@ auth_oidc_client_secret = "client-secret"
 
 [[tunnels]]
 id = "sso"
+tls_auto = true
+tls_state_dir = "certs"
+tls_require_local = true
 target = "localhost:3001"
 auth = "saml"
 auth_allowed_wallets = ["@example.com"]
@@ -392,5 +395,40 @@ func TestLocalTLSCertificateConfigRoundTrip(t *testing.T) {
 	}
 	if spec.TLSCert != filepath.Join(dir, "certs", "tenant.pem") || spec.TLSKey != filepath.Join(dir, "certs", "tenant.key") {
 		t.Fatalf("certificate paths after restart = %q, %q", spec.TLSCert, spec.TLSKey)
+	}
+}
+
+func TestAutomaticTLSConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	data := "[[tunnels]]\nid = \"web\"\ntarget = \"3000\"\nidentity_path = \"identity.json\"\ntls_auto = true\ntls_require_local = true\ntls_state_dir = \"certs\"\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.TLSAuto || !spec.TLSRequireLocal || spec.TLSStateDir != filepath.Join(dir, "certs") {
+		t.Fatalf("persisted automatic TLS options = %+v", spec)
+	}
+	cfg.Tunnels[0].TLSStateDir = ""
+	spec, err = cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSStateDir != filepath.Join(dir, "identity.json")+".tls" {
+		t.Fatalf("identity-scoped default = %q", spec.TLSStateDir)
 	}
 }

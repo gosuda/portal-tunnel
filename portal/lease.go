@@ -390,7 +390,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 
 	identityKey := leaseIdentity.ServiceKey()
 	var publicHostname string
-	if leaseIdentity.Name != "" {
+	if leaseIdentity.Name != "" && !req.CanonicalOnly {
 		var err error
 		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {

@@ -82,10 +82,11 @@ func newHarnessWithName(t *testing.T, name, host, attack string, opts ...sdk.Opt
 	}
 	relayURL := "https://" + sniAddr
 	relay, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     relayURL,
-		StateDir:      stateDir,
-		SNIListenAddr: ingressAddr,
-		SNIPort:       sniPort,
+		PortalURL:          relayURL,
+		TenantCertificates: true,
+		StateDir:           stateDir,
+		SNIListenAddr:      ingressAddr,
+		SNIPort:            sniPort,
 	})
 	if err != nil {
 		cancel()

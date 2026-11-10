@@ -313,3 +313,36 @@ func TestLocalTLSPathsAreNotNormalizedAway(t *testing.T) {
 		t.Fatal("configured local TLS file paths were silently removed")
 	}
 }
+
+func TestAutomaticTLSConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantDir   string
+		wantError bool
+	}{
+		{"identity default", Config{TargetAddr: "3000", IdentityPath: "identity.json", TLSAuto: true}, "identity.json.tls", false},
+		{"explicit", Config{TargetAddr: "3000", IdentityJSON: "{}", TLSAuto: true, TLSStateDir: " certs ", TLSRequireLocal: true}, " certs ", false},
+		{"memory identity requires directory", Config{TargetAddr: "3000", IdentityJSON: "{}", IdentityPath: "unused.json", TLSAuto: true}, "", true},
+		{"missing identity and directory", Config{TargetAddr: "3000", TLSAuto: true}, "", true},
+		{"directory does not enable automatic", Config{TargetAddr: "3000", TLSStateDir: "certs"}, "", true},
+		{"policy needs a mode", Config{TargetAddr: "3000", TLSRequireLocal: true}, "", true},
+		{"manual policy", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TLSRequireLocal: true}, "", false},
+		{"manual automatic conflict", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TLSCert: "cert.pem", TLSKey: "key.pem"}, "", true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TCPEnabled: true}, "", true},
+		{"cache", Config{Serve: "site", TLSAuto: true, TLSStateDir: "certs", Cache: &CacheConfig{}}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() = %v, want error %v", err, tc.wantError)
+			}
+			if !tc.wantError && spec.TLSStateDir != tc.wantDir {
+				t.Fatalf("state directory = %q, want %q", spec.TLSStateDir, tc.wantDir)
+			}
+			if spec.TLSRequireLocal != tc.config.TLSRequireLocal {
+				t.Fatal("require-local policy was lost")
+			}
+		})
+	}
+}

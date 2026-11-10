@@ -121,18 +121,20 @@ type HTTPRedirectConfig struct {
 }
 
 type ServerConfig struct {
-	Cache            cache.Config
-	IVNPConfigPath   string
-	PortalURL        string
-	StateDir         string
-	Bootstraps       []string
-	DiscoveryEnabled bool
-	SNIPort          int
-	HTTPRedirect     HTTPRedirectConfig
-	SNIListenAddr    string
-	MinPort          int
-	MaxPort          int
-	ACME             acme.Config
+	// TenantCertificates opts the relay into ACME quota use for authenticated tenants.
+	TenantCertificates bool
+	Cache              cache.Config
+	IVNPConfigPath     string
+	PortalURL          string
+	StateDir           string
+	Bootstraps         []string
+	DiscoveryEnabled   bool
+	SNIPort            int
+	HTTPRedirect       HTTPRedirectConfig
+	SNIListenAddr      string
+	MinPort            int
+	MaxPort            int
+	ACME               acme.Config
 	// UnapprovedLeasesPerSource bounds the leases one source can hold without
 	// being routable. Zero disables the bound.
 	UnapprovedLeasesPerSource int

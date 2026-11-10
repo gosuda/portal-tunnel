@@ -193,3 +193,19 @@ func TestExposeLocalTLSCertificates(t *testing.T) {
 		t.Fatal("unpaired certificate flag accepted")
 	}
 }
+
+func TestExposeAutomaticTLS(t *testing.T) {
+	spec, err := exposeSpec(t, "--tls-auto", "--tls-require-local", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.TLSAuto || !spec.TLSRequireLocal || spec.TLSStateDir != "identity.json.tls" {
+		t.Fatalf("automatic TLS options = %+v", spec)
+	}
+	if _, err := exposeSpec(t, "--tls-state-dir", "certs", "3000"); err == nil {
+		t.Fatal("state directory silently enabled automatic TLS")
+	}
+	if _, err := exposeSpec(t, "--tls-auto", "--identity-json", "{}", "3000"); err == nil {
+		t.Fatal("in-memory identity silently chose a persistence directory")
+	}
+}

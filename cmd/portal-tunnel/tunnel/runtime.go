@@ -21,6 +21,10 @@ import (
 )
 
 var (
+	errTLSAutomaticWithFiles                   = errors.New("tls_auto cannot be combined with tls_cert or tls_key")
+	errTLSAutomaticStateRequired               = errors.New("tls_auto requires tls_state_dir when no file-backed identity is configured")
+	errTLSStateWithoutAutomatic                = errors.New("tls_state_dir requires tls_auto")
+	errTLSRequireLocalWithoutMode              = errors.New("tls_require_local requires tls_auto or local certificate files")
 	errTLSCertificatePairRequired              = errors.New("tls_cert and tls_key must be configured together")
 	errLocalTLSWithRawTCP                      = errors.New("local TLS certificates cannot be combined with raw TCP")
 	errLocalTLSWithRelayCache                  = errors.New("local TLS certificates cannot be combined with relay cache")
@@ -42,13 +46,16 @@ var (
 
 // Spec is the resolved description of one tunnel that the runtime is built from.
 type Spec struct {
-	TLSCert   string
-	TLSKey    string
-	Identity  IdentitySpec
-	Relays    RelaySpec
-	Metadata  types.LeaseMetadata
-	Transport TransportSpec
-	HTTP      *HTTPConfig
+	TLSAuto         bool
+	TLSStateDir     string
+	TLSRequireLocal bool
+	TLSCert         string
+	TLSKey          string
+	Identity        IdentitySpec
+	Relays          RelaySpec
+	Metadata        types.LeaseMetadata
+	Transport       TransportSpec
+	HTTP            *HTTPConfig
 }
 
 type IdentitySpec struct {
@@ -101,7 +108,20 @@ func (spec Spec) Validate() error {
 	if (spec.TLSCert == "") != (spec.TLSKey == "") {
 		return errTLSCertificatePairRequired
 	}
-	if spec.TLSCert != "" {
+	if spec.TLSAuto {
+		if spec.TLSCert != "" {
+			return errTLSAutomaticWithFiles
+		}
+		if spec.TLSStateDir == "" {
+			return errTLSAutomaticStateRequired
+		}
+	} else if spec.TLSStateDir != "" {
+		return errTLSStateWithoutAutomatic
+	}
+	if spec.TLSRequireLocal && !spec.TLSAuto && spec.TLSCert == "" {
+		return errTLSRequireLocalWithoutMode
+	}
+	if spec.TLSCert != "" || spec.TLSAuto {
 		if spec.Transport.TCP {
 			return errLocalTLSWithRawTCP
 		}
@@ -234,6 +254,9 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 		sdk.WithMITMProtection(spec.Relays.BanMITM),
 		sdk.WithTLSCertificate(spec.TLSCert, spec.TLSKey),
 		sdk.WithMetadata(spec.Metadata),
+	}
+	if spec.TLSAuto {
+		opts = append(opts, sdk.WithAutomaticTLS(spec.TLSStateDir, spec.TLSRequireLocal))
 	}
 	if spec.Transport.UDP != nil {
 		opts = append(opts, sdk.WithUDP())

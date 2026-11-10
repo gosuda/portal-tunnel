@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -227,6 +228,7 @@ func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	clientConfig := lego.NewConfig(user)
 	clientConfig.CADirURL = m.cfg.CADirURL
 	clientConfig.Certificate.KeyType = certcrypto.RSA2048
+	clientConfig.HTTPClient.Transport = acmeRequestTransport{ctx: ctx, transport: clientConfig.HTTPClient.Transport}
 
 	client, err := lego.NewClient(clientConfig)
 	if err != nil {
@@ -395,4 +397,15 @@ func parseAccountKeyPEM(keyPEM []byte) (crypto.PrivateKey, error) {
 		return key, nil
 	}
 	return nil, errUnsupportedPrivateKeyType
+}
+
+// acmeRequestTransport binds lego's context-free order API to the operation
+// lifetime, including account registration and order-finalization requests.
+type acmeRequestTransport struct {
+	ctx       context.Context
+	transport http.RoundTripper
+}
+
+func (t acmeRequestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.transport.RoundTrip(req.WithContext(t.ctx))
 }

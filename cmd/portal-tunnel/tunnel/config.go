@@ -18,11 +18,14 @@ import (
 // holds what was set and nothing else; nil and zero values stand for defaults
 // that Spec fills in. The TOML keys are those of the agent config.
 type Config struct {
-	TLSCert      string `toml:"tls_cert,omitempty"`
-	TLSKey       string `toml:"tls_key,omitempty"`
-	Name         string `toml:"name,omitempty"`
-	IdentityPath string `toml:"identity_path,omitempty"`
-	IdentityJSON string `toml:"identity_json,omitempty"`
+	TLSAuto         bool   `toml:"tls_auto,omitempty"`
+	TLSStateDir     string `toml:"tls_state_dir,omitempty"`
+	TLSRequireLocal bool   `toml:"tls_require_local,omitempty"`
+	TLSCert         string `toml:"tls_cert,omitempty"`
+	TLSKey          string `toml:"tls_key,omitempty"`
+	Name            string `toml:"name,omitempty"`
+	IdentityPath    string `toml:"identity_path,omitempty"`
+	IdentityJSON    string `toml:"identity_json,omitempty"`
 
 	TargetAddr          string      `toml:"target,omitempty"`
 	Serve               string      `toml:"serve,omitempty"`
@@ -138,9 +141,12 @@ func (c Config) Spec() (Spec, error) {
 		return Spec{}, err
 	}
 	spec := Spec{
-		TLSCert:  c.TLSCert,
-		TLSKey:   c.TLSKey,
-		Identity: IdentitySpec{Name: c.Name, Path: c.IdentityPath, JSON: c.IdentityJSON},
+		TLSCert:         c.TLSCert,
+		TLSAuto:         c.TLSAuto,
+		TLSStateDir:     c.TLSStateDir,
+		TLSRequireLocal: c.TLSRequireLocal,
+		TLSKey:          c.TLSKey,
+		Identity:        IdentitySpec{Name: c.Name, Path: c.IdentityPath, JSON: c.IdentityJSON},
 		Relays: RelaySpec{
 			URLs:      c.RelayURLs,
 			Discovery: c.Discovery == nil || *c.Discovery,
@@ -165,6 +171,11 @@ func (c Config) Spec() (Spec, error) {
 		}
 		if !auth.IsZero() {
 			spec.HTTP.Auth = &auth
+		}
+	}
+	if spec.TLSAuto && spec.TLSStateDir == "" {
+		if spec.Identity.JSON == "" && spec.Identity.Path != "" {
+			spec.TLSStateDir = spec.Identity.Path + ".tls"
 		}
 	}
 	return spec, spec.Validate()

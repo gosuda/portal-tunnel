@@ -278,3 +278,23 @@ func TestExposeRejectsInvalidLocalTLSOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestExposeRejectsInvalidAutomaticTLSOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+	}{
+		{"missing state", []Option{WithAutomaticTLS("", false)}},
+		{"blank state", []Option{WithAutomaticTLS(" ", true)}},
+		{"manual files", []Option{WithAutomaticTLS("state", false), WithTLSCertificate("cert.pem", "key.pem")}},
+		{"relay cache", []Option{WithAutomaticTLS("state", false), WithStaticRelayCache(".", time.Hour)}},
+		{"raw TCP", []Option{WithAutomaticTLS("state", true), WithTCP()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Expose(t.Context(), types.Identity{}, []string{"https://relay.example"}, tc.opts...)
+			if err == nil || !strings.Contains(err.Error(), "TLS") {
+				t.Fatalf("expected automatic TLS option error, got %v", err)
+			}
+		})
+	}
+}

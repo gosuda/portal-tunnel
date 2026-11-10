@@ -82,6 +82,9 @@ type exposeFlags struct {
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
 	env := cli.NewEnv(os.Environ())
+	fs.BoolVar(&cfg.TLSAuto, "tls-auto", false, "Obtain and renew tunnel-owned certificates through the relay; Keyless bootstrap is allowed unless --tls-require-local")
+	fs.StringVar(&cfg.TLSStateDir, "tls-state-dir", "", "Persistent certificate/key directory for --tls-auto (default identity path plus .tls; required with --identity-json)")
+	fs.BoolVar(&cfg.TLSRequireLocal, "tls-require-local", false, "Require a local certificate before accepting traffic; never fall back to relay signing")
 	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "Tenant certificate chain PEM file; requires --tls-key and never falls back to relay signing")
 	fs.StringVar(&cfg.TLSKey, "tls-key", "", "Tenant private key PEM file; requires --tls-cert")
 	fs.StringVar(&flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
