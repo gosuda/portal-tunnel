@@ -209,5 +209,5 @@ user content.
 
 - **[Feature Inventory](/features)**: Searchable matrix of capabilities and interface support.
 - **[Architecture](/architecture)**: System sequence diagrams and wire protocol specifications.
-- **[Security Model](/security-model)**: Deep dive on tenant TLS, keyless signing, and trust boundaries.
-- **[CLI Reference](/cli-reference)**: Complete command-line reference and options.
+- **[Security Model](/security-model)**: Details on tenant TLS, keyless signing, and trust boundaries.
+- **[CLI Reference](/cli-reference)**: Command-line reference and usage examples.
