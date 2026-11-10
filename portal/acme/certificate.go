@@ -253,7 +253,6 @@ func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
 	registrationFile := registrationFilePath(m.cfg.KeyDir, m.cfg.CADirURL)
-	dnsProvider := m.dns
 	accountKey, err := loadOrCreateAccountKey(accountKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("load acme account key: %w", err)
@@ -290,7 +289,7 @@ func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
 	}
 
-	challengeProvider, err := dnsProvider.ChallengeProvider(ctx)
+	challengeProvider, err := m.dns.ChallengeProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create dns challenge provider: %w", err)
 	}
