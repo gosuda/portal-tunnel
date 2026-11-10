@@ -100,7 +100,7 @@ collect:
 	for range 2 {
 		select {
 		case result := <-results:
-			storeCollectFamilyResultsOutcome(&addresses, &errs, result)
+			addresses[result.index], errs[result.index] = result.address, result.err
 			done, nextFamily, timer := advanceCollectFamilyResultsWait(result.address, familyWait, remainingFamily)
 			if timer != nil {
 				defer timer.Stop()
@@ -116,10 +116,6 @@ collect:
 		}
 	}
 	return addresses, errs, nil
-}
-
-func storeCollectFamilyResultsOutcome(addresses *[2]string, errs *[2]error, result publicIPFamilyResult) {
-	addresses[result.index], errs[result.index] = result.address, result.err
 }
 
 func advanceCollectFamilyResultsWait(address string, familyWait time.Duration, remainingFamily <-chan time.Time) (bool, <-chan time.Time, *time.Timer) {

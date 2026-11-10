@@ -80,11 +80,7 @@ func writeCreatePrivateFileData(handle windows.Handle, path string, data []byte)
 }
 
 func secureWindowsPath(path string, directory bool) error {
-	resolveSecureWindowsPathTarget := resolvePrivateFileAbs
-	if directory {
-		resolveSecureWindowsPathTarget = resolvePrivateDirAbs
-	}
-	absPath, err := resolveSecureWindowsPathTarget(path)
+	absPath, err := resolvePrivateAbsTarget(path, directory)
 	if err != nil {
 		return err
 	}
@@ -104,14 +100,6 @@ func secureWindowsPath(path string, directory bool) error {
 	}
 	_, err = verifyWindowsPath(absPath, owner, directory)
 	return err
-}
-
-func resolvePrivateDirAbs(path string) (string, error) {
-	return resolvePrivateAbsTarget(path, true)
-}
-
-func resolvePrivateFileAbs(path string) (string, error) {
-	return resolvePrivateAbsTarget(path, false)
 }
 
 func resolvePrivateAbsTarget(path string, directory bool) (string, error) {
