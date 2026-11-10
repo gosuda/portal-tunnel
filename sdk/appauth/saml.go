@@ -2,7 +2,6 @@ package appauth
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/x509"
@@ -10,10 +9,8 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -141,127 +138,6 @@ func validateSAMLName(what, value string, limit int) error {
 	return nil
 }
 
-func (s *samlAuthenticator) identityProvider(ctx context.Context) (samlIdentityProvider, error) {
-	return s.metadata.get(ctx, providerMetadataCacheTTL, s.fetchMetadata)
-}
-
-func (s *samlAuthenticator) fetchMetadata(ctx context.Context) (samlIdentityProvider, error) {
-	var data []byte
-	var err error
-	if s.metadataFile != "" {
-		data, err = readSAMLMetadataFile(s.metadataFile)
-	} else {
-		data, err = fetchSAMLMetadata(ctx, s.httpClient, s.metadataURL)
-	}
-	if err != nil {
-		return samlIdentityProvider{}, fmt.Errorf("read saml metadata: %w", err)
-	}
-	return parseSAMLMetadata(data)
-}
-
-func readSAMLMetadataFile(path string) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-	return readSAMLMetadata(file)
-}
-
-func fetchSAMLMetadata(ctx context.Context, client *http.Client, targetURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/samlmetadata+xml, application/xml, text/xml")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	return readSAMLMetadata(resp.Body)
-}
-
-func readSAMLMetadata(r io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, samlMetadataBodyLimit+1))
-	if err == nil && len(data) > samlMetadataBodyLimit {
-		err = errSAMLMetadataTooLarge
-	}
-	return data, err
-}
-
-func parseSAMLMetadata(data []byte) (samlIdentityProvider, error) {
-	var entities []samltypes.EntityDescriptor
-	var entity samltypes.EntityDescriptor
-	if err := xml.Unmarshal(data, &entity); err == nil {
-		entities = []samltypes.EntityDescriptor{entity}
-	} else {
-		var list samlEntitiesDescriptor
-		if xml.Unmarshal(data, &list) != nil {
-			return samlIdentityProvider{}, fmt.Errorf("parse saml metadata: %w", err)
-		}
-		entities = list.Entities
-	}
-	var idps []samltypes.EntityDescriptor
-	for _, entity := range entities {
-		if entity.IDPSSODescriptor != nil {
-			idps = append(idps, entity)
-		}
-	}
-	if len(idps) != 1 {
-		return samlIdentityProvider{}, errSAMLMetadataNoIdentityProvider
-	}
-	idp := samlIdentityProvider{entityID: strings.TrimSpace(idps[0].EntityID)}
-	if idp.entityID == "" {
-		return samlIdentityProvider{}, errSAMLMetadataNoEntityID
-	}
-	descriptor := idps[0].IDPSSODescriptor
-	for _, service := range descriptor.SingleSignOnServices {
-		if service.Binding != saml2.BindingHttpRedirect {
-			continue
-		}
-		location, err := url.Parse(strings.TrimSpace(service.Location))
-		wellFormed := err == nil && location.Host != "" && location.User == nil && location.Fragment == ""
-		if !wellFormed || !secureSAMLProviderURL(location) {
-			return samlIdentityProvider{}, fmt.Errorf("saml single sign-on service must be an https url (or http on a loopback host): %q", service.Location)
-		}
-		idp.ssoURL = location.String()
-		break
-	}
-	if idp.ssoURL == "" {
-		return samlIdentityProvider{}, errSAMLMetadataNoRedirectSSO
-	}
-	for _, key := range descriptor.KeyDescriptors {
-		if key.Use != "" && key.Use != "signing" {
-			continue
-		}
-		for _, cert := range key.KeyInfo.X509Data.X509Certificates {
-			der, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(cert.Data), ""))
-			if err != nil {
-				return samlIdentityProvider{}, fmt.Errorf("saml metadata signing certificate: %w", err)
-			}
-			parsed, err := x509.ParseCertificate(der)
-			if err != nil {
-				return samlIdentityProvider{}, fmt.Errorf("saml metadata signing certificate: %w", err)
-			}
-			idp.certs = append(idp.certs, parsed)
-		}
-	}
-	if len(idp.certs) == 0 {
-		return samlIdentityProvider{}, errSAMLMetadataNoSigningKey
-	}
-	now := time.Now()
-	if !slices.ContainsFunc(idp.certs, func(cert *x509.Certificate) bool {
-		return !now.Before(cert.NotBefore) && !now.After(cert.NotAfter)
-	}) {
-		return samlIdentityProvider{}, errSAMLMetadataNoValidSigningKey
-	}
-	return idp, nil
-}
-
 func (s *samlAuthenticator) spEntityID(host string) string {
 	if s.entityID != "" {
 		return s.entityID
@@ -314,12 +190,21 @@ func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request host", http.StatusBadRequest)
 		return
 	}
+	authURL := s.buildServeLoginAuthRedirect(w, r, idp, host)
+	if authURL == "" {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, authURL, http.StatusSeeOther)
+}
+
+func (s *samlAuthenticator) buildServeLoginAuthRedirect(w http.ResponseWriter, r *http.Request, idp samlIdentityProvider, host string) string {
 	sp := s.serviceProvider(idp, host)
 	sp.ForceAuthn = r.URL.Query().Get("prompt") == accountChooserPrompt
 	request, err := sp.BuildAuthRequestDocumentNoSig()
 	if err != nil {
 		http.Error(w, "could not create login request", http.StatusInternalServerError)
-		return
+		return ""
 	}
 	stateClaims := samlStateClaims{
 		RequestID: request.Root().SelectAttrValue("ID", ""),
@@ -330,16 +215,15 @@ func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 	stateToken, err := encodeApplicationAuthLoginState(s.stateKey, &stateClaims, &stateClaims.Next)
 	if err != nil || stateClaims.RequestID == "" {
 		http.Error(w, "could not create login state", http.StatusInternalServerError)
-		return
+		return ""
 	}
 	authURL, err := sp.BuildAuthURLRedirect("", request)
 	if err != nil {
 		http.Error(w, "could not create login request", http.StatusInternalServerError)
-		return
+		return ""
 	}
 	setSAMLStateCookie(w, stateToken, int(applicationAuthLoginStateTTL.Seconds()))
-	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, authURL, http.StatusSeeOther)
+	return authURL
 }
 
 func setSAMLStateCookie(w http.ResponseWriter, value string, maxAge int) {
@@ -354,18 +238,16 @@ func setSAMLStateCookie(w http.ResponseWriter, value string, maxAge int) {
 	})
 }
 
+type serveSAMLACSRequest struct {
+	state samlStateClaims
+	host  string
+	now   time.Time
+}
+
 func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	if a.provider != ProviderSAML || a.saml == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
-	}
-	var idp samlIdentityProvider
-	fail := func(message, page, next string, fields ...string) {
-		if acceptsHTML(r) {
-			writeSigninFailurePage(w, r, http.StatusUnauthorized, page, a.saml.issuerHost(idp), next, fields...)
-			return
-		}
-		a.writeJSONError(w, http.StatusUnauthorized, message)
 	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -375,63 +257,95 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	stateCookie, err := r.Cookie(applicationAuthSAMLStateCookie)
 	setSAMLStateCookie(w, "", -1)
 	if err != nil {
-		fail("missing saml login state", signinProviderExpiredPage, "/")
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "missing saml login state", page: signinProviderExpiredPage, next: "/", idp: samlIdentityProvider{}})
 		return
 	}
-
 	now := time.Now().UTC()
 	host, err := normalizeHost(r.Host)
 	if err != nil {
 		a.writeJSONError(w, http.StatusBadRequest, "invalid request host")
 		return
 	}
-	var state samlStateClaims
-	if err := decodeSignedApplicationAuthJSON(a.saml.stateKey, stateCookie.Value, &state); err != nil ||
-		!sameApplicationHost(state.Host, host) ||
-		now.Unix() >= state.ExpiresAt ||
-		loginStateIssuedAt(state.ExpiresAt).Before(a.heldSince(host)) {
-		next := "/"
-		if err == nil {
-			next = state.Next
-		}
-		fail("invalid or expired saml login state", signinProviderExpiredPage, next)
+	state, next, ok := a.decodeServeSAMLACSState(stateCookie.Value, host, now)
+	if !ok {
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "invalid or expired saml login state", page: signinProviderExpiredPage, next: next, idp: samlIdentityProvider{}})
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, samlResponseBodyLimit)
 	if err := r.ParseForm(); err != nil {
-		fail("invalid saml response", signinProviderFailedPage, state.Next)
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "invalid saml response", page: signinProviderFailedPage, next: state.Next, idp: samlIdentityProvider{}})
 		return
 	}
-	idp, err = a.saml.identityProvider(r.Context())
-	if err != nil {
-		fail("saml metadata is not available", signinProviderFailedPage, state.Next)
+	a.finishServeSAMLACSLogin(w, r, serveSAMLACSRequest{state: state, host: host, now: now})
+}
+
+type serveSAMLACSFailure struct {
+	message string
+	page    string
+	next    string
+	fields  []string
+	idp     samlIdentityProvider
+}
+
+func (a *applicationAuth) failServeSAMLACS(w http.ResponseWriter, r *http.Request, failure serveSAMLACSFailure) {
+	if acceptsHTML(r) {
+		writeSigninFailurePage(w, r, http.StatusUnauthorized, failure.page, a.saml.issuerHost(failure.idp), failure.next, failure.fields...)
 		return
 	}
-	assertion, err := a.saml.verify(idp, r.PostForm.Get("SAMLResponse"), state, now)
+	a.writeJSONError(w, http.StatusUnauthorized, failure.message)
+}
+
+func (a *applicationAuth) verifyServeSAMLACSAssertion(idp samlIdentityProvider, encodedResponse string, state samlStateClaims, now time.Time) (samltypes.Assertion, string, *serveSAMLACSFailure) {
+	assertion, err := a.saml.verify(idp, encodedResponse, state, now)
 	if err != nil {
-		fail("saml response verification failed", signinProviderFailedPage, state.Next)
-		return
+		return samltypes.Assertion{}, "", &serveSAMLACSFailure{message: "saml response verification failed", page: signinProviderFailedPage, next: state.Next, idp: idp}
 	}
 	value, err := a.saml.subject(assertion)
 	if err != nil {
-		fail("saml response verification failed", signinProviderFailedPage, state.Next)
+		return samltypes.Assertion{}, "", &serveSAMLACSFailure{message: "saml response verification failed", page: signinProviderFailedPage, next: state.Next, idp: idp}
+	}
+	return assertion, value, nil
+}
+
+func (a *applicationAuth) decodeServeSAMLACSState(cookieValue, host string, now time.Time) (samlStateClaims, string, bool) {
+	var state samlStateClaims
+	if err := decodeSignedApplicationAuthJSON(a.saml.stateKey, cookieValue, &state); err != nil {
+		return samlStateClaims{}, "/", false
+	}
+	if !sameApplicationHost(state.Host, host) ||
+		now.Unix() >= state.ExpiresAt ||
+		loginStateIssuedAt(state.ExpiresAt).Before(a.heldSince(host)) {
+		return state, state.Next, false
+	}
+	return state, state.Next, true
+}
+
+func (a *applicationAuth) finishServeSAMLACSLogin(w http.ResponseWriter, r *http.Request, req serveSAMLACSRequest) {
+	var idp samlIdentityProvider
+	idp, err := a.saml.identityProvider(r.Context())
+	if err != nil {
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "saml metadata is not available", page: signinProviderFailedPage, next: req.state.Next, idp: idp})
+		return
+	}
+	assertion, value, failure := a.verifyServeSAMLACSAssertion(idp, r.PostForm.Get("SAMLResponse"), req.state, req.now)
+	if failure != nil {
+		a.failServeSAMLACS(w, r, *failure)
 		return
 	}
 	subject, ok := a.resolveAllowedPrincipal(value, value)
 	if !ok {
-		fail("saml principal is not allowed", signinProviderDeniedPage, state.Next, "@@ACCOUNT@@", providerAccount(value, value))
+		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "saml principal is not allowed", page: signinProviderDeniedPage, next: req.state.Next, fields: []string{"@@ACCOUNT@@", providerAccount(value, value)}, idp: idp})
 		return
 	}
-
 	lifetime := applicationAuthSessionTTL
 	if statement := assertion.AuthnStatement; statement != nil && statement.SessionNotOnOrAfter != nil {
-		lifetime = min(max(statement.SessionNotOnOrAfter.Sub(now), providerMinSessionTTL), applicationAuthSessionTTL)
+		lifetime = min(max(statement.SessionNotOnOrAfter.Sub(req.now), providerMinSessionTTL), applicationAuthSessionTTL)
 	}
-	if err := a.setSession(w, Principal{Provider: ProviderSAML, Subject: subject, Email: providerEmail(value)}, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
+	if err := a.setSession(w, Principal{Provider: ProviderSAML, Subject: subject, Email: providerEmail(value)}, strings.TrimSpace(r.Host), req.now, req.now.Add(lifetime)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
-	http.Redirect(w, r, sanitizeApplicationAuthNext(state.Next), http.StatusSeeOther)
+	http.Redirect(w, r, sanitizeApplicationAuthNext(req.state.Next), http.StatusSeeOther)
 }
 
 func (s *samlAuthenticator) verify(idp samlIdentityProvider, encodedResponse string, state samlStateClaims, now time.Time) (samltypes.Assertion, error) {
@@ -440,22 +354,10 @@ func (s *samlAuthenticator) verify(idp samlIdentityProvider, encodedResponse str
 	if err != nil {
 		return samltypes.Assertion{}, err
 	}
-	if response.Destination != sp.AssertionConsumerServiceURL {
-		return samltypes.Assertion{}, errSAMLDestinationMismatch
-	}
-	if !sameSAMLRequestID(response.InResponseTo, state.RequestID) {
-		return samltypes.Assertion{}, errSAMLInResponseToMismatch
-	}
-	if len(response.Assertions) != 1 {
-		return samltypes.Assertion{}, errSAMLNeedsOneAssertion
+	if err := checkVerifySAMLResponseBinding(response, sp.AssertionConsumerServiceURL, state.RequestID); err != nil {
+		return samltypes.Assertion{}, err
 	}
 	assertion := response.Assertions[0]
-	if assertion.ID == "" {
-		return samltypes.Assertion{}, errSAMLAssertionIDIsRequired
-	}
-	if !sameSAMLRequestID(assertion.Subject.SubjectConfirmation.SubjectConfirmationData.InResponseTo, state.RequestID) {
-		return samltypes.Assertion{}, errSAMLInResponseToMismatch
-	}
 	if err := checkSAMLConditions(assertion.Conditions, sp.AudienceURI, now); err != nil {
 		return samltypes.Assertion{}, err
 	}
@@ -463,6 +365,26 @@ func (s *samlAuthenticator) verify(idp samlIdentityProvider, encodedResponse str
 		return samltypes.Assertion{}, err
 	}
 	return assertion, nil
+}
+
+func checkVerifySAMLResponseBinding(response *samltypes.Response, consumerURL, requestID string) error {
+	if response.Destination != consumerURL {
+		return errSAMLDestinationMismatch
+	}
+	if !sameSAMLRequestID(response.InResponseTo, requestID) {
+		return errSAMLInResponseToMismatch
+	}
+	if len(response.Assertions) != 1 {
+		return errSAMLNeedsOneAssertion
+	}
+	assertion := response.Assertions[0]
+	if assertion.ID == "" {
+		return errSAMLAssertionIDIsRequired
+	}
+	if !sameSAMLRequestID(assertion.Subject.SubjectConfirmation.SubjectConfirmationData.InResponseTo, requestID) {
+		return errSAMLInResponseToMismatch
+	}
+	return nil
 }
 
 func sameSAMLRequestID(got, want string) bool {
@@ -480,19 +402,31 @@ func checkSAMLConditions(conditions *samltypes.Conditions, audience string, now 
 	if !now.Add(-samlClockLeeway).Before(notOnOrAfter) {
 		return errSAMLAssertionExpired
 	}
-	if conditions.NotBefore != "" {
-		notBefore, err := time.Parse(time.RFC3339, conditions.NotBefore)
-		if err != nil {
-			return fmt.Errorf("saml assertion NotBefore: %w", err)
-		}
-		if now.Add(samlClockLeeway).Before(notBefore) {
-			return errSAMLAssertionNotYetValid
-		}
+	if err := checkSAMLConditionsNotBefore(conditions, now); err != nil {
+		return err
 	}
-	if len(conditions.AudienceRestrictions) == 0 {
+	return checkSAMLConditionsAudience(conditions.AudienceRestrictions, audience)
+}
+
+func checkSAMLConditionsNotBefore(conditions *samltypes.Conditions, now time.Time) error {
+	if conditions.NotBefore == "" {
+		return nil
+	}
+	notBefore, err := time.Parse(time.RFC3339, conditions.NotBefore)
+	if err != nil {
+		return fmt.Errorf("saml assertion NotBefore: %w", err)
+	}
+	if now.Add(samlClockLeeway).Before(notBefore) {
+		return errSAMLAssertionNotYetValid
+	}
+	return nil
+}
+
+func checkSAMLConditionsAudience(restrictions []samltypes.AudienceRestriction, audience string) error {
+	if len(restrictions) == 0 {
 		return errSAMLAudienceMismatch
 	}
-	for _, restriction := range conditions.AudienceRestrictions {
+	for _, restriction := range restrictions {
 		if !slices.ContainsFunc(restriction.Audiences, func(candidate samltypes.Audience) bool {
 			return strings.TrimSpace(candidate.Value) == audience
 		}) {
@@ -509,23 +443,29 @@ func (s *samlAuthenticator) subject(assertion samltypes.Assertion) (string, erro
 		}
 		return assertion.Subject.NameID.Value, nil
 	}
-	var values []string
-	if statement := assertion.AttributeStatement; statement != nil {
-		for _, attribute := range statement.Attributes {
-			if attribute.Name != s.subjectAttribute {
-				continue
-			}
-			for _, value := range attribute.Values {
-				values = append(values, value.Value)
-			}
-		}
-	}
+	values := collectSubjectSAMLAttributeValues(assertion, s.subjectAttribute)
 	if len(values) != 1 || values[0] == "" {
 		return "", fmt.Errorf("saml attribute %q must carry exactly one value", s.subjectAttribute)
 	}
 	return values[0], nil
 }
 
+func collectSubjectSAMLAttributeValues(assertion samltypes.Assertion, subjectAttribute string) []string {
+	var values []string
+	statement := assertion.AttributeStatement
+	if statement == nil {
+		return values
+	}
+	for _, attribute := range statement.Attributes {
+		if attribute.Name != subjectAttribute {
+			continue
+		}
+		for _, value := range attribute.Values {
+			values = append(values, value.Value)
+		}
+	}
+	return values
+}
 func (r *samlReplaySet) claim(id string, until, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -564,21 +504,7 @@ func (a *applicationAuth) serveSAMLMetadata(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusBadRequest, "invalid request host")
 		return
 	}
-	var body bytes.Buffer
-	body.WriteString(xml.Header)
-	encoder := xml.NewEncoder(&body)
-	encoder.Indent("", "  ")
-	err = encoder.Encode(samlSPMetadata{
-		EntityID: a.saml.spEntityID(host),
-		SPSSODescriptor: samltypes.SPSSODescriptor{
-			ProtocolSupportEnumeration: saml2.SAMLProtocolNamespace,
-			AssertionConsumerServices: []samltypes.IndexedEndpoint{{
-				Binding:  saml2.BindingHttpPost,
-				Location: "https://" + host + types.PathApplicationAuthSAMLACS,
-				Index:    1,
-			}},
-		},
-	})
+	body, err := buildServeSAMLMetadataBody(a.saml.spEntityID(host), host)
 	if err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create metadata")
 		return
@@ -590,4 +516,24 @@ func (a *applicationAuth) serveSAMLMetadata(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	_, _ = w.Write(body.Bytes())
+}
+func buildServeSAMLMetadataBody(entityID, host string) (bytes.Buffer, error) {
+	var body bytes.Buffer
+	body.WriteString(xml.Header)
+	encoder := xml.NewEncoder(&body)
+	encoder.Indent("", "  ")
+	if err := encoder.Encode(samlSPMetadata{
+		EntityID: entityID,
+		SPSSODescriptor: samltypes.SPSSODescriptor{
+			ProtocolSupportEnumeration: saml2.SAMLProtocolNamespace,
+			AssertionConsumerServices: []samltypes.IndexedEndpoint{{
+				Binding:  saml2.BindingHttpPost,
+				Location: "https://" + host + types.PathApplicationAuthSAMLACS,
+				Index:    1,
+			}},
+		},
+	}); err != nil {
+		return bytes.Buffer{}, err
+	}
+	return body, nil
 }
