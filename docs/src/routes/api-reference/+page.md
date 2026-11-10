@@ -278,3 +278,28 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `tcp_port_disabled`, `tcp_port_capacity_exceeded`, `tcp_port_exhausted` | TCP port lease cannot be allocated |
 | `transport_mismatch` | request does not match the active lease transport |
 | `internal` | unexpected server failure |
+
+## Go Tenant TLS API
+
+`sdk.WithTLSCertificate(certFile, keyFile)` selects manual local signing for
+native, uncached HTTPS exposures. `sdk.Expose` reads and validates the pair
+before registering with any relay. Missing, malformed, mismatched, expired,
+or unsupported certificate material returns an error immediately. It never
+falls back to relay-backed signing.
+
+The certificate must cover every canonical hostname and friendly alias assigned
+by a selected relay. A coverage failure stops that relay's listener and appears
+in `Exposure.Relays()` with `RelayFailureTerminal` and an error wrapping
+`keyless.ErrLocalCertificate`; covered relays remain usable. Ordinary network
+failures remain retryable. Discovery applies its existing terminal-failure
+backoff policy and can select other relays.
+
+`Exposure.WaitReady` returns the current errors if all selected relays have
+failed terminally. It does not close the exposure or stop discovery; callers
+can add a compatible relay and wait again.
+
+**Go source compatibility:** direct users of `portal/keyless.Client` must
+replace `RelayCertPool()` with `TenantCertPool()`. The returned snapshot trusts
+the tenant certificate, not the relay control API. Use `TenantTLSConfig()` for
+tenant probes that must keep working across certificate rotation, and keep
+relay control-plane TLS trust separate. The old method name is not retained.

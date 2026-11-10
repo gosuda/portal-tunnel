@@ -101,7 +101,7 @@ func isTerminalRelayError(err error) bool {
 	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok && apiErr.IsRateLimited() {
 		return false
 	}
-	if errors.Is(err, errRelayIncompatible) {
+	if errors.Is(err, errRelayIncompatible) || errors.Is(err, keyless.ErrLocalCertificate) {
 		return true
 	}
 	for _, code := range terminalAPIErrorCodes {

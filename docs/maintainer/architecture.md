@@ -86,9 +86,11 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   not implement discovery or relay-selection policy. Applications provide only user
   intent — explicit relays, discovery on/off, max active relays, and transport
   requirements — and never interact with the discovery controller, watch callbacks,
-  or failure feedback directly. Readiness and accept operations do not infer source
-  exhaustion from the current membership; they wait for a future membership update,
-  context cancellation, or exposure closure. Local TCP/UDP targets belong to
+  or failure feedback directly. Readiness waits return the current relay errors if
+  every selected relay has failed terminally. This is a non-closing snapshot, not
+  source exhaustion: the exposure can still accept added or discovered relays.
+  Otherwise readiness waits and accept operations continue until a membership or
+  readiness update, context cancellation, or exposure closure. Local TCP/UDP targets belong to
   `sdk.ProxyConfig`, identity file loading belongs to CLI or agent callers, routed HTTP
   route tables belong to `sdk.NewHTTPRoutes`, and x402 payment gating belongs to the CLI
   and agent composition over `cmd/portal-tunnel/gateway`. `Exposure` owns one canonical relay-status

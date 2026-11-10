@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,9 +101,10 @@ func (i *testIssuer) issueFor(t *testing.T, serial int64, dnsName string) relayC
 }
 
 type relayStandIn struct {
-	srv      *httptest.Server
-	url      string
-	bindings *BindingRegistry
+	srv              *httptest.Server
+	url              string
+	bindings         *BindingRegistry
+	issuanceRequests atomic.Int64
 
 	mu      sync.Mutex
 	serving relayCertificate
@@ -122,6 +124,9 @@ func newRelayStandIn(t *testing.T, first relayCertificate) *relayStandIn {
 		t.Fatal(err)
 	}
 	relay.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == types.PathV1TenantCertificate {
+			relay.issuanceRequests.Add(1)
+		}
 		if r.URL.Path != signrpc.SignPath {
 			http.NotFound(w, r)
 			return

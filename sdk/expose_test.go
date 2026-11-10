@@ -7,10 +7,14 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -297,6 +301,69 @@ func TestExposeRejectsInvalidAutomaticTLSOptions(t *testing.T) {
 				t.Fatalf("expected automatic TLS option error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestExposeRejectsInvalidCertificateFiles(t *testing.T) {
+	clientIdentity, err := identity.Generate("local-tls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	corrupt := filepath.Join(dir, "corrupt.pem")
+	if err := os.WriteFile(corrupt, []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{filepath.Join(dir, "missing.pem"), corrupt} {
+		t.Run(filepath.Base(file), func(t *testing.T) {
+			exposure, err := Expose(t.Context(), clientIdentity, []string{"https://127.0.0.1:1"}, WithTLSCertificate(file, file))
+			if exposure != nil {
+				_ = exposure.Close()
+				t.Fatal("Expose started with invalid manual certificate files")
+			}
+			if !errors.Is(err, keyless.ErrLocalCertificate) {
+				t.Fatalf("Expose() = %v, want local certificate error before relay registration", err)
+			}
+		})
+	}
+}
+
+func TestTerminalRelayErrorsPreserveTransportRetries(t *testing.T) {
+	for _, tc := range []struct {
+		err      error
+		terminal bool
+	}{
+		{fmt.Errorf("manual TLS: %w", keyless.ErrLocalCertificate), true},
+		{context.Canceled, false},
+		{context.DeadlineExceeded, false},
+		{io.EOF, false},
+		{&net.OpError{Op: "dial", Net: "tcp", Err: io.EOF}, false},
+	} {
+		if got := isTerminalRelayError(tc.err); got != tc.terminal {
+			t.Fatalf("isTerminalRelayError(%v) = %v, want %v", tc.err, got, tc.terminal)
+		}
+	}
+}
+
+func TestWaitReadyOnlyReturnsFailuresWhenAllRelaysAreTerminal(t *testing.T) {
+	const badRelay, otherRelay = "https://bad.example", "https://other.example"
+	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 1)}
+	readyCtx, readyCancel := context.WithTimeout(t.Context(), time.Second)
+	defer readyCancel()
+	exposure.setRelayStatus(badRelay, listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: keyless.ErrLocalCertificate})
+	if _, err := exposure.WaitReady(readyCtx); !errors.Is(err, keyless.ErrLocalCertificate) {
+		t.Fatalf("terminal relay returned %v", err)
+	}
+	exposure.syncRelayStatuses([]string{badRelay, otherRelay})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := exposure.WaitReady(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("connecting relay was discarded: %v", err)
+	}
+	exposure.setRelayStatus(otherRelay, listenerStatus{state: RelayReady, publicURL: "https://tenant.other.example"})
+	ready, err := exposure.WaitReady(readyCtx)
+	if err != nil || len(ready) != 1 || ready[0].RelayURL != otherRelay {
+		t.Fatalf("healthy relay was discarded: %v, %v", ready, err)
 	}
 }
 

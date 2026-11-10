@@ -118,7 +118,7 @@ func (c *Client) startAutomatic(ctx context.Context, requireLocal bool) error {
 		return err // Corrupt state never selects the bootstrap path.
 	}
 	if err == nil && bundle.CertificatePEM != "" {
-		c.pin, err = c.localPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM))
+		c.pin, err = newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname, c.alternativeHostname)
 		// An expired certificate needs renewal, but other corrupt material
 		// requires repair rather than silently downgrading or replacing a key.
 		if err != nil {
@@ -206,7 +206,7 @@ func (c *Client) automaticPin(ctx context.Context) (*pinnedChain, error) {
 		return nil, err
 	}
 	if bundle.CertificatePEM != "" {
-		pin, err := c.localPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM))
+		pin, err := newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname, c.alternativeHostname)
 		if err == nil {
 			renewBefore := pin.leaf.NotAfter.Sub(pin.leaf.NotBefore) / 3
 			if time.Until(pin.leaf.NotAfter) > renewBefore {
@@ -282,7 +282,7 @@ func (c *Client) automaticPin(ctx context.Context) (*pinnedChain, error) {
 	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: c.hostname, Roots: tlsConfig.RootCAs, Intermediates: intermediates}); err != nil {
 		return nil, fmt.Errorf("verify issued tenant certificate: %w", err)
 	}
-	pin, err := c.localPin(chain, []byte(bundle.KeyPEM))
+	pin, err := newLocalPin(chain, []byte(bundle.KeyPEM), c.hostname, c.alternativeHostname)
 	if err != nil {
 		return nil, err
 	}

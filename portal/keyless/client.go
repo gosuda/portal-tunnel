@@ -4,7 +4,6 @@ package keyless
 import (
 	"bytes"
 	"context"
-	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -13,14 +12,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
 	"github.com/gosuda/keyless_tls/keyless/t13server"
-	ksigner "github.com/gosuda/keyless_tls/relay/signer"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -121,9 +118,6 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		certificateDir:      config.CertificateDir,
 	}
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	if (client.certFile == "") != (client.keyFile == "") {
 		return nil, errTenantCertificatePairRequired
 	}
@@ -137,6 +131,9 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		}
 	}
 	if config.CertificateDir != "" {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if config.CertFile != "" {
 			return nil, errAutomaticAndManualCertificateConflict
 		}
@@ -282,8 +279,9 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 		return false, nil
 	}
 	current = c.pin
-	// Retain only public verification material. The handshake owns its server
-	// and local key for as long as it needs them.
+	// Retain exact public leaves, never a retired relay's CA trust. A probe
+	// already in flight may still observe that leaf after local activation.
+	// The handshake owns its server and key for as long as it needs them.
 	live := c.retired[:0]
 	for _, old := range c.retired {
 		if old.leaf != nil && time.Now().Before(old.leaf.NotAfter) {
@@ -292,7 +290,7 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 	}
 	c.retired = live
 	if current != nil {
-		c.retired = append(c.retired, &pinnedChain{pool: current.pool, leaf: current.leaf, local: current.local})
+		c.retired = append(c.retired, &pinnedChain{leaf: current.leaf, local: current.local})
 	} else if c.ready != nil {
 		close(c.ready)
 	}
@@ -307,6 +305,9 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 }
 
 func pinIsStale(err error) bool {
+	if errors.Is(err, errTenantCertificateNotValid) {
+		return true
+	}
 	if strings.Contains(err.Error(), types.KeylessUnknownCertificateMessage) {
 		return true
 	}
@@ -321,21 +322,31 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 	if pin == nil {
 		return nil, errKeylessClientIsUnavailable
 	}
+	var err error
 	if pin.leaf != nil && (time.Now().Before(pin.leaf.NotBefore) || !time.Now().Before(pin.leaf.NotAfter)) {
 		_ = raw.Close()
-		return nil, errTenantCertificateNotValid
-	}
-	conn := pin.server.NewConn(raw, binding)
-	if err := conn.HandshakeContext(ctx); err != nil {
-		_ = conn.Close()
-		if pinIsStale(err) {
-			if _, refreshErr := c.refreshChain(ctx, pin); refreshErr != nil {
-				err = errors.Join(err, fmt.Errorf("refresh tenant certificate chain: %w", refreshErr))
-			}
+		if pin.local && c.certificateDir != "" {
+			// Automatic renewal owns its backoff; incoming connections must
+			// neither trigger issuance attempts nor restore relay signing.
+			return nil, errTenantCertificateNotValid
 		}
-		return nil, fmt.Errorf("tenant tls handshake: %w", err)
+		err = errTenantCertificateNotValid
+	} else {
+		conn := pin.server.NewConn(raw, binding)
+		err = conn.HandshakeContext(ctx)
+		if err == nil {
+			return conn, nil
+		}
+		_ = conn.Close()
 	}
-	return conn, nil
+	// Expiry fails closed, but still refreshes the stale generation so the
+	// next connection can use renewed relay material or replacement local files.
+	if pinIsStale(err) {
+		if _, refreshErr := c.refreshChain(ctx, pin); refreshErr != nil {
+			err = errors.Join(err, fmt.Errorf("refresh tenant certificate chain: %w", refreshErr))
+		}
+	}
+	return nil, fmt.Errorf("tenant tls handshake: %w", err)
 }
 
 // TenantCertPool returns the current tenant trust snapshot. Use TenantTLSConfig
@@ -365,7 +376,7 @@ func (c *Client) Close() error {
 		if c.monitorCancel != nil {
 			c.monitorCancel()
 		}
-		pins := append([]*pinnedChain{c.pin}, c.retired...)
+		pin := c.pin
 		c.mu.Unlock()
 		if c.workerDone != nil {
 			<-c.workerDone
@@ -373,10 +384,8 @@ func (c *Client) Close() error {
 		if c.monitorDone != nil {
 			<-c.monitorDone
 		}
-		for _, pin := range pins {
-			if pin != nil && pin.signer != nil {
-				c.closeErr = errors.Join(c.closeErr, pin.signer.Close())
-			}
+		if pin != nil && pin.signer != nil {
+			c.closeErr = pin.signer.Close()
 		}
 	})
 	return c.closeErr
@@ -416,74 +425,13 @@ func (c *Client) loadPin(ctx context.Context) (*pinnedChain, error) {
 		}
 		return c.newPin(chain)
 	}
-	certPEM, err := os.ReadFile(c.certFile)
-	if err != nil {
-		return nil, fmt.Errorf("read tenant certificate: %w", err)
-	}
-	keyPEM, err := os.ReadFile(c.keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read tenant key: %w", err)
-	}
-	return c.localPin(certPEM, keyPEM)
-}
-
-func (c *Client) localPin(certPEM, keyPEM []byte) (*pinnedChain, error) {
-	pair, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("load tenant certificate/key: %w", err)
-	}
-	key, ok := pair.PrivateKey.(crypto.Signer)
-	if !ok {
-		return nil, errTenantKeyCannotSign
-	}
-	leaf, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil {
-		return nil, err
-	}
-	roots := x509.NewCertPool()
-	intermediates := x509.NewCertPool()
-	for i, der := range pair.Certificate {
-		cert, err := x509.ParseCertificate(der)
-		if err != nil {
-			return nil, err
-		}
-		if i == len(pair.Certificate)-1 {
-			roots.AddCert(cert)
-		} else if i > 0 {
-			intermediates.AddCert(cert)
-		}
-	}
-	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: c.hostname, Roots: roots, Intermediates: intermediates}); err != nil {
-		return nil, fmt.Errorf("validate tenant certificate: %w", err)
-	}
-	if c.alternativeHostname != "" {
-		if err := leaf.VerifyHostname(c.alternativeHostname); err != nil {
-			return nil, fmt.Errorf("tenant certificate alias: %w", err)
-		}
-	}
-	store := ksigner.NewStaticKeyStore()
-	if err := store.Put(types.KeylessRelayKeyID, key); err != nil {
-		return nil, err
-	}
-	service := &ksigner.Service{Store: store}
-	server, err := t13server.NewServer(t13server.Config{
-		Certificates:     pair.Certificate,
-		NextProtos:       []string{"http/1.1"},
-		KeyID:            types.KeylessRelayKeyID,
-		TranscriptSigner: service,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create local tenant tls server: %w", err)
-	}
-	// The exact installed leaf is the probe's trust anchor, not the relay's
-	// control-plane certificate or a broader CA capable of issuing other leaves.
-	pool := x509.NewCertPool()
-	pool.AddCert(leaf)
-	return &pinnedChain{chainPEM: certPEM, server: server, pool: pool, leaf: leaf, local: true}, nil
+	return loadLocalPin(c.certFile, c.keyFile, c.hostname, c.alternativeHostname)
 }
 
 // TenantTLSConfig verifies self-probes against installed tenant materials,
 // including a previous generation still used by an in-flight handshake.
+// Retired generations trust only their exact leaf until expiry, including a
+// relay bootstrap leaf during local activation, never its issuing CA.
 // It must not be used for the relay control API.
 func (c *Client) TenantTLSConfig() *tls.Config {
 	return &tls.Config{
@@ -504,12 +452,20 @@ func (c *Client) TenantTLSConfig() *tls.Config {
 				intermediates.AddCert(cert)
 			}
 			var verificationErr error
-			for _, pin := range pins {
+			for i, pin := range pins {
 				if pin == nil {
 					continue
 				}
+				roots := pin.pool
+				if i > 0 {
+					if pin.leaf == nil || !state.PeerCertificates[0].Equal(pin.leaf) {
+						continue
+					}
+					roots = x509.NewCertPool()
+					roots.AddCert(pin.leaf)
+				}
 				_, err := state.PeerCertificates[0].Verify(x509.VerifyOptions{
-					DNSName: c.hostname, Roots: pin.pool, Intermediates: intermediates,
+					DNSName: c.hostname, Roots: roots, Intermediates: intermediates,
 				})
 				if err == nil {
 					return nil

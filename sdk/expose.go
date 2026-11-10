@@ -198,8 +198,9 @@ func WithStaticRelayCache(path string, ttl time.Duration) Option {
 }
 
 // WithTLSCertificate requires a locally held tenant certificate and private key.
-// Both PEM files must cover every registered canonical hostname. They are
-// reloaded during certificate refresh; failures never enable relay signing.
+// Expose validates the pair before registering. It must cover every assigned
+// canonical hostname and alias; an uncovered relay fails independently.
+// Files are reloaded during certificate refresh; errors never enable relay signing.
 // This option cannot be combined with relay cache or raw TCP.
 func WithTLSCertificate(certFile, keyFile string) Option {
 	return func(opts *options) {
@@ -324,6 +325,11 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	localTLSUnsupported := cfg.Cache != nil || cfg.TCPEnabled || runtime.GOOS == "js"
 	if localTLSConfigured && localTLSUnsupported {
 		return nil, errLocalTLSModeUnsupported
+	}
+	if cfg.TLSCertFile != "" {
+		if err := keyless.ValidateCertificateFiles(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+			return nil, fmt.Errorf("tenant TLS: %w", err)
+		}
 	}
 	if cfg.CertificateMonitor != nil {
 		if localTLSUnsupported {
@@ -910,21 +916,30 @@ func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Even
 	return event
 }
 
-func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}) {
+func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}, error) {
 	e.mu.RLock()
 	ready := make([]RelayStatus, 0, len(e.statuses))
+	allTerminal := len(e.statuses) > 0
+	var terminalErr error
 	for _, status := range e.statuses {
-		if !matches(status) {
-			continue
+		if matches(status) {
+			ready = append(ready, status)
 		}
-		ready = append(ready, status)
+		if status.State == RelayFailed && status.Failure == RelayFailureTerminal && status.Err != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("relay %s: %w", status.RelayURL, status.Err))
+		} else {
+			allTerminal = false
+		}
 	}
 	changed := e.stateChanged
 	e.mu.RUnlock()
 	slices.SortFunc(ready, func(a, b RelayStatus) int {
 		return strings.Compare(a.RelayURL, b.RelayURL)
 	})
-	return ready, changed
+	if !allTerminal {
+		terminalErr = nil
+	}
+	return ready, changed, terminalErr
 }
 
 // Updates reports relay lifecycle changes. Relays is the authoritative
@@ -941,6 +956,8 @@ func (e *Exposure) Updates() <-chan RelayStatus {
 }
 
 // WaitReady waits until at least one relay can accept tenant connections.
+// If every current relay has failed terminally, it returns their errors. The
+// exposure stays open, and callers may add relays or continue discovery.
 func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
 	if e == nil {
 		return nil, net.ErrClosed
@@ -955,12 +972,15 @@ func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool
 		return nil, errPortalSDKContextIsNil
 	}
 	for {
-		ready, changed := e.readyRelays(matches)
+		ready, changed, terminalErr := e.readyRelays(matches)
 		if len(ready) > 0 {
 			return ready, nil
 		}
 		if e.closed() {
 			return nil, net.ErrClosed
+		}
+		if terminalErr != nil {
+			return nil, terminalErr
 		}
 		select {
 		case <-ctx.Done():

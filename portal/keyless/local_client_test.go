@@ -229,6 +229,9 @@ func TestLocalTenantCertificateValidityAndAlgorithm(t *testing.T) {
 				client.Close()
 				t.Fatal("invalid material accepted")
 			}
+			if err := ValidateCertificateFiles(certFile, keyFile); !errors.Is(err, ErrLocalCertificate) {
+				t.Fatalf("preflight accepted invalid material: %v", err)
+			}
 		})
 	}
 }
