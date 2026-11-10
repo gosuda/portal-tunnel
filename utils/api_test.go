@@ -93,25 +93,30 @@ func TestDecodeJSONRequestRejectsOversizedBody(t *testing.T) {
 
 func TestDecodeAPIRequestErrorRetryAfter(t *testing.T) {
 	for _, header := range []string{"7", time.Now().Add(7 * time.Second).UTC().Format(http.TimeFormat), "", "bad", "-1", "99999999999999999999999999"} {
-		response := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {header}}, Body: io.NopCloser(strings.NewReader("busy"))}
-		apiErr, ok := errors.AsType[*types.APIRequestError](DecodeAPIRequestError(response))
-		if !ok {
-			t.Fatal("expected APIRequestError")
+		checkRetryAfterHeader(t, header)
+	}
+}
+
+func checkRetryAfterHeader(t *testing.T, header string) {
+	t.Helper()
+	response := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {header}}, Body: io.NopCloser(strings.NewReader("busy"))}
+	apiErr, ok := errors.AsType[*types.APIRequestError](DecodeAPIRequestError(response))
+	if !ok {
+		t.Fatal("expected APIRequestError")
+	}
+	if !apiErr.IsRateLimited() {
+		t.Fatal("non-JSON HTTP 429 lost its retryable status")
+	}
+	if header == "7" {
+		if apiErr.RetryAfter != 7*time.Second {
+			t.Fatalf("delta-seconds = %v", apiErr.RetryAfter)
 		}
-		if !apiErr.IsRateLimited() {
-			t.Fatal("non-JSON HTTP 429 lost its retryable status")
+	} else if strings.Contains(header, "GMT") {
+		if apiErr.RetryAfter <= 5*time.Second || apiErr.RetryAfter > 7*time.Second {
+			t.Fatalf("HTTP-date = %v", apiErr.RetryAfter)
 		}
-		if header == "7" {
-			if apiErr.RetryAfter != 7*time.Second {
-				t.Fatalf("delta-seconds = %v", apiErr.RetryAfter)
-			}
-		} else if strings.Contains(header, "GMT") {
-			if apiErr.RetryAfter <= 5*time.Second || apiErr.RetryAfter > 7*time.Second {
-				t.Fatalf("HTTP-date = %v", apiErr.RetryAfter)
-			}
-		} else if apiErr.RetryAfter != 0 {
-			t.Fatalf("invalid header %q = %v", header, apiErr.RetryAfter)
-		}
+	} else if apiErr.RetryAfter != 0 {
+		t.Fatalf("invalid header %q = %v", header, apiErr.RetryAfter)
 	}
 }
 
@@ -119,22 +124,7 @@ func TestHTTPDoAPIPathRejectsOversizedDiscovery(t *testing.T) {
 	t.Parallel()
 	for _, encoding := range []string{"declared length", "chunked", "gzip"} {
 		t.Run(encoding, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				switch encoding {
-				case "declared length":
-					w.Header().Set("Content-Length", strconv.FormatInt(types.MaxDiscoveryResponseBytes+1, 10))
-					w.WriteHeader(http.StatusOK)
-				case "chunked":
-					w.WriteHeader(http.StatusOK)
-					w.(http.Flusher).Flush()
-					_, _ = io.WriteString(w, strings.Repeat("x", int(types.MaxDiscoveryResponseBytes+1)))
-				case "gzip":
-					w.Header().Set("Content-Encoding", "gzip")
-					writer := gzip.NewWriter(w)
-					_, _ = io.WriteString(writer, strings.Repeat("x", int(types.MaxDiscoveryResponseBytes+1)))
-					_ = writer.Close()
-				}
-			}))
+			server := serveOversizedDiscovery(encoding)
 			defer server.Close()
 			base, err := url.Parse(server.URL)
 			if err != nil {
@@ -145,6 +135,25 @@ func TestHTTPDoAPIPathRejectsOversizedDiscovery(t *testing.T) {
 			}
 		})
 	}
+}
+
+func serveOversizedDiscovery(encoding string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch encoding {
+		case "declared length":
+			w.Header().Set("Content-Length", strconv.FormatInt(types.MaxDiscoveryResponseBytes+1, 10))
+			w.WriteHeader(http.StatusOK)
+		case "chunked":
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			_, _ = io.WriteString(w, strings.Repeat("x", int(types.MaxDiscoveryResponseBytes+1)))
+		case "gzip":
+			w.Header().Set("Content-Encoding", "gzip")
+			writer := gzip.NewWriter(w)
+			_, _ = io.WriteString(writer, strings.Repeat("x", int(types.MaxDiscoveryResponseBytes+1)))
+			_ = writer.Close()
+		}
+	}))
 }
 
 func TestHTTPDoAPIPathAcceptsDiscoveryAtLimit(t *testing.T) {

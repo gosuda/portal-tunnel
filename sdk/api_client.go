@@ -138,43 +138,81 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	if err := c.initHTTPTransport(ctx); err != nil {
 		return types.RegisterResponse{}, err
 	}
+	resp, err := c.exchangeRegister(ctx, registerReq, reportedIP)
+	if err != nil {
+		return types.RegisterResponse{}, err
+	}
+	return c.confirmRegisterResponse(resp, registerReq)
+}
 
+func (c *apiClient) exchangeRegister(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterResponse, error) {
 	var challenge types.RegisterChallengeResponse
 	var request types.RegisterRequest
 	var resp types.RegisterResponse
 	for {
-		var err error
 		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
-			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge)
-			if err == nil {
-				if err := identity.ValidateRegisterSIWEChallenge(challenge, c.relayURL, registerReq.Identity.Address, time.Now()); err != nil {
-					return types.RegisterResponse{}, err
-				}
-				signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
-				if err != nil {
-					return types.RegisterResponse{}, err
-				}
-				request = types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature, ReportedIP: reportedIP}
-				continue
+			if err := c.reloadRegisterChallenge(ctx, registerReq, reportedIP, &challenge, &request); err != nil {
+				return types.RegisterResponse{}, err
 			}
-		} else {
-			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, request, nil, &resp)
-			if err == nil {
-				break
-			}
+			continue
 		}
-		apiErr, ok := errors.AsType[*types.APIRequestError](err)
-		if !ok || !apiErr.IsRateLimited() {
-			return types.RegisterResponse{}, err
+		submitErr := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, request, nil, &resp)
+		if submitErr == nil {
+			return resp, nil
 		}
-		delay := apiErr.RetryAfter
-		if delay <= 0 {
-			delay = defaultRetryWait
-		}
-		if !utils.SleepOrDone(ctx, delay) {
-			return types.RegisterResponse{}, ctx.Err()
+		if pauseErr := pauseRegisterRetry(ctx, submitErr); pauseErr != nil {
+			return types.RegisterResponse{}, pauseErr
 		}
 	}
+}
+
+func (c *apiClient) reloadRegisterChallenge(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string, challenge *types.RegisterChallengeResponse, request *types.RegisterRequest) error {
+	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, challenge); err != nil {
+		return pauseRegisterRetry(ctx, err)
+	}
+	signed, err := signRegisterChallenge(*challenge, c.relayURL, registerReq, reportedIP)
+	if err != nil {
+		return err
+	}
+	*request = signed
+	return nil
+}
+
+func pauseRegisterRetry(ctx context.Context, err error) error {
+	delay, ok := registerRetryDelay(err)
+	if !ok {
+		return err
+	}
+	if !utils.SleepOrDone(ctx, delay) {
+		return ctx.Err()
+	}
+	return nil
+}
+
+func signRegisterChallenge(challenge types.RegisterChallengeResponse, relayURL *url.URL, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterRequest, error) {
+	if err := identity.ValidateRegisterSIWEChallenge(challenge, relayURL, registerReq.Identity.Address, time.Now()); err != nil {
+		return types.RegisterRequest{}, err
+	}
+	signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+	if err != nil {
+		return types.RegisterRequest{}, err
+	}
+	return types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature, ReportedIP: reportedIP}, nil
+}
+
+func registerRetryDelay(err error) (time.Duration, bool) {
+	apiErr, ok := errors.AsType[*types.APIRequestError](err)
+	if !ok || !apiErr.IsRateLimited() {
+		return 0, false
+	}
+	delay := apiErr.RetryAfter
+	if delay <= 0 {
+		delay = defaultRetryWait
+	}
+	return delay, true
+}
+
+func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registerReq types.RegisterChallengeRequest) (types.RegisterResponse, error) {
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {
 		return types.RegisterResponse{}, errRelayDidNotReturnAccessToken

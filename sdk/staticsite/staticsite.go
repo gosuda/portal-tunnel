@@ -23,27 +23,44 @@ func NewHandler(prefix, root, index string) http.Handler {
 			http.NotFound(w, req)
 			return
 		}
-		dir, err := os.OpenRoot(root)
-		if err != nil {
-			http.NotFound(w, req)
+		dir, ok := openStaticSiteRoot(w, req, root)
+		if !ok {
 			return
 		}
 		defer dir.Close()
 
-		if rel != "/" {
-			served, err := serveStaticFile(w, req, dir, rel)
-			if err != nil {
-				http.NotFound(w, req)
-				return
-			}
-			if served {
-				return
-			}
+		if serveStaticSiteFile(w, req, dir, rel) {
+			return
 		}
-		if served, err := serveStaticFile(w, req, dir, "/"+index); err != nil || !served {
-			http.NotFound(w, req)
-		}
+		serveStaticSiteIndex(w, req, dir, index)
 	})
+}
+
+func serveStaticSiteFile(w http.ResponseWriter, req *http.Request, dir *os.Root, rel string) bool {
+	if rel == "/" {
+		return false
+	}
+	served, err := serveStaticFile(w, req, dir, rel)
+	if err != nil {
+		http.NotFound(w, req)
+		return true
+	}
+	return served
+}
+
+func openStaticSiteRoot(w http.ResponseWriter, req *http.Request, root string) (*os.Root, bool) {
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		http.NotFound(w, req)
+		return nil, false
+	}
+	return dir, true
+}
+
+func serveStaticSiteIndex(w http.ResponseWriter, req *http.Request, dir *os.Root, index string) {
+	if served, err := serveStaticFile(w, req, dir, "/"+index); err != nil || !served {
+		http.NotFound(w, req)
+	}
 }
 
 func serveStaticFile(w http.ResponseWriter, req *http.Request, dir *os.Root, rel string) (bool, error) {
