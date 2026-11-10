@@ -77,6 +77,10 @@ func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, e
 	cfg.Project = runtimeCfg.ProjectID
 	cfg.ZoneID = runtimeCfg.ManagedZone
 	cfg.HTTPClient = runtimeCfg.HTTPClient
+	// Bound DNS HTTP transport without adding cancellation to cleanup requests.
+	// OAuth token refresh retains ctx and may outlive this timeout or fail after
+	// caller cancellation; this is not an end-to-end request or cleanup guarantee.
+	cfg.HTTPClient.Timeout = 30 * time.Second
 
 	provider, err := gcloud.NewDNSProviderConfig(cfg)
 	if err != nil {

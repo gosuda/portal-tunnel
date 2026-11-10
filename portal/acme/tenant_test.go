@@ -2,6 +2,7 @@ package acme
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -12,7 +13,10 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/go-acme/lego/v4/platform/wait"
 )
 
 func tenantCSR(t *testing.T, template *x509.CertificateRequest) (string, *ecdsa.PrivateKey) {
@@ -128,4 +132,70 @@ func TestTenantOrderBudgetSurvivesLeaseAndKeyChanges(t *testing.T) {
 	if _, err := manager.ObtainTenantCertificate(t.Context(), nil); !errors.Is(err, ErrTenantIssuerBusy) {
 		t.Fatalf("concurrent order bypassed serialization: %v", err)
 	}
+}
+
+type slowPropagationProvider struct{}
+
+func (slowPropagationProvider) Present(string, string, string) error { return nil }
+func (slowPropagationProvider) CleanUp(string, string, string) error { return nil }
+func (slowPropagationProvider) Timeout() (time.Duration, time.Duration) {
+	return time.Hour, time.Hour
+}
+
+func TestTenantDNSPropagationStopsAfterCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		provider := dnsChallengeProvider{Provider: slowPropagationProvider{}, ctx: ctx}
+		timeout, interval := provider.Timeout()
+		checked := make(chan struct{}, 1)
+		finished := make(chan error, 1)
+		go func() {
+			// Use lego's actual polling loop, including its initial context-free
+			// sleep. No public CA or DNS query is needed to test cancellation.
+			<-time.After(interval)
+			finished <- wait.For("propagation", timeout, interval, func() (bool, error) {
+				return provider.checkPropagation("tenant.example.com", "_acme-challenge.tenant.example.com.", "value", func(string, string) (bool, error) {
+					checked <- struct{}{}
+					return false, nil
+				})
+			})
+		}()
+		<-checked
+		synctest.Wait()
+		canceledAt := time.Now()
+		cancel()
+		if err := <-finished; !errors.Is(err, context.Canceled) {
+			t.Fatalf("propagation error = %v, want cancellation", err)
+		}
+		if elapsed := time.Since(canceledAt); elapsed > 5*time.Second {
+			t.Fatalf("canceled propagation took %s, want at most one bounded poll", elapsed)
+		}
+	})
+}
+
+func TestTenantDNSPropagationPreservesCancellationDuringCheck(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	provider := dnsChallengeProvider{ctx: ctx}
+	stop, err := provider.checkPropagation("tenant.example.com", "_acme-challenge.tenant.example.com.", "value", func(string, string) (bool, error) {
+		cancel()
+		return false, context.DeadlineExceeded
+	})
+	if !stop || !errors.Is(err, context.Canceled) {
+		t.Fatalf("propagation = %v, %v, want terminal cancellation", stop, err)
+	}
+}
+
+func TestTenantCanceledOrderReleasesIssuer(t *testing.T) {
+	manager := &Manager{}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := manager.ObtainTenantCertificate(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ObtainTenantCertificate() error = %v, want cancellation", err)
+	}
+	if !manager.issuanceMu.TryLock() {
+		t.Fatal("canceled order retained the issuance lock")
+	}
+	manager.issuanceMu.Unlock()
 }

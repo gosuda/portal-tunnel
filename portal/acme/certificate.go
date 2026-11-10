@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	lego "github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
@@ -242,7 +243,8 @@ func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create dns challenge provider: %w", err)
 	}
-	if err := client.Challenge.SetDNS01Provider(challengeProvider); err != nil {
+	provider := dnsChallengeProvider{Provider: challengeProvider, ctx: ctx}
+	if err := client.Challenge.SetDNS01Provider(provider, dns01.WrapPreCheck(provider.checkPropagation)); err != nil {
 		return nil, fmt.Errorf("set dns01 provider: %w", err)
 	}
 

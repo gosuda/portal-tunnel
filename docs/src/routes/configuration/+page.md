@@ -244,6 +244,29 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 | `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01 challenges, A/AAAA sync, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
 
+ACME cancellation is cooperative, not an end-to-end issuance deadline. ACME HTTP
+requests carry the operation context, and DNS propagation stops between probes;
+idle propagation polling sleeps are capped at five seconds. An in-flight probe
+still completes its context-free DNS lookups: lego allows 10 seconds per exchange
+on Unix or 20 seconds on Windows, with additional exchanges for TCP fallback,
+CNAME chains, zone discovery, and multiple nameservers.
+
+DNS provider publication and cleanup retain their own limits. Cleanup is still
+attempted after cancellation, but TXT removal is not guaranteed. Google Cloud
+uses a 30-second timeout for DNS HTTP transport; OAuth token refresh retains the
+original operation context, can outlive that timeout, and can fail during
+cleanup after cancellation. Cloudflare, Hetzner, Njalla, and Vultr default to
+30-second HTTP timeouts but allow provider environment overrides. Google Cloud's
+change-wait retry budget is 30 seconds;
+Hetzner and Route53 use their configured propagation budgets for provider-side
+change waits (120 seconds by default). These budgets can be exceeded by an
+in-flight API call, and Route53's underlying AWS HTTP client has no overall
+request timeout. The shared issuance lock stays held until the order and cleanup
+actually return, so canceled tenant orders can still delay other orders and
+relay renewal during those stages. Tenant issuance remains disabled by default.
+The polling cap also applies to relay certificate issuance without shortening
+its configured propagation budget.
+
 ### IPv4 and IPv6
 
 Managed DNS discovers public IPv4 and IPv6 independently and publishes A and

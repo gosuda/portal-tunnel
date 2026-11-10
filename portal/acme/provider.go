@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/go-acme/lego/v4/challenge"
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/cloudflare"
@@ -39,6 +41,53 @@ type dnsProvider interface {
 	EnsureTXTRecord(ctx context.Context, name, value string) error
 	DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error)
+}
+
+// dnsChallengeProvider stops lego's context-free propagation loop at the next
+// poll after cancellation. Keep issuance synchronous: releasing issuanceMu while
+// lego is still using the DNS provider would allow overlapping orders/cleanup.
+// An in-flight DNS lookup or provider Present/CleanUp still uses the underlying
+// implementation's timeouts; this is not a hard deadline for the entire order.
+// CleanUp delegates even after cancellation, retaining the provider's existing
+// lifetime and failure modes. See the TLS configuration docs for provider limits.
+type dnsChallengeProvider struct {
+	challenge.Provider
+	ctx context.Context
+}
+
+func (p dnsChallengeProvider) Present(domain, token, keyAuth string) error {
+	if err := p.ctx.Err(); err != nil {
+		return err
+	}
+	err := p.Provider.Present(domain, token, keyAuth)
+	if ctxErr := p.ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
+func (p dnsChallengeProvider) Timeout() (time.Duration, time.Duration) {
+	timeout, interval := dns01.DefaultPropagationTimeout, dns01.DefaultPollingInterval
+	if provider, ok := p.Provider.(challenge.ProviderTimeout); ok {
+		timeout, interval = provider.Timeout()
+	}
+	// Lego sleeps before its first check and between checks without a context.
+	// Bound those sleeps even when the provider's polling interval is configured.
+	if interval <= 0 {
+		interval = dns01.DefaultPollingInterval
+	}
+	return timeout, min(interval, 5*time.Second)
+}
+
+func (p dnsChallengeProvider) checkPropagation(_, fqdn, value string, check dns01.PreCheckFunc) (bool, error) {
+	if err := p.ctx.Err(); err != nil {
+		return true, err
+	}
+	ready, err := check(fqdn, value)
+	if ctxErr := p.ctx.Err(); ctxErr != nil {
+		return true, ctxErr
+	}
+	return ready, err
 }
 
 func newDNSProvider(providerType string, cfg Config) (dnsProvider, error) {
