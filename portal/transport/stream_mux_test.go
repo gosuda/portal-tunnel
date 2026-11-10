@@ -18,29 +18,7 @@ func TestReverseMuxAuthenticatesEveryStream(t *testing.T) {
 	accepted := make(chan net.Conn, 1)
 	authorized := make(chan string, 2)
 	serverErr := make(chan error, 1)
-	go func() {
-		for {
-			conn, capability, err := relay.Accept()
-			if err != nil {
-				serverErr <- err
-				return
-			}
-			authorized <- capability
-			acceptedCapability := capability == "current-capability"
-			if err := ConfirmReverseStream(conn, acceptedCapability); err != nil {
-				_ = conn.Close()
-				serverErr <- err
-				return
-			}
-			if !acceptedCapability {
-				_ = conn.Close()
-				continue
-			}
-			accepted <- conn
-			serverErr <- nil
-			return
-		}
-	}()
+	serveAuthenticatingMux(relay, accepted, authorized, serverErr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -65,6 +43,32 @@ func TestReverseMuxAuthenticatesEveryStream(t *testing.T) {
 	}
 }
 
+func serveAuthenticatingMux(relay *ReverseMux, accepted chan<- net.Conn, authorized chan<- string, serverErr chan<- error) {
+	go func() {
+		for {
+			conn, capability, err := relay.Accept()
+			if err != nil {
+				serverErr <- err
+				return
+			}
+			authorized <- capability
+			acceptedCapability := capability == "current-capability"
+			if err := ConfirmReverseStream(conn, acceptedCapability); err != nil {
+				_ = conn.Close()
+				serverErr <- err
+				return
+			}
+			if !acceptedCapability {
+				_ = conn.Close()
+				continue
+			}
+			accepted <- conn
+			serverErr <- nil
+			return
+		}
+	}()
+}
+
 func newReverseMuxPair(t *testing.T) (*ReverseMux, *ReverseMux) {
 	t.Helper()
 	serverConn, clientConn := net.Pipe()
@@ -87,6 +91,47 @@ func newReverseMuxPair(t *testing.T) (*ReverseMux, *ReverseMux) {
 func TestReverseMuxHalfClosePreservesResponse(t *testing.T) {
 	relay, connector := newReverseMuxPair(t)
 	accepted := make(chan net.Conn, 1)
+	done := serveHalfCloseMux(relay, accepted)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	conn := openHalfCloseStream(ctx, t, connector)
+	defer conn.Close()
+	exchangeHalfCloseRequest(t, conn)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	_ = (<-accepted).Close()
+}
+
+func openHalfCloseStream(ctx context.Context, t *testing.T, connector *ReverseMux) net.Conn {
+	t.Helper()
+	conn, err := connector.Open(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+func exchangeHalfCloseRequest(t *testing.T, conn net.Conn) {
+	t.Helper()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte("request")); err != nil {
+		t.Fatal(err)
+	}
+	half, ok := conn.(interface{ CloseWrite() error })
+	if !ok {
+		t.Fatal("reverse mux does not expose half-close")
+	}
+	if err := half.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(conn)
+	if err != nil || string(data) != "response" {
+		t.Fatalf("half-close response=%q err=%v", data, err)
+	}
+}
+
+func serveHalfCloseMux(relay *ReverseMux, accepted chan<- net.Conn) <-chan error {
 	done := make(chan error, 1)
 	go func() {
 		conn, _, err := relay.Accept()
@@ -109,36 +154,21 @@ func TestReverseMuxHalfClosePreservesResponse(t *testing.T) {
 		_ = conn.Close()
 		done <- err
 	}()
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-	defer cancel()
-	conn, err := connector.Open(ctx, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := conn.Write([]byte("request")); err != nil {
-		t.Fatal(err)
-	}
-	half, ok := conn.(interface{ CloseWrite() error })
-	if !ok {
-		t.Fatal("reverse mux does not expose half-close")
-	}
-	if err := half.CloseWrite(); err != nil {
-		t.Fatal(err)
-	}
-	data, err := io.ReadAll(conn)
-	if err != nil || string(data) != "response" {
-		t.Fatalf("half-close response=%q err=%v", data, err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	_ = (<-accepted).Close()
+	return done
 }
 
 func TestReverseMuxFullCloseCannotBeReopenedByDeadline(t *testing.T) {
 	relay, connector := newReverseMuxPair(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	conn, peer := openFullCloseSession(ctx, t, relay, connector)
+	defer conn.Close()
+	defer peer.Close()
+	verifyFullCloseInterruptsRead(ctx, t, conn)
+}
+
+func openFullCloseSession(ctx context.Context, t *testing.T, relay *ReverseMux, connector *ReverseMux) (net.Conn, net.Conn) {
+	t.Helper()
 	accepted := make(chan net.Conn, 1)
 	errs := make(chan error, 1)
 	go func() {
@@ -150,18 +180,19 @@ func TestReverseMuxFullCloseCannotBeReopenedByDeadline(t *testing.T) {
 		accepted <- conn
 		errs <- ConfirmReverseStream(conn, true)
 	}()
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-	defer cancel()
 	conn, err := connector.Open(ctx, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
 	peer := <-accepted
-	defer peer.Close()
 	if err := <-errs; err != nil {
 		t.Fatal(err)
 	}
+	return conn, peer
+}
+
+func verifyFullCloseInterruptsRead(ctx context.Context, t *testing.T, conn net.Conn) {
+	t.Helper()
 	readDone := make(chan error, 1)
 	go func() { _, err := conn.Read(make([]byte, 1)); readDone <- err }()
 	if err := conn.Close(); err != nil {

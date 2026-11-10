@@ -109,10 +109,9 @@ type relayStandIn struct {
 	keys    map[string]crypto.Signer
 }
 
-func newRelayStandIn(t *testing.T, first relayCertificate) *relayStandIn {
+func createNewRelayStandInSigner(t *testing.T, relay *relayStandIn) *Signer {
 	t.Helper()
-	relay := &relayStandIn{bindings: NewBindingRegistry(time.Minute), serving: first, keys: map[string]crypto.Signer{}}
-	relay.keys[string(first.leaf.Raw)] = first.tls.PrivateKey.(crypto.Signer)
+	relay.keys[string(relay.serving.leaf.Raw)] = relay.serving.tls.PrivateKey.(crypto.Signer)
 	signer, err := NewSigner(relay.bindings, func(leafDER []byte) crypto.Signer {
 		relay.mu.Lock()
 		defer relay.mu.Unlock()
@@ -121,6 +120,11 @@ func newRelayStandIn(t *testing.T, first relayCertificate) *relayStandIn {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return signer
+}
+
+func startNewRelayStandInServer(t *testing.T, relay *relayStandIn, signer *Signer) {
+	t.Helper()
 	relay.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != signrpc.SignPath {
 			http.NotFound(w, r)
@@ -141,6 +145,13 @@ func newRelayStandIn(t *testing.T, first relayCertificate) *relayStandIn {
 	relay.srv.Start()
 	t.Cleanup(relay.srv.Close)
 	relay.url = "https://" + relay.srv.Listener.Addr().String()
+}
+
+func newRelayStandIn(t *testing.T, first relayCertificate) *relayStandIn {
+	t.Helper()
+	relay := &relayStandIn{bindings: NewBindingRegistry(time.Minute), serving: first, keys: map[string]crypto.Signer{}}
+	signer := createNewRelayStandInSigner(t, relay)
+	startNewRelayStandInServer(t, relay, signer)
 	return relay
 }
 
@@ -190,6 +201,40 @@ func (r *relayStandIn) visit(t *testing.T, client *Client, roots *x509.CertPool)
 	return visitor.ConnectionState().PeerCertificates[0], nil
 }
 
+func checkTenantLeafBeforeRenewal(t *testing.T, relay *relayStandIn, client *Client, issuer *testIssuer, before relayCertificate) {
+	t.Helper()
+	if leaf, err := relay.visit(t, client, issuer.pool); err != nil || !leaf.Equal(before.leaf) {
+		t.Fatalf("tenant registered before the renewal: leaf %v, error %v; want the old certificate and no error", leaf, err)
+	}
+}
+
+func checkTenantLeafAfterRenewal(t *testing.T, relay *relayStandIn, client *Client, issuer *testIssuer, renewed relayCertificate) {
+	t.Helper()
+	if leaf, err := relay.visit(t, client, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
+		t.Fatalf("tenant registered after the renewal: leaf %v, error %v; want the new certificate and no error", leaf, err)
+	}
+}
+
+func checkTenantRefreshPinsRenewal(t *testing.T, relay *relayStandIn, client *Client, issuer *testIssuer, renewed relayCertificate) {
+	t.Helper()
+	changed, err := client.RefreshChain(context.Background())
+	if err != nil || !changed {
+		t.Fatalf("RefreshChain() = %v, %v; want the new chain pinned", changed, err)
+	}
+	if leaf, err := relay.visit(t, client, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
+		t.Fatalf("tenant after RefreshChain: leaf %v, error %v; want the new certificate and no error", leaf, err)
+	}
+	pinned := x509.NewCertPool()
+	pinned.AddCert(renewed.leaf)
+	pinned.AddCert(issuer.cert)
+	if !client.RelayCertPool().Equal(pinned) {
+		t.Fatal("RelayCertPool() after RefreshChain is not the chain the tenant presents")
+	}
+	if changed, err := client.RefreshChain(context.Background()); err != nil || changed {
+		t.Fatalf("RefreshChain() with nothing renewed = %v, %v; want no change", changed, err)
+	}
+}
+
 func TestTenantsAcrossARelayCertificateRenewal(t *testing.T) {
 	t.Parallel()
 
@@ -200,30 +245,11 @@ func TestTenantsAcrossARelayCertificateRenewal(t *testing.T) {
 
 	relay.renew(renewed, false)
 
-	if leaf, err := relay.visit(t, registeredBefore, issuer.pool); err != nil || !leaf.Equal(before.leaf) {
-		t.Fatalf("tenant registered before the renewal: leaf %v, error %v; want the old certificate and no error", leaf, err)
-	}
+	checkTenantLeafBeforeRenewal(t, relay, registeredBefore, issuer, before)
 	registeredAfter := relay.newClient(t)
-	if leaf, err := relay.visit(t, registeredAfter, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
-		t.Fatalf("tenant registered after the renewal: leaf %v, error %v; want the new certificate and no error", leaf, err)
-	}
+	checkTenantLeafAfterRenewal(t, relay, registeredAfter, issuer, renewed)
 
-	changed, err := registeredBefore.RefreshChain(context.Background())
-	if err != nil || !changed {
-		t.Fatalf("RefreshChain() = %v, %v; want the new chain pinned", changed, err)
-	}
-	if leaf, err := relay.visit(t, registeredBefore, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
-		t.Fatalf("tenant after RefreshChain: leaf %v, error %v; want the new certificate and no error", leaf, err)
-	}
-	pinned := x509.NewCertPool()
-	pinned.AddCert(renewed.leaf)
-	pinned.AddCert(issuer.cert)
-	if !registeredBefore.RelayCertPool().Equal(pinned) {
-		t.Fatal("RelayCertPool() after RefreshChain is not the chain the tenant presents")
-	}
-	if changed, err := registeredBefore.RefreshChain(context.Background()); err != nil || changed {
-		t.Fatalf("RefreshChain() with nothing renewed = %v, %v; want no change", changed, err)
-	}
+	checkTenantRefreshPinsRenewal(t, relay, registeredBefore, issuer, renewed)
 }
 
 func TestClientRepinsWhenTheRelayHoldsNoKeyForItsChain(t *testing.T) {
@@ -276,43 +302,50 @@ func TestSignerAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct {
-		name        string
-		keyID       string
-		certificate []byte
-		status      int
-		message     string
-	}{
+	for _, tc := range []signerAnswerCase{
 		{"known certificate", types.KeylessRelayKeyID, certificateMessage([]byte("known leaf")), http.StatusOK, ""},
 		{"other key id", "other", certificateMessage([]byte("known leaf")), http.StatusForbidden, "unknown key id"},
 		{"unknown certificate", types.KeylessRelayKeyID, certificateMessage([]byte("another leaf")), http.StatusForbidden, types.KeylessUnknownCertificateMessage},
 		{"malformed certificate message", types.KeylessRelayKeyID, []byte("not a certificate message"), http.StatusBadRequest, "malformed certificate message"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			hello := []byte("client hello")
-			binding := bindings.Issue("lease", hello)
-			body, err := json.Marshal(signrpc.TranscriptSignRequest{
-				KeyID:               test.keyID,
-				Algorithm:           signrpc.AlgorithmECDSASHA256,
-				Binding:             binding[:],
-				ClientHello:         hello,
-				ServerHello:         []byte("server hello"),
-				EncryptedExtensions: []byte("encrypted extensions"),
-				Certificate:         test.certificate,
-				TimestampUnix:       time.Now().Unix(),
-				Nonce:               "nonce",
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, signrpc.SignPath, bytes.NewReader(body))
-			signer.ServeHTTP(recorder, request, "lease")
-			if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), test.message) {
-				t.Fatalf("sign answer = %d %q, want %d containing %q", recorder.Code, recorder.Body.String(), test.status, test.message)
-			}
+			checkSignerAnswer(t, signer, bindings, tc)
 		})
+	}
+}
+
+type signerAnswerCase struct {
+	name        string
+	keyID       string
+	certificate []byte
+	status      int
+	message     string
+}
+
+func checkSignerAnswer(t *testing.T, signer *Signer, bindings *BindingRegistry, tc signerAnswerCase) {
+	t.Helper()
+	hello := []byte("client hello")
+	binding := bindings.Issue("lease", hello)
+	body, err := json.Marshal(signrpc.TranscriptSignRequest{
+		KeyID:               tc.keyID,
+		Algorithm:           signrpc.AlgorithmECDSASHA256,
+		Binding:             binding[:],
+		ClientHello:         hello,
+		ServerHello:         []byte("server hello"),
+		EncryptedExtensions: []byte("encrypted extensions"),
+		Certificate:         tc.certificate,
+		TimestampUnix:       time.Now().Unix(),
+		Nonce:               "nonce",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, signrpc.SignPath, bytes.NewReader(body))
+	signer.ServeHTTP(recorder, request, "lease")
+	if recorder.Code != tc.status || !strings.Contains(recorder.Body.String(), tc.message) {
+		t.Fatalf("sign answer = %d %q, want %d containing %q", recorder.Code, recorder.Body.String(), tc.status, tc.message)
 	}
 }
 
@@ -337,6 +370,33 @@ func TestClientRepinsWhenARenewalComesFromAnotherIssuer(t *testing.T) {
 	}
 }
 
+func checkBurstFirstPinsRenewal(t *testing.T, ctx context.Context, client *Client, stale *pinnedChain) {
+	t.Helper()
+	if changed, err := client.refreshChain(ctx, stale); err != nil || !changed {
+		t.Fatalf("first check of the burst = %v, %v; want the new chain pinned", changed, err)
+	}
+}
+
+func checkBurstLaterSharesFetch(t *testing.T, ctx context.Context, client *Client, stale *pinnedChain) {
+	t.Helper()
+	if changed, err := client.refreshChain(ctx, stale); err != nil || changed {
+		t.Fatalf("later check of the same burst = %v, %v; want it to share the first check", changed, err)
+	}
+}
+
+func checkBurstScheduledPinsNewest(t *testing.T, ctx context.Context, client *Client, issuer *testIssuer, second relayCertificate) {
+	t.Helper()
+	pinned := x509.NewCertPool()
+	pinned.AddCert(second.leaf)
+	pinned.AddCert(issuer.cert)
+	if !client.RelayCertPool().Equal(pinned) {
+		t.Fatal("a check of the same burst fetched the relay chain again")
+	}
+	if changed, err := client.RefreshChain(ctx); err != nil || !changed {
+		t.Fatalf("scheduled check = %v, %v; want the newest chain pinned", changed, err)
+	}
+}
+
 func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	t.Parallel()
 
@@ -345,28 +405,13 @@ func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	relay := newRelayStandIn(t, first)
 	client := relay.newClient(t)
 	staleOfTheBurst := client.pinned()
-	pinnedChain := func(leaf *x509.Certificate) *x509.CertPool {
-		pool := x509.NewCertPool()
-		pool.AddCert(leaf)
-		pool.AddCert(issuer.cert)
-		return pool
-	}
 	ctx := context.Background()
 
 	relay.renew(second, false)
-	if changed, err := client.refreshChain(ctx, staleOfTheBurst); err != nil || !changed {
-		t.Fatalf("first check of the burst = %v, %v; want the new chain pinned", changed, err)
-	}
+	checkBurstFirstPinsRenewal(t, ctx, client, staleOfTheBurst)
 	relay.renew(third, false)
-	if changed, err := client.refreshChain(ctx, staleOfTheBurst); err != nil || changed {
-		t.Fatalf("later check of the same burst = %v, %v; want it to share the first check", changed, err)
-	}
-	if !client.RelayCertPool().Equal(pinnedChain(second.leaf)) {
-		t.Fatal("a check of the same burst fetched the relay chain again")
-	}
-	if changed, err := client.RefreshChain(ctx); err != nil || !changed {
-		t.Fatalf("scheduled check = %v, %v; want the newest chain pinned", changed, err)
-	}
+	checkBurstLaterSharesFetch(t, ctx, client, staleOfTheBurst)
+	checkBurstScheduledPinsNewest(t, ctx, client, issuer, second)
 }
 
 func TestRefreshChainPinsNothingAfterClose(t *testing.T) {

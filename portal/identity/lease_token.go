@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	jose "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -91,40 +91,54 @@ func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.
 	if leaseID == "" {
 		return "", LeaseAccessTokenClaims{}, errLeaseIDIsRequired
 	}
-
-	signer, err := jose.NewSigner(jose.SigningKey{
-		Algorithm: leaseTokenAlgorithm,
-		Key: &es256kOpaqueSigner{
-			authority: authority,
-		},
-	}, (&jose.SignerOptions{}).WithType("JWT"))
+	signer, err := leaseTokenSigner(authority)
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
-
 	now := time.Now().UTC()
 	expiresAt = expiresAt.UTC()
 	if !expiresAt.After(now) {
 		return "", LeaseAccessTokenClaims{}, errTokenExpiryMustBeInTheFuture
 	}
-	claims := LeaseAccessTokenClaims{
-		Claims: jwt.Claims{
-			Issuer:    strings.TrimSpace(issuer),
-			Subject:   leaseIdentity.Key(),
-			Audience:  jwt.Audience{audience},
-			ID:        utils.RandomID("tok_"),
-			IssuedAt:  jwt.NewNumericDate(now),
-			NotBefore: jwt.NewNumericDate(now),
-			Expiry:    jwt.NewNumericDate(expiresAt),
-		},
-		Identity: leaseIdentity,
-		LeaseID:  leaseID,
-	}
-	token, err := jwt.Signed(signer).Claims(claims).Serialize()
+	claims := timedLeaseClaims(addressedLeaseClaims(issuer, leaseIdentity, audience, leaseID), now, expiresAt)
+	token, err := signedLeaseToken(signer, claims)
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
 	return token, claims, nil
+}
+
+func leaseTokenSigner(authority Authority) (jose.Signer, error) {
+	return jose.NewSigner(jose.SigningKey{
+		Algorithm: leaseTokenAlgorithm,
+		Key: &es256kOpaqueSigner{
+			authority: authority,
+		},
+	}, (&jose.SignerOptions{}).WithType("JWT"))
+}
+
+func addressedLeaseClaims(issuer string, leaseIdentity types.Identity, audience, leaseID string) LeaseAccessTokenClaims {
+	return LeaseAccessTokenClaims{
+		Claims: jwt.Claims{
+			Issuer:   strings.TrimSpace(issuer),
+			Subject:  leaseIdentity.Key(),
+			Audience: jwt.Audience{audience},
+		},
+		Identity: leaseIdentity,
+		LeaseID:  leaseID,
+	}
+}
+
+func timedLeaseClaims(base LeaseAccessTokenClaims, now, expiresAt time.Time) LeaseAccessTokenClaims {
+	base.ID = utils.RandomID("tok_")
+	base.IssuedAt = jwt.NewNumericDate(now)
+	base.NotBefore = jwt.NewNumericDate(now)
+	base.Expiry = jwt.NewNumericDate(expiresAt)
+	return base
+}
+
+func signedLeaseToken(signer jose.Signer, claims LeaseAccessTokenClaims) (string, error) {
+	return jwt.Signed(signer).Claims(claims).Serialize()
 }
 
 func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, now time.Time) (LeaseAccessTokenClaims, error) {

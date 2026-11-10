@@ -82,48 +82,55 @@ func TestControllerLocalSecurityBanSurvivesDiscoveryUntilOperatorOverride(t *tes
 	}
 }
 
-func TestControllerRelayIntentOpsLinearizeUnderConcurrency(t *testing.T) {
-	const relayA = "https://relay-a.example"
-	controller := NewController(nil)
-	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
-	controller.SetExplicitRelays([]string{relayA})
+func toggleEvenRelayIntent(controller *Controller, relayA string) {
+	for i := range 25 {
+		if i%2 == 0 {
+			controller.AddRelay(relayA)
+			continue
+		}
+		controller.RemoveRelay(relayA)
+	}
+}
 
+func toggleOddRelayIntent(controller *Controller, relayA string) {
+	for i := range 25 {
+		if i%2 == 1 {
+			controller.AddRelay(relayA)
+			continue
+		}
+		controller.RemoveRelay(relayA)
+	}
+}
+
+func driveRelayIntentOps(controller *Controller, relayA string) {
 	intentLoops := []func(){
-		func() {
-			for i := range 25 {
-				if i%2 == 0 {
-					controller.AddRelay(relayA)
-				} else {
-					controller.RemoveRelay(relayA)
-				}
-			}
-		},
-		func() {
-			for i := range 25 {
-				if i%2 == 1 {
-					controller.AddRelay(relayA)
-				} else {
-					controller.RemoveRelay(relayA)
-				}
-			}
-		},
+		func() { toggleEvenRelayIntent(controller, relayA) },
+		func() { toggleOddRelayIntent(controller, relayA) },
 	}
 	var wg sync.WaitGroup
 	for _, loop := range intentLoops {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			loop()
-		}()
+		wg.Go(loop)
 	}
 	wg.Wait()
+}
 
+func checkRelayIntentLinearized(t *testing.T, controller *Controller, relayA string) {
+	t.Helper()
 	controller.mu.Lock()
 	inExplicit := slices.Contains(controller.explicitRelays, relayA)
 	controller.mu.Unlock()
 	if suppressed := controller.relaySet.IsSuppressed(relayA, time.Now().UTC()); inExplicit == suppressed {
 		t.Fatalf("relay A inExplicit=%v suppressed=%v; intent ops must linearize (inExplicit requires !suppressed)", inExplicit, suppressed)
 	}
+}
+
+func TestControllerRelayIntentOpsLinearizeUnderConcurrency(t *testing.T) {
+	const relayA = "https://relay-a.example"
+	controller := NewController(nil)
+	mustApplyAuthoritative(t, controller.relaySet, mustRelayDescriptor(t, relayA))
+	controller.SetExplicitRelays([]string{relayA})
+	driveRelayIntentOps(controller, relayA)
+	checkRelayIntentLinearized(t, controller, relayA)
 }
 
 func TestControllerReportMITMBansRelay(t *testing.T) {

@@ -36,7 +36,18 @@ func TestLoadOrCreateRelayIdentityToleratesStaleSeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create relay identity: %v", err)
 	}
+	injectedStaleRelaySeed(t, path)
+	reloaded, err := LoadOrCreateRelayIdentity(path, "relay.example.com")
+	if err != nil {
+		t.Fatalf("reload identity with stale seed: %v", err)
+	}
+	if reloaded.PrivateKey != created.PrivateKey {
+		t.Fatalf("reloaded relay identity mismatch: %+v", reloaded)
+	}
+}
 
+func injectedStaleRelaySeed(t *testing.T, path string) {
+	t.Helper()
 	stale, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read identity file: %v", err)
@@ -52,13 +63,5 @@ func TestLoadOrCreateRelayIdentityToleratesStaleSeed(t *testing.T) {
 	}
 	if err := os.WriteFile(path, withSeed, 0o600); err != nil {
 		t.Fatalf("write identity file: %v", err)
-	}
-
-	reloaded, err := LoadOrCreateRelayIdentity(path, "relay.example.com")
-	if err != nil {
-		t.Fatalf("reload identity with stale seed: %v", err)
-	}
-	if reloaded.PrivateKey != created.PrivateKey {
-		t.Fatalf("reloaded relay identity mismatch: %+v", reloaded)
 	}
 }

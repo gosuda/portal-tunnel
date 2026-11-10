@@ -101,21 +101,35 @@ func TestEthereumPersonalMessageRecoveryVectors(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			alternate := test.signature[:130] + "00"
-			if strings.HasSuffix(test.signature, "01") {
-				alternate = test.signature[:130] + "1c"
-			}
-			for _, signature := range []string{test.signature, alternate} {
-				address, err := recoverEthereumPersonalMessage(test.message, signature)
-				if err != nil || address != test.address {
-					t.Fatalf("recover = %q, %v; want %q", address, err, test.address)
-				}
-			}
-			address, err := recoverEthereumPersonalMessage(test.message+"!", test.signature)
-			if err == nil && address == test.address {
-				t.Fatal("signature authenticated a changed message")
-			}
+			alternate := alternateMessageSig(test.signature)
+			checkedRecoverySigs(t, test.message, test.signature, alternate, test.address)
+			rejectedTamperedMessage(t, test.message, test.signature, test.address)
 		})
+	}
+}
+
+func alternateMessageSig(signature string) string {
+	if strings.HasSuffix(signature, "01") {
+		return signature[:130] + "1c"
+	}
+	return signature[:130] + "00"
+}
+
+func checkedRecoverySigs(t *testing.T, message, signature, alternate, want string) {
+	t.Helper()
+	for _, candidate := range []string{signature, alternate} {
+		address, err := recoverEthereumPersonalMessage(message, candidate)
+		if err != nil || address != want {
+			t.Fatalf("recover = %q, %v; want %q", address, err, want)
+		}
+	}
+}
+
+func rejectedTamperedMessage(t *testing.T, message, signature, want string) {
+	t.Helper()
+	address, err := recoverEthereumPersonalMessage(message+"!", signature)
+	if err == nil && address == want {
+		t.Fatal("signature authenticated a changed message")
 	}
 }
 

@@ -57,37 +57,40 @@ func DialQUICBackhaul(ctx context.Context, addr string, tlsConfig *tls.Config, a
 	if err != nil {
 		return nil, fmt.Errorf("dial quic backhaul: %w", err)
 	}
+	if err := authorizeBackhaulControl(ctx, conn, accessToken); err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
 
+func authorizeBackhaulControl(ctx context.Context, conn *quic.Conn, accessToken string) error {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		_ = conn.CloseWithError(1, "control stream open failed")
-		return nil, fmt.Errorf("open quic backhaul control stream: %w", err)
+		return fmt.Errorf("open quic backhaul control stream: %w", err)
 	}
-
 	_ = stream.SetDeadline(time.Now().Add(quicBackhaulControlTimeout))
 	if err := json.NewEncoder(stream).Encode(quicBackhaulControlMessage{AccessToken: accessToken}); err != nil {
 		_ = conn.CloseWithError(1, "control write failed")
-		return nil, fmt.Errorf("write quic backhaul control message: %w", err)
+		return fmt.Errorf("write quic backhaul control message: %w", err)
 	}
-
 	var resp quicBackhaulControlResponse
 	if err := json.NewDecoder(io.LimitReader(stream, quicBackhaulControlBodyLimit)).Decode(&resp); err != nil {
 		_ = conn.CloseWithError(1, "control response read failed")
-		return nil, fmt.Errorf("read quic backhaul control response: %w", err)
+		return fmt.Errorf("read quic backhaul control response: %w", err)
 	}
 	_ = stream.SetDeadline(time.Time{})
 	_ = stream.Close()
-
 	if !resp.OK {
 		errText := strings.TrimSpace(resp.Error)
 		errText = cmp.Or(errText, "rejected")
 		_ = conn.CloseWithError(1, errText)
 		if code := backhaulRejectionCode(errText); code != "" {
-			return nil, fmt.Errorf("quic backhaul rejected: %w", &types.APIRequestError{Code: code})
+			return fmt.Errorf("quic backhaul rejected: %w", &types.APIRequestError{Code: code})
 		}
-		return nil, fmt.Errorf("quic backhaul rejected: %s", errText)
+		return fmt.Errorf("quic backhaul rejected: %s", errText)
 	}
-	return conn, nil
+	return nil
 }
 
 func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls.Config) (*quic.Conn, error) {
@@ -106,7 +109,14 @@ func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls
 		tlsConfig.ServerName = host
 	}
 
-	var primary, fallback []net.IPAddr
+	primary, fallback := splitBackhaulAddresses(addresses)
+	if len(fallback) == 0 {
+		return dialBackhaulAddresses(ctx, primary, port, tlsConfig)
+	}
+	return raceBackhaulDial(ctx, primary, fallback, port, tlsConfig)
+}
+
+func splitBackhaulAddresses(addresses []net.IPAddr) (primary, fallback []net.IPAddr) {
 	primaryIPv4 := addresses[0].IP.To4() != nil
 	for _, address := range addresses {
 		if (address.IP.To4() != nil) == primaryIPv4 {
@@ -115,54 +125,70 @@ func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls
 			fallback = append(fallback, address)
 		}
 	}
-	dial := func(ctx context.Context, addresses []net.IPAddr) (*quic.Conn, error) {
-		var firstErr error
-		for i, address := range addresses {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			attemptCtx := ctx
-			cancel := func() {}
-			if deadline, ok := ctx.Deadline(); ok {
-				attemptCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(addresses)-i))
-			}
-			conn, err := quic.DialAddr(attemptCtx, net.JoinHostPort(address.String(), port), tlsConfig, quicBackhaulConfig())
-			cancel()
-			if err == nil {
-				return conn, nil
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-		return nil, firstErr
-	}
-	if len(fallback) == 0 {
-		return dial(ctx, primary)
-	}
+	return primary, fallback
+}
 
+func dialBackhaulAddresses(ctx context.Context, addresses []net.IPAddr, port string, tlsConfig *tls.Config) (*quic.Conn, error) {
+	var firstErr error
+	for i, address := range addresses {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		attemptCtx := ctx
+		cancel := func() {}
+		if deadline, ok := ctx.Deadline(); ok {
+			attemptCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(addresses)-i))
+		}
+		conn, err := quic.DialAddr(attemptCtx, net.JoinHostPort(address.String(), port), tlsConfig, quicBackhaulConfig())
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, firstErr
+}
+
+func raceBackhaulDial(ctx context.Context, primary, fallback []net.IPAddr, port string, tlsConfig *tls.Config) (*quic.Conn, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	returned := make(chan struct{})
 	defer close(returned)
-	type result struct {
-		conn *quic.Conn
-		err  error
-	}
-	results := make(chan result)
-	race := func(addresses []net.IPAddr) {
-		conn, err := dial(ctx, addresses)
-		select {
-		case results <- result{conn: conn, err: err}:
-		case <-returned:
-			if conn != nil {
-				_ = conn.CloseWithError(0, "another relay address connected")
-			}
-		}
-	}
-	go race(primary)
+	results := make(chan backhaulRaceResult)
+	delivery := backhaulRaceDelivery{results: results, returned: returned}
+	go raceBackhaulAddresses(ctx, primary, port, tlsConfig, delivery)
 	timer := time.NewTimer(300 * time.Millisecond)
 	defer timer.Stop()
+	startFallback := func() {
+		go raceBackhaulAddresses(ctx, fallback, port, tlsConfig, delivery)
+	}
+	return awaitBackhaulRace(ctx, timer, results, startFallback)
+}
+
+type backhaulRaceResult struct {
+	conn *quic.Conn
+	err  error
+}
+
+type backhaulRaceDelivery struct {
+	results  chan backhaulRaceResult
+	returned chan struct{}
+}
+
+func raceBackhaulAddresses(ctx context.Context, addresses []net.IPAddr, port string, tlsConfig *tls.Config, delivery backhaulRaceDelivery) {
+	conn, err := dialBackhaulAddresses(ctx, addresses, port, tlsConfig)
+	select {
+	case delivery.results <- backhaulRaceResult{conn: conn, err: err}:
+	case <-delivery.returned:
+		if conn != nil {
+			_ = conn.CloseWithError(0, "another relay address connected")
+		}
+	}
+}
+
+func awaitBackhaulRace(ctx context.Context, timer *time.Timer, results <-chan backhaulRaceResult, startFallback func()) (*quic.Conn, error) {
 	fallbackStarted := false
 	var firstErr error
 	for {
@@ -171,22 +197,34 @@ func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls
 			return nil, ctx.Err()
 		case <-timer.C:
 			fallbackStarted = true
-			go race(fallback)
+			startFallback()
 		case result := <-results:
-			if result.err == nil {
-				return result.conn, nil
+			nextFirstErr, retConn, retErr, done := settleBackhaulResult(firstErr, result)
+			if done {
+				return retConn, retErr
 			}
-			if firstErr != nil {
-				return nil, errors.Join(firstErr, result.err)
-			}
-			firstErr = result.err
+			firstErr = nextFirstErr
 			if !fallbackStarted {
-				timer.Stop()
 				fallbackStarted = true
-				go race(fallback)
+				launchBackhaulFallback(timer, startFallback)
 			}
 		}
 	}
+}
+
+func launchBackhaulFallback(timer *time.Timer, startFallback func()) {
+	timer.Stop()
+	startFallback()
+}
+
+func settleBackhaulResult(firstErr error, result backhaulRaceResult) (error, *quic.Conn, error, bool) {
+	if result.err == nil {
+		return firstErr, result.conn, nil, true
+	}
+	if firstErr != nil {
+		return firstErr, nil, errors.Join(firstErr, result.err), true
+	}
+	return result.err, nil, nil, false
 }
 
 func backhaulRejectionCode(errText string) string {

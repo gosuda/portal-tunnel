@@ -221,6 +221,42 @@ func (c *Controller) signal() {
 
 // Next refreshes discovery as needed and blocks until the desired relay set
 // changes. The caller remains responsible for reconciling the result.
+func (c *Controller) refreshControllerNext(ctx context.Context, refresh bool) error {
+	if !refresh {
+		return nil
+	}
+	if err := c.refresher.Refresh(ctx, nil); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.Warn().Err(err).Msg("relay discovery refresh failed; will retry")
+	}
+	c.refreshAt = time.Now().Add(DiscoveryPollInterval)
+	return nil
+}
+
+func (c *Controller) waitControllerNext(ctx context.Context) error {
+	wait := max(time.Until(c.refreshAt), 0)
+	timer := time.NewTimer(wait)
+	ctxDone := false
+	select {
+	case <-ctx.Done():
+		ctxDone = true
+	case <-timer.C:
+	case <-c.changed:
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	if ctxDone {
+		return ctx.Err()
+	}
+	return nil
+}
+
 func (c *Controller) Next(ctx context.Context) ([]string, error) {
 	if c == nil {
 		return nil, errRelayDiscoveryControllerIsNil
@@ -230,41 +266,18 @@ func (c *Controller) Next(ctx context.Context) ([]string, error) {
 	}
 	for {
 		now := time.Now()
-		refresh := !c.published || !now.Before(c.refreshAt)
-		if refresh {
-			if err := c.refresher.Refresh(ctx, nil); err != nil {
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				log.Warn().Err(err).Msg("relay discovery refresh failed; will retry")
-			}
-			c.refreshAt = time.Now().Add(DiscoveryPollInterval)
+		if err := c.refreshControllerNext(ctx, !c.published || !now.Before(c.refreshAt)); err != nil {
+			return nil, err
 		}
 		rs := c.buildRouteState()
 		next := c.relaySet.selectRelays(rs)
 		if !c.published || !slices.Equal(c.selected, next) {
-			c.selected = append([]string(nil), next...)
+			c.selected = slices.Clone(next)
 			c.published = true
 			return next, nil
 		}
-
-		wait := max(time.Until(c.refreshAt), 0)
-		timer := time.NewTimer(wait)
-		ctxDone := false
-		select {
-		case <-ctx.Done():
-			ctxDone = true
-		case <-timer.C:
-		case <-c.changed:
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		if ctxDone {
-			return nil, ctx.Err()
+		if err := c.waitControllerNext(ctx); err != nil {
+			return nil, err
 		}
 	}
 }

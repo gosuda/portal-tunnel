@@ -104,19 +104,83 @@ func (s *Syncer) Sync(ctx context.Context, client *http.Client, accessToken stri
 	return err
 }
 
-func (s *Syncer) syncSnapshot(ctx context.Context, client *http.Client, accessToken string) error {
+func (s *Syncer) snapshotManifest() (types.StaticCacheManifest, error) {
+	var manifest types.StaticCacheManifest
 	snapshot := s.snapshot
 	if snapshot == nil {
-		return errCacheSourceGenerationIsUnavailable
+		return manifest, errCacheSourceGenerationIsUnavailable
 	}
 	if snapshot.err != nil {
-		return snapshot.err
+		return manifest, snapshot.err
 	}
-	manifest := snapshot.manifest
-	if _, _, err := manifestDigest(manifest, s.limits.MaxObjectSize, s.limits.MaxExposureBytes); err != nil {
+	if _, _, err := manifestDigest(snapshot.manifest, s.limits.MaxObjectSize, s.limits.MaxExposureBytes); err != nil {
+		return manifest, err
+	}
+	return snapshot.manifest, nil
+}
+
+func writeSnapshotUpload(ctx context.Context, parts *multipart.Writer, root *os.Root, manifest types.StaticCacheManifest) error {
+	part, err := parts.CreateFormField("manifest")
+	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(snapshot.root)
+	if err := json.NewEncoder(part).Encode(manifest); err != nil {
+		return err
+	}
+	for _, object := range manifest.Files {
+		if err := writeSnapshotObject(ctx, parts, root, object); err != nil {
+			return err
+		}
+	}
+	return parts.Close()
+}
+
+func writeSnapshotObject(ctx context.Context, parts *multipart.Writer, root *os.Root, object types.StaticCacheFile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	part, err := parts.CreateFormField("object")
+	if err != nil {
+		return err
+	}
+	input, err := root.Open(object.Path)
+	if err != nil {
+		return err
+	}
+	info, statErr := input.Stat()
+	if statErr != nil || !info.Mode().IsRegular() || info.Size() != object.Size {
+		_ = input.Close()
+		return errStaticCacheSourceChangedDuringUpload
+	}
+	_, copyErr := io.CopyN(part, input, object.Size)
+	closeErr := input.Close()
+	return errors.Join(copyErr, closeErr)
+}
+
+func finishSnapshotUpload(client *http.Client, request *http.Request, reader *io.PipeReader, finished <-chan error) error {
+	response, requestErr := client.Do(request)
+	_ = reader.CloseWithError(requestErr)
+	writeErr := <-finished
+	if requestErr != nil {
+		return requestErr
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return utils.DecodeAPIRequestError(response)
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	_, err := io.Copy(io.Discard, io.LimitReader(response.Body, types.StaticCacheManifestLimit))
+	return err
+}
+
+func (s *Syncer) syncSnapshot(ctx context.Context, client *http.Client, accessToken string) error {
+	manifest, err := s.snapshotManifest()
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(s.snapshot.root)
 	if err != nil {
 		return err
 	}
@@ -141,55 +205,9 @@ func (s *Syncer) syncSnapshot(ctx context.Context, client *http.Client, accessTo
 	request.Header.Set(types.HeaderAccessToken, accessToken)
 	finished := make(chan error, 1)
 	go func() {
-		err := func() error {
-			part, err := parts.CreateFormField("manifest")
-			if err != nil {
-				return err
-			}
-			if err := json.NewEncoder(part).Encode(manifest); err != nil {
-				return err
-			}
-			for _, object := range manifest.Files {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				part, err := parts.CreateFormField("object")
-				if err != nil {
-					return err
-				}
-				input, err := root.Open(object.Path)
-				if err != nil {
-					return err
-				}
-				info, statErr := input.Stat()
-				if statErr != nil || !info.Mode().IsRegular() || info.Size() != object.Size {
-					_ = input.Close()
-					return errStaticCacheSourceChangedDuringUpload
-				}
-				_, copyErr := io.CopyN(part, input, object.Size)
-				closeErr := input.Close()
-				if err := errors.Join(copyErr, closeErr); err != nil {
-					return err
-				}
-			}
-			return parts.Close()
-		}()
-		_ = writer.CloseWithError(err)
-		finished <- err
+		uploadErr := writeSnapshotUpload(ctx, parts, root, manifest)
+		_ = writer.CloseWithError(uploadErr)
+		finished <- uploadErr
 	}()
-	response, requestErr := client.Do(request)
-	_ = reader.CloseWithError(requestErr)
-	writeErr := <-finished
-	if requestErr != nil {
-		return requestErr
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return utils.DecodeAPIRequestError(response)
-	}
-	if writeErr != nil {
-		return writeErr
-	}
-	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, types.StaticCacheManifestLimit))
-	return err
+	return finishSnapshotUpload(client, request, reader, finished)
 }

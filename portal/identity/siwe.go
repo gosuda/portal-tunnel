@@ -36,33 +36,55 @@ type SIWEMessage struct {
 // FormatSIWEMessage formats the EIP-4361 subset Portal issues for registration
 // and wallet login. It is not a general SIWE formatter.
 func FormatSIWEMessage(m SIWEMessage) (string, error) {
-	domain, err := url.Parse("https://" + m.Domain)
+	if err := validateSIWEDomain(m.Domain); err != nil {
+		return "", err
+	}
+	uri, err := parseSIWEURI(m.URI)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errInvalidSIWEDomain, err)
-	}
-	if domain.Host == "" {
-		return "", errInvalidSIWEDomain
-	}
-	authority := domain.Host
-	if domain.User != nil {
-		authority = domain.User.String() + "@" + authority
-	}
-	if authority != m.Domain {
-		return "", errInvalidSIWEDomain
-	}
-	uri, err := url.Parse(m.URI)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", errInvalidSIWEURI, err)
-	}
-	if !uri.IsAbs() {
-		return "", errInvalidSIWEURI
+		return "", err
 	}
 	address, err := NormalizeEVMAddress(m.Address)
 	if err != nil {
 		return "", err
 	}
+	if err := validateSIWEFields(m); err != nil {
+		return "", err
+	}
+	return formatSIWEMessage(m, address, uri), nil
+}
+
+func validateSIWEDomain(raw string) error {
+	domain, err := url.Parse("https://" + raw)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errInvalidSIWEDomain, err)
+	}
+	if domain.Host == "" {
+		return errInvalidSIWEDomain
+	}
+	authority := domain.Host
+	if domain.User != nil {
+		authority = domain.User.String() + "@" + authority
+	}
+	if authority != raw {
+		return errInvalidSIWEDomain
+	}
+	return nil
+}
+
+func parseSIWEURI(raw string) (*url.URL, error) {
+	uri, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errInvalidSIWEURI, err)
+	}
+	if !uri.IsAbs() {
+		return nil, errInvalidSIWEURI
+	}
+	return uri, nil
+}
+
+func validateSIWEFields(m SIWEMessage) error {
 	if strings.IndexFunc(m.Statement, func(r rune) bool { return r < ' ' || r > '~' }) >= 0 {
-		return "", errSIWEStatementMustSingleAsciiLine
+		return errSIWEStatementMustSingleAsciiLine
 	}
 	invalidNonce := strings.IndexFunc(m.Nonce, func(r rune) bool {
 		lower := r >= 'a' && r <= 'z'
@@ -71,18 +93,21 @@ func FormatSIWEMessage(m SIWEMessage) (string, error) {
 		return !lower && !upper && !digit
 	}) >= 0
 	if len(m.Nonce) < 8 || invalidNonce {
-		return "", errSIWENonceMustContainLeast8
+		return errSIWENonceMustContainLeast8
 	}
 	if strings.ContainsAny(m.RequestID, "\r\n") {
-		return "", errInvalidSIWERequestID
+		return errInvalidSIWERequestID
 	}
+	return nil
+}
 
+func formatSIWEMessage(m SIWEMessage, address string, uri *url.URL) string {
 	header := fmt.Sprintf("%s wants you to sign in with your Ethereum account:\n%s\n\n", m.Domain, address)
 	if m.Statement != "" {
 		header += m.Statement + "\n"
 	}
 	return fmt.Sprintf("%s\nURI: %s\nVersion: %s\nChain ID: %d\nNonce: %s\nIssued At: %s\nExpiration Time: %s\nRequest ID: %s",
-		header, uri.String(), siweVersion, siweChainID, m.Nonce, m.IssuedAt.UTC().Format(time.RFC3339), m.ExpiresAt.UTC().Format(time.RFC3339), m.RequestID), nil
+		header, uri.String(), siweVersion, siweChainID, m.Nonce, m.IssuedAt.UTC().Format(time.RFC3339), m.ExpiresAt.UTC().Format(time.RFC3339), m.RequestID)
 }
 
 // VerifySIWEMessage verifies the stored challenge after the caller has matched
