@@ -1,10 +1,11 @@
+import type { JSX } from "react";
 import { Admin } from "@/pages/Admin";
 import { ServerDetail } from "@/pages/ServerDetail";
 import { ServerList } from "@/pages/ServerList";
 import { ROUTE_PATHS } from "@/lib/apiPaths";
 import { Route, Routes } from "react-router-dom";
 
-function App() {
+function App(): JSX.Element {
   return (
     <Routes>
       <Route path={ROUTE_PATHS.home} element={<ServerList />} />

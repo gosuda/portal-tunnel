@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { Badge } from "./authShared";
 import signinCopy from "@/lib/signinCopy.json";
@@ -15,7 +16,7 @@ export function VisitorPreview({
   auth: TunnelAuthOptions;
   relayURL: string;
   name: string;
-}) {
+}): JSX.Element {
   const hostname =
     buildServiceStatusHostname(relayURL, name) || "your-name.relay";
   let issuerHost = "your provider";

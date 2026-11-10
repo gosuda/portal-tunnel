@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { useEffect, useState } from "react";
 import { KeyRound, Loader2, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,10 +13,37 @@ interface AdminHeaderProps {
   auth: AdminAuth;
 }
 
+async function fetchHeaderMetadata(
+  isCancelled: () => boolean,
+  setReleaseVersion: (version: string) => void,
+  setENSVerified: (verified: boolean) => void
+): Promise<void> {
+  try {
+    const status = await apiClient.get<DomainResponse>(
+      RELAY_API_PATHS.sdk.domain
+    );
+    if (isCancelled()) {
+      return;
+    }
+    const fetchedVersion =
+      typeof status?.release_version === "string"
+        ? status.release_version.trim()
+        : "";
+    setReleaseVersion(fetchedVersion);
+    setENSVerified(status?.ens?.verified === true);
+  } catch {
+    if (isCancelled()) {
+      return;
+    }
+    setReleaseVersion("");
+    setENSVerified(false);
+  }
+}
+
 export function AdminHeader({
   title = "PORTAL ADMIN",
   auth,
-}: AdminHeaderProps) {
+}: AdminHeaderProps): JSX.Element {
   const [releaseVersion, setReleaseVersion] = useState("");
   const [ensVerified, setENSVerified] = useState(false);
   const { isAuthenticated, isLoading, login, logout } = auth;
@@ -39,30 +67,7 @@ export function AdminHeader({
 
   useEffect(() => {
     let cancelled = false;
-
-    void (async () => {
-      try {
-        const status = await apiClient.get<DomainResponse>(
-          RELAY_API_PATHS.sdk.domain
-        );
-        if (cancelled) {
-          return;
-        }
-        const fetchedVersion =
-          typeof status?.release_version === "string"
-            ? status.release_version.trim()
-            : "";
-        setReleaseVersion(fetchedVersion);
-        setENSVerified(status?.ens?.verified === true);
-      } catch {
-        if (cancelled) {
-          return;
-        }
-        setReleaseVersion("");
-        setENSVerified(false);
-      }
-    })();
-
+    void fetchHeaderMetadata(() => cancelled, setReleaseVersion, setENSVerified);
     return () => {
       cancelled = true;
     };

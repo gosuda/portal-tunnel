@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import {
   Select,
   SelectContent,
@@ -20,7 +21,7 @@ export const StatusSelect = ({
   onStatusChange,
   hideFiltersOnMobile,
   className,
-}: StatusSelectProps) => (
+}: StatusSelectProps): JSX.Element => (
   <Select
     value={status}
     onValueChange={(value) => onStatusChange(value as StatusFilter)}
