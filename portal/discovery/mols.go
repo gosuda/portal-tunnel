@@ -1,30 +1,11 @@
 package discovery
 
-// MOLS selection ranks relays on a dynamic NxN grid sized to the current pool.
-// Multipliers are chosen per grid order so m1, m2, and m1-m2 stay coprime to
-// the order; even orders admit no such linear pair (all units are odd, so
-// m1-m2 is even) and fall back to a single-square (1,1) score, which remains
-// deterministic and duplicate-free per row.
-// The grid is rebuilt on every selection from the eligible pool, so a node
-// that was evicted or filtered out simply shrinks the grid (N+1 -> N) and the
-// remaining indexes are recomputed mechanically; no stale entries can linger.
-// Because order := len(autoPool), adding, removing, or filtering a relay
-// recomputes all folded indexes and can substantially reshuffle future
-// rankings. This dynamic-order trade-off keeps the ranker stateless; active
-// listeners are protected from the reshuffle by selection stickiness
-// (applyActiveStickiness), which retains healthy active relays under the
-// quota.
-//
-// All ranking hashes are keyed with a per-client selection key (HMAC-SHA256),
-// making rankings unpredictable to outside observers and immune to URL
-// grinding. The sdk derives the key from the client's persisted identity
-// secret, so rankings stay stable across restarts without any new stored
-// value.
-//
-// Ordering Pipeline:
-//   1. Filter: Apply ban, dead, expiry, and protocol compatibility gates.
-//   2. Rank: Order every eligible candidate deterministically with MOLS.
-//   3. Demote: Swap out a high-pressure top relay for its healthier peer.
+// MOLS selection ranks the eligible relay pool on a dynamic NxN grid sized
+// to the current pool. Rankings are deterministic per client, keyed with a
+// per-client selection key, and stay stable across restarts. The grid is
+// rebuilt on every selection, so eviction only shrinks the grid. Active
+// listeners are protected from reshuffles by selection stickiness, which
+// retains healthy active relays under the quota.
 import (
 	"cmp"
 	"crypto/hmac"
@@ -51,16 +32,6 @@ const (
 	molsP2CPressureDelta   = 0.3
 )
 
-// molsScore computes the MOLS grid score for position (i, j) using multipliers m1 and m2.
-// When m1 and m2 form a valid orthogonal pair, the client's 2D grid coordinates (row, col)
-// project target positions across both Latin squares:
-//
-//	Square 1 (m1): Primary target t1 = (m1*row + col) % order
-//	Square 2 (m2): Secondary target t2 = (m2*row + col) % order
-//
-// Relay column j receives its ranking score via proximity to both targets, ensuring
-// that displaced clients disperse across diverse secondary nodes rather than collapsing
-// onto a single cyclic successor (herd elimination).
 func molsScore(row, col, j, m1, m2, order int, ok bool) int {
 	if !ok || order <= 1 {
 		return ((m1*row+j)%order)*order + 1
@@ -81,8 +52,6 @@ func molsScore(row, col, j, m1, m2, order int, ok bool) int {
 	return bonus + (order-d1)*order + (order - d2) + 1
 }
 
-// molsPairValid reports whether m1, m2, and m1-m2 are all coprime to order,
-// which keeps both linear Latin squares orthogonal at this grid order.
 func molsPairValid(order, m1, m2 int) bool {
 	gcd := func(a, b int) int {
 		if a < 0 {
@@ -96,12 +65,6 @@ func molsPairValid(order, m1, m2 int) bool {
 	return gcd(m1, order) == 1 && gcd(m2, order) == 1 && gcd(m1-m2, order) == 1
 }
 
-// molsMultipliers selects per-order multipliers: it prefers the base (or
-// variant) constants and otherwise scans for the smallest valid pair. Even
-// orders admit no *linear* orthogonal pair (all units mod an even order are
-// odd, so m1-m2 is always even); ok is false then and callers fall back to
-// the single-square (1,1) score, which stays deterministic and duplicate-free
-// per row without MOLS fairness.
 func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 	if order%2 == 0 {
 		return 1, 1, false
@@ -142,18 +105,11 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 	return 1, 1, false
 }
 
-// molsCongestionScore inverts the MOLS score to prioritize low-latency relays during congestion.
 func molsCongestionScore(row, col, j, m1, m2, order int, ok bool) int {
 	maxScore := 3*order*order + order*order + order + 1
 	return maxScore - molsScore(row, col, (order-1)-j, m1, m2, order, ok)
 }
 
-// molsDigest returns a keyed cryptographic digest of s using HMAC-SHA256.
-// The selection key is the per-client secret that makes rankings
-// unpredictable to outside observers and immune to relay URL grinding; the
-// sdk derives it from the client's persisted identity secret, and it stays
-// stable across restarts. The first 8 bytes fold into the grid coordinates
-// (row, col), and the digest also fixes each relay's column order.
 func molsDigest(key []byte, s string) [16]byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(s))
@@ -162,10 +118,6 @@ func molsDigest(key []byte, s string) [16]byte {
 	return out
 }
 
-// molsCongestionMode reports whether the active pool is congested and whether
-// its latency distribution is non-linear. Fallback relays are excluded: their
-// multi-second RTTs reflect unhealthiness, not congestion, and would
-// otherwise flip the ranking into congestion inversion spuriously.
 func molsCongestionMode(states []relayState) (congested, nonLinear bool) {
 	active := make([]relayState, 0, len(states))
 	for _, state := range states {
@@ -177,40 +129,37 @@ func molsCongestionMode(states []relayState) (congested, nonLinear bool) {
 	return avgRTT > molsCongestionRTTThreshold, cv > molsCVThreshold
 }
 
-// molsRTTStats computes the mean RTT and coefficient of variation across relay states.
 func molsRTTStats(states []relayState) (mean time.Duration, cv float64) {
-	var count int
-	var sum float64
+	rtts := make([]float64, 0, len(states))
 	for _, state := range states {
 		if state.DiscoveryRTTAt.IsZero() {
 			continue
 		}
-		count++
-		sum += float64(state.effectiveRTT())
+		rtts = append(rtts, float64(state.effectiveRTT()))
 	}
-	if count == 0 {
+	if len(rtts) == 0 {
 		return 0, 0
 	}
-	avg := sum / float64(count)
-	if count == 1 {
+	var sum float64
+	for _, rtt := range rtts {
+		sum += rtt
+	}
+	avg := sum / float64(len(rtts))
+	if len(rtts) == 1 {
 		return time.Duration(avg), 0
 	}
 	var sq float64
-	for _, state := range states {
-		if state.DiscoveryRTTAt.IsZero() {
-			continue
-		}
-		d := float64(state.effectiveRTT()) - avg
+	for _, rtt := range rtts {
+		d := rtt - avg
 		sq += d * d
 	}
-	stddev := math.Sqrt(sq / float64(count))
+	stddev := math.Sqrt(sq / float64(len(rtts)))
 	if avg > 0 {
 		cv = stddev / avg
 	}
 	return time.Duration(avg), cv
 }
 
-// isRelayFallback reports whether the relay's effective RTT exceeds the fallback threshold.
 func isRelayFallback(state relayState) bool {
 	return !state.DiscoveryRTTAt.IsZero() && state.effectiveRTT() > molsFallbackRTTThreshold
 }
@@ -221,7 +170,6 @@ type molsCandidate struct {
 	seq   int
 }
 
-// betterMOLSCandidate reports whether candidate a should be ranked higher than b using MOLS score and tiebreakers.
 func betterMOLSCandidate(a, b molsCandidate) bool {
 	if a.score != b.score {
 		return a.score > b.score
@@ -234,10 +182,6 @@ func betterMOLSCandidate(a, b molsCandidate) bool {
 	return a.seq < b.seq
 }
 
-// rankRelayPool ranks relay URLs by MOLS priority and observed latency.
-// The key is the per-client selection secret that makes the ranking
-// unpredictable to outside observers; a nil key keeps the ranking
-// deterministic (tooling and tests).
 func rankRelayPool(autoPool []relayState, localAddress string, key []byte) []string {
 	if len(autoPool) == 0 {
 		return nil
@@ -328,8 +272,6 @@ func rankRelayPool(autoPool []relayState, localAddress string, key []byte) []str
 			return 0
 		})
 
-		// Swap the top slot when its tail latency exceeds its peer's, so a
-		// marginally pressured leader falls one place instead of below worse relays.
 		if len(candidates) >= 2 {
 			p0 := candidates[0].state.pressure()
 			p1 := candidates[1].state.pressure()
@@ -349,8 +291,6 @@ func rankRelayPool(autoPool []relayState, localAddress string, key []byte) []str
 	fallbackURLs := rankTier(fallbackStates)
 	return append(activeURLs, fallbackURLs...)
 }
-
-// selectPriority returns the ordered relay URLs for a client using MOLS selection with explicit relays prepended.
 func selectPriority(states []relayState, routeState routeState) []string {
 	now := time.Now().UTC()
 	explicit := make([]string, 0, len(routeState.ExplicitRelayURLs))
@@ -360,8 +300,6 @@ func selectPriority(states []relayState, routeState routeState) []string {
 			continue
 		}
 		seen[relayURL] = struct{}{}
-		// Explicit URLs remain selectable if discovery evicts their candidate.
-		// Retained state still enforces bans, backoff, and transport requirements.
 		eligible := true
 		for _, state := range states {
 			if state.Descriptor.APIHTTPSAddr != relayURL {
@@ -387,8 +325,6 @@ func selectPriority(states []relayState, routeState routeState) []string {
 	return append(explicit, auto...)
 }
 
-// applyActiveStickiness retains healthy active connections under the quota,
-// then appends every other candidate in ranked order.
 func applyActiveStickiness(ranked []string, activeRelayURLs []string, states []relayState, maxActive int) []string {
 	if len(ranked) == 0 || maxActive <= 0 || len(activeRelayURLs) == 0 {
 		return ranked

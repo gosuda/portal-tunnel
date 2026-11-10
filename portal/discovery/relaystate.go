@@ -38,22 +38,11 @@ const (
 	AnnounceMaxValidity = 24 * time.Hour
 )
 
-// relayTrust classifies whether this relay has directly verified a pool
-// entry or only received its descriptor from untrusted input. Verifying a
-// relay never verifies the other relays its discovery response mentions;
-// those are admitted as candidates like any other untrusted descriptor.
 type relayTrust uint8
 
 const (
-	// relayCandidate marks a descriptor admitted from untrusted input.
-	// Candidates remain refresh-poll targets, but they are excluded from
-	// Descriptors(), automatic route selection, and this relay's own gossip
-	// output until promoted.
 	relayCandidate relayTrust = iota
 
-	// relayVerified marks a relay whose own URL this relay polled directly
-	// and which served a validly signed self-descriptor. Verified entries
-	// are globally discoverable and automatically selectable.
 	relayVerified
 )
 
@@ -63,7 +52,7 @@ type percentileTracker struct {
 
 func (pt *percentileTracker) add(rtt time.Duration) {
 	pt.samples = append(pt.samples, float64(rtt))
-	if len(pt.samples) > 100 { // Keep last 100 samples
+	if len(pt.samples) > 100 {
 		pt.samples = pt.samples[1:]
 	}
 }
@@ -80,8 +69,6 @@ func (pt *percentileTracker) get(p float64) time.Duration {
 		return 0
 	}
 
-	// Sort a bounded scratch copy so querying a percentile preserves the
-	// arrival order used to evict samples. Interpolate between closest ranks.
 	var scratch [100]float64
 	samples := scratch[:len(pt.samples)]
 	copy(samples, pt.samples)
@@ -98,16 +85,8 @@ func (pt *percentileTracker) get(p float64) time.Duration {
 type relayState struct {
 	Descriptor types.RelayDescriptor
 	Bootstrap  bool
-	// Trust classifies how the entry entered the set. Descriptors from
-	// untrusted input (/discovery/announce or gossiped discovery
-	// content) are admitted as relayCandidate and stay out of Descriptors()
-	// and automatic route selection until a direct authoritative probe of
-	// that exact relay promotes them to relayVerified.
-	Trust  relayTrust
-	Banned bool
-	// recovery budget. Dead relays are excluded from route planning and relay
-	// listings but stay in the set: the refresher keeps probing them and a
-	// successful discovery response clears the mark.
+	Trust      relayTrust
+	Banned     bool
 	Dead       bool
 	LastSeenAt time.Time
 
@@ -127,7 +106,6 @@ const (
 	maxFailurePenalty = 3 * time.Second
 )
 
-// effectiveRTT computes the relay's RTT with a virtual latency penalty applied for active and discovery failures.
 func (state relayState) effectiveRTT() time.Duration {
 	rtt := state.DiscoveryRTT
 	failures := state.activeFailures + state.discoveryFailures
@@ -141,7 +119,6 @@ func (state relayState) effectiveRTT() time.Duration {
 	return rtt
 }
 
-// pressure measures observed tail latency inflation relative to the median.
 func (state relayState) pressure() float64 {
 	p50 := float64(state.RTTTracker.get(0.50))
 	p90 := float64(state.RTTTracker.get(0.90))
@@ -166,22 +143,12 @@ func (state relayState) hasObservedDescriptor() bool {
 
 type routeState struct {
 	ExplicitRelayURLs []string
-	// ActiveRelayURLs holds currently active connected relay URLs to enable
-	// connection-level stickiness and prevent listener churn during ranking updates.
-	ActiveRelayURLs []string
-	// MaxActiveRelays caps auto-selected listener entries. Zero or negative
-	// values use the selection default of 3.
-	MaxActiveRelays int
-	RequireUDP      bool
-	RequireTCP      bool
-	// LocalAddress is the ingress identity address used by MOLS route selection to
-	// derive a deterministic row index into the MOLS grid.
-	LocalAddress string
-	// SelectionKey is the per-client secret key for MOLS ranking hashes. It
-	// makes rankings unpredictable to outside observers and immune to relay URL
-	// grinding; the sdk derives a stable key from the identity private key.
-	// A nil key keeps the ranking deterministic (tooling and tests).
-	SelectionKey []byte
+	ActiveRelayURLs   []string
+	MaxActiveRelays   int
+	RequireUDP        bool
+	RequireTCP        bool
+	LocalAddress      string
+	SelectionKey      []byte
 }
 
 func (state relayState) supportsRequiredTransports(routeState routeState, now time.Time) bool {

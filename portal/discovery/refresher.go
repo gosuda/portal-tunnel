@@ -40,8 +40,6 @@ func NewRefresher(relaySet *RelaySet) *Refresher {
 		utils.WithHTTPTimeout(defaultRequestTimeout),
 		utils.WithHTTPCheckRedirect(rejectDiscoveryRedirect),
 	)
-	// Untrusted descriptors must never use a proxy that can resolve or dial
-	// their hostname on our behalf. Resolve and pin only public IPs ourselves.
 	publicTransport := client.Transport.(*http.Transport).Clone()
 	publicTransport.Proxy = nil
 	publicTransport.DialContext = dialPublicRelay
@@ -101,9 +99,6 @@ func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDesc
 	})
 }
 
-// sortRefreshCandidates orders relays so that the most important sources are
-// refreshed first under concurrency limits: bootstrap, then discovered
-// healthy relays, and finally recovery/backoff candidates.
 func sortRefreshCandidates(states []relayState) []relayState {
 	slices.SortFunc(states, func(a, b relayState) int {
 		if a.Bootstrap != b.Bootstrap {
@@ -115,19 +110,7 @@ func sortRefreshCandidates(states []relayState) []relayState {
 		if a.discoveryFailures != b.discoveryFailures {
 			return a.discoveryFailures - b.discoveryFailures
 		}
-		if !a.nextDiscoveryRefreshAt.Equal(b.nextDiscoveryRefreshAt) {
-			if a.nextDiscoveryRefreshAt.IsZero() {
-				return -1
-			}
-			if b.nextDiscoveryRefreshAt.IsZero() {
-				return 1
-			}
-			if a.nextDiscoveryRefreshAt.Before(b.nextDiscoveryRefreshAt) {
-				return -1
-			}
-			return 1
-		}
-		return 0
+		return a.nextDiscoveryRefreshAt.Compare(b.nextDiscoveryRefreshAt)
 	})
 	return states
 }
@@ -161,7 +144,6 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error
 		}
 		client = r.publicHTTPClient
 	} else if utils.IsLocalRelayHost(baseURL.Hostname()) {
-		// Local TLS trust is only permitted for explicitly configured peers.
 		_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
 		if err != nil {
 			r.logDiscoveryFailure(state, err)
@@ -185,9 +167,6 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error
 
 	if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relayURL, resp, measuredAt); err != nil {
 		if errors.Is(err, ErrProtocolMismatch) {
-			// The relay answered; protocol incompatibility is visibility
-			// metadata, not a health failure. Keep polling it without
-			// accumulating discovery failures or pool bans.
 			log.Debug().Err(err).Str("relay", relayURL).Msg("discovery protocol mismatch; relay kept visible as incompatible")
 			return nil
 		}

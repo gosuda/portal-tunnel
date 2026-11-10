@@ -86,8 +86,7 @@ type Config struct {
 }
 
 // ReverseOffer is a capability-verified inbound reverse connection awaiting
-// portal lease admission. Connection ownership transfers with the offer, and
-// its response methods preserve the overlay status-byte protocol.
+// portal lease admission. Connection ownership transfers with the offer.
 type ReverseOffer struct {
 	ServiceIdentity types.ServiceIdentityKey
 	LeaseID         string
@@ -131,8 +130,7 @@ type IssueInput struct {
 }
 
 // Runtime owns IVNP gateway selection, capabilities, framing, peer
-// verification, and admission. Connection ownership transfers with reverse
-// offers and successful gateway connection pairs.
+// verification, and admission.
 type Runtime struct {
 	config Config
 
@@ -209,13 +207,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 	if r == nil || r.router == nil {
 		return errOverlayRuntimeIsNotStarted
 	}
-	// Constructor contexts do not own IVNP resources after success. Close the
-	// router explicitly to cancel construction and join all destination I/O.
 	stop := context.AfterFunc(ctx, r.Close)
 	defer stop()
 	defer r.Close()
-	// NewDestination waits for tunnels and publication; keep it off the public
-	// server startup path so an unavailable overlay still permits direct traffic.
 	endpoint, err := r.router.NewDestination(r.ctx, ivnp.DefaultDestinationConfig())
 	if err != nil {
 		if r.ctx.Err() != nil {
@@ -392,10 +386,9 @@ func (r *Runtime) gatewayCandidates(descriptors []types.RelayDescriptor, now tim
 			continue
 		}
 		addressKey := strings.ToLower(verified.Address)
-		if _, ok := seenAddresses[addressKey]; ok {
-			continue
-		}
-		if _, ok := seenDestinations[destination]; ok {
+		_, addrSeen := seenAddresses[addressKey]
+		_, destSeen := seenDestinations[destination]
+		if addrSeen || destSeen {
 			continue
 		}
 		seenAddresses[addressKey] = struct{}{}
@@ -480,8 +473,6 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay is unavailable")
 		return nil, nil
 	}
-	// The relay ingress resolves the source before this handler runs. Caller-chosen
-	// signing keys and lease IDs must not create fresh admission budgets.
 	if retry := r.sourceLimiter.Allow(source, 1); retry > 0 {
 		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "relay overlay request rate exceeded")
 		return nil, nil
@@ -534,16 +525,15 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 		}
 	}()
 	_ = upstream.SetDeadline(time.Now().Add(10 * time.Second))
-	if err := binary.Write(upstream, binary.BigEndian, uint16(len(capability))); err != nil {
-		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
-		return nil, nil
-	}
-	if _, err := io.WriteString(upstream, capability); err != nil {
-		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
-		return nil, nil
+	handshakeErr := binary.Write(upstream, binary.BigEndian, uint16(len(capability)))
+	if handshakeErr == nil {
+		_, handshakeErr = io.WriteString(upstream, capability)
 	}
 	var response [1]byte
-	if _, err := io.ReadFull(upstream, response[:]); err != nil {
+	if handshakeErr == nil {
+		_, handshakeErr = io.ReadFull(upstream, response[:])
+	}
+	if handshakeErr != nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "relay overlay route is unavailable")
 		return nil, nil
 	}
@@ -570,14 +560,10 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 	}
 	downstream, buffered, err := hijacker.Hijack()
 	if err != nil {
-		// A hijack failure leaves the response writer unusable, so the HTTP
-		// server owns the connection again; record why no bridge started.
 		log.Warn().Err(err).Str("component", "overlay").Msg("gateway bridge hijack failed")
 		return nil, nil
 	}
 	if _, err := fmt.Fprint(buffered, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: raw\r\nConnection: Upgrade\r\n\r\n"); err != nil {
-		// The hijacked connection is unusable, so nothing can be reported to
-		// the client; record why the bridge never started.
 		log.Warn().Err(err).Str("component", "overlay").Msg("gateway bridge upgrade write failed")
 		_ = downstream.Close()
 		return nil, nil
@@ -591,7 +577,7 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 	_ = upstream.SetDeadline(time.Time{})
 	client := &bufferedConn{Conn: downstream, reader: buffered.Reader, release: release}
 	client.stop = context.AfterFunc(r.ctx, func() { _ = client.Close() })
-	handoff = true // ownership and capacity release move to the caller's bridge
+	handoff = true
 	return client, upstream
 }
 
@@ -621,8 +607,6 @@ func (r *Runtime) acceptReverse(conn net.Conn) {
 		_, _ = conn.Write([]byte{types.OverlayStatusUnavailable})
 		return
 	}
-	// Portal chooses the lease-admission outcome through the offer's response
-	// methods; every byte after verification belongs to the offer protocol.
 	select {
 	case r.offers <- ReverseOffer{ServiceIdentity: claims.LeaseIdentity.ServiceKey(), LeaseID: claims.LeaseID, conn: conn}:
 		handoff = true
@@ -735,8 +719,6 @@ func verifyCapability(capability string, now time.Time) (capabilityClaims, error
 }
 
 func peerDestination(conn net.Conn) (string, error) {
-	// IVNP stream addresses carry the hash authenticated by its handshake.
-	// Require the typed address; a hostname on an arbitrary net.Addr is not proof.
 	peer, ok := conn.RemoteAddr().(ivnp.Addr)
 	if !ok || peer.Hash == (ivnp.Hash{}) || peer.Port == 0 {
 		return "", errOverlayConnectionLacksPeerIdentity
