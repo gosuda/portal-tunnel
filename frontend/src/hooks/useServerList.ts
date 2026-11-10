@@ -48,13 +48,10 @@ function collectReputation(
 }
 
 export function useServerList() {
-  // The app whose comments are open, by id, so the panel follows each poll.
   const [commentServerId, setCommentServerId] = useState<string | null>(null);
   const [browseView, setBrowseView] = useState<BrowseView>("home");
   const [showHidden, setShowHidden] = useState(false);
   const isDesktop = useMediaQuery(DESKTOP_QUERY);
-  // The sidebar opens on desktop and closes on mobile, and follows the
-  // breakpoint when it is crossed; in between, the visitor toggles it.
   const [sidebarOpen, setSidebarOpen] = useState(isDesktop);
   const [sidebarBreakpoint, setSidebarBreakpoint] = useState(isDesktop);
   if (sidebarBreakpoint !== isDesktop) {
@@ -67,8 +64,6 @@ export function useServerList() {
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
 
-  // The last snapshot as the relay sent it; an identical poll keeps the
-  // current state, so the directory does not filter, sort and re-render.
   const lastSnapshot = useRef("");
 
   useEffect(() => {
@@ -79,7 +74,6 @@ export function useServerList() {
     const schedule = () => {
       window.clearTimeout(timer);
       timer = undefined;
-      // A hidden tab stops polling; becoming visible refreshes at once.
       if (!cancelled && !document.hidden) {
         timer = window.setTimeout(() => void refresh(), POLL_INTERVAL_MS);
       }
@@ -154,7 +148,6 @@ export function useServerList() {
       typeof response?.down === "number" &&
       typeof response?.total === "number"
     ) {
-      // The next poll must apply the relay's count even if it matches the old snapshot.
       lastSnapshot.current = "";
       setSummaries((current) => ({
         ...current,
@@ -170,9 +163,6 @@ export function useServerList() {
     }
   };
 
-  // Join the relay's vote aggregate onto each card by hostname.
-  // Deps are plain state (array + record), so the compiler can preserve
-  // this memo — a function identity dep would bail compilation out.
   const servers: BaseServer[] = useMemo(
     () =>
       publicState.leases.map(leaseToServer).map((server) => ({
@@ -199,7 +189,6 @@ export function useServerList() {
 
   return {
     ...list,
-    // null once the app leaves the directory, which closes the panel.
     commentServer: servers.find((server) => server.id === commentServerId) ?? null,
     toggleComments: (server: BaseServer) =>
       setCommentServerId((current) => (current === server.id ? null : server.id)),
@@ -221,7 +210,6 @@ export function useServerList() {
       }
       list.resetFilters();
     },
-    // null means unavailable; an empty array is an authoritative empty snapshot.
     leases: publicState.stale ? null : publicState.leases,
     onVote: vote,
   };

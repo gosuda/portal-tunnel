@@ -68,7 +68,6 @@ export function ServerList() {
   );
 }
 
-// The keyed page section owns the request and draft lifetime of one app.
 function CommentsThread({
   server,
   onClose,

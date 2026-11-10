@@ -32,7 +32,6 @@
 	});
 
 	$effect(() => {
-		// Track mode changes for re-render
 		const _ = mode.current;
 		if (rendered) {
 			renderDiagram();

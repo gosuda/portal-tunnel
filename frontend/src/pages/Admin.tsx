@@ -5,7 +5,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { AdminServerList } from "@/components/AdminServerList";
 
 export function Admin() {
-  // One sign-in state for the page; the header signs in and out through it.
   const auth = useAuth();
   const { isAuthenticated, isLoading: authLoading } = auth;
 

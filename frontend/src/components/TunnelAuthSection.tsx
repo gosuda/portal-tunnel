@@ -21,13 +21,9 @@ import { VisitorPreview } from "./tunnel-auth/VisitorPreview";
 export interface TunnelAuthSectionProps {
   auth: TunnelAuthOptions;
   onChange: (next: TunnelAuthOptions) => void;
-  /** From validateTunnelAuth; the same list that gates copying the command. */
   issues: TunnelAuthIssue[];
-  /** The relays in the command; each gives the app its own host. */
   relayUrls: string[];
-  /** Whether relay discovery may publish the app on more relays. */
   discovery: boolean;
-  /** The normalized public name; empty while the user has not chosen one. */
   name: string;
   os: TunnelCommandOS;
 }
@@ -43,7 +39,6 @@ export function TunnelAuthSection({
 }: TunnelAuthSectionProps) {
   const patch = (next: Partial<TunnelAuthOptions>) =>
     onChange({ ...auth, ...next });
-  // Each method reads its own kind of entry, so a list does not carry over.
   const methods = useRadioGroup(
     METHODS.map((method) => method.id),
     auth.method,

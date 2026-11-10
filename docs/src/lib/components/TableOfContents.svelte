@@ -12,7 +12,6 @@
 	let activeId = $state('');
 	let headingElements = $state<HTMLElement[]>([]);
 
-	// Re-extract headings when the page changes
 	$effect(() => {
 		$page.url.pathname;
 
@@ -45,7 +44,6 @@
 		});
 	});
 
-	// Track active heading via runed's useIntersectionObserver
 	useIntersectionObserver(
 		() => headingElements,
 		(entries) => {

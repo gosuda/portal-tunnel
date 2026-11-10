@@ -45,19 +45,21 @@ export function AdminHeader({
         const status = await apiClient.get<DomainResponse>(
           RELAY_API_PATHS.sdk.domain
         );
-        if (!cancelled) {
-          const fetchedVersion =
-            typeof status?.release_version === "string"
-              ? status.release_version.trim()
-              : "";
-          setReleaseVersion(fetchedVersion);
-          setENSVerified(status?.ens?.verified === true);
+        if (cancelled) {
+          return;
         }
+        const fetchedVersion =
+          typeof status?.release_version === "string"
+            ? status.release_version.trim()
+            : "";
+        setReleaseVersion(fetchedVersion);
+        setENSVerified(status?.ens?.verified === true);
       } catch {
-        if (!cancelled) {
-          setReleaseVersion("");
-          setENSVerified(false);
+        if (cancelled) {
+          return;
         }
+        setReleaseVersion("");
+        setENSVerified(false);
       }
     })();
 

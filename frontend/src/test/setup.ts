@@ -21,8 +21,6 @@ if (typeof window !== "undefined" && !window.matchMedia) {
   });
 }
 
-// Node 25+ ships a global Web Storage that shadows jsdom's and lacks methods
-// without --localstorage-file, so tests get an in-memory Storage instead.
 function createMemoryStorage(): Storage {
   const items = new Map<string, string>();
   return {

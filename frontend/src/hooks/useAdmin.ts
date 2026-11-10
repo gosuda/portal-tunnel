@@ -28,7 +28,6 @@ export interface AdminServer extends BaseServer {
   displayIP: string;
 }
 
-/** A transport the relay can open per lease, and how many leases may use it. */
 export interface PortSettings {
   enabled: boolean;
   maxLeases: number;
@@ -141,12 +140,8 @@ export function useAdmin(enabled = true) {
     setPolicySettings(state.settings);
   };
 
-  // Each load takes a number; only the latest may apply its result, so a
-  // refresh after an action and the first load cannot overwrite each other,
-  // and nothing applies after unmount.
   const loadGeneration = useRef(0);
 
-  /** Reads the policy state; showLoading puts the page in its loading state. */
   const reload = async (showLoading: boolean) => {
     const generation = ++loadGeneration.current;
     setError("");

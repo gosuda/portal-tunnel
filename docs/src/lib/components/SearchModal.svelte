@@ -139,7 +139,6 @@
 	class="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]"
 	onkeydown={handleKeydown}
 >
-	<!-- Backdrop -->
 	<button
 		class="absolute inset-0 bg-foreground/20 backdrop-blur-sm"
 		onclick={close}
@@ -147,14 +146,12 @@
 		tabindex="-1"
 	></button>
 
-	<!-- Modal -->
 	<div
 		role="dialog"
 		aria-modal="true"
 		aria-label="Search documentation"
 		class="relative z-10 mx-4 flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/95 shadow-2xl backdrop-blur-xl"
 	>
-		<!-- Search input -->
 		<div class="flex items-center gap-3 px-5 py-4">
 			<svg class="h-5 w-5 shrink-0 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 				<path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
@@ -176,14 +173,12 @@
 			{/if}
 		</div>
 
-		<!-- Results count -->
 		{#if query && !loading && !searchUnavailable}
 			<div class="border-t border-border/40 px-5 py-2 text-xs text-text-muted">
 				{totalCount} result{totalCount !== 1 ? 's' : ''} for <span class="font-medium text-foreground">{query}</span>
 			</div>
 		{/if}
 
-		<!-- Results -->
 		<div class="max-h-[55vh] overflow-y-auto border-t border-border/40 px-3 py-3">
 			{#if searchUnavailable}
 				<div class="px-4 py-8 text-center text-sm text-text-muted">
@@ -200,11 +195,9 @@
 				<div class="space-y-3">
 					{#each groups as group}
 						<div class="overflow-hidden rounded-xl border border-border/50 bg-secondary/30">
-							<!-- Page title -->
 							<div class="px-4 py-2.5">
 								<span class="font-display text-sm font-bold text-foreground">{group.pageTitle}</span>
 							</div>
-							<!-- Sub-results -->
 							<div class="divide-y divide-border/30">
 								{#each group.subResults as sub}
 									{@const flatIdx = flatResults.indexOf(sub.url)}
@@ -236,7 +229,6 @@
 			{/if}
 		</div>
 
-		<!-- Footer -->
 		<div class="flex items-center justify-between border-t border-border/40 px-5 py-2.5 text-[11px] text-text-muted">
 			<div class="flex items-center gap-3">
 				<span><kbd class="rounded border border-border/60 px-1 py-0.5">↑↓</kbd> navigate</span>

@@ -2,10 +2,6 @@ import type { ReactNode } from "react";
 import { TriangleAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/**
- * The classes the tunnel command forms share. `section` heads a
- * part of the dialog; `label` names a field inside one.
- */
 export const TUNNEL_FORM_STYLES = {
   help: "text-xs leading-5 text-muted-foreground dark:text-zinc-500",
   section: "text-sm font-medium text-foreground dark:text-zinc-100",
@@ -61,7 +57,6 @@ export function Chip({
   onRemove,
 }: {
   text: string;
-  /** What the entry is, shown before the text. */
   kind?: string;
   invalid?: boolean;
   removeLabel: string;
@@ -97,7 +92,6 @@ export function Chip({
   );
 }
 
-/** A row of chips ending in a text input: Enter adds, Backspace on an empty input removes the last chip. */
 export function ChipField({
   id,
   chips,

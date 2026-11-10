@@ -88,9 +88,10 @@ export function TagCombobox({
     }
   };
 
+  const BLUR_CLOSE_DELAY_MS = 100;
+
   const handleBlur = () => {
-    // allow option click before closing
-    setTimeout(() => setOpen(false), 100);
+    setTimeout(() => setOpen(false), BLUR_CLOSE_DELAY_MS);
   };
 
   return (

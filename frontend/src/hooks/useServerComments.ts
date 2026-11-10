@@ -4,8 +4,6 @@ import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import type { AppComment, CommentListResponse, ReputationVoteAction, VoteCommentRequest } from "@/types/api";
 
-// Mounted once per selected app by ServerList, so closing or switching panels
-// discards that app's draft and cannot apply an old request to a new thread.
 export function useServerComments(server: BaseServer) {
   const [comments, setComments] = useState<AppComment[]>([]);
   const [draft, setDraft] = useState("");
@@ -27,8 +25,10 @@ export function useServerComments(server: BaseServer) {
     return () => { cancelled = true; };
   }, [path]);
 
+  const busy = loading || pending !== null || votingCommentId !== null;
+
   const refresh = async () => {
-    if (loading || pending || votingCommentId !== null) return;
+    if (busy) return;
     setLoading(true);
     setError("");
     try {
@@ -42,7 +42,7 @@ export function useServerComments(server: BaseServer) {
   };
 
   const submit = async () => {
-    if (!draft.trim() || loading || pending || votingCommentId !== null) return;
+    if (!draft.trim() || busy) return;
     setPending("post");
     setError("");
     try {
@@ -60,7 +60,7 @@ export function useServerComments(server: BaseServer) {
   };
 
   const remove = async (id: string) => {
-    if (loading || pending || votingCommentId !== null) return;
+    if (busy) return;
     setPending("delete");
     setError("");
     try {
@@ -74,7 +74,7 @@ export function useServerComments(server: BaseServer) {
   };
 
   const voteComment = async (id: string, vote: ReputationVoteAction) => {
-    if (loading || pending || votingCommentId !== null) return;
+    if (busy) return;
     setVotingCommentId(id);
     setError("");
     try {

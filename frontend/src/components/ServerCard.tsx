@@ -21,11 +21,6 @@ export interface ConstellationData {
   lines: { x1: number; y1: number; x2: number; y2: number; opacity: number }[];
 }
 
-/**
- * Deterministic Night Sky Constellation Generator.
- * Transforms an identity address or name into a celestial constellation map
- * across a deep midnight sky with connected starlight paths.
- */
 export function createConstellationData(seed: string): ConstellationData {
   const normalizedSeed = seed.toLowerCase().trim();
   const randseed = new Int32Array(4);
@@ -42,12 +37,10 @@ export function createConstellationData(seed: string): ConstellationData {
     return (randseed[3] >>> 0) / ((1 << 31) >>> 0);
   }
 
-  // 1. Faint cosmic nebula cloud in deep space (subtle deep sapphire to slate indigo, hue 205-240)
   const nebulaHue = Math.floor(205 + rand() * 35);
   const nebulaCx = Math.floor(90 + rand() * 140);
   const nebulaCy = Math.floor(45 + rand() * 90);
 
-  // 2. Faint background starfield (20 to 28 tiny background pinpricks)
   const bgCount = 20 + Math.floor(rand() * 9);
   const bgStars: { cx: number; cy: number; r: number; opacity: number }[] = [];
   for (let i = 0; i < bgCount; i += 1) {
@@ -59,7 +52,6 @@ export function createConstellationData(seed: string): ConstellationData {
     });
   }
 
-  // 3. Main constellation star nodes (6 to 8 stars)
   const starCount = 6 + Math.floor(rand() * 3);
   const candidateStars: { x: number; y: number; r: number; opacity: number }[] = [];
 
@@ -80,17 +72,17 @@ export function createConstellationData(seed: string): ConstellationData {
       }
     }
 
-    if (!tooClose) {
-      candidateStars.push({
-        x,
-        y,
-        r: Math.round((1.6 + rand() * 1.5) * 10) / 10,
-        opacity: Math.round((0.85 + rand() * 0.15) * 100) / 100,
-      });
+    if (tooClose) {
+      continue;
     }
+    candidateStars.push({
+      x,
+      y,
+      r: Math.round((1.6 + rand() * 1.5) * 10) / 10,
+      opacity: Math.round((0.85 + rand() * 0.15) * 100) / 100,
+    });
   }
 
-  // Mark top 2 brightest stars as primary with diffraction cross flares
   const sortedIndices = candidateStars
     .map((s, idx) => ({ r: s.r, idx }))
     .sort((a, b) => b.r - a.r);
@@ -101,7 +93,6 @@ export function createConstellationData(seed: string): ConstellationData {
     isPrimary: primarySet.has(idx),
   }));
 
-  // 4. Connect stars using Minimum Spanning Tree (MST) so it forms a single elegant constellation
   const n = stars.length;
   const inTree = new Set<number>([0]);
   const edges: [number, number][] = [];
@@ -113,28 +104,27 @@ export function createConstellationData(seed: string): ConstellationData {
 
     for (const u of inTree) {
       for (let v = 0; v < n; v += 1) {
-        if (!inTree.has(v)) {
-          const dx = stars[u].x - stars[v].x;
-          const dy = stars[u].y - stars[v].y;
-          const distSq = dx * dx + dy * dy;
-          if (distSq < bestDist) {
-            bestDist = distSq;
-            bestU = u;
-            bestV = v;
-          }
+        if (inTree.has(v)) {
+          continue;
+        }
+        const dx = stars[u].x - stars[v].x;
+        const dy = stars[u].y - stars[v].y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < bestDist) {
+          bestDist = distSq;
+          bestU = u;
+          bestV = v;
         }
       }
     }
 
-    if (bestU !== -1 && bestV !== -1) {
-      inTree.add(bestV);
-      edges.push([bestU, bestV]);
-    } else {
+    if (bestU === -1 || bestV === -1) {
       break;
     }
+    inTree.add(bestV);
+    edges.push([bestU, bestV]);
   }
 
-  // Add 1 extra nearest-neighbor edge if distance < 85px to create occasional closed loop
   if (n >= 4) {
     let extraDist = Infinity;
     let extraU = -1;
@@ -144,15 +134,16 @@ export function createConstellationData(seed: string): ConstellationData {
         const alreadyConnected = edges.some(
           ([a, b]) => (a === u && b === v) || (a === v && b === u)
         );
-        if (!alreadyConnected) {
-          const dx = stars[u].x - stars[v].x;
-          const dy = stars[u].y - stars[v].y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 85 && dist < extraDist) {
-            extraDist = dist;
-            extraU = u;
-            extraV = v;
-          }
+        if (alreadyConnected) {
+          continue;
+        }
+        const dx = stars[u].x - stars[v].x;
+        const dy = stars[u].y - stars[v].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 85 && dist < extraDist) {
+          extraDist = dist;
+          extraU = u;
+          extraV = v;
         }
       }
     }
@@ -198,21 +189,18 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          {/* Deep Midnight Sky Gradient */}
           <linearGradient id={skyGradId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#040711" />
             <stop offset="48%" stopColor="#081020" />
             <stop offset="100%" stopColor="#0c172e" />
           </linearGradient>
 
-          {/* Deep Space Cosmic Nebula Cloud */}
           <radialGradient id={nebulaId} cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor={`hsl(${data.nebulaHue}, 50%, 28%)`} stopOpacity="0.32" />
             <stop offset="60%" stopColor={`hsl(${data.nebulaHue}, 45%, 16%)`} stopOpacity="0.12" />
             <stop offset="100%" stopColor="#040711" stopOpacity="0" />
           </radialGradient>
 
-          {/* Starlight Glow Flare */}
           <radialGradient id={starGlowId} cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
             <stop offset="35%" stopColor="#bae6fd" stopOpacity="0.4" />
@@ -220,10 +208,8 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
           </radialGradient>
         </defs>
 
-        {/* 1. Base Deep Night Sky */}
         <rect width="320" height="180" fill={`url(#${skyGradId})`} />
 
-        {/* 2. Soft Ambient Cosmic Nebula */}
         <ellipse
           cx={data.nebulaCx}
           cy={data.nebulaCy}
@@ -232,7 +218,6 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
           fill={`url(#${nebulaId})`}
         />
 
-        {/* 3. Delicate Background Starfield */}
         <g fill="#f8fafc">
           {data.bgStars.map((s, idx) => (
             <circle
@@ -245,7 +230,6 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
           ))}
         </g>
 
-        {/* 4. Constellation Lines (Starlight connecting paths) */}
         <g stroke="#bae6fd" strokeWidth="1" strokeLinecap="round">
           {data.lines.map((line, idx) => (
             <line
@@ -259,10 +243,8 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
           ))}
         </g>
 
-        {/* 5. Constellation Stars */}
         {data.stars.map((star, idx) => (
           <g key={`star-${idx}`}>
-            {/* Primary star aura & lens flare diffraction cross */}
             {star.isPrimary && (
               <>
                 <circle
@@ -293,7 +275,6 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
               </>
             )}
 
-            {/* Star outer ring */}
             <circle
               cx={star.x}
               cy={star.y}
@@ -302,7 +283,6 @@ export function DefaultServerThumbnail({ server }: { server: BaseServer }) {
               opacity="0.35"
             />
 
-            {/* Star luminous core */}
             <circle
               cx={star.x}
               cy={star.y}
@@ -337,7 +317,6 @@ export function ServerCard({
     id: serverId, name, description, tags, thumbnail, online,
     tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
   } = server;
-  // The thumbnail that failed to load; a new thumbnail URL gets its own try.
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const [isVoting, setIsVoting] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
@@ -376,7 +355,6 @@ export function ServerCard({
 
   const cardBody = (
     <article className="relative w-full min-w-0">
-      {/* 1. Thumbnail Container (16:9 aspect ratio) */}
       <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-muted shadow-2xs transition-all duration-300 ease-out group-hover:scale-[1.02] group-hover:border-border group-hover:shadow-md">
         {effectiveThumbnail ? (
           <img
@@ -390,7 +368,6 @@ export function ServerCard({
           <DefaultServerThumbnail server={server} />
         )}
 
-        {/* Top-right custom action overlay */}
         {action && (
           <div className="pointer-events-auto absolute top-2.5 right-2.5 z-30">
             {action}
@@ -402,7 +379,6 @@ export function ServerCard({
           </span>
         )}
 
-        {/* Payment badge */}
         {showPaymentBadge && (
           <span
             className={clsx(
@@ -415,7 +391,6 @@ export function ServerCard({
           </span>
         )}
 
-        {/* Online LIVE badge */}
         {online && !isTransportService && (
           <span className="absolute bottom-2.5 right-2.5 inline-flex items-center gap-1.5 rounded bg-black/80 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-400 backdrop-blur-xs">
             <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -423,7 +398,6 @@ export function ServerCard({
           </span>
         )}
 
-        {/* Description overlay on hover or focus-within */}
         {hasDetails && (
           <div
             className={clsx(
@@ -458,7 +432,6 @@ export function ServerCard({
           </div>
         )}
 
-        {/* Raw transport endpoints (TCP / UDP) */}
         {isTransportService && (
           <div className="pointer-events-auto absolute inset-x-2.5 bottom-2.5 z-30 space-y-1 rounded-lg border border-white/10 bg-black/85 p-2 backdrop-blur-md shadow-xs">
             {endpoints.map((endpoint) => (
@@ -482,9 +455,7 @@ export function ServerCard({
         )}
       </div>
 
-      {/* 2. Details Container: Title (left) + Southeast Actions (Up, Down, Comments) (right) */}
       <div className={clsx("mt-2.5 flex items-center justify-between gap-2", isNavigable ? "pointer-events-none" : "")}>
-        {/* Title */}
         <h3
           title={name}
           className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-foreground transition-colors group-hover:text-primary"
@@ -492,10 +463,8 @@ export function ServerCard({
           {name}
         </h3>
 
-        {/* Southeast actions: Upvotes, Downvotes, Comments */}
         {showActions && (
           <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5">
-            {/* Rating Pill: [ 👍 12 | 👎 3 ] */}
             {(onVote || server.reputation) && (
               <div className="inline-flex h-7 items-center rounded-lg border border-border/70 bg-secondary/50 p-0.5 text-xs text-muted-foreground shadow-2xs backdrop-blur-xs">
                 <button
@@ -540,7 +509,6 @@ export function ServerCard({
               </div>
             )}
 
-            {/* Comments Button: [ 💬 5 ] */}
             {(onOpenComments || server.reputation?.comments !== undefined) && (
               onOpenComments ? (
                 <button
@@ -572,7 +540,6 @@ export function ServerCard({
         )}
       </div>
 
-      {/* Children slot (e.g. Admin controls) */}
       {children && (
         <div className="pointer-events-auto relative z-30 mt-3 border-t border-border pt-3">
           {children}

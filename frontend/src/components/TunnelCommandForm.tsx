@@ -103,8 +103,6 @@ export function TunnelCommandForm() {
     setRelayUrls((prev) => prev.filter((candidate) => candidate !== url));
   };
 
-  // Shared text and input styles come from the table; the classes below are
-  // this form's own layout.
   const inlineFieldClass = "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-secondary/60";
   const inlineInputClass = "h-9 border-0 bg-transparent px-3 text-sm font-semibold text-foreground placeholder:text-text-muted shadow-none focus-visible:ring-0 dark:text-zinc-100 dark:placeholder:text-zinc-500";
   const osGroupClass = "flex rounded-md bg-border p-1 dark:bg-secondary/60";
@@ -367,9 +365,7 @@ export function TunnelCommandForm() {
   );
 }
 
-/** Owns its top spacing, so the empty region adds no gap under the command. */
 function NotReady({ issues }: { issues: TunnelAuthIssue[] }) {
-  // Always mounted: a live region announces text that appears inside it.
   return (
     <div role="status" className={cn(issues.length > 0 && "pt-2")}>
       {issues.length > 0 && (

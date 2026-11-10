@@ -1,7 +1,6 @@
 import type { DiscoveryResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
 
 export interface RelayReleases {
-  /** Release versions the serving relay observed, by relay URL. */
   versions: Record<string, string>;
   discovery?: DiscoveryResponse;
 }
@@ -81,8 +80,6 @@ export function mergeIncompatibleRelays(
   return merged;
 }
 
-// Locally observed release metadata: peer versions collected from the serving
-// relay's own discovery response, plus the response envelope itself.
 export function relayReleaseLabel(
   versions: Record<string, string>,
   relay: KnownRelay,
