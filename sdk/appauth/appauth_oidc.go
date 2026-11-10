@@ -175,15 +175,10 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request host", http.StatusBadRequest)
 		return
 	}
-	o.issueOIDCServeLoginRedirect(w, r, issueOIDCServeLoginRedirectState{doc: doc, host: host})
+	o.issueOIDCServeLoginRedirect(w, r, doc, host)
 }
 
-type issueOIDCServeLoginRedirectState struct {
-	doc  oidcDiscoveryDocument
-	host string
-}
-
-func (o *oidcAuthenticator) issueOIDCServeLoginRedirect(w http.ResponseWriter, r *http.Request, state issueOIDCServeLoginRedirectState) {
+func (o *oidcAuthenticator) issueOIDCServeLoginRedirect(w http.ResponseWriter, r *http.Request, doc oidcDiscoveryDocument, host string) {
 	loginState := rand.Text()
 	nonce := rand.Text()
 	codeVerifier := oauth2.GenerateVerifier()
@@ -194,7 +189,7 @@ func (o *oidcAuthenticator) issueOIDCServeLoginRedirect(w http.ResponseWriter, r
 		State:        loginState,
 		Nonce:        nonce,
 		CodeVerifier: codeVerifier,
-		Host:         state.host,
+		Host:         host,
 		Next:         next,
 		ExpiresAt:    expiresAt.Unix(),
 	}
@@ -212,7 +207,7 @@ func (o *oidcAuthenticator) issueOIDCServeLoginRedirect(w http.ResponseWriter, r
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	oauthCfg := o.oauth2Config(state.doc, state.host)
+	oauthCfg := o.oauth2Config(doc, host)
 	authOptions := []oauth2.AuthCodeOption{
 		oauth2.S256ChallengeOption(codeVerifier),
 		oauth2.SetAuthURLParam("nonce", nonce),

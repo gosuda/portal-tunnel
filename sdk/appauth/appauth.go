@@ -264,9 +264,33 @@ func buildApplicationAuthNewState(id types.Identity, settings applicationAuthSet
 		allowedSubjects[subject] = struct{}{}
 	}
 	allowAnySubject := settings.provider == ProviderSIWE || (settings.provider == ProviderCredential && len(settings.allowed) == 0)
-	providers, err := buildApplicationAuthNewProviders(id, settings, publicHosts)
-	if err != nil {
-		return applicationAuthNewState{}, err
+	var siwe *identity.SIWEAuthenticator
+	var oidc *oidcAuthenticator
+	var saml *samlAuthenticator
+	var email *emailAuthenticator
+	switch settings.provider {
+	case ProviderSIWE:
+		siweAuth, err := identity.NewSIWEAuthenticator(identity.SIWEAuthConfig{
+			AllowedAddresses: settings.allowed,
+			AllowAnyAddress:  len(settings.allowed) == 0,
+			Statement:        "Sign in to this Portal application",
+			ChallengePrefix:  "pac_",
+		})
+		if err != nil {
+			return applicationAuthNewState{}, err
+		}
+		siwe = siweAuth
+	case ProviderOIDC, ProviderSAML:
+		oidcAuth, samlAuth, err := buildOIDCSAMLProviders(id, settings)
+		if err != nil {
+			return applicationAuthNewState{}, err
+		}
+		oidc, saml = oidcAuth, samlAuth
+	case ProviderEmail:
+		if publicHosts == nil {
+			return applicationAuthNewState{}, errEmailRequiresPublicHosts
+		}
+		email = newEmailAuthenticator(settings)
 	}
 	credentialKeyRaw, err := identity.DeriveToken(id, applicationCredentialKeyUse)
 	if err != nil {
@@ -278,48 +302,13 @@ func buildApplicationAuthNewState(id types.Identity, settings applicationAuthSet
 		credentialKey:   credentialKey,
 		allowedSubjects: allowedSubjects,
 		allowAnySubject: allowAnySubject,
-		siwe:            providers.siwe,
-		oidc:            providers.oidc,
-		saml:            providers.saml,
-		email:           providers.email,
+		siwe:            siwe,
+		oidc:            oidc,
+		saml:            saml,
+		email:           email,
 	}, nil
 }
 
-type applicationAuthNewProviders struct {
-	siwe  *identity.SIWEAuthenticator
-	oidc  *oidcAuthenticator
-	saml  *samlAuthenticator
-	email *emailAuthenticator
-}
-
-func buildApplicationAuthNewProviders(id types.Identity, settings applicationAuthSettings, publicHosts func() []PublicHost) (applicationAuthNewProviders, error) {
-	var providers applicationAuthNewProviders
-	switch settings.provider {
-	case ProviderSIWE:
-		siweAuth, err := identity.NewSIWEAuthenticator(identity.SIWEAuthConfig{
-			AllowedAddresses: settings.allowed,
-			AllowAnyAddress:  len(settings.allowed) == 0,
-			Statement:        "Sign in to this Portal application",
-			ChallengePrefix:  "pac_",
-		})
-		if err != nil {
-			return applicationAuthNewProviders{}, err
-		}
-		providers.siwe = siweAuth
-	case ProviderOIDC, ProviderSAML:
-		oidcAuth, samlAuth, err := buildOIDCSAMLProviders(id, settings)
-		if err != nil {
-			return applicationAuthNewProviders{}, err
-		}
-		providers.oidc, providers.saml = oidcAuth, samlAuth
-	case ProviderEmail:
-		if publicHosts == nil {
-			return applicationAuthNewProviders{}, errEmailRequiresPublicHosts
-		}
-		providers.email = newEmailAuthenticator(settings)
-	}
-	return providers, nil
-}
 func buildOIDCSAMLProviders(id types.Identity, settings applicationAuthSettings) (*oidcAuthenticator, *samlAuthenticator, error) {
 	stateKey, err := identity.DeriveToken(id, "application-access-"+settings.provider+"-state")
 	if err != nil {
