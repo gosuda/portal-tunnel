@@ -5,7 +5,6 @@ import {
 } from "@/lib/metadata";
 import type { Lease, ReputationSummary } from "@/types/api";
 
-/** One app in the directory, built from a relay lease. */
 export interface BaseServer {
   id: string;
   name: string;
@@ -16,6 +15,7 @@ export interface BaseServer {
   online: boolean;
   dns: string;
   link: string;
+  address?: string;
   tcpAddr?: string;
   udpAddr?: string;
   lastUpdated?: string;
@@ -25,11 +25,6 @@ export interface BaseServer {
   reputation?: ReputationSummary;
 }
 
-/**
- * The directory entry for a lease. The id is the canonical hostname, so it
- * stays stable when the short name changes. A raw TCP or UDP app has no web
- * page, so it gets no link.
- */
 export function leaseToServer(row: Lease): BaseServer {
   const metadata = parseLeaseMetadata(row.metadata);
   const payment = resolveLeasePayment(metadata);
@@ -49,6 +44,7 @@ export function leaseToServer(row: Lease): BaseServer {
     online: (row.ready || 0) > 0,
     dns: publicHostname,
     link: !tcpAddr && !udpAddr && publicHostname ? `https://${publicHostname}/` : "",
+    address: row.address,
     tcpAddr: tcpAddr || undefined,
     udpAddr: udpAddr || undefined,
     lastUpdated: row.last_seen_at || undefined,

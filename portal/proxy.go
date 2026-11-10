@@ -212,8 +212,6 @@ func (m *BPSManager) SetServiceIdentityBPSLimits(next map[types.ServiceIdentityK
 		m.identityBPS.Store(limits)
 	}
 	m.mu.Lock()
-	// Rates are read separately on every reservation. Keep accrued credit for
-	// identities that remain limited, just as individual rate updates do.
 	for key := range m.identityLimiters {
 		bps, configured := limits[key]
 		if !configured {
@@ -323,8 +321,6 @@ func (l *bpsLimiter) reserve(bytes, bps float64) time.Duration {
 	}
 
 	missing := bytes - l.tokens
-	// Waiting must retain accrued credit; otherwise an early retry discards
-	// progress and can keep an open connection throttled indefinitely.
 	l.updatedAt = now
 	return time.Duration(missing / bps * float64(time.Second))
 }

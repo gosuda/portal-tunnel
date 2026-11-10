@@ -5,8 +5,6 @@
 	const SHARE_KIND_LABEL: Record<ShareKind, string> = { url: 'URL', file: 'File', port: 'Port' };
 	const SHARE_PLACEHOLDER = 'file:///Users/me/site/index.html or 3000';
 
-	// Empty by default so the field reads as "paste a link here" instead of
-	// pre-committing the user to a local port.
 	let target = $state('');
 	let os: TunnelCommandOS = $state('unix');
 	let name = $state('');
@@ -64,7 +62,6 @@
 			</div>
 
 			<div class="space-y-5">
-				<!-- 1. Paste what you want to share -->
 				<div class="space-y-2">
 					<div class="space-y-1.5">
 						<p class="text-[13px] font-semibold tracking-[0.04em] text-slate-100 sm:text-sm">
@@ -85,7 +82,6 @@
 					</div>
 				</div>
 
-				<!-- 2. Run this command -->
 				<div class="space-y-3">
 					<div class="flex flex-wrap items-center justify-between gap-3">
 						<p class="text-[13px] font-semibold tracking-[0.04em] text-slate-100 sm:text-sm">
@@ -122,7 +118,6 @@
 						</div>
 					</div>
 
-					<!-- Share + Name controls -->
 					<div class="space-y-2">
 						<div class="flex min-w-0 items-center gap-2">
 							<span
@@ -163,7 +158,6 @@
 						</div>
 					</div>
 
-					<!-- Command block -->
 					<div
 						class="relative min-h-[148px] rounded-xl border px-4 py-4 pr-14 font-mono text-sm leading-7"
 						style="border-color: rgba(255,255,255,0.1); background: rgba(0,0,0,0.55); color: white; box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);"
@@ -207,7 +201,6 @@
 					</div>
 				</div>
 
-				<!-- 3. Open the URL printed by Portal -->
 				<div class="space-y-2 pt-1">
 					<p class="text-[13px] font-semibold tracking-[0.04em] text-slate-100 sm:text-sm">
 						3. Open the URL printed by Portal

@@ -120,8 +120,7 @@ func ResolveStaticSite(input string) (root string, index string, err error) {
 // StaticSiteRequestPath strips the route prefix from a request path and returns
 // a clean, root-relative path. It reports false for parent-directory traversal.
 func StaticSiteRequestPath(prefix, urlPath string) (string, bool) {
-	// Reject before normalizing: NormalizeURLPath cleans ".." away, so a check
-	// after it would never fire.
+
 	if containsDotDot(urlPath) {
 		return "", false
 	}

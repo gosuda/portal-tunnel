@@ -113,7 +113,6 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 
 	flags := make([]string, 0, len(args))
 	positionals := make([]string, 0, len(args))
-	terminated := false
 
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
@@ -123,19 +122,14 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 		}
 		if arg == "--" {
 			positionals = append(positionals, args[i+1:]...)
-			terminated = true
+			flags = append(flags, "--")
 			break
 		}
 
 		name := strings.TrimLeft(strings.TrimSpace(arg), "-")
-		if name == "" {
-			positionals = append(positionals, args[i])
-			continue
-		}
-		hasInlineValue := false
-		if cut, _, ok := strings.Cut(name, "="); ok {
-			name = strings.TrimSpace(cut)
-			hasInlineValue = true
+		before, _, hasInlineValue := strings.Cut(name, "=")
+		if hasInlineValue {
+			name = strings.TrimSpace(before)
 		}
 		if name == "" {
 			positionals = append(positionals, args[i])
@@ -150,12 +144,13 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 		}
 		boolValue, ok := flagDef.Value.(boolFlagValue)
 		if ok && boolValue.IsBoolFlag() {
-			if i+1 < len(args) {
-				next := strings.TrimSpace(args[i+1])
-				if _, err := strconv.ParseBool(next); err == nil {
-					flags[len(flags)-1] = args[i] + "=" + next
-					i++
-				}
+			if i+1 >= len(args) {
+				continue
+			}
+			next := strings.TrimSpace(args[i+1])
+			if _, err := strconv.ParseBool(next); err == nil {
+				flags[len(flags)-1] = args[i] + "=" + next
+				i++
 			}
 			continue
 		}
@@ -166,11 +161,6 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 		flags = append(flags, args[i])
 	}
 
-	// Keep the terminator ahead of every positional after moving flags.
-	// Otherwise, a flag-like target after -- becomes an executable option.
-	if terminated {
-		flags = append(flags, "--")
-	}
 	return append(flags, positionals...)
 }
 
@@ -192,14 +182,11 @@ func RequireNoArgs(args []string, command string) error {
 	return fmt.Errorf("%s does not accept positional arguments", strings.TrimSpace(command))
 }
 
-// HelpTopic maps a subcommand name to its usage printer.
 type HelpTopic struct {
 	Name  string
 	Usage func(io.Writer)
 }
 
-// MakeHelpCommand returns a CommandFunc that dispatches help topics.
-// Topics are matched in order; the slice provides deterministic output.
 func MakeHelpCommand(rootUsage func(io.Writer), topics []HelpTopic) CommandFunc {
 	return func(args []string) error {
 		if len(args) == 0 {
@@ -247,9 +234,6 @@ func WriteCommandUsage(w io.Writer, usage []string, examples []string) {
 	}
 }
 
-// WriteFlagDefaults prints the registered flags. Custom Usage printers replace
-// FlagSet defaults, so --help would otherwise list examples and omit the flags
-// agents need (identity-path, relays).
 func WriteFlagDefaults(w io.Writer, fs *flag.FlagSet) {
 	if w == nil || fs == nil {
 		return

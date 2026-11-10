@@ -1,10 +1,5 @@
 package policy
 
-// Service reputation: relay-local app votes, comments, and comment votes.
-//
-// The relay's lease registry owns service lifecycle. This file owns only the
-// bounded feedback data and voter identities; HTTP handling stays with the API.
-
 import (
 	"cmp"
 	"crypto/hmac"
@@ -43,15 +38,10 @@ const (
 const (
 	reputationVoterIDBytes = 32
 
-	// Whole-file JSON is rewritten on each changed vote so these caps keep
-	// the work per public POST small; identities persist for the life of
-	// the state file, so past the identity cap new identities are rejected.
 	reputationMaxVoters     = 1024
 	reputationMaxIdentities = 4096
 )
 
-// persistedReputation is the reputation.json schema. A non-nil Comments also
-// records that legacy comments.json has been imported, including an empty file.
 type persistedReputation struct {
 	VoterSecret []byte                       `json:"voter_secret"`
 	Identities  map[string]map[string]string `json:"identities,omitempty"`
@@ -169,8 +159,6 @@ func validateIdentities(identities map[string]map[string]string) error {
 }
 
 func loadLegacyComments(dir string) (*persistedComments, error) {
-	// Once imported, the comments object remains present even when empty.
-	// The old file is never read again, so deleted comments cannot reappear.
 	comments := &persistedComments{}
 	var raw json.RawMessage
 	exists, err := utils.ReadJSONFileIfExists(filepath.Join(dir, "comments.json"), &raw)
@@ -200,9 +188,6 @@ func (s *ReputationStore) AllowVote(source netip.Addr, comment bool) time.Durati
 	return retry
 }
 
-// Vote changes an app vote when commentID is empty, or a vote on that app's
-// comment otherwise. Target checks and admission policy precede one shared
-// mutation and atomic commit. It does not build comment-list responses.
 func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, source netip.Addr) (VoteSummary, string, error) {
 	vote = strings.TrimSpace(vote)
 	if vote != VoteUp && vote != VoteDown && vote != VoteClear {
@@ -238,7 +223,6 @@ func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, sourc
 			if previous == nil && len(ledger) >= reputationMaxIdentities {
 				return VoteSummary{}, "", ErrReputationCapacity
 			}
-			// Only a new cookieless app voter pays the extra mint budget.
 			if minted != "" {
 				if retry, _ := s.limiter.Allow(source, 10); retry > 0 {
 					return VoteSummary{}, "", ErrReputationCapacity
@@ -313,9 +297,8 @@ func (s *ReputationStore) CommentsCount(identity string) int {
 	return len(s.state.Comments.Threads[identity])
 }
 
-// ViewerHashFor resolves a cookie to its voter digest for read paths. A
-// forged or malformed cookie reads as anonymous; source-derived identities
-// are issued only on votes.
+// ViewerHashFor resolves a cookie to its voter digest for read paths.
+// Unknown cookies read as anonymous.
 func (s *ReputationStore) ViewerHashFor(cookieID string) string {
 	if cookieID == "" {
 		return ""
@@ -327,10 +310,6 @@ func (s *ReputationStore) ViewerHashFor(cookieID string) string {
 	return hash
 }
 
-// resolveVoterLocked returns the digest of a verified cookie or derives one
-// deterministically from the trusted client source. A caller that drops every
-// Set-Cookie header cannot create unlimited distinct voter identities.
-// Without accounts, clients behind the same public IP share this identity.
 func (s *ReputationStore) resolveVoterLocked(cookieID string, source netip.Addr) (hash, minted string, err error) {
 	if cookieID != "" {
 		if verified, ok := s.verifyVoter(cookieID); ok {

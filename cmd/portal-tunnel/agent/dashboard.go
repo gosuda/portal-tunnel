@@ -48,11 +48,8 @@ type agentDashboardModel struct {
 	stateDir   string
 	theme      agentDashboardTheme
 
-	status AgentStatusResponse
-	// err is what the last action or input refused with; it stays until the next
-	// action answers or esc dismisses it.
-	err error
-	// pollErr is why the last status poll failed; the next poll that works clears it.
+	status  AgentStatusResponse
+	err     error
 	pollErr error
 
 	width  int
@@ -65,11 +62,9 @@ type agentDashboardModel struct {
 	selectedTunnelID string
 	selectedRelayURL string
 	activePane       agentDashboardPane
-	confirmDelete    string // ID of the tunnel waiting for a delete answer
-	confirmStop      bool   // a stop-the-agent question waits for an answer
-	// stopsAgent says that closing the dashboard also stops the agent, as under
-	// agent run --foreground, so F10 and q ask first.
-	stopsAgent bool
+	confirmDelete    string
+	confirmStop      bool
+	stopsAgent       bool
 
 	addingTunnel     bool
 	addFocus         int
@@ -153,10 +148,6 @@ func (m agentDashboardModel) Init() tea.Cmd {
 	return tea.Batch(agentDashboardFetchStatus(m.stateDir), agentDashboardTick(), textinput.Blink)
 }
 
-// shownErr is the error the dashboard reports: a failed poll says more than an
-// earlier action's refusal, as the agent is out of reach. esc dismisses err but
-// not pollErr: while the agent is unreachable the banner stays, as it says why
-// nothing works.
 func (m agentDashboardModel) shownErr() error {
 	if m.pollErr != nil {
 		return m.pollErr
@@ -232,9 +223,6 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 	}
 	for _, region := range m.layout().regions {
 		if event.Y == region.y && event.X >= region.x0 && event.X < region.x1 {
-			// While a question waits for an answer, only its Yes and No buttons act on a click, as only
-			// the answers act on a key. The wheel and the sidebar drag above still scroll; neither
-			// touches what the question is about.
 			if m.confirming() && region.action != agentDashboardActionAnswerYes && region.action != agentDashboardActionAnswerNo {
 				return m, nil
 			}
@@ -300,7 +288,6 @@ func (m agentDashboardModel) runAction(action agentDashboardAction, tunnelID, re
 	return m, nil
 }
 
-// answerYes carries out the pending question: stop the agent or delete the tunnel.
 func (m agentDashboardModel) answerYes() (tea.Model, tea.Cmd) {
 	if m.confirmStop {
 		return m, tea.Quit
@@ -310,7 +297,6 @@ func (m agentDashboardModel) answerYes() (tea.Model, tea.Cmd) {
 	return m.deleteTunnel(tunnelID)
 }
 
-// answerNo drops the pending question.
 func (m agentDashboardModel) answerNo() (tea.Model, tea.Cmd) {
 	m.confirmDelete = ""
 	m.confirmStop = false
@@ -410,8 +396,6 @@ func (m *agentDashboardModel) setActivePane(pane agentDashboardPane) {
 	}
 }
 
-// scrollActivePane moves the relay selection; the Access screen hides the
-// Relays pane, so the wheel does nothing there.
 func (m agentDashboardModel) scrollActivePane(delta int) (tea.Model, tea.Cmd) {
 	if !m.accessing() {
 		m.selectRelayOffset(delta)
@@ -531,8 +515,6 @@ func (m *agentDashboardModel) resizeInputs(width int) {
 		&m.access.from,
 	} {
 		input.Width = settingsWidth
-		// The input keeps its visible window while the cursor stays inside it, so move the
-		// cursor to the end, which always rebuilds the window for the new width, and back.
 		pos := input.Position()
 		input.CursorEnd()
 		input.SetCursor(pos)

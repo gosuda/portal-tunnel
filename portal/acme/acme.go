@@ -70,7 +70,6 @@ type Manager struct {
 	ensCommands  chan ensDNSCommand
 	material     *utils.Snapshot[servedMaterial]
 
-	// pendingDNSAddress is guarded by commandMu and cleared only after address-record synchronization.
 	pendingDNSAddress bool
 }
 
@@ -254,8 +253,6 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 	if err != nil {
 		return "", "", false, fmt.Errorf("validate relay certificate: %w", err)
 	}
-	// The account key is created before any registration, so it marks ACME state
-	// for every CA directory, whatever name that directory's registration has.
 	hasACMEState := utils.FileExists(filepath.Join(m.cfg.KeyDir, accountKeyFileName)) || utils.FileExists(filepath.Join(m.cfg.KeyDir, registrationFileName))
 	if !covered {
 		if !hasACMEState {
@@ -300,10 +297,6 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 		return errACMEObtainResponseMissingCertificateOr
 	}
 
-	// Every issuance carries a new private key, so what the relay serves must
-	// change together with the files. A pair that does not parse is refused
-	// before anything is written, so the files and what is served cannot
-	// disagree.
 	material, err := newTLSMaterial(obtained.Certificate, obtained.PrivateKey)
 	if err != nil {
 		return err

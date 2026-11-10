@@ -59,8 +59,6 @@ func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCertificate() error = %v", err)
 	}
-	// The next start must keep what this one issued, or each start would
-	// replace the certificate and undo the trust a user gave it.
 	if !localDevelopmentCertificateReusable(cert, localDevelopmentDomains("localhost"), time.Now().UTC()) {
 		t.Fatalf("issued certificate valid from %v to %v is replaced on the next start", cert.NotBefore, cert.NotAfter)
 	}
@@ -85,8 +83,6 @@ func TestNewManagerDefaultsToEmbeddedProvider(t *testing.T) {
 	}
 }
 
-// Without ACME state or ENS automation, an operator-supplied certificate wins
-// over managed issuance and loading it does not need provider credentials.
 func TestEnsureTLSMaterialUsesManualCertificateWithDNSProvider(t *testing.T) {
 	t.Parallel()
 
@@ -142,8 +138,6 @@ func TestNewManagerRejectsEmptyKeyDirectory(t *testing.T) {
 	}
 }
 
-// Public-IP discovery is the only external dependency in this manual-certificate
-// scenario. DNS answers below still travel through the real embedded listeners.
 type publicIPTransport struct {
 	err error
 	ip  string
@@ -273,8 +267,6 @@ func assertEmbeddedDNSAddress(t *testing.T, client *dns.Client, addr, name, publ
 		t.Fatalf("%s address %s = %v, want authoritative answer", client.Net, name, answer)
 	}
 	if publicIP == "" {
-		// Missing names are refused (issue #516) while the address is pending;
-		// names with explicit records answer NODATA.
 		if len(answer.Answer) != 0 || (answer.Rcode != dns.RcodeSuccess && answer.Rcode != dns.RcodeRefused) {
 			t.Fatalf("%s address %s = %v, want no address during discovery outage", client.Net, name, answer)
 		}
@@ -309,24 +301,14 @@ func TestManagedCertificateRequiresPublicAddress(t *testing.T) {
 					if err := writeManualRelayCertificate(t, keyDir, "portal.example.com"); err != nil {
 						t.Fatal(err)
 					}
-					// Existing ACME state distinguishes a cached managed certificate
-					// from an operator-supplied certificate.
 					if err := os.WriteFile(filepath.Join(keyDir, accountKeyFileName), nil, 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
-				manager, err := NewManager(Config{
+				manager := newTestManager(t, Config{
 					BaseDomain:  "portal.example.com",
 					KeyDir:      keyDir,
 					DNSProvider: provider,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() {
-					if err := manager.Stop(context.Background()); err != nil {
-						t.Errorf("Stop(): %v", err)
-					}
 				})
 				if err := manager.EnsureTLSMaterial(context.Background()); !errors.Is(err, outage) || manager.TLSMaterial() != nil {
 					t.Fatalf("EnsureTLSMaterial() = %v with certificate loaded %v, want discovery failure for managed issuance", err, manager.TLSMaterial() != nil)
@@ -336,15 +318,9 @@ func TestManagedCertificateRequiresPublicAddress(t *testing.T) {
 	}
 }
 
-func TestManualEmbeddedCertificateDoesNotIgnoreCancellation(t *testing.T) {
-	keyDir := t.TempDir()
-	if err := writeManualRelayCertificate(t, keyDir, "portal.example.com"); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := NewManager(Config{
-		BaseDomain: "portal.example.com",
-		KeyDir:     keyDir,
-	})
+func newTestManager(t *testing.T, cfg Config) *Manager {
+	t.Helper()
+	manager, err := NewManager(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,6 +328,18 @@ func TestManualEmbeddedCertificateDoesNotIgnoreCancellation(t *testing.T) {
 		if err := manager.Stop(context.Background()); err != nil {
 			t.Errorf("Stop(): %v", err)
 		}
+	})
+	return manager
+}
+
+func TestManualEmbeddedCertificateDoesNotIgnoreCancellation(t *testing.T) {
+	keyDir := t.TempDir()
+	if err := writeManualRelayCertificate(t, keyDir, "portal.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(t, Config{
+		BaseDomain: "portal.example.com",
+		KeyDir:     keyDir,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -382,8 +370,6 @@ func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	// Keep both public-IP discovery and the provider API on the local TLS server.
-	// Its certificate is test-only; no requests leave the loopback connection.
 	client := utils.NewHTTPClient(
 		utils.WithHTTPTLSConfig(&tls.Config{InsecureSkipVerify: true}),
 	)
@@ -397,21 +383,13 @@ func TestEnsureTLSMaterialRejectsDNSRecordUpdateFailure(t *testing.T) {
 	utils.DefaultHTTPClient = client
 	t.Cleanup(func() { utils.DefaultHTTPClient = originalClient })
 
-	manager, err := NewManager(Config{
+	manager := newTestManager(t, Config{
 		BaseDomain:      "portal.example.com",
 		KeyDir:          t.TempDir(),
 		DNSProvider:     TypeCloudflare,
 		CloudflareToken: "test-token",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := manager.Stop(context.Background()); err != nil {
-			t.Errorf("Stop(): %v", err)
-		}
-	})
-	err = manager.EnsureTLSMaterial(context.Background())
+	err := manager.EnsureTLSMaterial(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "ensure dns records: ensure A record") || !strings.Contains(err.Error(), "DNS record update rejected") {
 		t.Fatalf("EnsureTLSMaterial() error = %v, want fatal DNS record update failure", err)
 	}
@@ -425,7 +403,6 @@ func newEmbeddedDNSManager(t *testing.T, cfg Config) (*Manager, Config) {
 
 	addressInUse := syscall.EADDRINUSE
 	if runtime.GOOS == "windows" {
-		// Winsock bind returns WSAEADDRINUSE, not syscall.EADDRINUSE.
 		addressInUse = syscall.Errno(10048)
 	}
 	const attempts = 5
@@ -439,8 +416,6 @@ func newEmbeddedDNSManager(t *testing.T, cfg Config) (*Manager, Config) {
 		if err := listener.Close(); err != nil {
 			t.Fatalf("release DNS probe port: %v", err)
 		}
-		// Exercise the public configured-port path. Another listener can take
-		// either protocol's port before NewManager binds it; retry only that race.
 		manager, err := NewManager(cfg)
 		if err == nil {
 			t.Cleanup(func() {
@@ -467,8 +442,6 @@ func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) error 
 	return writeRelayCertificate(t, certFile, keyFile, baseDomain, time.Now().UTC().Add(90*24*time.Hour))
 }
 
-// writeRelayCertificate writes a self-signed certificate for baseDomain and its
-// wildcard, valid until notAfter, and its private key.
 func writeRelayCertificate(t *testing.T, certFile, keyFile, baseDomain string, notAfter time.Time) error {
 	t.Helper()
 

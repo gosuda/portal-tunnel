@@ -35,10 +35,8 @@ const (
 
 // RunHTTP serves handler on the relay listener and, when localAddr is set, on
 // that local address too. Requests from the relay listener reach handler with
-// X-Forwarded-Proto set to https, replacing any client-sent value: the tunnel
-// ends TLS for the public hostname. Do not use it on an exposure that enables
-// WithTCP: raw TCP sessions arrive on the same listener unencrypted and would be
-// labeled https too.
+// X-Forwarded-Proto set to https. Do not use it on an exposure that enables
+// WithTCP.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	if relayListener == nil && localAddr == "" {
 		return errRelayListenerOrLocalAddressRequired
@@ -52,9 +50,7 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	if relayListener != nil {
 		relaySrv = &http.Server{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// The tunnel ended TLS, and every public Portal URL is https, so a
-				// client-sent X-Forwarded-Proto cannot say otherwise. Inbound
-				// Portal identity headers are also removed before reaching handler.
+
 				utils.DelHeaderSpellings(r.Header, "X-Forwarded-Proto")
 				r.Header.Set("X-Forwarded-Proto", "https")
 				utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
@@ -311,9 +307,6 @@ func (r *httpRoute) baseHandler() http.Handler {
 	}
 }
 
-// rewriteProxyRequest connects to the upstream but keeps the request authority
-// the browser used: the upstream URL says where to dial, not which Host the app
-// sees.
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	path := utils.NormalizeURLPath(pr.In.URL.Path)
 	rawPath := pr.In.URL.RawPath
@@ -326,12 +319,10 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 			path = cmp.Or(path, "/")
 		}
 
-		if rawPath != "" {
-			if rawPath == r.prefix {
-				rawPath = "/"
-			} else if strings.HasPrefix(rawPath, r.prefix+"/") {
-				rawPath = strings.TrimPrefix(rawPath, r.prefix)
-			}
+		if rawPath == r.prefix {
+			rawPath = "/"
+		} else if rest, ok := strings.CutPrefix(rawPath, r.prefix+"/"); ok {
+			rawPath = "/" + rest
 		}
 	}
 
@@ -339,17 +330,12 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 	pr.Out.URL.RawPath = rawPath
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
-	// SetURL clears Host; routed HTTP keeps the browser-visible authority.
+
 	pr.Out.Host = pr.In.Host
-	// The proxy removes the canonical X-Forwarded-* headers of the inbound request
-	// before this runs; their underscore spellings, which a CGI-style upstream reads
-	// as the same headers, are removed here, with X-Forwarded-Prefix, set below.
+
 	utils.DelHeaderSpellings(pr.Out.Header, "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Prefix")
 	pr.SetXForwarded()
 
-	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy (here
-	// the tunnel itself, see RunHTTP) the inbound X-Forwarded-Proto carries the
-	// real client scheme.
 	if pr.In.TLS == nil {
 		proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
 		if proto = strings.ToLower(strings.TrimSpace(proto)); proto != "" {
@@ -357,11 +343,6 @@ func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
 		}
 	}
 
-	// X-Forwarded-Prefix is only meaningful for non-root routes. Any
-	// client-supplied value is gone (removed above), and the trusted one is set
-	// only when the route carries a non-root prefix. Root routes leave
-	// the header absent so upstream applications do not see a spoofed
-	// value.
 	if r.prefix != "/" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", r.prefix)
 	}
@@ -411,7 +392,7 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 		if err == nil {
 			switch {
 			case parsed.IsAbs():
-				// The upstream's own authority, or the public one it received as Host.
+
 				if (strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host)) ||
 					strings.EqualFold(parsed.Host, publicHost) {
 					parsed.Scheme = publicScheme

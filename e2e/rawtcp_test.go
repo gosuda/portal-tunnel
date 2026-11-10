@@ -26,11 +26,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// A raw TCP lease allocates one dedicated relay port and pipes plain bytes
-// through the backhaul to the local service. The transport refactor moved
-// this path between owners, so the data path itself is pinned here: port
-// allocation on the relay, byte round trips in both directions, and a fresh
-// connection after the first one closes.
 func TestRawTCPPortRelay(t *testing.T) {
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		t.Run(host, func(t *testing.T) {
@@ -152,8 +147,6 @@ func startRawTCPTestTunnel(t *testing.T, host, target string) (string, *tunnel.R
 	if tcpAddr == "" {
 		t.Fatalf("relay status %+v carries no TCP address", ready)
 	}
-	// Raw TCP routing is per allocated port, so tests dial the loopback
-	// address behind the advertised host.
 	_, leasePort, err := net.SplitHostPort(tcpAddr)
 	if err != nil {
 		t.Fatalf("split TCP address %q: %v", tcpAddr, err)
@@ -161,7 +154,6 @@ func startRawTCPTestTunnel(t *testing.T, host, target string) (string, *tunnel.R
 	return net.JoinHostPort(host, leasePort), runtime, stop
 }
 
-// startTCPEcho runs a byte echo listener on loopback and returns its address.
 func startTCPEcho(t *testing.T, host string) (string, func()) {
 	t.Helper()
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
@@ -265,8 +257,6 @@ func TestTCPProxyResponseHalfClosePreservesRequestUpload(t *testing.T) {
 	if string(response) != "response-first" {
 		t.Fatalf("response = %q", response)
 	}
-	// Receiving response EOF must not end the opposite direction. Only
-	// now send the request, so a premature full close cannot pass by luck.
 	if _, err := client.Write([]byte("request-after-response-eof")); err != nil {
 		t.Fatal(err)
 	}
@@ -282,8 +272,6 @@ func TestTCPProxyResponseHalfClosePreservesRequestUpload(t *testing.T) {
 	}
 }
 
-// Shutdown and public reset must propagate EOF to the origin. A public reset
-// may reach the SDK as clean reverse EOF.
 func TestTCPProxyOriginEOFOnShutdownOrPublicReset(t *testing.T) {
 	for _, mode := range []string{"cancel", "exposure-close", "reset"} {
 		t.Run(mode, func(t *testing.T) {
@@ -528,7 +516,6 @@ func TestTCPLeaseBridgeLifecycle(t *testing.T) {
 				h := newTCPLeaseHarness(t, carrier)
 				public, reverse := h.connect()
 				tcpLeaseRoundTrip(t, public, reverse)
-				// Renewal extends the same lease and must leave its active bridge alive.
 				var renewed types.RenewResponse
 				if err := utils.HTTPDoAPIPath(t.Context(), h.client, h.base, http.MethodPost, types.PathSDKRenew, types.RenewRequest{AccessToken: h.lease.AccessToken, TTL: 60}, nil, &renewed); err != nil {
 					t.Fatal(err)
@@ -542,7 +529,6 @@ func TestTCPLeaseBridgeLifecycle(t *testing.T) {
 						t.Fatal(err)
 					}
 				case "expiry":
-					// Expiry is enforced by the five-second registry janitor.
 					revocationWait = 15 * time.Second
 					if err := utils.HTTPDoAPIPath(t.Context(), h.client, h.base, http.MethodPost, types.PathSDKRenew, types.RenewRequest{AccessToken: h.lease.AccessToken, TTL: 1}, nil, &renewed); err != nil {
 						t.Fatal(err)
@@ -561,13 +547,13 @@ func TestTCPLeaseBridgeLifecycle(t *testing.T) {
 				for _, conn := range []net.Conn{public, reverse} {
 					_ = conn.SetReadDeadline(time.Now().Add(revocationWait))
 					var one [1]byte
-					if _, err := conn.Read(one[:]); err == nil {
+					_, err := conn.Read(one[:])
+					if err == nil {
 						t.Fatal("revoked bridge still delivered data")
-					} else {
-						var netErr net.Error
-						if errors.As(err, &netErr) && netErr.Timeout() {
-							t.Fatalf("%s retained active %s bridge: %v", event, carrier, err)
-						}
+					}
+					var netErr net.Error
+					if errors.As(err, &netErr) && netErr.Timeout() {
+						t.Fatalf("%s retained active %s bridge: %v", event, carrier, err)
 					}
 				}
 				if event == "deny" {

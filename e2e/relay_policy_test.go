@@ -40,7 +40,6 @@ func buildRelayBinary(t *testing.T) string {
 	return bin
 }
 
-// relayTenantClient reaches tenant hostnames through the local relay listener.
 func relayTenantClient(t *testing.T, client *http.Client, base *url.URL) *http.Client {
 	t.Helper()
 	transport := client.Transport.(*http.Transport).Clone()
@@ -51,8 +50,6 @@ func relayTenantClient(t *testing.T, client *http.Client, base *url.URL) *http.C
 	return &http.Client{Transport: transport, Timeout: 5 * time.Second}
 }
 
-// waitForRelayCertificateMaterial polls until the relay has persisted both
-// halves of its local certificate material under dir.
 func waitForRelayCertificateMaterial(t *testing.T, dir string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -74,7 +71,6 @@ func waitForRelayCertificateMaterial(t *testing.T, dir string) {
 	}
 }
 
-// relayControlClient returns an HTTPS client that trusts the relay's local certificate.
 func relayControlClient(t *testing.T, stateDir string) *http.Client {
 	t.Helper()
 	certPEM, err := os.ReadFile(filepath.Join(stateDir, "fullchain.pem"))
@@ -93,7 +89,6 @@ func relayControlClient(t *testing.T, stateDir string) *http.Client {
 	return &http.Client{Transport: transport, Timeout: 10 * time.Second}
 }
 
-// waitRelayReady polls healthz until the serve loop accepts traffic.
 func waitRelayReady(t *testing.T, client *http.Client, baseURL string, serveResult <-chan error) {
 	t.Helper()
 	deadline := time.After(5 * time.Second)
@@ -159,9 +154,6 @@ func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Co
 	return ctx, base, client
 }
 
-// Defaults apply without per-identity setup. Saved rate increases and explicit
-// unlimited overrides survive restart with a different default. Resetting either
-// override restores inheritance, including after another restart.
 func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
 	stateDir := t.TempDir()
 	identities := make([]types.Identity, 3)
@@ -225,7 +217,6 @@ func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
 		ctx, base, client, checkLimits := startPhase(t, defaultBPS)
 		checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
 
-		// Conflicting operations must preserve both saved and live policy.
 		zero := int64(0)
 		conflict := types.LeasePolicyUpdate{IdentityKey: identities[0].Key(), BPS: &zero, ResetBPS: true}
 		err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, conflict, headers, nil)
@@ -250,8 +241,6 @@ func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
 	})
 }
 
-// Exercise admin persistence and registration through the real relay binary.
-// A failed allow-side policy write must leave the existing denial effective.
 func TestRelayAccessPolicyTransaction(t *testing.T) {
 	leaseIdentity, err := identity.Generate("policy-transaction")
 	if err != nil {
@@ -301,7 +290,6 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	}
 	assertBlocked := func() {
 		t.Helper()
-		// Registration publishes access again, including after a failed save.
 		if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
 			t.Fatal(err)
 		}
@@ -341,9 +329,6 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	}
 	assertBlocked()
 
-	// Make atomic replacement fail without permissions or filesystem mocks.
-	// The relay has already loaded its state; a directory cannot be replaced
-	// by the new policy file on either Windows or Unix.
 	if err := os.Rename(policyPath, policyPath+".saved"); err != nil {
 		t.Fatal(err)
 	}
@@ -377,8 +362,6 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	}
 }
 
-// The startup mode applies before any admin call, and a mode saved in
-// policy.json wins over it in both directions.
 func TestRelayInitialApprovalMode(t *testing.T) {
 	headers := http.Header{"Authorization": {"Bearer admin-test"}}
 	effectiveMode := func(t *testing.T, ctx context.Context, base *url.URL, client *http.Client) string {
@@ -407,7 +390,6 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 			}), "")
 		}()
 
-		// A pending lease has registered, so the admin can see and approve it.
 		pending := waitPolicyLease(t, ctx, client, base)
 		if pending.IsApproved {
 			t.Fatalf("manual relay approved a lease on its own: %+v", pending)
@@ -465,7 +447,6 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 	t.Run("invalid value stops startup", func(t *testing.T) {
 		bin := buildRelayBinary(t)
 		for _, value := range []string{"off", "Manual", ""} {
-			// The deadline turns a relay that wrongly starts into a failure.
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			command := exec.CommandContext(ctx, bin, "--identity-path", t.TempDir(), "--approval-mode="+value)
@@ -557,9 +538,6 @@ func TestManualModeRevokesOfflineCache(t *testing.T) {
 	}
 }
 
-// Runtime UDP toggling must preserve pre-refactor semantics: disabling UDP
-// takes effect immediately even while the QUIC backhaul listener is live,
-// while enabling UDP without a listener stays a restart-required operation.
 func TestUDPRuntimeToggle(t *testing.T) {
 	headers := http.Header{"Authorization": {"Bearer admin-test"}}
 
@@ -620,8 +598,6 @@ func setLeasePolicy(t *testing.T, ctx context.Context, client *http.Client, base
 	}
 }
 
-// A running SDK follows every admin decision on a manual relay. Old SDKs get
-// the same retraction, because the relay closes the lease's idle streams.
 func TestManualRelayApprovalLifecycle(t *testing.T) {
 	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
 	leaseIdentity, err := identity.Generate("approval-lifecycle")
@@ -704,8 +680,6 @@ func TestManualRelayApprovalLifecycle(t *testing.T) {
 	waitApproval(sdk.RelayApprovalRefused)
 }
 
-// One reverse capability outlives every decision: an approved lease needs no
-// new registration, and the refusal names the decision.
 func TestReverseCapabilitySurvivesApproval(t *testing.T) {
 	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
 	leaseIdentity, err := identity.Generate("approval-capability")
@@ -758,8 +732,6 @@ func TestReverseCapabilitySurvivesApproval(t *testing.T) {
 	}
 }
 
-// The CLI's machine-readable output never reads as usable while a raw TCP lease
-// waits, and it retracts readiness when the lease loses approval.
 func TestPortalExposeWaitsForRelayApproval(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the portal binary")
@@ -846,7 +818,6 @@ func TestPortalExposeWaitsForRelayApproval(t *testing.T) {
 		return ready && raw != nil
 	}, 30*time.Second)
 
-	// Visitors claim streams, which must not print the address again.
 	_, port, err := net.SplitHostPort(fmt.Sprint(raw["tcp_addr"]))
 	if err != nil {
 		t.Fatalf("raw line = %v: %v", raw, err)

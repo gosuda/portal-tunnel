@@ -18,11 +18,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// agentDashboardAccessMaxEntries is how many allow list entries the Settings
-// pane lists before it counts the rest.
 const agentDashboardAccessMaxEntries = 4
 
-// agentDashboardAccessMode names how a tunnel's public address is protected.
 func agentDashboardAccessMode(provider string) string {
 	switch provider {
 	case "":
@@ -42,9 +39,6 @@ func agentDashboardAccessMode(provider string) string {
 	}
 }
 
-// agentDashboardAllowedHint says what an empty allow list means for a
-// provider, following the gateway rules: credential and siwe accept any valid
-// principal, while OIDC, SAML and email refuse to run without at least one entry.
 func agentDashboardAllowedHint(provider string) string {
 	switch provider {
 	case appauth.ProviderCredential:
@@ -58,7 +52,6 @@ func agentDashboardAllowedHint(provider string) string {
 	}
 }
 
-// agentDashboardIdentityHeaders describes the identity headers setting.
 func agentDashboardIdentityHeaders(on bool) string {
 	if on {
 		return "on (" + types.HeaderPortalUser + ")"
@@ -66,8 +59,6 @@ func agentDashboardIdentityHeaders(on bool) string {
 	return "off"
 }
 
-// agentDashboardSecretState says whether a client secret or SMTP password is
-// stored; the secret itself never reaches the dashboard.
 func agentDashboardSecretState(set bool) string {
 	if set {
 		return "set"
@@ -75,8 +66,6 @@ func agentDashboardSecretState(set bool) string {
 	return "not set"
 }
 
-// agentDashboardSecretSet reports whether the tunnel stores the secret of
-// provider: the OIDC client secret or the SMTP password of email.
 func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
 	switch provider {
 	case appauth.ProviderOIDC:
@@ -88,9 +77,6 @@ func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
 	}
 }
 
-// agentDashboardProviderCheck is the LED, the word and the style that report
-// the check of a tunnel's OIDC or SAML identity provider, or of its SMTP
-// server, made once when the tunnel starts. The reason of a failure is the error in the tunnel status.
 func agentDashboardProviderCheck(th *agentDashboardTheme, tunnel AgentTunnelStatus) (string, lipgloss.Style) {
 	switch {
 	case tunnel.AuthProviderError != "":
@@ -104,8 +90,6 @@ func agentDashboardProviderCheck(th *agentDashboardTheme, tunnel AgentTunnelStat
 	}
 }
 
-// addAccessValue adds one read-only detail line; a value that does not fit
-// ends in the truncation marker. An empty label continues the line above.
 func (v *agentDashboardView) addAccessValue(th *agentDashboardTheme, width int, label, value string, style lipgloss.Style) {
 	const labelWidth = agentDashboardDetailLabelWidth
 	if label != "" {
@@ -114,9 +98,6 @@ func (v *agentDashboardView) addAccessValue(th *agentDashboardTheme, width int, 
 	v.addLine(th.muted.Render(agentDashboardCell(label, labelWidth)) + " " + style.Render(agentDashboardFit(value, max(1, width-labelWidth-1))))
 }
 
-// addAccessSummary shows how the tunnel is protected, one detail per line. An
-// open tunnel needs only the first line, and a failed provider check shows
-// there too, so that it is seen without scrolling.
 func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) {
 	mode, style := agentDashboardAccessMode(tunnel.Provider), th.text
 	if tunnel.AuthProviderError != "" {
@@ -166,8 +147,6 @@ func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int
 	v.addAccessValue(th, width, "Provider check", check, checkStyle)
 }
 
-// agentDashboardAccessProviders lists the access modes in the order left and
-// right step through them.
 var agentDashboardAccessProviders = []string{
 	"",
 	appauth.ProviderCredential,
@@ -177,15 +156,12 @@ var agentDashboardAccessProviders = []string{
 	appauth.ProviderEmail,
 }
 
-// What an empty SAML entity ID, subject attribute or SMTP username stands for.
 const (
 	agentDashboardSAMLEntityIDDefault = "metadata URL of each host"
 	agentDashboardSAMLSubjectDefault  = "NameID"
 	agentDashboardSMTPUsernameDefault = "none (no SMTP login)"
 )
 
-// agentDashboardAccessMessageLines is how many lines of an error, or of the
-// reason a provider check failed, the Access screen keeps.
 const agentDashboardAccessMessageLines = 4
 
 type agentDashboardAccessRow int
@@ -207,39 +183,28 @@ const (
 	agentDashboardAccessRowFrom
 )
 
-// agentDashboardAccessField is one stop of the focus ring of the Access screen.
 type agentDashboardAccessField struct {
 	row   agentDashboardAccessRow
-	entry int // index into the allow list of an entry row
+	entry int
 }
 
-// agentDashboardAccess is the draft behind the Access screen; the screen is
-// open while tunnelID is set. A typed secret lives only in its input: it is
-// cleared when the screen closes, when the mode changes and after a successful
-// apply, and it is drawn only while the input is revealed.
 type agentDashboardAccess struct {
 	tunnelID    string
-	focus       int // index into fields
+	focus       int
 	provider    string
 	headers     bool
 	allowed     []string
-	clearSecret bool // the stored secret of the provider is to be removed; never set while a secret is typed
-	applying    bool // an apply was sent and has not been answered
-	applied     bool // an apply of this draft went through
+	clearSecret bool
+	applying    bool
+	applied     bool
 	err         error
-	// base is the stored settings the draft was loaded from or last found in
-	// step with. A status that differs from both base and the draft means
-	// someone else changed the tunnel under the draft (see syncAccess).
-	base AgentTunnelStatus
+	base        AgentTunnelStatus
 
-	// secret is the OIDC client secret or the SMTP password, the one secret
-	// of the provider the draft has.
 	add, issuer, clientID, secret                         textinput.Model
 	metadataURL, metadataFile, entityID, subjectAttribute textinput.Model
 	smtpAddr, smtpUsername, from                          textinput.Model
 }
 
-// agentDashboardAccessMsg is the answer to the PATCH that applies a draft.
 type agentDashboardAccessMsg struct {
 	tunnelID string
 	err      error
@@ -265,7 +230,6 @@ func newAgentDashboardAccess(theme agentDashboardTheme) agentDashboardAccess {
 
 func (m agentDashboardModel) accessing() bool { return m.access.tunnelID != "" }
 
-// accessTunnel is the status of the tunnel the Access screen is open for.
 func (m agentDashboardModel) accessTunnel() (AgentTunnelStatus, bool) {
 	index := slices.IndexFunc(m.status.Tunnels, func(tunnel AgentTunnelStatus) bool { return tunnel.ID == m.access.tunnelID })
 	if index < 0 {
@@ -274,9 +238,6 @@ func (m agentDashboardModel) accessTunnel() (AgentTunnelStatus, bool) {
 	return m.status.Tunnels[index], true
 }
 
-// openAccess opens the Access screen for the selected tunnel with a draft of
-// what is stored. The dashboard reads the status with the agent's own token, so
-// the allow list in it is complete.
 func (m agentDashboardModel) openAccess() (tea.Model, tea.Cmd) {
 	tunnel, ok := m.selectedTunnelStatus()
 	if !ok {
@@ -288,7 +249,6 @@ func (m agentDashboardModel) openAccess() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// closeAccess leaves the Access screen and drops the draft, secret included.
 func (m *agentDashboardModel) closeAccess() {
 	a := &m.access
 	a.forgetSecret()
@@ -301,16 +261,6 @@ func (m *agentDashboardModel) closeAccess() {
 	a.applying = false
 }
 
-// syncAccess keeps the open Access screen from applying a stale draft. The
-// PATCH names the fields that differ from the stored settings, so a draft that
-// no longer matches what is stored (the tunnel was changed through config.toml,
-// the CLI or another dashboard) would put its old values back. A status that
-// differs from both the draft's base and the draft is such a change: the screen
-// shows the stored settings again and says so, and what was edited is dropped.
-// That includes edits made while this screen's own apply was still running,
-// since the screen cannot tell them apart; opening it again continues from what
-// is stored. A status equal to the draft is the answer to this screen's own
-// apply.
 func (m *agentDashboardModel) syncAccess() {
 	tunnel, ok := m.accessTunnel()
 	if !ok {
@@ -328,17 +278,12 @@ func (m *agentDashboardModel) syncAccess() {
 	}
 }
 
-// sameAccessSettings reports whether two statuses of a tunnel agree on
-// everything the Access screen edits or shows as stored.
 func sameAccessSettings(a, b AgentTunnelStatus) bool {
 	return authChanges(a.AuthConfig, b.AuthConfig) == nil &&
 		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet &&
 		a.AuthSMTPPasswordSet == b.AuthSMTPPasswordSet
 }
 
-// load makes the draft equal to what the tunnel has stored. The secret input
-// is not part of that: it is empty whenever the screen is closed, and every
-// change of mode empties it.
 func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
 	a.base = tunnel
 	a.applied = false
@@ -363,24 +308,18 @@ func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
 	}
 }
 
-// resetProviderInputs empties the OIDC, SAML and email settings of the draft.
 func (a *agentDashboardAccess) resetProviderInputs() {
 	for _, input := range []*textinput.Model{&a.issuer, &a.clientID, &a.metadataURL, &a.metadataFile, &a.entityID, &a.subjectAttribute, &a.smtpAddr, &a.smtpUsername, &a.from} {
 		input.Reset()
 	}
 }
 
-// forgetSecret drops a typed secret, a pending removal of the stored one, and
-// the reveal.
 func (a *agentDashboardAccess) forgetSecret() {
 	a.secret.Reset()
 	a.secret.EchoMode = textinput.EchoPassword
 	a.clearSecret = false
 }
 
-// setClearSecret marks the stored secret for removal or takes the mark back. An
-// SMTP username and password are set together, so the username goes with the mark
-// and returns with it, unless another one was typed meanwhile.
 func (a *agentDashboardAccess) setClearSecret(clear bool, stored AgentTunnelStatus) {
 	a.clearSecret = clear
 	if clear {
@@ -397,10 +336,6 @@ func (a *agentDashboardAccess) setClearSecret(clear bool, stored AgentTunnelStat
 	}
 }
 
-// setProvider switches the draft to provider and drops a typed secret. The
-// allow list and the OIDC, SAML or email settings belong to one provider, so another provider
-// than the stored one starts without them; coming back to the stored one
-// restores what is stored.
 func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelStatus) {
 	if provider == a.provider {
 		return
@@ -418,9 +353,6 @@ func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelSt
 	a.resetProviderInputs()
 }
 
-// fields is the focus ring: the mode, then, unless the tunnel is open, the
-// allow list entries, the entry input, the identity headers and, for OIDC,
-// SAML or email, the provider settings.
 func (a agentDashboardAccess) fields() []agentDashboardAccessField {
 	fields := []agentDashboardAccessField{{row: agentDashboardAccessRowMode}}
 	if a.provider == "" {
@@ -498,7 +430,6 @@ func (a *agentDashboardAccess) blur() {
 	}
 }
 
-// moveFocus focuses the field at index of the ring, wrapping around its ends.
 func (a *agentDashboardAccess) moveFocus(index int) {
 	count := len(a.fields())
 	a.focus = (index%count + count) % count
@@ -508,25 +439,15 @@ func (a *agentDashboardAccess) moveFocus(index int) {
 	}
 }
 
-// request is the PATCH that turns what the tunnel has stored into the draft. It
-// names only what differs, because a named field replaces the stored one. An
-// empty secret input leaves the stored secret alone; only clearSecret, or
-// leaving the provider of the secret, sends an empty one.
 func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdateRequest {
 	if a.provider == "" {
-		// The agent clears the other settings itself and refuses them next to an empty auth.
 		if stored.Provider == "" {
 			return AgentTunnelUpdateRequest{}
 		}
 		return AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{"auth": json.RawMessage(`""`)}}
 	}
 
-	// The draft holds the settings of its own provider only, so leaving OIDC,
-	// SAML or email clears the settings of the provider left, which the
-	// validators refuse for another provider.
 	draft := appauth.Config{Provider: a.provider, IdentityHeaders: a.headers}
-	// A tunnel that stays on its provider keeps the key its list is stored under,
-	// so that opening the screen of a released config changes nothing.
 	if appauth.ProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.Allow) == 0) {
 		draft.EmailList = a.allowed
 	} else {
@@ -554,9 +475,6 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	}
 	req := AgentTunnelUpdateRequest{Auth: authChanges(stored.AuthConfig, draft)}
 
-	// Each secret belongs to one provider: the typed secret is the draft
-	// provider's, and a stored one is removed when the draft leaves its provider
-	// or clearSecret marks it.
 	for _, owned := range []struct{ provider, key string }{
 		{appauth.ProviderOIDC, "auth_oidc_client_secret"},
 		{appauth.ProviderEmail, "auth_smtp_password"},
@@ -587,15 +505,11 @@ func (m agentDashboardModel) applyAccess() (tea.Model, tea.Cmd) {
 	}
 	m.access.err = nil
 	m.access.applying = true
-	// The command holds the request, not the model, so that a typed secret has
-	// no other copy than the one in its input and the request on its way.
 	stateDir, tunnelID := m.stateDir, tunnel.ID
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err := UpdateTunnel(ctx, stateDir, tunnelID, req)
-		// The agent writes the settings first and then restarts the tunnel, which can take
-		// longer than the control client waits, so a timeout does not mean the apply failed.
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = errors.New("the agent did not answer in time; the change may still be applied, the next status shows it")
 		}
@@ -603,13 +517,9 @@ func (m agentDashboardModel) applyAccess() (tea.Model, tea.Cmd) {
 	}
 }
 
-// answerAccess handles the answer to applyAccess. A refusal stays on the
-// screen with the secret still typed, so that the rest can be corrected; a
-// success drops the secret. The screen keeps its own error because the status
-// poll that follows every answer replaces the dashboard's.
 func (m *agentDashboardModel) answerAccess(msg agentDashboardAccessMsg) {
 	if msg.tunnelID != m.access.tunnelID || !m.access.applying {
-		m.err = msg.err // the screen was closed while the request ran
+		m.err = msg.err
 		return
 	}
 	m.access.applying = false
@@ -620,8 +530,6 @@ func (m *agentDashboardModel) answerAccess(msg agentDashboardAccessMsg) {
 	}
 }
 
-// addAccessEntry moves the typed entry to the allow list. The gateway
-// normalizes it for the provider, so a wrong entry is refused at once.
 func (m *agentDashboardModel) addAccessEntry() {
 	a := &m.access
 	entry := strings.TrimSpace(a.add.Value())
@@ -638,7 +546,6 @@ func (m *agentDashboardModel) addAccessEntry() {
 	if !slices.Contains(a.allowed, normalized.Allow[0]) {
 		a.allowed = append(slices.Clone(a.allowed), normalized.Allow[0])
 	}
-	// The entry row is one further down now that the list grew.
 	a.moveFocus(slices.IndexFunc(a.fields(), func(field agentDashboardAccessField) bool { return field.row == agentDashboardAccessRowAdd }))
 }
 
@@ -650,8 +557,6 @@ func (a *agentDashboardAccess) removeEntry() {
 	}
 }
 
-// changeAccessChoice steps the mode through the providers, or flips the
-// identity headers, depending on the focused row.
 func (m *agentDashboardModel) changeAccessChoice(step int) {
 	a := &m.access
 	switch a.current().row {
@@ -694,7 +599,6 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 	}
 	var content agentDashboardView
 	if m.confirmStop {
-		// The screen stands in for the Tunnels pane, where the question is drawn otherwise.
 		content.addStyled(inner, th.pending, agentDashboardStopQuestion)
 		content.addButtons(th, inner,
 			agentDashboardButton{label: "Yes", action: agentDashboardActionAnswerYes},
@@ -771,7 +675,6 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 			body.addLine(style.Render(line))
 		}
 	}
-	// A changed sign-in gate restarts the tunnel from its saved settings.
 	for _, line := range agentDashboardWrap("Applying restarts this tunnel, drops the relays connected to it at runtime, and signs out visitors on its alias.", inner, 3) {
 		body.addLine(th.muted.Render(line))
 	}
@@ -800,8 +703,6 @@ func agentDashboardAccessEntryPlaceholder(provider string) string {
 	}
 }
 
-// agentDashboardSecretPlaceholder says what the secret input stands for while it
-// is empty: the stored secret stays unless it is marked for removal.
 func agentDashboardSecretPlaceholder(a agentDashboardAccess, stored AgentTunnelStatus) string {
 	switch {
 	case a.clearSecret:
@@ -813,8 +714,6 @@ func agentDashboardSecretPlaceholder(a agentDashboardAccess, stored AgentTunnelS
 	}
 }
 
-// agentDashboardWrap breaks text into lines of at most width cells and keeps
-// the first maxLines of them, marking the cut.
 func agentDashboardWrap(text string, width, maxLines int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" || width <= 0 {
@@ -831,7 +730,6 @@ func agentDashboardWrap(text string, width, maxLines int) []string {
 	return lines
 }
 
-// addAccessChoice adds a row whose value changes with left and right.
 func (v *agentDashboardView) addAccessChoice(th *agentDashboardTheme, width int, label, value string, field int, focused bool) {
 	labelStyle, valueStyle, prompt := th.muted, th.text, th.glyph.promptBlurred
 	if focused {
@@ -842,8 +740,6 @@ func (v *agentDashboardView) addAccessChoice(th *agentDashboardTheme, width int,
 	v.addFieldRow(labelStyle.Render(agentDashboardCell(label+":", agentDashboardLabelWidth))+" "+th.strong.Render(prompt)+valueStyle.Render(agentDashboardFit(value, valueWidth)), width, field)
 }
 
-// addAccessAllowed adds the line above the allow list entries: how many there
-// are, or what an empty list means for the provider.
 func (v *agentDashboardView) addAccessAllowed(th *agentDashboardTheme, width int, a agentDashboardAccess) {
 	text, style := fmt.Sprintf("%d entries", len(a.allowed)), th.muted
 	switch len(a.allowed) {
@@ -856,8 +752,6 @@ func (v *agentDashboardView) addAccessAllowed(th *agentDashboardTheme, width int
 	v.addLine(th.muted.Render(agentDashboardCell("Allowed:", agentDashboardLabelWidth)) + " " + th.glyph.promptBlurred + style.Render(agentDashboardFit(text, valueWidth)))
 }
 
-// addAccessEntryRow adds one allow list entry, over the whole width so that a
-// wallet address fits.
 func (v *agentDashboardView) addAccessEntryRow(th *agentDashboardTheme, width int, entry string, field int, focused bool) {
 	marker, style := th.glyph.unselected, th.text
 	if focused {
@@ -866,7 +760,6 @@ func (v *agentDashboardView) addAccessEntryRow(th *agentDashboardTheme, width in
 	v.addFieldRow(style.Width(width).Render(marker+agentDashboardFit(entry, max(1, width-lipgloss.Width(marker)))), width, field)
 }
 
-// addFieldRow adds a line that focuses a field of the Access screen on click.
 func (v *agentDashboardView) addFieldRow(line string, width, field int) {
 	v.regions = append(v.regions, agentDashboardRegion{x0: 0, x1: width, y: len(v.lines), action: agentDashboardActionFocusAccessField, field: field})
 	v.addLine(line)

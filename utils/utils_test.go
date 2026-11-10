@@ -155,10 +155,10 @@ func TestCanonicalLeaseHostname(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		strings.Repeat("a", 64),          // over the DNS label limit
-		addr,                             // an address-only canonical label
-		"myapp-" + addr,                  // a short-name canonical label
-		"5e2twslnrzki2h4l7bzvq--" + addr, // a long-name canonical label
+		strings.Repeat("a", 64),
+		addr,
+		"myapp-" + addr,
+		"5e2twslnrzki2h4l7bzvq--" + addr,
 	} {
 		if _, err := CanonicalLeaseHostname(name, address, "example.com"); err == nil {
 			t.Fatalf("CanonicalLeaseHostname(%q) error = nil", name)
@@ -169,8 +169,6 @@ func TestCanonicalLeaseHostname(t *testing.T) {
 	}
 }
 
-// A normalized name never ends with a hyphen, so no short name produces the
-// canonical label of a long one, and no service name is shaped like either.
 func TestServiceNamesCannotTakeCanonicalLabels(t *testing.T) {
 	t.Parallel()
 
@@ -198,8 +196,6 @@ func TestServiceNamesCannotTakeCanonicalLabels(t *testing.T) {
 	}
 }
 
-// Shape and length rules apply to the normalized ASCII label, after case
-// folding and IDNA conversion.
 func TestCanonicalLeaseHostnameNormalizesFirst(t *testing.T) {
 	t.Parallel()
 
@@ -209,8 +205,6 @@ func TestCanonicalLeaseHostnameNormalizesFirst(t *testing.T) {
 		t.Fatalf("NormalizeServiceName(fullwidth address) error = nil")
 	}
 
-	// "bücher-abcdefghij" is 17 code points but 24 octets in ASCII form, so
-	// it takes the hashed form, the same as its punycode spelling.
 	unicode, err := CanonicalLeaseHostname("bücher-abcdefghij", address, "example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -359,5 +353,14 @@ func TestExtractCanonicalHostnameAddressIgnoresCasePortAndTrailingDot(t *testing
 	}
 	if _, err := ExtractCanonicalHostnameAddress("myapp.relay.example"); err == nil {
 		t.Error("ExtractCanonicalHostnameAddress accepted a friendly name that embeds no address")
+	}
+}
+
+func TestNormalizeURLPathCollapsesBackslashLedPaths(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{`/\example`, `/\`, `/\/`} {
+		if got := NormalizeURLPath(raw); got != "/" {
+			t.Fatalf("NormalizeURLPath(%q) = %q, want %q", raw, got, "/")
+		}
 	}
 }

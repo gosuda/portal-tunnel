@@ -58,7 +58,6 @@ func TestResolveStaticSiteFileUsesParentDirectory(t *testing.T) {
 func TestResolveStaticSiteRejectsMissingEntry(t *testing.T) {
 	t.Parallel()
 
-	// A directory without index.html has no SPA entry to fall back to.
 	dir := newStaticSite(t, map[string]string{"assets/app.css": "body{}"})
 	if _, _, err := ResolveStaticSite(dir); err == nil {
 		t.Fatal("ResolveStaticSite() error = nil, want missing entry error")

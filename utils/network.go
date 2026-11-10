@@ -33,9 +33,8 @@ var (
 	}
 )
 
-// ResolvePublicIP attempts to determine the caller's public IP address
-// using well-known external services. Returns empty string on failure.
-// Best-effort with a short timeout to avoid blocking registration.
+// ResolvePublicIP determines the caller's public IP address using well-known
+// external services. It returns an empty string on failure.
 func ResolvePublicIP(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -43,7 +42,6 @@ func ResolvePublicIP(ctx context.Context) string {
 	if ip, err := resolvePublicIP(ctx, 1500*time.Millisecond, 0, publicIPEndpoints...); err == nil {
 		return ip
 	}
-	// Neither address family should spend the other's remaining fallback budget.
 	ips, _ := resolvePublicIPFamilies(ctx, 1500*time.Millisecond, 0)
 	if len(ips) == 0 {
 		return ""
@@ -60,8 +58,6 @@ func ResolvePublicIPs(ctx context.Context) ([]string, error) {
 	return resolvePublicIPFamilies(ctx, 3*time.Second, 3*time.Second)
 }
 
-// resolvePublicIPFamilies shares concurrent discovery and cancellation between
-// first-address registration and best-effort dual-stack DNS discovery.
 func resolvePublicIPFamilies(ctx context.Context, attemptTimeout, familyWait time.Duration) ([]string, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	type result struct {
@@ -190,8 +186,6 @@ func SanitizeReportedIP(raw string) string {
 	return ip.Unmap().String()
 }
 
-// The non-public exceptions to Go's IsGlobalUnicast and IsPrivate checks
-// include shared, benchmark, documentation, and transition address space.
 var nonPublicIPv4 = [...]netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),

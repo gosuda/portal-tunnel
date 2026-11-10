@@ -17,10 +17,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// The single public ingress path — the SNI listener handing control-plane
-// TLS connections in-process to the API server — must keep the registering
-// TCP source as the lease client IP; forwarded headers stay untrusted by
-// default, so a spoofed X-Forwarded-For cannot buy a fresh NAT budget.
 func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
 	sniPort := harnessPort(t, "127.0.0.1")
 	server, err := portal.NewServer(portal.ServerConfig{
@@ -36,7 +32,6 @@ func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
 	if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 		t.Fatalf("start portal server: %v", err)
 	}
-	// A distinct loopback source detects an accidental internal TCP re-dial.
 	dialer := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.2")}, Timeout: 5 * time.Second}
 	transport := &http.Transport{DialContext: dialer.DialContext, TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "localhost"}}
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
@@ -52,9 +47,6 @@ func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
 		t.Fatalf("generate lease identity: %v", err)
 	}
 	headers := http.Header{"X-Forwarded-For": {"198.51.100.99"}, "X-Real-IP": {"198.51.100.99"}}
-	// SNI "localhost" equals the relay identity name from PortalURL, so the
-	// SNI listener routes this connection to the control-plane API server;
-	// the socket peer must survive that in-process handoff.
 	base, err := url.Parse("https://127.0.0.1:" + strconv.Itoa(sniPort))
 	if err != nil {
 		t.Fatalf("parse ingress base URL: %v", err)
@@ -77,9 +69,6 @@ func TestPublicIngressPreservesRegistrationPeer(t *testing.T) {
 	}
 }
 
-// A relay ban must survive subsequent registration challenges: the public
-// connect endpoint must answer Forbidden before any connection is offered
-// to the lease stream.
 func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	sniPort := harnessPort(t, "127.0.0.1")
 	server, err := portal.NewServer(portal.ServerConfig{
@@ -109,9 +98,6 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate lease identity: %v", err)
 	}
-	// The transport sends SNI "localhost", the relay identity name from
-	// PortalURL, so the SNI listener hands this connection to the
-	// control-plane API server — public API surface only, no direct listener.
 	base, err := url.Parse("https://127.0.0.1:" + strconv.Itoa(sniPort))
 	if err != nil {
 		t.Fatalf("parse API base URL: %v", err)
@@ -132,8 +118,6 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	if len(leases) != 1 || leases[0].IdentityKey == "" {
 		t.Fatalf("policy leases = %+v, want the registered identity key", leases)
 	}
-	// The relay pushes its ban decision into the data path; the public
-	// connect endpoint must answer before any connection is offered.
 	proposedAccess := access.Snapshot()
 	identityKey, err := types.ParseServiceIdentityKey(leases[0].IdentityKey)
 	if err != nil {
@@ -143,8 +127,6 @@ func TestConnectRejectsRoutingBannedIdentity(t *testing.T) {
 	committed := access.Commit(proposedAccess)
 	server.SetServiceIdentityAccess(identityKey, committed.Access(identityKey), committed.Revision())
 
-	// A new challenge pushes the current relay decision again. It must not
-	// restore access to the existing lease after the ban has been applied.
 	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
 		t.Fatalf("register challenge after ban: %v", err)
 	}

@@ -68,10 +68,6 @@ func main() {
 	}
 }
 
-// exposeFlags holds the expose flags that a tunnel.Config does not take as
-// they are: lists given as one comma-separated value, routes to parse, the two
-// relay switches whose default the config leaves to Spec, the relay cache, and
-// options of the process rather than of the tunnel.
 type exposeFlags struct {
 	relayCSV    string
 	tags        string
@@ -153,10 +149,6 @@ func runExposeCommand(args []string) error {
 		return fmt.Errorf("--log-format %q: supported values are text and json", flags.logFormat)
 	}
 	if flags.logFormat == "json" {
-		// Machine mode: one structured JSON log record per line, sourced
-		// from the SDK's authoritative relay status logs (event
-		// relay_status). Integrations filter records by event; no other
-		// state machine exists.
 		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
 	var err error
@@ -198,8 +190,6 @@ func runExposeCommand(args []string) error {
 	return runtime.Run(ctx)
 }
 
-// tunnelSpecFromExposeFlags completes cfg with the flags it does not take as
-// they are and resolves it with Spec, the step every frontend shares.
 func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags exposeFlags) (tunnel.Spec, error) {
 	if !flags.cache && flags.cacheTTL != 0 {
 		return tunnel.Spec{}, errCacheTTLRequiresCache
@@ -218,10 +208,6 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 	if flags.cache {
 		cfg.Cache = &tunnel.CacheConfig{TTL: flags.cacheTTL}
 	}
-	// AUTH_OIDC_*, AUTH_SAML_* and AUTH_SMTP_* may be exported for one
-	// service, so without --auth oidc, saml or email only an --auth-oidc-*,
-	// --auth-saml-* or --auth-smtp-* flag given on the command line counts. The
-	// same holds for AUTH_IDENTITY_PROOF without --auth-identity-headers.
 	oidcFlagGiven, samlFlagGiven, emailFlagGiven, proofFlagGiven := false, false, false, false
 	fs.Visit(func(f *flag.Flag) {
 		oidcFlagGiven = oidcFlagGiven || strings.HasPrefix(f.Name, "auth-oidc-")
@@ -229,7 +215,6 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 		emailFlagGiven = emailFlagGiven || strings.HasPrefix(f.Name, "auth-smtp-")
 		proofFlagGiven = proofFlagGiven || f.Name == "auth-identity-proof"
 	})
-	// An error here is the one Spec reports for this config.
 	normalized, _ := cfg.AuthConfig.Normalize()
 	provider := normalized.Provider
 	if provider != appauth.ProviderOIDC && !oidcFlagGiven {
@@ -384,7 +369,6 @@ func runListCommand(args []string) error {
 	return table.Flush()
 }
 
-// fetchRelayVersion returns an empty string when a relay's version is unavailable.
 func fetchRelayVersion(ctx context.Context, relayURL string) string {
 	client := utils.NewHTTPClient(utils.WithHTTPTimeout(3 * time.Second))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL+types.PathSDKDomain, nil)
@@ -477,7 +461,6 @@ func printExposeUsage(w io.Writer) {
 			group = common
 		}
 		group.Var(f.Value, f.Name, f.Usage)
-		// Keep declared defaults instead of resolved environment values.
 		group.Lookup(f.Name).DefValue = f.DefValue
 	})
 	for _, group := range []*flag.FlagSet{common, advanced} {

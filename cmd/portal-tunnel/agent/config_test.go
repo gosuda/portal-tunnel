@@ -36,7 +36,6 @@ func TestStaticServeConfigRoundTrip(t *testing.T) {
 			if got := cfg.Tunnels[0].Serve; got != want {
 				t.Fatalf("serve = %q, want %q", got, want)
 			}
-			// Saving unrelated settings must preserve the static site source.
 			cfg.Tunnels[0].Description = "updated metadata"
 			if err := writeConfigDocument(path, 0o600, cfg); err != nil {
 				t.Fatal(err)
@@ -52,15 +51,6 @@ func TestStaticServeConfigRoundTrip(t *testing.T) {
 	}
 }
 
-// tunnelsDocument sets every tunnel key, each to a value that differs from its
-// default, so a key the writer drops shows up as a difference after a save. It
-// is written the way configs of earlier versions are, with the flat auth_* and
-// x402_* keys that the typed components keep. The keys are spread over several
-// tunnels because loading validates each one and some keys exclude each other
-// (HTTP routes and TCP, a static site and a target). The check below finds a key
-// as a line that starts with it and has one space before `=`, so keep the keys
-// unindented in that form. A key inside a nested struct such as an HTTP route is
-// not walked and has to be set here by hand.
 const tunnelsDocument = `
 [[tunnels]]
 id = "web"
@@ -148,10 +138,6 @@ target = "127.0.0.1:3004"
 replica = true
 `
 
-// Saving the config after any dashboard action rewrites the whole file, so
-// every key the loader reads must come back out of the writer, under the name
-// it was read by: an agent of an earlier version and the documentation read
-// the same keys.
 func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(tunnelsDocument), 0o600); err != nil {
@@ -162,8 +148,6 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A key added to TunnelConfig must be added to the document above too, or
-	// this test would not notice the writer forgetting it.
 	keys := tunnelConfigKeys(reflect.TypeOf(TunnelConfig{}))
 	for _, key := range keys {
 		if !strings.Contains(tunnelsDocument, "\n"+key+" =") && !strings.Contains(tunnelsDocument, "\n[[tunnels."+key+"]]") {
@@ -203,8 +187,6 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 	}
 }
 
-// The flat keys of a config fill the typed components the runtime is built
-// from.
 func TestExistingConfigKeysFillComponents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(tunnelsDocument), 0o600); err != nil {
@@ -249,10 +231,6 @@ func TestExistingConfigKeysFillComponents(t *testing.T) {
 	}
 }
 
-// A saved tunnel keeps what was set, explicit false and default values
-// included, and no default that was left out: Spec fills those in each time.
-// The ID and the identity path are kept, since they name the tunnel and its
-// identity.
 func TestSavedConfigKeepsOnlyWhatWasSet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -310,9 +288,6 @@ max_active_relays = 3
 	}
 }
 
-// Linux and macOS keep the mode a file already has, so the agent restricts a
-// config before it writes a credential into it; a config without one is left as
-// the user set it.
 func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows restricts the file with an ACL instead of a mode")
@@ -338,7 +313,7 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 			if err := os.WriteFile(path, nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Chmod(path, tt.before); err != nil { // not subject to the umask
+			if err := os.Chmod(path, tt.before); err != nil {
 				t.Fatal(err)
 			}
 			if err := writeConfigDocument(path, tt.before, Config{Tunnels: []TunnelConfig{plain, tt.tunnel}}); err != nil {
@@ -355,10 +330,6 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 	}
 }
 
-// holdsSecret lists the credential fields by hand, as the document writer lists
-// the keys it saves. A credential field added to TunnelConfig and missing from
-// holdsSecret would be saved into a world-readable file with no test to notice, so
-// every field whose key reads like a credential must count.
 func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 	var found int
 	for _, field := range reflect.VisibleFields(reflect.TypeOf(TunnelConfig{})) {
@@ -380,7 +351,6 @@ func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 			t.Errorf("%s reads like a credential, but a config that stores it is not made private: add it to holdsSecret", key)
 		}
 	}
-	// Three keys are known today; fewer means the match above stopped finding them.
 	if found < 3 {
 		t.Errorf("found %d credential keys in TunnelConfig; want at least 3", found)
 	}

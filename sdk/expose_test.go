@@ -44,9 +44,6 @@ func TestPublicURLForLeaseUsesRelayAuthority(t *testing.T) {
 	}
 }
 
-// AliasSince dates the current hold of an alias: a burst of connecting keeps it,
-// and an alias that came back is a new hold, because another identity may have
-// held the name in between.
 func TestAliasSinceDatesTheCurrentHold(t *testing.T) {
 	const relayURL, public, alias = "https://relay.example", "https://long.relay.example", "https://short.relay.example"
 	ctx, cancel := context.WithCancel(context.Background())
@@ -187,7 +184,7 @@ func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
 	if got := update(); got.state != RelayConnecting || got.approval != RelayApprovalPending || got.publicURL != "" || got.tcpAddr != "" {
 		t.Fatalf("waiting status = %+v", got)
 	}
-	l.reportRefusal(pending) // the second session slot says the same
+	l.reportRefusal(pending)
 	quiet()
 	l.reportRefusal(denied)
 	if got := update(); got.approval != RelayApprovalRefused {
@@ -198,7 +195,7 @@ func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
 	if got := update(); got.state != RelayReady || got.approval != "" || got.publicURL == "" {
 		t.Fatalf("ready status = %+v", got)
 	}
-	// The other slot's answer can arrive after a stream opened.
+
 	l.reportRefusal(pending)
 	quiet()
 
@@ -212,7 +209,7 @@ func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
 	}
 
 	l.clearLease("")
-	l.reportRefusal(pending) // a lease that is gone has nothing to report
+	l.reportRefusal(pending)
 	quiet()
 }
 
@@ -241,8 +238,6 @@ func TestApprovalKeepsARelayOutOfTheActiveSet(t *testing.T) {
 	}
 }
 
-// A relay that stays in the set keeps its whole status: a listener reports only
-// changes, so nothing else would restore what a set change dropped.
 func TestRelaySetChangeKeepsTheStatus(t *testing.T) {
 	const waiting, ready = "https://waiting.example", "https://ready.example"
 	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 8)}

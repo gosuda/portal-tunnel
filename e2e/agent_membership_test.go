@@ -16,9 +16,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 )
 
-// Runtime membership belongs to the current exposure. Persisted metadata and
-// unrelated tunnel additions/deletions must neither reconnect a removed relay
-// nor discard one connected through the agent API.
 func TestAgentSettingsPreserveRuntimeRelayMembership(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -69,15 +66,17 @@ func TestAgentSettingsPreserveRuntimeRelayMembership(t *testing.T) {
 		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
 			status, err := agent.Status(ctx, dir)
-			if err == nil {
-				for _, tunnel := range status.Tunnels {
-					if tunnel.ID != "web" {
-						continue
-					}
-					for _, relay := range tunnel.Relays {
-						if relay.RelayURL == relayURL && relay.PublicURL != "" {
-							return relay.PublicURL
-						}
+			if err != nil {
+				<-time.After(100 * time.Millisecond)
+				continue
+			}
+			for _, tunnel := range status.Tunnels {
+				if tunnel.ID != "web" {
+					continue
+				}
+				for _, relay := range tunnel.Relays {
+					if relay.RelayURL == relayURL && relay.PublicURL != "" {
+						return relay.PublicURL
 					}
 				}
 			}

@@ -24,8 +24,6 @@ interface TunnelCommandExtras {
 export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   const currentOrigin = useMemo(() => readCurrentOrigin(), []);
 
-  // Empty by default so the field reads as "paste a link here" instead of
-  // pre-committing the user to a local port.
   const [target, setTarget] = useState("");
   const [name, setName] = useState("");
   const { copiedKey, copy } = useCopy();

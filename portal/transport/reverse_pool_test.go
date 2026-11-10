@@ -229,8 +229,6 @@ func TestAcquireAfterCloseFailsWithNetErrClosed(t *testing.T) {
 	relay := NewReversePool(time.Minute, 1)
 	relay.Close()
 
-	// Closing the relay must release pending claimers with net.ErrClosed,
-	// never leave them waiting for a connection that will never arrive.
 	conn, err := relay.Acquire(context.Background())
 	if conn != nil {
 		t.Fatal("Claim() after Close() returned a connection")
@@ -280,7 +278,6 @@ func TestReversePoolPauseDropsIdleConnectionsAndRefusesOffers(t *testing.T) {
 	}
 }
 
-// A connection admitted just before a routing decision must not park after it.
 func TestReversePoolPauseBeatsAnOutstandingReservation(t *testing.T) {
 	pool := NewReversePool(0, 2)
 	t.Cleanup(pool.Close)

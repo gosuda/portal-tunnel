@@ -91,7 +91,7 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   context cancellation, or exposure closure. Local TCP/UDP targets belong to
   `sdk.ProxyConfig`, identity file loading belongs to CLI or agent callers, routed HTTP
   route tables belong to `sdk.NewHTTPRoutes`, and x402 payment gating belongs to the CLI
-  and agent composition over `portal/x402`. `Exposure` owns one canonical relay-status
+  and agent composition over `cmd/portal-tunnel/gateway`. `Exposure` owns one canonical relay-status
   map; listener events update it, while `Relays`, `Updates`, and `WaitReady` read
   from that state. Agent status types are not part of the SDK contract.
 
@@ -113,6 +113,8 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   that cannot re-pin (it does not send `repins_chain` on renewal) is asked to
   register again, through `lease_not_found` at its next renewal, when the relay
   serves a certificate the chain it registered under does not verify.
+
+Constraints these packages must keep for protocol, security, or platform reasons are recorded in [implementation-invariants.md](implementation-invariants.md).
 
 ## Identity Challenges
 

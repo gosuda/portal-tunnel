@@ -18,8 +18,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// leaseReverseTransport opens raw connections on native runtimes and owns the
-// WebSocket reverse mux shared by one browser lease.
 type leaseReverseTransport struct {
 	listener *listener
 
@@ -143,10 +141,6 @@ func validatePublicReverseHostname(host string) error {
 	return nil
 }
 
-// ControlContext runs after name resolution and before connect. Checking the
-// actual resolved address on each dial prevents DNS rebinding from reaching
-// private endpoints. Direct connections to the explicitly configured relay
-// retain their existing local-development behavior.
 func reverseTCPDialer(alternate bool) *net.Dialer {
 	dialer := &net.Dialer{Timeout: defaultDialTimeout}
 	if !alternate {

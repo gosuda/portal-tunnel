@@ -61,8 +61,6 @@ func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
 	for _, peer := range peers {
 		_ = peer.Close()
 	}
-	// A completed ClientHello must transfer to the root HTTP server and release
-	// the inspection slot, so stalled-peer pressure cannot exhaust future work.
 	recoveryCtx, recoveryCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer recoveryCancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -120,8 +118,6 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cancel(); _ = server.Shutdown(context.Background()); _ = server.Wait() })
-	// Every API request establishes fresh root TLS, so an existing keepalive
-	// cannot hide lockout at the shared public listener.
 	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, DisableKeepAlives: true}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 3 * time.Second}
@@ -160,8 +156,6 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 			t.Cleanup(func() { _ = conn.Close() })
 			pending = append(pending, conn)
 		}
-		// The 129th close is also an accept-loop barrier: all 128 earlier sockets
-		// reached this lease's admission boundary before the next lease is filled.
 		extra, err := net.DialTimeout("tcp", addr, time.Second)
 		if err != nil {
 			t.Fatal(err)
@@ -174,7 +168,6 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 			t.Fatalf("lease overflow not rejected: %v", err)
 		}
 	}
-	// An otherwise empty ninth lease rules out merely hitting per-lease caps.
 	_, ninthPort, err := net.SplitHostPort(leases[8].TCPAddr)
 	if err != nil {
 		t.Fatal(err)
@@ -212,8 +205,6 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 	if time.Since(fillStarted) >= 10*time.Second {
 		t.Fatal("control-plane assertion exceeded the reverse-wait budget")
 	}
-	// The oldest waiter is still live: success did not rely on ten-second
-	// claim expiry reclaiming the tenant budget during the control requests.
 	_ = pending[0].SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 	if _, err := pending[0].Read(byteBuf[:]); !errors.As(err, &netErr) || !netErr.Timeout() {
 		t.Fatalf("saturation expired before control-plane assertion: %v", err)

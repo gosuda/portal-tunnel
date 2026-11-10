@@ -10,7 +10,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// relayStates returns the current non-banned relay states.
 func relayStates(set *RelaySet) []relayState {
 	states := set.currentRelayStates(time.Now().UTC())
 	out := make([]relayState, 0, len(states))
@@ -43,8 +42,6 @@ func bootstrapRelayState(relayURL string) relayState {
 	return state
 }
 
-// mustApplyAuthoritative ingests the descriptor as a successful authoritative
-// discovery response from the relay itself, promoting it to relayVerified.
 func mustApplyAuthoritative(t *testing.T, set *RelaySet, desc types.RelayDescriptor) {
 	t.Helper()
 	if _, err := set.ApplyRelayDiscoveryResponse(desc.APIHTTPSAddr, types.DiscoveryResponse{
@@ -55,7 +52,6 @@ func mustApplyAuthoritative(t *testing.T, set *RelaySet, desc types.RelayDescrip
 	}
 }
 
-// servesDescriptor reports whether the set currently gossips relayURL onward.
 func servesDescriptor(set *RelaySet, relayURL string) bool {
 	for _, desc := range set.Descriptors(types.RelayDescriptor{}) {
 		if desc.APIHTTPSAddr == relayURL {
@@ -65,7 +61,6 @@ func servesDescriptor(set *RelaySet, relayURL string) bool {
 	return false
 }
 
-// routesTo reports whether automatic single-hop route planning selects relayURL.
 func routesTo(t *testing.T, set *RelaySet, relayURL string) bool {
 	t.Helper()
 	routes := set.selectRelays(routeState{LocalAddress: "client"})
@@ -80,8 +75,6 @@ func routesTo(t *testing.T, set *RelaySet, relayURL string) bool {
 func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	set := NewRelaySet(nil)
 
-	// Ingest a descriptor that was valid when it arrived but has since
-	// expired: sign and apply it in the past, then read in the present.
 	relayURL := "https://relay-stale.example"
 	issuedAt := time.Now().UTC().Truncate(time.Microsecond).Add(-DiscoveryDescriptorTTL - time.Minute)
 	desc := mustSignedDescriptor(t, mustSigningIdentity(t), relayURL, issuedAt)
@@ -97,8 +90,6 @@ func TestDescriptorsDropsExpiredSignedRelayDescriptor(t *testing.T) {
 	}
 }
 
-// A banned relay stops being served to peers, stops being selected for new
-// routes, and cannot re-enter through a later gossip announce.
 func TestBannedRelayStopsServingAndRouting(t *testing.T) {
 	set := NewRelaySet(nil)
 
@@ -160,8 +151,6 @@ func TestApplyRelayDiscoveryResponseCollectsRelaysDespiteProtocolMismatch(t *tes
 func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t *testing.T) {
 	set := NewRelaySet(nil)
 
-	// The protocol version matches, so the only error the response can
-	// produce is the missing-target one.
 	hinted := mustRelayDescriptor(t, "https://relay-hinted.example")
 	changed, err := set.ApplyRelayDiscoveryResponse("https://relay-source.example", types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
@@ -186,9 +175,6 @@ func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t
 	}
 }
 
-// Discovery-failure lifecycle: a transient failure does not remove an
-// otherwise usable relay, exhausting the failure budget does, a gossip hint
-// does not revive it, and a direct authoritative success does.
 func TestDiscoveryFailureLifecycle(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -231,9 +217,6 @@ func TestDiscoveryFailureLifecycle(t *testing.T) {
 	}
 }
 
-// Active-failure lifecycle: a listener failure suppresses the relay from new
-// routes without banning it or hiding its descriptor, a later discovery
-// success does not forgive the failure, and an explicit operator re-add does.
 func TestActiveFailureLifecycle(t *testing.T) {
 	const relayA = "https://relay-a.example"
 	set := NewRelaySet(nil)
@@ -265,9 +248,6 @@ func TestActiveFailureLifecycle(t *testing.T) {
 	}
 }
 
-// EnsureRelayURL must persist a clean candidate for an unknown URL without
-// clobbering existing state: suppression recorded before the call survives,
-// so explicit relays keep durable failure state across intent refreshes.
 func TestRelaySetEnsureRelayURLPreservesExistingState(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
@@ -451,9 +431,6 @@ func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	// A gossip batch re-lists the same relay and refreshes its relayState
-	// freshness, but it is not a direct contact and carries no release of
-	// its own: it must not extend the release observation's clock.
 	gossipAt := t0.Add(2 * time.Hour)
 	gossipDesc := mustSignedDescriptor(t, signing, relayURL, gossipAt)
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{

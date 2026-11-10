@@ -268,6 +268,6 @@ local tunnel identity used for registration.
 ## Next Steps
 
 - [Keyless TLS Explained](/keyless-tls) - handshake, signer policy, and self-probe rationale
-- [Architecture](/architecture) - deep dive into Portal's internal design
+- [Architecture](/architecture) - Portal's internal design and protocol flows
 - [Wallet and ENS](/wallet-and-ens) - admin tokens, wallet auth, and ENS gasless DNS import
 - [Self-Hosting](/self-hosting) - run your own relay server

@@ -36,40 +36,18 @@ var (
 )
 
 const (
-	// emailLinkTTL is how long a login link works.
-	emailLinkTTL = 10 * time.Minute
-	// emailSendTimeout bounds one SMTP conversation, from the dial to QUIT.
-	emailSendTimeout = 30 * time.Second
-	// emailSendSlots bounds the SMTP conversations in flight at once.
-	emailSendSlots = 4
-	// One address gets at most one link per emailAddressCooldown and
-	// emailAddressHourlyLimit links per hour, so a public URL cannot flood an
-	// exactly listed mailbox. The addresses that only an @domain entry allows are
-	// unbounded, and alice+1@ and alice+2@ can reach one mailbox, so together
-	// they get at most emailDomainHourlyLimit links per hour, which bounds that
-	// mailbox and the SMTP account's quota. An exactly listed address is outside
-	// that budget, so a flood of made-up addresses in a domain cannot lock it out.
+	emailLinkTTL            = 10 * time.Minute
+	emailSendTimeout        = 30 * time.Second
+	emailSendSlots          = 4
 	emailAddressCooldown    = time.Minute
 	emailAddressHourlyLimit = 5
 	emailDomainHourlyLimit  = 50
-	// emailAddressLimit is the longest address SMTP delivers (RFC 5321 4.5.3.1.3).
-	emailAddressLimit = 254
-	// emailImplicitTLSPort is the submission port that starts with TLS (RFC 8314).
-	emailImplicitTLSPort = 465
-	// emailLinkTokenBytes is the size of the secret in a login link: 256 bits.
-	emailLinkTokenBytes = 32
-	// emailRoutingCharacters are ordinary address characters to net/mail, but a
-	// mail server can route on them: user%evil.example@team.example passes an
-	// @team.example entry, and such a server delivers it to evil.example.
-	emailRoutingCharacters = "%!"
+	emailAddressLimit       = 254
+	emailImplicitTLSPort    = 465
+	emailLinkTokenBytes     = 32
+	emailRoutingCharacters  = "%!"
 )
 
-// emailAuthenticator mails one-time login links through the operator's SMTP
-// server. A link is a random token that is kept only as its SHA-256 digest,
-// with the address and host it was mailed for; it works once, at that host,
-// for emailLinkTTL. Each link is admitted by the send limits first, so the
-// links and the sends it remembers stay bounded by the limits and the number
-// of exactly listed addresses. A restart forgets them all.
 type emailAuthenticator struct {
 	smtpAddr    string
 	smtpHost    string
@@ -77,21 +55,15 @@ type emailAuthenticator struct {
 	username    string
 	password    string
 	from        mail.Address
-	// binding digests the SMTP server, the username and the sender into every
-	// email session, so a change of the mail account ends the sessions of the
-	// links it mailed. The password stays out: a session cookie must not carry
-	// anything to guess it from.
-	binding string
+	binding     string
 
 	sendSlots chan struct{}
 
 	mu    sync.Mutex
 	links map[[sha256.Size]byte]emailLink
-	// sent holds the sends of the last hour, oldest first.
-	sent []emailSend
+	sent  []emailSend
 }
 
-// emailLink is what a login link stands for until it is used or expires.
 type emailLink struct {
 	hostEpoch string
 	email     string
@@ -101,9 +73,7 @@ type emailLink struct {
 }
 
 type emailSend struct {
-	email string
-	// listed says whether an exact allowlist entry allows the address, not
-	// only an @domain entry.
+	email  string
 	listed bool
 	at     time.Time
 }
@@ -120,7 +90,6 @@ type applicationAuthEmailRedeemRequest struct {
 func newEmailAuthenticator(settings applicationAuthSettings) *emailAuthenticator {
 	host, port, _ := net.SplitHostPort(settings.emailSMTPAddr)
 	portNumber, _ := strconv.Atoi(port)
-	// None of the settings can hold a NUL, so the separators keep them unambiguous.
 	binding := sha256.Sum256([]byte(settings.emailSMTPAddr + "\x00" + settings.emailSMTPUsername + "\x00" + settings.emailFrom.Address))
 	return &emailAuthenticator{
 		smtpAddr:    settings.emailSMTPAddr,
@@ -135,9 +104,6 @@ func newEmailAuthenticator(settings applicationAuthSettings) *emailAuthenticator
 	}
 }
 
-// validateSMTPAddr checks the host:port of the SMTP server. The transport
-// follows from it: implicit TLS on port 465, STARTTLS on any other port, and
-// plaintext only to a local host (see emailPlaintextHost).
 func validateSMTPAddr(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -150,9 +116,6 @@ func validateSMTPAddr(addr string) error {
 	return nil
 }
 
-// parseSMTPFrom reads the fixed sender, the From header and the envelope
-// sender of every link. It must be one address; a display name is kept for the
-// header only.
 func parseSMTPFrom(raw string) (mail.Address, error) {
 	if strings.ContainsFunc(raw, unicode.IsControl) {
 		return mail.Address{}, errSMTPFromMustOneAddress
@@ -167,11 +130,6 @@ func parseSMTPFrom(raw string) (mail.Address, error) {
 	return *from, nil
 }
 
-// normalizeVisitorEmail reads the address a visitor typed. It must be a bare
-// address that net/mail reads back unchanged, so a display name, a comment, a
-// quoted local part or a line break is refused, and it is normalized like an
-// allowlist entry. An address that names a route is refused too, because the
-// allowlist only vouches for the domain after the last @.
 func normalizeVisitorEmail(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || len(raw) > emailAddressLimit || strings.ContainsFunc(raw, unicode.IsControl) || strings.ContainsAny(raw, emailRoutingCharacters) {
@@ -188,10 +146,6 @@ func normalizeVisitorEmail(raw string) (string, error) {
 	return email, nil
 }
 
-// admit records a send to email at now and takes a send slot for it, if the
-// limits and the slots allow one. listed says whether an exact allowlist entry
-// allows email. The slot comes last, so a request the limits refuse never holds
-// one, and a send dropped for a busy slot spends no limit. The caller holds e.mu.
 func (e *emailAuthenticator) admit(email string, listed bool, now time.Time) bool {
 	hourAgo := now.Add(-time.Hour)
 	e.sent = slices.DeleteFunc(e.sent, func(send emailSend) bool { return !send.at.After(hourAgo) })
@@ -224,9 +178,6 @@ func (e *emailAuthenticator) admit(email string, listed bool, now time.Time) boo
 	return true
 }
 
-// issue creates the link for a send to email at host that returns the visitor
-// to next. It returns the token, and the send owns a slot from then on, or ""
-// when a limit or the slots refuse the send.
 func (e *emailAuthenticator) issue(email string, listed bool, host, hostEpoch, next string, now time.Time) string {
 	var secret [emailLinkTokenBytes]byte
 	_, _ = rand.Read(secret[:])
@@ -246,9 +197,6 @@ func (e *emailAuthenticator) issue(email string, listed bool, host, hostEpoch, n
 	return token
 }
 
-// redeem uses up the link of token. It returns the address and target of a
-// link that was mailed for host and has not expired. Any link it finds is
-// forgotten, so a link works at most once.
 func (e *emailAuthenticator) redeem(token, host, hostEpoch string, heldSince, now time.Time) (email, next string, ok bool) {
 	key := sha256.Sum256([]byte(strings.TrimSpace(token)))
 	e.mu.Lock()
@@ -261,10 +209,6 @@ func (e *emailAuthenticator) redeem(token, host, hostEpoch string, heldSince, no
 	return link.email, link.next, true
 }
 
-// send mails a login link for email at host, unless a limit refuses it. The
-// SMTP conversation runs in its own goroutine, so the caller answers before it
-// starts and an allowed address answers as fast as a refused one. At most
-// emailSendSlots conversations run at once, each within emailSendTimeout.
 func (e *emailAuthenticator) send(email string, listed bool, host, hostEpoch, next string, now time.Time) {
 	token := e.issue(email, listed, host, hostEpoch, next, now)
 	if token == "" {
@@ -274,9 +218,6 @@ func (e *emailAuthenticator) send(email string, listed bool, host, hostEpoch, ne
 		defer func() { <-e.sendSlots }()
 		ctx, cancel := context.WithTimeout(context.Background(), emailSendTimeout)
 		defer cancel()
-		// The error comes from composing the mail, the SMTP server or the
-		// connection and never holds the password, and deliver keeps the
-		// recipient out of it.
 		message, err := emailLoginMessage(e.from, host, token, now)
 		if err == nil {
 			err = e.deliver(ctx, email, message)
@@ -287,8 +228,6 @@ func (e *emailAuthenticator) send(email string, listed bool, host, hostEpoch, ne
 	}()
 }
 
-// check signs in to the SMTP server and quits without sending, so that a wrong
-// address, TLS setup or password shows when the tunnel starts.
 func (e *emailAuthenticator) check(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, emailSendTimeout)
 	defer cancel()
@@ -297,13 +236,10 @@ func (e *emailAuthenticator) check(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = client.Close() }()
-	// dial has signed in, which is all this asks, so a failed QUIT is not a failure.
 	_ = client.Quit()
 	return nil
 }
 
-// deliver hands one mail to the SMTP server. The replies from RCPT on are about
-// the recipient and can quote the address, so their errors keep only the code.
 func (e *emailAuthenticator) deliver(ctx context.Context, to string, message []byte) error {
 	client, err := e.dial(ctx)
 	if err != nil {
@@ -326,13 +262,10 @@ func (e *emailAuthenticator) deliver(ctx context.Context, to string, message []b
 	if err := data.Close(); err != nil {
 		return fmt.Errorf("smtp DATA: %w", smtpReplyCode(err))
 	}
-	// The server took the mail at the end of DATA, so a failed QUIT is not a
-	// failed send.
 	_ = client.Quit()
 	return nil
 }
 
-// smtpReplyCode reduces an SMTP reply to its code.
 func smtpReplyCode(err error) error {
 	var reply *textproto.Error
 	if errors.As(err, &reply) {
@@ -341,10 +274,6 @@ func smtpReplyCode(err error) error {
 	return err
 }
 
-// dial opens a signed-in SMTP session within the deadline of ctx: implicit TLS
-// on port 465, otherwise STARTTLS, which the server must offer unless its host
-// is a local one (see emailPlaintextHost). Only there does the session stay
-// plaintext.
 func (e *emailAuthenticator) dial(ctx context.Context) (*smtp.Client, error) {
 	tlsConfig := &tls.Config{ServerName: e.smtpHost, MinVersion: tls.VersionTLS12}
 	var conn net.Conn
@@ -372,16 +301,12 @@ func (e *emailAuthenticator) dial(ctx context.Context) (*smtp.Client, error) {
 	return client, nil
 }
 
-// emailPlaintextHost reports whether an SMTP session to host may stay
-// plaintext: only for the names net/smtp itself sends a password to without
-// TLS, so that a plaintext session can always sign in.
 func emailPlaintextHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client, tlsConfig *tls.Config) error {
 	if !e.implicitTLS && !emailPlaintextHost(e.smtpHost) {
-		// Extension reports a failed hello as a missing extension.
 		if err := client.Hello("localhost"); err != nil {
 			return fmt.Errorf("smtp EHLO: %w", err)
 		}
@@ -401,14 +326,6 @@ func (e *emailAuthenticator) secureAndSignIn(client *smtp.Client, tlsConfig *tls
 	return nil
 }
 
-// emailLoginMessage is the one mail the tunnel sends: fixed text, the host the
-// link is for in its subject, and the link. A mail client makes a link of any URL
-// in the text, so the login link is the only one: a visitor who taps another
-// reaches the application, not the sign-in. The token is in the fragment, as in a credential
-// redeem link, so a mail scanner or link preview that fetches the URL cannot
-// use it up. The sign-in page posts it only after a click, so one that also runs
-// the page cannot either. The recipient is named only in the SMTP envelope, with
-// no To header, so nothing a visitor typed is part of the mail itself.
 func emailLoginMessage(from mail.Address, host, token string, now time.Time) ([]byte, error) {
 	_, fromDomain, _ := strings.Cut(from.Address, "@")
 	link := "https://" + host + types.PathApplicationAuthLogin + "#email_token=" + token
@@ -443,10 +360,6 @@ func emailLoginMessage(from mail.Address, host, token string, now time.Time) ([]
 	return []byte(message.String()), nil
 }
 
-// serveEmailRequest mails a login link to an allowed address. Every address
-// that is well formed gets the same answer, whether it is allowed, refused by
-// a limit or mailed, and the mail goes out after the answer, so neither the
-// answer nor its timing tells who may sign in.
 func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Request) {
 	if a.provider != ProviderEmail || a.email == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
@@ -471,8 +384,6 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// A link mailed for any other host would send its token to whoever answers
-	// there, so the host comes from the public list and never from the request.
 	host, held, public := a.publicHost(r.Host)
 	if !public {
 		a.writeJSONError(w, http.StatusMisdirectedRequest, errRequestHostNotPublic.Error())
@@ -485,9 +396,6 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 	a.writeJSON(w, http.StatusAccepted, struct{}{})
 }
 
-// serveEmailRedeem turns a login link into the session every provider
-// creates. The allowlist is checked again, so an entry removed after the link
-// was mailed refuses it.
 func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Request) {
 	if a.provider != ProviderEmail || a.email == nil {
 		a.writeJSONError(w, http.StatusNotFound, "not found")

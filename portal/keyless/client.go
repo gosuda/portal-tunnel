@@ -1,13 +1,4 @@
-// Package keyless owns Portal's tenant TLS feature boundary: tenant TLS
-// termination via the keyless_tls t13server (transcript-bound TLS 1.3 whose
-// CertificateVerify signatures are produced remotely by the relay's /v1/sign
-// endpoint) plus the material resolution that pins the relay certificate
-// chain. The SDK and the relay own when and why these operations happen
-// (lease sessions, reverse sessions, TLS listeners); this package owns the
-// tenant TLS protocol itself. Relay key possession is proven per handshake:
-// every termination presents transcript-bound signatures from the key that
-// matches the pinned certificate, so no configuration-time signer self-test
-// is needed.
+// Package keyless owns Portal's tenant TLS feature boundary: terminating tenant TLS with transcript-bound relay signatures and resolving the pinned relay certificate chain.
 package keyless
 
 import (
@@ -56,25 +47,17 @@ type Client struct {
 	mu          sync.RWMutex
 	accessToken string
 	pin         *pinnedChain
-	closed      bool // guarded by mu, so that no pin is installed after Close
+	closed      bool
 	closeOnce   sync.Once
 	closeErr    error
 
-	// Fixed when the client is created; RefreshChain reuses them to pin another
-	// chain.
 	relayURL   string
 	serverName string
 	hostname   string
 
-	// refreshMu serializes the checks of the relay chain.
 	refreshMu sync.Mutex
 }
 
-// pinnedChain is one relay certificate chain with what is derived from it. The
-// signer reaches the relay's /v1/sign endpoint verified against this same
-// chain. RefreshChain replaces the whole value, so the chain a handshake
-// presents, the pool the MITM probe verifies it against and the chain the
-// signer trusts always belong together.
 type pinnedChain struct {
 	chainPEM []byte
 	server   *t13server.Server
@@ -122,9 +105,6 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	return client, nil
 }
 
-// newPin pins chainPEM: it checks the chain covers the lease hostname and
-// builds the TLS server that presents it with the signer that proves possession
-// of its key.
 func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 	if err := verifyCertificateHostname(chainPEM, c.hostname); err != nil {
 		return nil, fmt.Errorf("keyless certificate does not cover %s: %w", c.hostname, err)
@@ -196,18 +176,10 @@ func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
 	return c.refreshChain(ctx, nil)
 }
 
-// refreshChain is RefreshChain, except that it does nothing when stale is set
-// and is no longer the pinned chain: the handshakes that fail on the same stale
-// pin share the check of the first one, once that check pinned a new chain. A
-// check that finds the relay still serving the pinned chain changes nothing, so
-// the next failure checks again; with at most a few handshakes in flight per
-// lease that costs at most a few fetches per burst.
 func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, error) {
 	if c.pinned() == nil {
 		return false, errKeylessClientIsUnavailable
 	}
-	// Serialized so that a slower fetch cannot pin a chain the relay already
-	// replaced.
 	c.refreshMu.Lock()
 	defer c.refreshMu.Unlock()
 	if stale != nil && c.pinned() != stale {
@@ -227,23 +199,16 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 	}
 	c.mu.Lock()
 	if c.closed {
-		// Close already released the pin it saw; a new one would never be.
 		c.mu.Unlock()
 		_ = next.signer.Close()
 		return false, nil
 	}
 	c.pin = next
 	c.mu.Unlock()
-	// Handshakes still using the replaced signer finish on their connections.
 	_ = current.signer.Close()
 	return true, nil
 }
 
-// pinIsStale reports whether a failed handshake means the relay no longer
-// accepts the chain this client pinned: it holds no key for the chain it
-// presents, or its API certificate does not verify against the pinned chain
-// any more, as when a renewal comes from another issuer. Both are cured by
-// pinning the chain the relay serves now.
 func pinIsStale(err error) bool {
 	if strings.Contains(err.Error(), types.KeylessUnknownCertificateMessage) {
 		return true
@@ -265,8 +230,6 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 	conn := pin.server.NewConn(raw, binding)
 	if err := conn.HandshakeContext(ctx); err != nil {
 		_ = conn.Close()
-		// This handshake is lost; the ones after it present the chain the relay
-		// serves now.
 		if pinIsStale(err) {
 			if _, refreshErr := c.refreshChain(ctx, pin); refreshErr != nil {
 				err = errors.Join(err, fmt.Errorf("refresh relay certificate chain: %w", refreshErr))
@@ -308,7 +271,6 @@ func (c *Client) Close() error {
 	return c.closeErr
 }
 
-// relayChain returns the certificate chain the relay presents on endpoint.
 func relayChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
 	chainPEM, err := utils.FetchEndpointCertificateChain(ctx, endpoint, serverName)
 	if err != nil {

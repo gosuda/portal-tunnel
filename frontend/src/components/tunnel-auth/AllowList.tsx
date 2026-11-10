@@ -73,7 +73,6 @@ export function AllowList({
         );
       })}
       <FieldIssues issues={issues} field="allow" />
-      {/* Always mounted: a live region announces text that appears inside it. */}
       <div role="status">
         {auth.allow.length === 0 && method === "siwe" && (
           <Notice tone="warn">

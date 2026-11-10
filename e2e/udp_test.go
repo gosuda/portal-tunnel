@@ -27,9 +27,6 @@ func TestUDPPortRelay(t *testing.T) {
 	}
 }
 
-// Exercise real UDP ingress, authenticated QUIC backhaul, the local UDP
-// origin, and the response path. The advertised relay name can differ from
-// its bind address so DNS fallback uses the same end-to-end contract.
 func testUDPPortRelay(t *testing.T, relayHost, relayName, originHost string) {
 	t.Helper()
 	origin, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(originHost)})
@@ -85,7 +82,6 @@ func testUDPPortRelay(t *testing.T, relayHost, relayName, originHost string) {
 	}
 }
 
-// startUDPTestTunnel keeps the same SDK exposure alive when the relay restarts.
 func startUDPTestTunnel(t *testing.T, relayHost, relayName, originAddress string) (int, func(), func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -176,8 +172,6 @@ func startUDPTestTunnel(t *testing.T, relayHost, relayName, originAddress string
 		if err := relay.Wait(); err != nil {
 			t.Fatalf("wait for stopped relay: %v", err)
 		}
-		// quic-go retains its transport socket while closed connections drain.
-		// Wait for that real socket lifetime before rebinding the same address.
 		drainDeadline := time.Now().Add(10 * time.Second)
 		drainPoll := time.NewTicker(20 * time.Millisecond)
 		defer drainPoll.Stop()
@@ -207,8 +201,6 @@ func startUDPTestTunnel(t *testing.T, relayHost, relayName, originAddress string
 	return publicPort, restart, stop
 }
 
-// A relay hostname can advertise both families while only one is reachable.
-// Exercise the complete UDP path through that hostname with each family absent.
 func TestUDPRelayAddressFallback(t *testing.T) {
 	const hostname = "fallback.localhost"
 	packet, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -272,8 +264,6 @@ func TestUDPRelayAddressFallback(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, "udp", packet.LocalAddr().String())
 		},
 	}
-	// Subtest cleanup closes the exposure and joins its proxy before restoring
-	// this process-wide resolver or stopping the DNS server.
 	t.Cleanup(func() { net.DefaultResolver = originalResolver })
 
 	for _, tc := range []struct {
@@ -317,8 +307,6 @@ func TestUDPRelayRestartIsolatesSenderSockets(t *testing.T) {
 	}
 	restart()
 	newSender := dial()
-	// The surviving SDK re-registers asynchronously. Retry only new ingress
-	// until its origin socket is observable, using the same public UDP port.
 	var newPeer *net.UDPAddr
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
@@ -384,8 +372,6 @@ func TestUDPProxyCloseReleasesOriginSocket(t *testing.T) {
 				t.Fatalf("origin did not observe live proxy socket: %q, %v", payload[:n], err)
 			}
 			stop()
-			// Proxy completion must release its connected origin socket, not
-			// merely stop accepting new frames while its reader remains alive.
 			rebound, err := net.ListenUDP("udp4", peer)
 			if err != nil {
 				t.Fatalf("proxy close retained origin socket %s: %v", peer, err)
@@ -422,7 +408,6 @@ func TestUDPOversizedPacketsDropWhole(t *testing.T) {
 	if err != nil || !bytes.Equal(buf[:n], valid) {
 		t.Fatalf("origin received oversized prefix or lost valid packet: size=%d err=%v", n, err)
 	}
-	// Enforce the same whole-packet limit on local-origin responses.
 	if _, err := origin.WriteToUDP(bytes.Repeat([]byte("x"), 4096), peer); err != nil {
 		t.Fatal(err)
 	}

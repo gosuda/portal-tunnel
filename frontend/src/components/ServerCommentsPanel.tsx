@@ -60,7 +60,6 @@ export function ServerCommentsPanel({
           }}
           className="fixed top-[116px] right-0 bottom-0 z-[60] flex w-full flex-col border-l border-border bg-card text-card-foreground shadow-[-12px_0_40px_rgba(0,0,0,0.18)] outline-none md:top-16 sm:w-[400px]"
         >
-          {/* Header */}
           <div className="border-b border-border p-5">
             <div className="flex items-center justify-between gap-3">
               <Dialog.Title className="flex items-center gap-2 text-lg font-bold">
@@ -90,7 +89,6 @@ export function ServerCommentsPanel({
             </Dialog.Description>
           </div>
 
-          {/* App Recommendation Section */}
           {server.reputation && onVoteApp && (
             <div className="border-b border-border bg-secondary/30 px-5 py-3">
               <div className="flex items-center justify-between gap-3">
@@ -144,7 +142,6 @@ export function ServerCommentsPanel({
             </div>
           )}
 
-          {/* Comments List */}
           <div className="min-h-0 flex-1 overflow-y-auto p-5" aria-busy={loading}>
             {loading ? (
               <p role="status" className="py-10 text-center text-sm text-muted-foreground">
@@ -183,7 +180,6 @@ export function ServerCommentsPanel({
                     <p className="mt-1.5 whitespace-pre-wrap wrap-anywhere text-sm leading-6 text-foreground/90">
                       {comment.text}
                     </p>
-                    {/* Comment Vote controls */}
                     <div className="mt-2 flex items-center gap-1">
                       <button
                         type="button"
@@ -237,7 +233,6 @@ export function ServerCommentsPanel({
             )}
           </div>
 
-          {/* Form */}
           <form
             onSubmit={(event) => {
               event.preventDefault();

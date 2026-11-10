@@ -43,8 +43,6 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		utils.WriteAPIData(w, http.StatusOK, types.StaticCacheStatus{})
 		return
 	}
-	// One service identity may hold one of the two upload slots. Checks
-	// have their own capacity; neither operation queues requests.
 	readTimeout := 10 * time.Second
 	if req.Method == http.MethodPut {
 		c.mu.Lock()
@@ -77,8 +75,6 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	var manifest types.StaticCacheManifest
 	var err error
 	defer func() {
-		// Keep a failed read's deadline so net/http's unread-body drain
-		// cannot extend a stalled upload after its slot has been released.
 		if err == nil {
 			_ = controller.SetReadDeadline(time.Time{})
 		}
@@ -86,7 +82,6 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	var parts *multipart.Reader
 	var manifestReader io.Reader = http.MaxBytesReader(w, req.Body, types.StaticCacheManifestLimit)
 	if req.Method == http.MethodPut {
-		// Includes multipart framing and manifest bytes, with a fixed bound.
 		req.Body = &idleUploadBody{
 			ReadCloser:  http.MaxBytesReader(w, req.Body, c.limits.MaxExposureBytes+2*types.StaticCacheManifestLimit),
 			controller:  controller,
@@ -130,8 +125,6 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		if status.Present {
 			status.ExpiresAt = existing.expiresAt
 		} else if existing != nil && existing.leaseID == site.leaseID {
-			// A changed snapshot falls back to the live origin until its
-			// replacement is complete, including when admission later fails.
 			c.retireLocked(existing)
 		}
 		c.mu.Unlock()
@@ -166,8 +159,6 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 				err = partErr
 				break
 			}
-			// Disk filenames are content hashes, never uploaded paths. Distinct
-			// URLs may share a digest within this snapshot.
 			output, createErr := root.Create(file.SHA256)
 			if createErr != nil {
 				err = createErr
@@ -198,11 +189,11 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 	c.mu.Lock()
 	var status types.StaticCacheStatus
 	if c.eligibleLocked(site.leaseID) && c.leases[site.leaseID].generation == generation {
-		active := c.leases[site.leaseID]
+		live := c.leases[site.leaseID]
 		if previous := c.entries[site.host]; previous != nil {
 			c.retireLocked(previous)
 		}
-		site.expiresAt = active.cacheExpiry()
+		site.expiresAt = live.cacheExpiry()
 		c.entries[site.host] = site
 		published = true
 		status = types.StaticCacheStatus{Present: true, ExpiresAt: site.expiresAt}
@@ -218,7 +209,6 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 
 const uploadIdleTimeout = 10 * time.Second
 
-// idleUploadBody limits blocking reads while retaining the absolute upload deadline.
 type idleUploadBody struct {
 	io.ReadCloser
 	controller  *http.ResponseController

@@ -7,7 +7,6 @@
 
 	const currentPath = $derived($page.url.pathname);
 
-	// Track user-toggled state per section. null means "not manually toggled"
 	let userToggles: Record<number, boolean | null> = $state({});
 
 	function isItemActive(href: string): boolean {
@@ -27,7 +26,6 @@
 		if (userToggle !== null && userToggle !== undefined) {
 			return userToggle;
 		}
-		// Auto-open if section has active child or defaultOpen
 		return sectionHasActiveChild(index) || (sections[index].defaultOpen ?? false);
 	}
 
@@ -36,9 +34,7 @@
 		userToggles[index] = !currentlyOpen;
 	}
 
-	// When the route changes to a page within a section, force that section open
 	$effect(() => {
-		// Access currentPath to create the dependency
 		void currentPath;
 		for (let i = 0; i < sections.length; i++) {
 			if (sectionHasActiveChild(i)) {

@@ -68,8 +68,8 @@ describe("Portal commands", () => {
     const unix = buildCommand(opts, { platform: "linux", arch: "x64" });
     const windows = buildCommand(opts, { platform: "win32", arch: "x64" });
 
-    assert.ok(unix.includes("\"$PORTAL_BIN\" expose --name my-app -- 'http://[::1]:8080/'"));
-    assert.ok(windows.includes("& $PortalBin expose --name my-app -- 'http://[::1]:8080/'"));
+    assert.ok(unix.includes("\"$PORTAL_BIN\" expose --name my-app -- 'http://[::1]:8080/'"), unix);
+    assert.ok(windows.includes("& $PortalBin expose --name my-app -- 'http://[::1]:8080/'"), windows);
   });
 
   it("resolveTunnelInstallerURL maps supported platforms to release installers", () => {
@@ -100,7 +100,7 @@ describe("Portal commands", () => {
     assert.match(command, /sh "\$PORTAL_INSTALLER"/);
     assert.match(command, /PORTAL_BIN="\$\(command -v portal 2>\/dev\/null \|\| true\)"/);
     assert.match(command, /"\$PORTAL_BIN" expose --relays https:\/\/relay\.example\.com -- localhost:3000/);
-    assert.ok(!command.includes("--name"));
+    assert.doesNotMatch(command, /--name/);
   });
 
   it("buildCommand can use the default public registry without --relays", () => {
@@ -114,8 +114,8 @@ describe("Portal commands", () => {
       arch: "x64",
     });
 
-    assert.ok(!command.includes("--relays"));
-    assert.ok(!command.includes("--name"));
+    assert.doesNotMatch(command, /--relays/);
+    assert.doesNotMatch(command, /--name/);
     assert.match(command, /"\$PORTAL_BIN" expose -- localhost:3000/);
   });
 

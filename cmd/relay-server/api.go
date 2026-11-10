@@ -42,8 +42,6 @@ var embeddedDistFS embed.FS
 const (
 	controlBodyLimit = 1 << 16
 
-	// Relay-local wire paths. Deliberately not in types/paths.go: no Go
-	// package outside cmd/relay-server needs them.
 	pathReputationVote    = types.PathAPIPrefix + "/reputation/vote"
 	reputationFilename    = "reputation.json"
 	reputationVoterCookie = "portal_voter"
@@ -60,10 +58,8 @@ type RelayAPI struct {
 	frontendFS           fs.FS
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
-	// reputation owns app votes, comments, and comment votes in reputation.json.
-	reputation *policy.ReputationStore
-	// policyWriteMu serializes candidate editing, persistence, and publication.
-	policyWriteMu sync.Mutex
+	reputation           *policy.ReputationStore
+	policyWriteMu        sync.Mutex
 }
 
 func NewRelayAPI(server *portal.Server, policies *policy.Store, ingress *policy.Ingress, policyStatePath, adminToken, frontendDir string, initialSettings types.PolicySettings) (*RelayAPI, error) {
@@ -194,8 +190,6 @@ func (api *RelayAPI) loadPolicyState(initial policy.State) error {
 		if err != nil {
 			return err
 		}
-		// Nonpositive limits in older files mean explicit unlimited, distinct
-		// from an absent entry inheriting the configured relay default.
 		for key, limit := range limits {
 			if limit < 0 {
 				limits[key] = 0
@@ -395,8 +389,6 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// policyLeases decorates the portal's lease listing with the relay's access
-// decisions for the admin surface.
 func (api *RelayAPI) policyLeases(access policy.State) []types.PolicyLease {
 	leases := api.server.PolicyLeases()
 	for i := range leases {
@@ -411,10 +403,6 @@ func (api *RelayAPI) policyLeases(access policy.State) []types.PolicyLease {
 	return leases
 }
 
-// commitPolicy applies saved operator policy and publishes access decisions
-// before acknowledging the admin request. policyWriteMu serializes writers;
-// registration may publish the same snapshot concurrently, and Portal rejects
-// any older revision on arrival.
 func (api *RelayAPI) commitPolicy(next policy.State) error {
 	if err := api.server.SetTransportPolicy(next.UDP.Enabled, next.UDP.MaxLeases, next.TCPPort.Enabled, next.TCPPort.MaxLeases); err != nil {
 		return err
@@ -542,8 +530,6 @@ func applyOptionalPolicy(enabled *bool, maxLeases *int, current types.PolicyPort
 	return current
 }
 
-// parseIdentityKeyList converts persisted identity strings at the policy
-// boundary so policy.State only receives typed runtime keys.
 func parseIdentityKeyList(section string, keys []string) ([]types.ServiceIdentityKey, error) {
 	parsed := make([]types.ServiceIdentityKey, len(keys))
 	for i, raw := range keys {
@@ -556,11 +542,6 @@ func parseIdentityKeyList(section string, keys []string) ([]types.ServiceIdentit
 	return parsed, nil
 }
 
-// parseIdentityBPSLimits converts persisted identity_bps keys at the policy
-// boundary. Two
-// spellings sharing a canonical key must agree on the limit: conflicting
-// values abort load instead of letting map iteration order pick a winner,
-// while identical duplicates collapse silently.
 func parseIdentityBPSLimits(limits map[string]int64) (map[types.ServiceIdentityKey]int64, error) {
 	if limits == nil {
 		return nil, nil
@@ -684,8 +665,6 @@ func serveLLMs(w http.ResponseWriter, r *http.Request, portalURL string) {
 	_, _ = w.Write([]byte(body))
 }
 
-// serveVote keeps both public vote URLs on one admission, mutation, and cookie
-// path. The route determines the target; a missing comment ID cannot vote on an app.
 func (api *RelayAPI) serveVote(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return

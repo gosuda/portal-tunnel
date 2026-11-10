@@ -42,8 +42,6 @@ main().catch(async (error) => {
 });
 </script>`
 
-// waitBrowserExit tears down the browser tree and waits for the launcher to
-// be reaped, bounded so a surviving browser helper can never wedge the suite.
 func waitBrowserExit(t *testing.T, browserDone <-chan struct{}, tree *browserTree) {
 	t.Helper()
 	if err := tree.kill(); err != nil {
@@ -61,8 +59,6 @@ func readBrowserLog(path string) string {
 	return string(data)
 }
 
-// requireBrowser finds Chrome or Chromium. CI must have one; elsewhere the test
-// that asks is skipped.
 func requireBrowser(t *testing.T) string {
 	t.Helper()
 	for _, candidate := range []string{"google-chrome", "chromium", "chromium-browser"} {
@@ -83,8 +79,6 @@ type browserSmokeResult struct {
 	err       error
 }
 
-// TestPackagedBrowserWASM loads the artifacts produced by make build-tunnel
-// in a real browser, exposes a handler, and reaches it through tenant TLS.
 func TestPackagedBrowserWASM(t *testing.T) {
 	for _, name := range []string{"", "browser-preview"} {
 		t.Run(cmp.Or(name, "unnamed"), func(t *testing.T) {
@@ -162,10 +156,6 @@ func testPackagedBrowserWASM(t *testing.T, name string) {
 		_ = relay.Wait()
 	})
 
-	// The browser writes to files rather than pipes: browsers hand off to
-	// helper processes that outlive the launcher and inherit its descriptors,
-	// and an inherited pipe keeps cmd.Wait blocked long after the launcher
-	// exits.
 	browserLog := filepath.Join(t.TempDir(), "browser.log")
 	logFile, err := os.Create(browserLog)
 	if err != nil {
@@ -206,7 +196,6 @@ waitReady:
 			if browserErr != nil {
 				t.Fatalf("browser launcher exited with error before connector became ready: %v; browser log=%s", browserErr, readBrowserLog(browserLog))
 			}
-			// Clean launcher exit is normal on platforms that hand off to helper processes.
 			waitBrowser = nil
 		case <-ctx.Done():
 			t.Fatalf("browser connector did not become ready: %v; browser log=%s", ctx.Err(), readBrowserLog(browserLog))

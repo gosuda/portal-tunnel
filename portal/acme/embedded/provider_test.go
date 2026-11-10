@@ -86,8 +86,6 @@ func TestASynthesisFollowsCurrentPublicIP(t *testing.T) {
 		}
 	}
 
-	// Explicit per-hostname A records must never override synthesis, so a
-	// public IP change propagates to every hostname immediately.
 	if err := p.EnsureAddressRecord(ctx, "tunnel."+testZone, "198.51.100.7"); err != nil {
 		t.Fatalf("ensure a record: %v", err)
 	}
@@ -150,7 +148,6 @@ func TestAddressSynthesisPreservesOtherFamily(t *testing.T) {
 			}
 		}
 	}
-	// Explicit hostname changes cannot override the zone-wide address.
 	if err := p.EnsureAddressRecord(ctx, "tunnel."+testZone, "2001:db8::99"); err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +181,6 @@ func TestAWithoutPublicIPIsNodata(t *testing.T) {
 func TestAWithoutPublicIPRefusesMissingNames(t *testing.T) {
 	p := newTestProvider(t, nil)
 
-	// Missing names are refused without an SOA while the public address is
-	// still pending, so resolvers cannot negative-cache them (issue #516).
 	for _, name := range []string{"tunnel." + testZone, "deep.a.b." + testZone} {
 		resp := exchange(t, p, "tcp", dns.TypeA, name)
 		requireRcode(t, resp, dns.RcodeRefused)
@@ -197,7 +192,6 @@ func TestAWithoutPublicIPRefusesMissingNames(t *testing.T) {
 		}
 	}
 
-	// Once the address is synced the same names resolve.
 	if err := p.EnsureAddressRecords(context.Background(), testZone, "203.0.113.10"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
@@ -240,7 +234,6 @@ func TestTXTRecordLifecycle(t *testing.T) {
 		t.Fatalf("missing txt values: %v", seen)
 	}
 
-	// Prefix deletion removes only matching values.
 	if err := p.DeleteTXTRecords(ctx, name, "ENS1 "); err != nil {
 		t.Fatalf("delete txt records: %v", err)
 	}
@@ -272,8 +265,6 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 	if err := p.CleanUp(testZone, "token", keyAuth); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
-	// Without a public address the deleted challenge name is refused, not
-	// negative-cached as a name error.
 	resp = exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
 	requireRcode(t, resp, dns.RcodeRefused)
 	if len(resp.Answer) != 0 {
@@ -316,7 +307,6 @@ func TestApexMetadata(t *testing.T) {
 		t.Fatalf("got soa minttl %d, want %d", soa.Minttl, recordTTL)
 	}
 
-	// Mutations advance the SOA serial.
 	before := soa.Serial
 	if err := p.EnsureTXTRecord(ctx, testZone, "value"); err != nil {
 		t.Fatalf("ensure txt: %v", err)
@@ -399,8 +389,6 @@ func TestUDPExchangeWithEDNS(t *testing.T) {
 	}
 }
 
-// The embedded server is authoritative for exactly one zone: record mutations
-// outside that zone must be rejected, never silently served.
 func TestMutationsOutsideZoneRejected(t *testing.T) {
 	p := newTestProvider(t, nil)
 	ctx := context.Background()

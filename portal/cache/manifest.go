@@ -20,8 +20,6 @@ var (
 	errStaticCacheManifestTooLarge           = errors.New("static cache manifest is too large")
 )
 
-// manifestDigest validates the bounded wire manifest and hashes its canonical
-// representation. Paths are URL paths, never filesystem extraction targets.
 func manifestDigest(m types.StaticCacheManifest, maxObject, maxBytes int64) (string, int64, error) {
 	if len(m.Files) == 0 || len(m.Files) > types.StaticCacheMaxFiles {
 		return "", 0, errInvalidStaticCacheFileCount
@@ -54,6 +52,6 @@ func manifestDigest(m types.StaticCacheManifest, maxObject, maxBytes int64) (str
 	if len(raw) > types.StaticCacheManifestLimit {
 		return "", 0, errStaticCacheManifestTooLarge
 	}
-	digest := sha256.Sum256(raw)
-	return hex.EncodeToString(digest[:]), total, nil
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), total, nil
 }

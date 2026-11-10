@@ -64,8 +64,6 @@ func New(cfg Config, dir string) (*Manager, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	// This host-provided directory must be exclusive to this relay. Only
-	// our generated snapshot directories are disposable across restarts.
 	children, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -77,8 +75,6 @@ func New(cfg Config, dir string) (*Manager, error) {
 			}
 		}
 	}
-	// A tenant may use at most a quarter of the total budget, capped at
-	// 64 MiB, with a one-byte minimum for tiny budgets.
 	exposureBytes := min(64<<20, max(1, cfg.MaxBytes/4))
 	return &Manager{
 		cfg: cfg, dir: dir,
@@ -89,8 +85,6 @@ func New(cfg Config, dir string) (*Manager, error) {
 	}, nil
 }
 
-// retireLocked removes routing immediately, while readers and failed disk
-// cleanup keep their bytes charged until the directory is actually removed.
 func (c *Manager) retireLocked(site *cachedSite) {
 	if site == nil || c.entries[site.host] != site {
 		return
@@ -339,9 +333,7 @@ func (c *Manager) reserve(size int64) error {
 				oldest = site
 				continue
 			}
-			earlier := site.usedAt.Before(oldest.usedAt)
-			tie := site.usedAt.Equal(oldest.usedAt) && site.host < oldest.host
-			if earlier || tie {
+			if site.usedAt.Before(oldest.usedAt) || (site.usedAt.Equal(oldest.usedAt) && site.host < oldest.host) {
 				oldest = site
 			}
 		}

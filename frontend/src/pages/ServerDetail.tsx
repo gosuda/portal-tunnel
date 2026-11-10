@@ -6,9 +6,6 @@ import { Button } from "@/components/ui/button";
 import type { BaseServer } from "@/lib/server";
 import { isReputationWarning } from "@/utils/reputation";
 
-// Set right before this page leaves for the service. Session storage keeps it
-// to this tab, so a service opened in one tab does not bounce another tab's
-// detail page back to the directory.
 const LEFT_FOR_SERVICE_KEY = "isPush";
 
 function leaveForService(url: string): void {
@@ -20,7 +17,6 @@ function leaveForService(url: string): void {
   window.location.assign(url);
 }
 
-/** Whether this tab left for a service from here; reading clears it. */
 function consumeLeftForService(): boolean {
   try {
     const left = sessionStorage.getItem(LEFT_FOR_SERVICE_KEY) === "true";
@@ -34,13 +30,10 @@ function consumeLeftForService(): boolean {
 export function ServerDetail() {
   const location = useLocation();
   const navigate = useNavigate();
-  // The card passes its directory entry; a direct visit has none.
   const server = location.state as BaseServer | null;
 
   const showGate = isReputationWarning(server?.reputation);
 
-  // Coming back to this page after it opened the service (Back, or a bfcache
-  // restore) returns to the directory instead of opening the service again.
   useEffect(() => {
     const handlePageShow = () => {
       if (consumeLeftForService()) {
@@ -57,7 +50,6 @@ export function ServerDetail() {
     }
   }, [navigate]);
 
-  // Only flagged cards link here; unflagged cards open the service directly.
   if (!server || !showGate) {
     return <Navigate to="/" replace />;
   }

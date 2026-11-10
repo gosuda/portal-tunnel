@@ -24,10 +24,6 @@ type TLSMaterial struct {
 	Certificate tls.Certificate
 }
 
-// servedMaterial is the certificate the relay serves now, and the earlier ones
-// that tenants may still present: a tenant pins the chain the relay served when
-// its lease client was created and keeps presenting it to visitors after a
-// renewal replaced it.
 type servedMaterial struct {
 	current *TLSMaterial
 	retired []*TLSMaterial
@@ -54,10 +50,7 @@ func (m *Manager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 // SigningKey returns the private key of the certificate whose leaf is leafDER:
 // the one being served, or one served before a renewal for as long as it has
-// not expired. A visitor's browser trusts a certificate until it expires, so a
-// tenant still presenting it is signed for exactly that long and no longer
-// (see serve for what that means after a revocation). Any other certificate
-// gets nil.
+// not expired. Any other certificate gets nil.
 func (m *Manager) SigningKey(leafDER []byte) crypto.Signer {
 	if m == nil {
 		return nil
@@ -71,8 +64,6 @@ func (m *Manager) SigningKey(leafDER []byte) crypto.Signer {
 	return nil
 }
 
-// signable is the material SigningKey signs for at now: the served
-// certificate, then the replaced ones that have not expired.
 func (s servedMaterial) signable(now time.Time) []*TLSMaterial {
 	var signable []*TLSMaterial
 	if s.current != nil {
@@ -104,17 +95,6 @@ func (t *TLSMaterial) holds(leafDER []byte) bool {
 	return t != nil && bytes.Equal(t.Certificate.Certificate[0], leafDER)
 }
 
-// serve makes material the served certificate. The one it replaces stays
-// available to SigningKey; certificates that have expired are dropped, and so
-// is a copy of the new certificate itself (a startup provision serves the
-// issued pair, then EnsureTLSMaterial loads the same pair from disk).
-//
-// This is built for scheduled renewal, where the replaced certificate is still
-// valid and tenants still present it. It keeps the replaced key signing until
-// that certificate expires even when the renewal was meant to retire it, as
-// after a revocation or a key compromise. For a compromise, restart the relay:
-// the retired material lives in memory only, and the restart also drops every
-// lease, so tenants re-pin the chain on disk.
 func (m *Manager) serve(material *TLSMaterial) {
 	replaced := m.TLSMaterial()
 	now := time.Now()
@@ -163,8 +143,6 @@ func newTLSMaterial(certPEM, keyPEM []byte) (*TLSMaterial, error) {
 	return &TLSMaterial{CertPEM: certPEM, Certificate: certificate}, nil
 }
 
-// loadTLSMaterial reads the certificate pair and makes it the served material.
-// A pair that cannot be read or parsed leaves the previous material in place.
 func (m *Manager) loadTLSMaterial(certFile, keyFile string) error {
 	certPEM, err := os.ReadFile(certFile)
 	if err != nil {

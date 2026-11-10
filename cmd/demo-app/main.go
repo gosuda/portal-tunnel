@@ -56,8 +56,6 @@ type demoConfig struct {
 	maxActiveRelays int
 }
 
-// registerConnectivityFlags registers the relay, discovery, identity, and
-// owner flags that are shared across TCP and UDP demo commands.
 func registerConnectivityFlags(fs *flag.FlagSet, cfg *demoConfig, defaultRelays string) {
 	env := cli.NewEnv(os.Environ())
 	env.String(fs, &cfg.relayURLs, "relays", defaultRelays, "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with bootstrap relays when discovery is enabled)", "RELAYS")
@@ -230,8 +228,6 @@ func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, op
 	return sdk.Expose(ctx, identity, explicitRelayURLs, opts...)
 }
 
-// resolveDemoIdentity parses an inline identity or existing file. It generates
-// and persists an identity only when neither source exists.
 func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
 	if raw := strings.TrimSpace(cfg.identityJSON); raw != "" {
 		return identity.Parse([]byte(raw))

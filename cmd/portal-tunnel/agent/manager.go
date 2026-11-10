@@ -41,8 +41,6 @@ type manager struct {
 	mu      sync.RWMutex
 	cfg     Config
 	tunnels map[string]*managedTunnel
-	// rootCtx is the context tunnels run under; Start replaces it with the
-	// agent's context.
 	rootCtx context.Context
 }
 
@@ -339,8 +337,6 @@ func (m *manager) applyConfig(cfg Config) error {
 		previous := tunnel.cfg
 		if !reflect.DeepEqual(previous, tunnelCfg) {
 			tunnel.cfg = tunnelCfg
-			// Metadata and the discovery cap can change on the current exposure.
-			// All other settings are assembled when the runtime starts.
 			previous.LeaseMetadata = tunnelCfg.LeaseMetadata
 			previous.MaxActiveRelays = tunnelCfg.MaxActiveRelays
 			if reflect.DeepEqual(previous, tunnelCfg) {
@@ -514,7 +510,6 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		state = "starting"
 	}
 
-	// The config passed validation before it was saved, so it resolves.
 	spec, _ := cfg.Spec()
 	auth := cfg.AuthConfig
 	status := AgentTunnelStatus{
@@ -602,7 +597,6 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
-	// Resolve process defaults on the runtime copy; never persist the secret.
 	cfg.FacilitatorToken = cmp.Or(strings.TrimSpace(cfg.FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
 	spec, err := cfg.Spec()
 	if err != nil {

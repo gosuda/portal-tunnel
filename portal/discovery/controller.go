@@ -31,17 +31,11 @@ const (
 	FailureMITM     FailureKind = "mitm"
 )
 
-// Controller is a thin discovery selection and refresh layer. It owns no
-// relay runtime state: RelaySet owns failure/backoff/ban/candidate state,
-// Exposure owns runtime/listener state, and the Controller only refreshes
-// discovery, selects relays, and signals changes.
-//
-// The Controller is the policy owner: callers set explicit relays, max
-// active relays, transport requirements, and local address via the Set*
-// methods, and forward add/remove relay user intent through AddRelay /
-// RemoveRelay, which apply the explicit-list change together with the
-// matching eligibility change as one atomic unit. Next returns each changed
-// desired relay set as a value for the runtime to reconcile.
+// Controller refreshes discovery, selects relays, and signals changes.
+// RelaySet owns failure, backoff, ban, and candidate state. AddRelay and
+// RemoveRelay each apply the explicit-list change together with the
+// matching eligibility change as one atomic unit. Next returns each
+// changed desired relay set as a value for the runtime to reconcile.
 type Controller struct {
 	relaySet  *RelaySet
 	refresher *Refresher
@@ -90,10 +84,8 @@ func (c *Controller) Report(relayURL string, kind FailureKind) {
 	c.signal()
 }
 
-// SetExplicitRelays replaces the explicit relay URLs for selection. The
-// controller normalizes and stores a defensive copy, gives every URL a
-// durable RelaySet candidate state (so later failure reports stick for
-// custom relays that never entered through discovery), and signals the
+// SetExplicitRelays replaces the explicit relay URLs for selection and
+// gives every URL a durable RelaySet candidate state, then signals the
 // selection loop to re-evaluate immediately.
 func (c *Controller) SetExplicitRelays(urls []string) {
 	if c == nil {
@@ -130,12 +122,10 @@ func (c *Controller) SetActiveRelays(urls []string) {
 	c.signal()
 }
 
-// AddRelay applies one add-relay user intent as a single atomic unit: the
-// explicit-list change, the durable RelaySet candidate state, and the
-// eligibility reset (ban and suppression cleared, so a re-added relay is
-// immediately selectable) all serialize together under the controller lock.
-// A concurrent RemoveRelay can therefore never interleave a stale eligibility
-// reset past the removal — the final state always matches one serial order.
+// AddRelay applies one add-relay user intent as a single atomic unit:
+// the explicit-list change, the durable candidate state, and the
+// eligibility reset all serialize together under the controller lock, so a
+// re-added relay is immediately selectable.
 func (c *Controller) AddRelay(relayURL string) {
 	if c == nil || relayURL == "" {
 		return
@@ -153,10 +143,9 @@ func (c *Controller) AddRelay(relayURL string) {
 	c.signal()
 }
 
-// RemoveRelay applies one remove-relay user intent as a single atomic unit:
-// the explicit-list change and the selection deactivation (dropped from
-// active selection, kept as a future candidate) serialize together under
-// the controller lock, symmetric with AddRelay.
+// RemoveRelay applies one remove-relay user intent as a single atomic
+// unit: the explicit-list change and the selection deactivation serialize
+// together under the controller lock.
 func (c *Controller) RemoveRelay(relayURL string) {
 	if c == nil || relayURL == "" {
 		return
@@ -259,28 +248,23 @@ func (c *Controller) Next(ctx context.Context) ([]string, error) {
 			return next, nil
 		}
 
-		wait := time.Until(c.refreshAt)
-		if wait < 0 {
-			wait = 0
-		}
+		wait := max(time.Until(c.refreshAt), 0)
 		timer := time.NewTimer(wait)
+		ctxDone := false
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return nil, ctx.Err()
+			ctxDone = true
 		case <-timer.C:
 		case <-c.changed:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
 			}
+		}
+		if ctxDone {
+			return nil, ctx.Err()
 		}
 	}
 }

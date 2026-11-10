@@ -1,20 +1,3 @@
-// SIWE wallet authentication uses stateless challenges.
-//
-// Challenges are stateless and tamper-evident: Issue encodes the challenge
-// payload into an HMAC-signed token instead of storing pending state, so
-// issuance consumes no server state and an unauthenticated flood of
-// challenge requests cannot exhaust login capacity (issue #530). The token
-// travels to the wallet as the opaque challenge ID; its embedded payload
-// ID doubles as the SIWE request ID. Verification keeps no state either:
-// a replayed token within its TTL re-authenticates the same wallet,
-// which cannot create a new identity or bypass signature verification,
-// so replay tracking — and the global capacity failure mode it would
-// reintroduce — is deliberately omitted. By default each authenticator generates
-// its challenge-signing key at construction. Services can instead provide a
-// shared key so outstanding challenges survive replica rotation. Source IP
-// addresses and relay connection identities are deliberately not used to rate-limit
-// issuance: neither is a trustworthy browser identity through relay
-// transport, so limiting on them would only block the wrong clients.
 package identity
 
 import (
@@ -38,10 +21,7 @@ var (
 )
 
 const (
-	// siweChallengeTTL bounds how long a wallet has to sign its challenge.
-	siweChallengeTTL = 2 * time.Minute
-	// siweChallengeKeyLength is the size of the challenge-signing key NewSIWEAuthenticator
-	// generates for each authenticator.
+	siweChallengeTTL       = 2 * time.Minute
 	siweChallengeKeyLength = 32
 )
 
@@ -82,9 +62,6 @@ type SIWEChallenge struct {
 	ExpiresAt time.Time
 }
 
-// siweChallengePayload is the HMAC-protected body of a challenge token. Its
-// canonical JSON encoding (struct field order, deterministic) is what the
-// MAC covers.
 type siweChallengePayload struct {
 	ID        string    `json:"id"`
 	Address   string    `json:"address"`
@@ -163,7 +140,7 @@ func NormalizeEVMAddresses(values []string) ([]string, error) {
 
 // Issue returns a fresh challenge for address. It touches no shared state:
 // a flood of unauthenticated challenge requests cannot exhaust issuance
-// because there is no pending pool to fill (issue #530).
+// because there is no pending pool to fill.
 func (a *SIWEAuthenticator) Issue(address, domain, uri string, now time.Time) (SIWEChallenge, error) {
 	if a == nil {
 		return SIWEChallenge{}, ErrSIWEUnauthorized
@@ -227,10 +204,6 @@ func (a *SIWEAuthenticator) Verify(challengeToken, message, signature, domain st
 	if now.After(payload.ExpiresAt) || payload.IssuedAt.Before(notBefore) {
 		return "", ErrSIWEChallengeExpired
 	}
-	// Rebuild the message from the HMAC-protected payload and require
-	// byte-for-byte equality: the wallet signs exactly what was issued,
-	// so an edited message invalidates the challenge without creating a
-	// second validation path through the submitted text.
 	expected, err := FormatSIWEMessage(SIWEMessage{
 		Domain: payload.Domain, Address: payload.Address, URI: payload.URI,
 		Statement: payload.Statement, Nonce: payload.Nonce, RequestID: payload.ID,
@@ -251,8 +224,6 @@ func (a *SIWEAuthenticator) Verify(challengeToken, message, signature, domain st
 	return payload.Address, nil
 }
 
-// decodeChallengeToken splits and authenticates the token: an unknown
-// format, undecodable payload, or bad MAC all answer ErrSIWEChallengeInvalid.
 func (a *SIWEAuthenticator) decodeChallengeToken(token string) (siweChallengePayload, error) {
 	encodedPayload, encodedMAC, ok := strings.Cut(token, ".")
 	if !ok {

@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: portal-relay
+    scheme: https
+    metrics_path: /api/admin/metrics
+    bearer_token_file: /run/secrets/portal_admin_token
+    static_configs:
+      - targets: [localhost:443]
+    tls_config:
+      # The default PORTAL_URL is https://localhost. Set this to the real
+      # root hostname when deploying with a different PORTAL_URL.
+      server_name: localhost
+      # Local self-signed certificates only. Use a trusted CA and set this
+      # to false when the relay has a production certificate.
+      insecure_skip_verify: true

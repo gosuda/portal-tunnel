@@ -53,18 +53,9 @@ const (
 	defaultRenewBefore      = 30 * time.Second
 	defaultReadyTarget      = 8
 	defaultRetryWait        = 3 * time.Second
-	// defaultChainCheckInterval bounds how often a lease asks the relay whether
-	// its pinned certificate chain is still the one served. A replaced relay
-	// certificate stays signable until its NotAfter, and the relay renews at
-	// least min(7 days, a tenth of the lifetime) before expiry, so an hourly
-	// check moves a tenant long before the old certificate expires. It costs the
-	// relay a fortieth of the TLS handshakes a check at every lease renewal
-	// (about every 90 s) would: for 10k tenants about 3 per second instead of
-	// 111. A handshake that finds the pin stale re-pins at once, without waiting
-	// for this.
+
 	defaultChainCheckInterval = time.Hour
-	// maxAdmitting bounds the connections that finished their tenant TLS
-	// handshake and are still being admitted or waiting to be queued for Accept.
+
 	maxAdmitting = 64
 )
 
@@ -95,8 +86,6 @@ type listenerStatus struct {
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
 
-// terminalAPIErrorCodes are relay API rejections that permanently
-// disqualify a relay for the exposure, matched by code via errors.Is.
 var terminalAPIErrorCodes = []string{
 	types.APIErrorCodeFeatureUnavailable,
 	types.APIErrorCodeTransportMismatch,
@@ -126,9 +115,6 @@ func isTerminalRelayError(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
 }
 
-// relayApprovalFromError reads the routing decision out of a refused reverse
-// connect, the one place a relay reports it. Renew stays silent on purpose: an
-// SDK treats a renew 4xx as terminal, and a retry already answers within seconds.
 func relayApprovalFromError(err error) RelayApproval {
 	switch {
 	case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}):
@@ -140,14 +126,6 @@ func relayApprovalFromError(err error) RelayApproval {
 	}
 }
 
-// staleLeaseError reports whether err means credentials this listener
-// previously obtained are no longer valid on the relay: the in-memory
-// lease registry was dropped by a relay restart, or the relay rotated its
-// signing authority so the stored access token and reverse capability
-// answer "unauthorized" before the missing-record check can answer "lease
-// not found". Errors in this class must move the listener back to full
-// registration; they are never a reason to keep retrying the same stale
-// credential or to fail the relay permanently.
 func staleLeaseError(err error) bool {
 	return errors.Is(err, errLeaseRefreshRequired) ||
 		errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) ||
@@ -201,8 +179,6 @@ type listener struct {
 	lease *utils.Snapshot[listenerSnapshot]
 }
 
-// newListener creates one public relay listener.
-// Only local config validation fails immediately; relay startup runs in the background until ready.
 func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
 
@@ -277,9 +253,6 @@ func (l *listener) reportStreamReady() {
 	l.logRawEndpoints()
 }
 
-// reportRefusal publishes a relay's refusal of a reverse connect. An open stream
-// outranks it: the other session slot can get its answer just after a stream
-// opened, from a decision the relay has already changed.
 func (l *listener) reportRefusal(err error) {
 	approval := relayApprovalFromError(err)
 	if approval == "" || !l.setApproval(approval) {
@@ -288,8 +261,6 @@ func (l *listener) reportRefusal(err error) {
 	l.reportAvailable()
 }
 
-// setApproval reads the open streams inside the update, so a refusal that loses
-// the race with a stream opening does not stick to a lease that routes.
 func (l *listener) setApproval(approval RelayApproval) bool {
 	_, changed := l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
 		if approval != "" && l.readySessions.Load() > 0 {
@@ -304,9 +275,6 @@ func (l *listener) setApproval(approval RelayApproval) bool {
 	return changed
 }
 
-// logRawEndpoints prints, once per lease, the line that tells a raw TCP or UDP
-// publisher its address. It waits for an open stream, because the relay refuses
-// visitors before that.
 func (l *listener) logRawEndpoints() {
 	lease, first := l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
 		if current.endpointsLogged || !current.hasRawEndpoint() {
@@ -398,10 +366,6 @@ func (l *listener) run(ctx context.Context) {
 		if lease, ok := l.leaseSnapshot(); !ok || (l.publicURLForLease(lease) == "" && !lease.hasRawEndpoint()) {
 			log.Info().Str("address", l.identity.Address).Msg("relay listener registered")
 		}
-		// The ready advertisement ("service ready at") is logged by
-		// Exposure.applyRelayStatus once the public URL is committed to
-		// the authoritative relay status, so it can always be retracted
-		// by the symmetric deselection log (issue #463).
 
 		err = l.runLease(ctx)
 		if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
@@ -482,11 +446,8 @@ func (l *listener) Close() error {
 }
 
 type listenerSnapshot struct {
-	// hostname is the identity-bound canonical hostname used for TLS, the
-	// keyless signer, MITM probes and PublicURL.
 	hostname string
-	// aliasHostname is the <name>.<root> alias when the relay granted it
-	// to this lease, else empty. The relay keeps it for the lease lifetime.
+
 	aliasHostname string
 	aliasEpoch    string
 	udpAddr       string
@@ -495,12 +456,11 @@ type listenerSnapshot struct {
 	reverse       types.ReverseEndpoint
 	expiresAt     time.Time
 	tenantTLS     *keyless.Client
-	// approval is the relay's latest refusal of this lease, if any.
+
 	approval RelayApproval
-	// endpointsLogged records that this lease's raw endpoints were printed.
+
 	endpointsLogged bool
-	// chainCheckedAt is when the relay chain tenantTLS pins was last found
-	// current: at registration, and at each scheduled check that completed.
+
 	chainCheckedAt time.Time
 }
 
@@ -552,11 +512,6 @@ func (l *listener) Accept() (net.Conn, error) {
 	}
 }
 
-// admit lets a connection whose tenant TLS handshake finished say what it is,
-// a self-probe, a channel binding request or ordinary traffic, and then queues
-// it for Accept. It runs in its own goroutine and releases its admitting slot
-// when done, so a client that is slow to speak delays only itself: Accept is
-// serial, and waiting there would hold up every connection behind it.
 func (l *listener) admit(ctx context.Context, conn net.Conn) {
 	defer func() { <-l.admitting }()
 
@@ -571,8 +526,7 @@ func (l *listener) admit(ctx context.Context, conn net.Conn) {
 	if handled {
 		return
 	}
-	// A select with both cases ready picks one at random, so check first: a
-	// connection admitted after the lease context ended must not be queued.
+
 	if ctx.Err() != nil {
 		_ = nextConn.Close()
 		return
@@ -619,19 +573,14 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 	return l.datagram.SendFrame(frame)
 }
 
-// publicURLForLease is the identity-bound canonical URL, which always routes
-// to this lease.
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
 	return l.leaseURL(lease.hostname)
 }
 
-// aliasURLForLease is the <name>.<root> URL when the relay granted that
-// alias to this lease, else empty.
 func (l *listener) aliasURLForLease(lease listenerSnapshot) string {
 	return l.leaseURL(lease.aliasHostname)
 }
 
-// leaseURL builds the relay URL for hostname.
 func (l *listener) leaseURL(hostname string) string {
 	baseURL := l.api.relayURL
 	if baseURL == nil || strings.TrimSpace(hostname) == "" {
@@ -660,8 +609,6 @@ func relayAuthority(relayURL *url.URL, hostname string) string {
 	return net.JoinHostPort(host, port)
 }
 
-// runStaticCache supplies current SDK transport and lease credentials; the
-// cache package owns generation selection and the synchronization protocol.
 func (l *listener) runStaticCache(ctx context.Context) {
 	limits, available := l.api.cacheLimits()
 	if !available {
@@ -714,9 +661,9 @@ func (l *listener) runLease(ctx context.Context) error {
 			l.runStaticCache(leaseCtx)
 		}()
 	}
-	// The lease owns its reverse transport and any state it keeps.
+
 	reverseTransport := newLeaseReverseTransport(l)
-	// Both exits cancel and join the workers before this owner closes its mux.
+
 	defer reverseTransport.Close()
 	for sessionSlot := range defaultReadyTarget {
 		sessionSlot++
@@ -775,10 +722,7 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			// Credentials this listener previously obtained that the relay
-			// no longer recognizes (restart, expiry, authority rotation)
-			// must leave the retry loop and re-register; ordinary transport
-			// errors below keep retrying.
+
 			if staleLeaseError(err) {
 				return errLeaseRefreshRequired
 			}
@@ -820,10 +764,6 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless
 				}
 			}
 
-			// Taking a slot bounds the connections in admission at
-			// maxAdmitting, counting those whose admit goroutine waits on a
-			// full l.accepted. A full accept queue alone does not stop this
-			// loop: it claims reverse connections until every slot is taken.
 			select {
 			case <-ctx.Done():
 				_ = acceptedConn.Close()
@@ -1000,7 +940,6 @@ func (l *listener) runDatagramLoop(ctx context.Context) error {
 	}
 }
 
-// reverseTarget reads the current lease's reverse endpoint and capability.
 func (l *listener) reverseTarget() (*url.URL, string, error) {
 	lease, ok := l.leaseSnapshot()
 	if !ok || lease.reverse.Capability == "" {
@@ -1009,7 +948,7 @@ func (l *listener) reverseTarget() (*url.URL, string, error) {
 	if !lease.reverse.ExpiresAt.After(time.Now().UTC()) {
 		return nil, "", errLeaseRefreshRequired
 	}
-	// Recheck on every reconnect, including after a failed gateway is replaced.
+
 	if err := l.validateReverseEndpointTransport(lease.reverse); err != nil {
 		return nil, "", fmt.Errorf("reverse endpoint is not authorized: %w", err)
 	}
@@ -1028,7 +967,7 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 	if endpoint == nil || endpoint.Hostname() == "" {
 		return nil, errReverseEndpointHostnameIsUnavailable
 	}
-	// Never bootstrap local TLS trust for a relay-supplied gateway.
+
 	if l.isAlternateReverseEndpoint(endpoint.String()) {
 		if err := validatePublicReverseHostname(endpoint.Hostname()); err != nil {
 			return nil, err
@@ -1053,8 +992,6 @@ func (l *listener) reverseTLSConfig(ctx context.Context, endpoint *url.URL) (*tl
 	return tlsConfig, nil
 }
 
-// clearReverseTLSCache drops the cached TLS config for alternate reverse
-// endpoints so a rotated relay authority is re-trusted on the next dial.
 func (l *listener) clearReverseTLSCache() {
 	l.reverseTLSMu.Lock()
 	defer l.reverseTLSMu.Unlock()
@@ -1131,10 +1068,6 @@ func (l *listener) runRenewLoop(ctx context.Context) error {
 			return err
 		}
 
-		// Round(0) strips the monotonic clock reading so that
-		// time.Since uses wall-clock time.  The monotonic clock
-		// freezes during macOS sleep, so without this the elapsed
-		// duration would equal the timer interval, not real time.
 		before := time.Now().Round(0)
 		if interval > 0 {
 			if !utils.SleepOrDone(ctx, interval) {
@@ -1143,10 +1076,6 @@ func (l *listener) runRenewLoop(ctx context.Context) error {
 		}
 		elapsed := time.Since(before)
 
-		// If the wall-clock jump is much larger than expected, the OS
-		// likely suspended the process (e.g. macOS lid close).  The
-		// server-side lease is almost certainly expired, so skip the
-		// normal renew and go straight to re-registration.
 		if elapsed > interval+wakeThreshold {
 			log.Info().
 				Dur("expected", interval).
@@ -1251,12 +1180,6 @@ func (l *listener) renewLease(ctx context.Context) error {
 	return nil
 }
 
-// refreshRelayChain moves the tenant to the certificate chain the relay serves
-// now and reports whether the check completed. Lease renewal is the cadence at
-// which a tenant that never reconnects learns of a renewed relay certificate,
-// at most once per defaultChainCheckInterval, and the relay signs for the
-// replaced one only until it expires. A failure keeps the pinned chain and is
-// retried at the next renewal.
 func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Client) bool {
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -1371,7 +1294,7 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok {
 		retryWait = max(retryWait, apiErr.RetryAfter)
 	}
-	// The relay_status event reports this once per change, not once per slot.
+
 	if relayApprovalFromError(err) != "" {
 		return utils.SleepOrDone(ctx, retryWait)
 	}

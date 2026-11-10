@@ -54,7 +54,6 @@ async function fetchAuthState(): Promise<AuthState> {
   }
 }
 
-/** The admin sign-in state and its actions; one owner per page. */
 export type AdminAuth = ReturnType<typeof useAuth>;
 
 export function useAuth() {

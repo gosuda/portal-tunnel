@@ -68,7 +68,6 @@ func (a *walletAuthenticator) login(req types.WalletAuthLoginRequest, domain str
 	if a == nil {
 		return "", "", identity.ErrSIWEUnauthorized
 	}
-	// The control API is never served on an alias, so no hold dates its challenges.
 	address, err := a.siwe.Verify(req.ChallengeID, req.SIWEMessage, req.SIWESignature, domain, time.Time{}, now)
 	if err != nil {
 		return "", "", err
@@ -77,10 +76,6 @@ func (a *walletAuthenticator) login(req types.WalletAuthLoginRequest, domain str
 	return a.sessionForVerifiedWallet(address, now), address, nil
 }
 
-// sessionForVerifiedWallet accepts only a SIWE-verified address. Replays reuse
-// its existing session without extending expiration. Scanning at most 128
-// sessions removes expired entries; eviction happens only when capacity is
-// full. Fixed session TTLs make the earliest expiry the oldest.
 func (a *walletAuthenticator) sessionForVerifiedWallet(address string, now time.Time) string {
 	now = now.UTC()
 	a.mu.Lock()

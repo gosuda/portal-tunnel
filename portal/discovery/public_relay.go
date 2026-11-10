@@ -20,8 +20,6 @@ var (
 	errDiscoveryRedirectsAreNotAllowed    = errors.New("discovery redirects are not allowed")
 )
 
-// requirePublicRelayURL checks the static part of the discovery trust boundary.
-// Names must also pass the resolved-address check on every new connection.
 func requirePublicRelayURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -40,13 +38,7 @@ func requirePublicRelayURL(raw string) error {
 	return nil
 }
 
-// dialPublicRelay resolves a discovery hostname and dials only a vetted IP.
-// Dialing the IP, rather than the hostname, prevents a second DNS lookup from
-// rebinding to an internal address. net/http retains the original hostname
-// for TLS certificate verification and the HTTP Host header.
 func dialPublicRelay(ctx context.Context, network, address string) (net.Conn, error) {
-	// HTTP transports can keep a dial alive after its request times out.
-	// Bound DNS resolution and all connection attempts independently.
 	ctx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
 	defer cancel()
 
@@ -68,7 +60,6 @@ func dialPublicRelay(ctx context.Context, network, address string) (net.Conn, er
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("dial discovery relay %q: %w", host, err)
 		}
-		// Leave time for later vetted addresses if this one is unreachable.
 		dialer := net.Dialer{Timeout: time.Until(deadline) / time.Duration(len(ips)-index)}
 		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 		if err == nil {

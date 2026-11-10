@@ -59,8 +59,6 @@ func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
 	if !limited {
 		t.Fatal("vote source limit was not enforced")
 	}
-	// Comment admission has its own budget, and a missing ID must never fall
-	// through to app voting, even though both routes share the handler.
 	for _, id := range []string{"", "  "} {
 		req := httptest.NewRequest(http.MethodPost, types.PathCommentsVote, strings.NewReader(`{"hostname":"demo.example.com","id":"`+id+`","vote":"up"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -79,8 +77,6 @@ func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
 	}
 }
 
-// newPolicyAPI builds a RelayAPI over an optional policy.json payload and
-// returns the server so tests can assert on the applied relay state.
 func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, error) {
 	t.Helper()
 	dir := t.TempDir()
@@ -202,5 +198,20 @@ func TestAdminMutationRejectsMalformedIdentityKey(t *testing.T) {
 	api.Handler().ServeHTTP(response, req)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("malformed identity key mutation: %d, want 400", response.Code)
+	}
+}
+
+func TestServeFrontendFallsBackToIndexForClientRoutes(t *testing.T) {
+	api := newTestReputationAPI(t)
+	serve := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		api.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+	if rec := serve("/app/dashboard"); rec.Code != http.StatusOK || rec.Body.String() != "portal" {
+		t.Fatalf("client route = %d %q, want 200 index", rec.Code, rec.Body.String())
+	}
+	if rec := serve("/missing.css"); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing asset = %d, want 404", rec.Code)
 	}
 }

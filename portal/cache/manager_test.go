@@ -101,8 +101,6 @@ func TestAdmissionPreservesTenantAndObjectBounds(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	// Each object fits, but their sum exceeds this exposure's share while
-	// remaining well below the relay's total budget.
 	manifest := types.StaticCacheManifest{Index: "index.html", Files: []types.StaticCacheFile{
 		{Path: "index.html", Size: 5, SHA256: strings.Repeat("a", 64)},
 		{Path: "other.html", Size: 5, SHA256: strings.Repeat("b", 64)},
@@ -117,7 +115,6 @@ func TestAdmissionPreservesTenantAndObjectBounds(t *testing.T) {
 		t.Fatalf("over-budget exposure modified storage: %d, %d", w.Code, c.used)
 	}
 
-	// A large total budget must still reject oversized individual objects.
 	c = testManager(t, 1<<30)
 	lease = testLease(c, "site")
 	manifest.Files = manifest.Files[:1]
@@ -312,7 +309,6 @@ func TestFallbackReleasesSnapshotAndDiskFailureRequestsReupload(t *testing.T) {
 					t.Fatalf("snapshot did not recover: %d %s", w.Code, w.Body.String())
 				}
 			}
-			// The entire budget is reclaimable before any origin request ends.
 			other := testLease(c, "other")
 			w = httptest.NewRecorder()
 			c.Handle(w, testRequest(t, http.MethodPut, "next"), other.ID, c.Generation(other.ID))
@@ -357,7 +353,7 @@ func (r *gatedBody) Read(p []byte) (int, error) {
 }
 
 func TestAdmissionKeepsChecksAndUploadsIndependentlyBounded(t *testing.T) {
-	c := testManager(t, 32) // Cache owns a separate two-request pool for each operation.
+	c := testManager(t, 32)
 	l := testLease(c, "site")
 	other := testLease(c, "other")
 	resume := make(chan struct{})
@@ -445,8 +441,6 @@ func TestObjectDigestMismatchRejectsUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The replacement is the same length as "site" so the streamed byte count
-	// matches the manifest and only the SHA-256 comparison can reject.
 	req.Body = io.NopCloser(strings.NewReader(strings.Replace(string(raw), "site", "sita", 1)))
 	w := httptest.NewRecorder()
 	c.Handle(w, req, l.ID, c.Generation(l.ID))
@@ -474,8 +468,6 @@ func TestLeaseReplacementRejectsInFlightUpload(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("upload never started reading its body")
 	}
-	// Re-registering the same identity replaces the lease while the old
-	// upload is still streaming its body.
 	replacement := Lease{ID: "second-id", Owner: types.NewServiceIdentityKey("site", "0x1"), Hostname: "second.localhost", ExpiresAt: time.Now().Add(24 * time.Hour), LastSeenAt: time.Now()}
 	c.Register(replacement, types.RegisterChallengeRequest{Cache: true, CacheTTL: 86400})
 	close(resume)
@@ -516,8 +508,6 @@ func TestDetachOwnerRejectsInFlightCacheRequests(t *testing.T) {
 			}()
 			<-started
 			c.DetachOwner(lease.Owner)
-			// Restored access permits a fresh generation on the retained lease.
-			// An old PUT still owns upload admission until its handler exits.
 			fresh := httptest.NewRecorder()
 			c.Handle(fresh, testRequest(t, http.MethodPut, "new"), lease.ID, c.Generation(lease.ID))
 			close(resume)
@@ -560,8 +550,6 @@ func TestDetachOwnerSuppressesCacheRouting(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	// The relay drives this event when its access state stops routing the
-	// owner; cached content must not outlive that decision.
 	c.DetachOwner(l.Owner)
 	if c.Has(l.Hostname) {
 		t.Fatal("detached identity remained routable from cache")
@@ -574,8 +562,6 @@ func TestDetachOwnerSuppressesCacheRouting(t *testing.T) {
 	}
 }
 
-// Syncer rejecting redirects ensures that access tokens and cache upload payloads
-// are never forwarded to an untrusted external endpoint via HTTP redirects.
 func TestStaticCacheDoesNotFollowRedirects(t *testing.T) {
 	root := t.TempDir()
 	content := []byte("site")
@@ -663,7 +649,6 @@ func TestUploadAdmissionIsolatesServiceIdentities(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("another service could not use the remaining slot: %d", w.Code)
 	}
-	// A malformed upload must also release this service's admission.
 	bad := httptest.NewRequest(http.MethodPut, types.PathSDKCache, strings.NewReader("invalid"))
 	w = httptest.NewRecorder()
 	c.Handle(w, bad, other.ID, c.Generation(other.ID))
@@ -782,7 +767,6 @@ func TestStaticCacheRetriesTransientAdmissionErrorsWithoutDelete(t *testing.T) {
 					case http.MethodPut:
 						if method == http.MethodPut && admissionStatus.Load() != http.StatusOK {
 							rejected.Add(1)
-							// Real admission can reject before reading the multipart body.
 							http.Error(w, "admission unavailable", int(admissionStatus.Load()))
 							return
 						}
@@ -863,6 +847,38 @@ func TestStaticCacheRetriesTransientAdmissionErrorsWithoutDelete(t *testing.T) {
 					t.Fatal("retry deleted cached content")
 				}
 			})
+		}
+	}
+}
+
+func TestReserveKeepsPinnedReadersRouted(t *testing.T) {
+	c := testManager(t, 24)
+	var pinned []*cachedSite
+	var hosts []string
+	for _, name := range []string{"first", "second", "third", "fourth"} {
+		lease := testLease(c, name)
+		w := httptest.NewRecorder()
+		c.Handle(w, testRequest(t, http.MethodPut, "123456"), lease.ID, c.Generation(lease.ID))
+		if w.Code != http.StatusOK {
+			t.Fatal(w.Body.String())
+		}
+		pinned = append(pinned, c.acquire(lease.Hostname))
+		hosts = append(hosts, lease.Hostname)
+	}
+	defer func() {
+		for _, site := range pinned {
+			c.release(site)
+		}
+	}()
+	next := testLease(c, "next")
+	w := httptest.NewRecorder()
+	c.Handle(w, testRequest(t, http.MethodPut, "new"), next.ID, c.Generation(next.ID))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("over-budget upload admitted with pinned readers: %d", w.Code)
+	}
+	for _, host := range hosts {
+		if !c.Has(host) {
+			t.Fatalf("pinned snapshot %q lost routing under admission pressure", host)
 		}
 	}
 }

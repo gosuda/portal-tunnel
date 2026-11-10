@@ -12,7 +12,6 @@ export type SortOption =
   | "updated"
   | "duration";
 
-/** The order the directory opens in and returns to on Home: newest first. */
 export const DEFAULT_SORT: SortOption = "default";
 
 export type BrowseView = "home" | "favorites" | "relays";

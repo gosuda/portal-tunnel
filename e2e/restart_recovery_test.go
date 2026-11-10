@@ -19,13 +19,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// A relay restart drops the in-memory lease registry and kills the live
-// reverse sessions. When the relay restarts with the same signing
-// identity, the listener's stored credentials answer "lease not found"
-// once it is back, and the SDK re-registers on its own. This test pins
-// that recovery so a relay restart never requires restarting the SDK
-// application (issue #471); the rotated-authority variant lives in
-// authority_rotation_test.go.
 func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 	h := newHarness(t)
 	publicURL := h.waitForPublicURL()
@@ -42,8 +35,6 @@ func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 		t.Fatalf("wait for relay shutdown: %v", err)
 	}
 
-	// The same state dir keeps the relay identity and TLS materials, so
-	// the restarted relay re-verifies nothing the SDK pinned.
 	restarted, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     "https://127.0.0.1:" + strconv.Itoa(h.sniPort),
 		StateDir:      h.stateDir,
@@ -60,9 +51,6 @@ func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 	}
 	h.server = restarted
 
-	// The exposure must recover without being recreated: a complete new
-	// registration, fresh reverse sessions, and the public hostname
-	// routing again.
 	deadline := time.Now().Add(45 * time.Second)
 	for {
 		if got, ok := h.tryGet(publicURL); ok && got == marker {
@@ -76,10 +64,6 @@ func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 	t.Fatal("exposure did not route again after relay restart")
 }
 
-// TestExposureReRegistersAfterAuthorityRotation verifies that a relay restart
-// that rotates the lease signing authority while keeping the TLS relay identity
-// causes a previously valid access token to be rejected as "unauthorized" once
-// the relay is back up, and that the exposure automatically re-registers.
 func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
 	h := newHarness(t)
 	publicURL := h.waitForPublicURL()

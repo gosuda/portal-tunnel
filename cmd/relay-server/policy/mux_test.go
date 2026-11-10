@@ -38,9 +38,6 @@ func TestMuxRejectsMethodBeforeAdmission(t *testing.T) {
 	}
 }
 
-// A relay that names the networks tunnels may come from refuses registration
-// and renewal from anywhere else before spending any pre-auth budget, and still
-// registers tunnels from those networks.
 func TestMuxRefusesTunnelsFromOutsideAllowedNetworks(t *testing.T) {
 	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: t.TempDir()})
 	if err != nil {
@@ -50,8 +47,6 @@ func TestMuxRefusesTunnelsFromOutsideAllowedNetworks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One unit of global budget, refilled once a minute: a refused request that
-	// spent it would leave the allowed tunnel below with none.
 	limiter := NewSourceLimiter(1, 1, 1, 1)
 	handler := Mux(server, http.NotFoundHandler(), ingress, limiter, NewStore(), PreAuthConfig{ChallengeCost: 1, RegisterCost: 1, AnnounceCost: 1})
 	leaseIdentity, err := identity.Generate("source-allowed")
@@ -113,9 +108,6 @@ func TestMuxLeavesFallbackBodyLimitsToOwner(t *testing.T) {
 	}
 }
 
-// A client that signs from a second address still spends the budget of the one
-// that asked, where a refusal lands. The budget also reads an identity as its
-// lease will hold it, not as a request spells it.
 func TestMuxUnapprovedLeaseBudget(t *testing.T) {
 	const asking, signing, fromHeader = "198.51.100.1", "198.51.100.2", "X-Test-From"
 	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: t.TempDir(), UnapprovedLeasesPerSource: 2})
@@ -197,5 +189,46 @@ func TestMuxUnapprovedLeaseBudget(t *testing.T) {
 	spelled.Name = "budget_approved"
 	if asked, answer := ask(spelled); asked.StatusCode != http.StatusCreated {
 		t.Fatalf("approved identity, spelled another way = %d: %s", asked.StatusCode, answer)
+	}
+}
+
+func TestMuxPreAuthBudgetExhaustionRefusesWithRetryAfter(t *testing.T) {
+	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limiter := NewSourceLimiter(1, 1, 0, 0)
+	handler := Mux(server, http.NotFoundHandler(), nil, limiter, NewStore(), PreAuthConfig{ChallengeCost: 1})
+	leaseIdentity, err := identity.Generate("pre-auth-budget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(types.RegisterChallengeRequest{Identity: leaseIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "198.51.100.1:1234"
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(relay.Close)
+	challenge := func() (int, http.Header, string) {
+		response, err := relay.Client().Post(relay.URL+types.PathSDKRegisterChallenge, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = response.Body.Close() }()
+		answer, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response.StatusCode, response.Header, string(answer)
+	}
+	if status, _, answer := challenge(); status != http.StatusCreated {
+		t.Fatalf("first challenge = %d, want 201: %s", status, answer)
+	}
+	status, header, answer := challenge()
+	if status != http.StatusTooManyRequests || header.Get("Retry-After") == "" {
+		t.Fatalf("exhausted pre-auth budget = %d, Retry-After %q, want 429 with guidance: %s", status, header.Get("Retry-After"), answer)
 	}
 }

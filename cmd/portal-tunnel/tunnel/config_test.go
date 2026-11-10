@@ -37,8 +37,6 @@ func TestParseHTTPRoute(t *testing.T) {
 	}
 }
 
-// An explicit blank method must not become an empty list, which charges every
-// method rather than rejecting the invalid payment configuration.
 func TestConfigSpecRejectsBlankPaymentMethods(t *testing.T) {
 	for _, methods := range [][]string{{""}, {" "}, {"GET", " "}} {
 		cfg := Config{HTTPRoutes: []HTTPRoute{{
@@ -104,8 +102,6 @@ func TestConfigSpecModes(t *testing.T) {
 			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "saml", []string{"@example.com"}
 			c.SAMLMetadataURL, c.SAMLMetadataFile = "https://idp.example/metadata", "/idp.xml"
 		}},
-		// The settings of a provider that is not the active one are refused, so
-		// they cannot change what the active one does.
 		{name: "oidc settings under siwe", edit: func(c *Config) {
 			c.TargetAddr, c.Provider, c.OIDCIssuerURL = "localhost:3000", "siwe", "https://accounts.google.com"
 		}},
@@ -204,8 +200,6 @@ func TestReplicaRejectsPaidNanoRoutes(t *testing.T) {
 	}
 }
 
-// A Config keeps nil and zero for what was not set, so Spec owns the defaults,
-// and an explicit value, false and zero included, wins over them.
 func TestConfigSpecDefaults(t *testing.T) {
 	off, on := false, true
 	for _, tc := range []struct {
@@ -230,9 +224,6 @@ func TestConfigSpecDefaults(t *testing.T) {
 	}
 }
 
-// Any auth setting makes an HTTP tunnel with the sign-in gate, so an incomplete
-// auth config is refused instead of leaving the application open. Payment
-// settings alone change nothing: only a paid route uses them.
 func TestConfigSpecHTTPMode(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -262,9 +253,6 @@ func TestConfigSpecHTTPMode(t *testing.T) {
 	}
 }
 
-// Representative OIDC, SAML and x402 configs, written the way a user may type
-// them, reach the runtime normalized by the owners of the components, and the
-// Config the caller holds is left as it was.
 func TestConfigSpecResolvesComponents(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", "")
 	for _, tc := range []struct {
@@ -342,7 +330,6 @@ func TestConfigSpecResolvesComponents(t *testing.T) {
 	}
 }
 
-// Spec uses explicit input even when the process has a facilitator token.
 func TestConfigSpecDoesNotReadEnvironment(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", " env-token ")
 	cfg := Config{HTTPRoutes: []HTTPRoute{{Prefix: "/", Upstream: "127.0.0.1:3001"}}}
@@ -359,8 +346,6 @@ func TestConfigSpecDoesNotReadEnvironment(t *testing.T) {
 	}
 }
 
-// The identity proof is compared byte for byte upstream, and a path is resolved
-// by the frontend that knows its base, so Normalize leaves both alone.
 func TestConfigNormalizeKeepsProofAndPaths(t *testing.T) {
 	cfg := Config{IdentityPath: "relative/identity.json"}
 	cfg.IdentityProof = " proof-with-spaces-kept "

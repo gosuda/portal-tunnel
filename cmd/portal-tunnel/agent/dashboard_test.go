@@ -33,8 +33,6 @@ func keyRunes(text string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}
 }
 
-// testDashboardStatus is plain ASCII on purpose: the ASCII fallback is about the glyphs the
-// dashboard draws, not about what users name their tunnels.
 func testDashboardStatus() AgentStatusResponse {
 	relays := []AgentRelayStatus{
 		{RelayURL: "https://relay-one.example.com", PublicURL: "https://web.relay-one.example.com", Version: "v2.4.1", State: sdk.RelayReady},
@@ -69,7 +67,6 @@ type dashboardScenario struct {
 	steps []tea.Msg
 }
 
-// testDashboardScenarios are the states of the dashboard a terminal has to be able to show.
 func testDashboardScenarios() []dashboardScenario {
 	load := agentDashboardStatusMsg{status: testDashboardStatus()}
 	long := keyRunes(strings.Repeat("long value ", 20))
@@ -115,7 +112,6 @@ func testDashboardScenarios() []dashboardScenario {
 	}
 }
 
-// newTestDashboard replays steps on a new model and then sizes the terminal.
 func newTestDashboard(t *testing.T, theme agentDashboardTheme, width, height int, steps ...tea.Msg) agentDashboardModel {
 	t.Helper()
 	var model tea.Model = newAgentDashboardModel("/etc/portal/config.toml", "/var/lib/portal", theme)
@@ -146,8 +142,6 @@ func click(t *testing.T, model agentDashboardModel, match func(agentDashboardReg
 	return model, nil
 }
 
-// clickText presses the left mouse button on the first and on the last cell of text as it is
-// drawn, and requires that both presses had the effect.
 func clickText(t *testing.T, model agentDashboardModel, text string, worked func(agentDashboardModel) bool) agentDashboardModel {
 	t.Helper()
 	for y, line := range strings.Split(model.View(), "\n") {
@@ -341,8 +335,6 @@ func TestDashboardQuitKeys(t *testing.T) {
 	}
 }
 
-// Under agent run --foreground closing the dashboard stops the agent and every
-// tunnel, so F10 and q ask first while ctrl+c still stops it at once.
 func TestDashboardAsksBeforeStoppingTheAgent(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	load := agentDashboardStatusMsg{status: testDashboardStatus()}
@@ -360,7 +352,7 @@ func TestDashboardAsksBeforeStoppingTheAgent(t *testing.T) {
 	}{
 		{"tunnels", []tea.Msg{load}, []tea.KeyMsg{keyF10, keyRunes("q")}},
 		{"relays", []tea.Msg{load, keyRight, keyRight}, []tea.KeyMsg{keyF10, keyRunes("q")}},
-		{"settings", []tea.Msg{load, keyRight}, []tea.KeyMsg{keyF10}}, // q is typed into the field there
+		{"settings", []tea.Msg{load, keyRight}, []tea.KeyMsg{keyF10}},
 	}
 	for _, ctx := range contexts {
 		t.Run(ctx.name, func(t *testing.T) {
@@ -385,7 +377,6 @@ func TestDashboardAsksBeforeStoppingTheAgent(t *testing.T) {
 		})
 	}
 
-	// A delete question open in a foreground dashboard keeps F10 from stopping the agent.
 	deleting, _ := press(foreground(load), keyF8)
 	if declined, cmd := press(deleting, keyF10); cmd != nil || strings.Contains(declined.View(), `Delete tunnel "web"?`) {
 		t.Fatalf("F10 during a delete question should decline it, not stop the agent: cmd = %v", cmd != nil)
@@ -398,7 +389,6 @@ func TestDashboardAsksBeforeStoppingTheAgent(t *testing.T) {
 	if _, cmd := clickAction(t, asked, agentDashboardActionAnswerYes); !isQuit(cmd) {
 		t.Fatal("the Yes button should stop the agent")
 	}
-	// The way out stays on the bar even where the bar is too narrow for the rest.
 	for _, steps := range [][]tea.Msg{{load}, {load, keyRight, keyRight}} {
 		model := newTestDashboard(t, theme, 80, 24, steps...)
 		model.stopsAgent = true
@@ -431,7 +421,6 @@ func TestDashboardPaneKeys(t *testing.T) {
 		{[]tea.KeyMsg{keyRight, keyRight, keyTab}, "TUNNELS"},
 		{[]tea.KeyMsg{keyRight, keyRight, keyBackTb}, "SETTINGS"},
 		{[]tea.KeyMsg{keyRight, keyEsc}, "TUNNELS"},
-		// Settings is a form: tab and shift+tab move between its fields, and only left and right leave it.
 		{[]tea.KeyMsg{keyTab, keyTab}, "SETTINGS"},
 		{[]tea.KeyMsg{keyTab, keyBackTb}, "SETTINGS"},
 		{[]tea.KeyMsg{keyTab, keyRight}, "RELAYS"},
@@ -466,8 +455,6 @@ func TestDashboardEscClearsTheError(t *testing.T) {
 	}
 }
 
-// Every action is followed by a status poll, so an error the action left must outlive
-// that poll, and a poll that failed must not outlive the next one that works.
 func TestDashboardKeepsAnActionErrorAcrossPolls(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	healthy := agentDashboardStatusMsg{status: testDashboardStatus()}
@@ -526,7 +513,6 @@ func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 		}
 	}
 
-	// The Delete button asks too, and its answers are buttons as well.
 	asked, cmd := clickAction(t, model, agentDashboardActionDeleteTunnel)
 	if cmd != nil || !strings.Contains(asked.View(), prompt) {
 		t.Fatal("the Delete button should only ask")
@@ -541,7 +527,6 @@ func TestDashboardDeleteAsksBeforeDeleting(t *testing.T) {
 
 func TestDashboardDeleteQuestionIgnoresOtherClicks(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
-	// A running tunnel with a failed relay has a clickable Connect button.
 	status := testDashboardStatus()
 	status.Tunnels[0].Relays = []AgentRelayStatus{{RelayURL: "https://failed.example.net", State: sdk.RelayFailed}}
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: status})
@@ -598,8 +583,6 @@ func TestAgentDashboardPaneRows(t *testing.T) {
 	}
 }
 
-// checkPaneRows requires that the panes and their frames fill the body, that no pane drops below
-// its minimum, and that no other pane grows before the active one has all the rows it wants.
 func checkPaneRows(t *testing.T, height int, want [agentDashboardPaneCount]int, active agentDashboardPane) {
 	t.Helper()
 	rows := agentDashboardPaneRows(height, want, active)
@@ -627,7 +610,6 @@ func TestDashboardThemes(t *testing.T) {
 			t.Errorf("theme %q: %v", name, err)
 		}
 	}
-	// The default belongs to the --theme flags, so an empty name is not a theme either.
 	for _, name := range []string{"purple", ""} {
 		err := ValidateDashboardTheme(name)
 		if err == nil {

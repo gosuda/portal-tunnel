@@ -15,14 +15,11 @@ import (
 )
 
 const (
-	nanoTestPayTo     = "nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3"
-	nanoTestOtherPeer = "nano_1111111111111111111111111111111111111111111111111111hifc8npp"
-	// 0.01 XNO in raw (1 XNO = 10^30 raw).
-	nanoTestRaw = "10000000000000000000000000000"
+	nanoTestPayTo        = "nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3"
+	nanoTestOtherPeer    = "nano_1111111111111111111111111111111111111111111111111111hifc8npp"
+	nanoTestRawFor001XNO = "10000000000000000000000000000"
 )
 
-// newNanoRPCNode stands in for a Nano RPC node answering block_info from a
-// fixed ledger of block hash -> block_info response.
 func newNanoRPCNode(t *testing.T, ledger map[string]map[string]any) *httptest.Server {
 	t.Helper()
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,10 +64,10 @@ func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
 		unconfirmedHash = "3333333333333333333333333333333333333333333333333333333333333333"
 	)
 	ledger := map[string]map[string]any{
-		paidHash:        nanoSendBlock(nanoTestPayTo, nanoTestRaw, "true"),
+		paidHash:        nanoSendBlock(nanoTestPayTo, nanoTestRawFor001XNO, "true"),
 		underpaidHash:   nanoSendBlock(nanoTestPayTo, "9999999999999999999999999999", "true"),
-		wrongPayeeHash:  nanoSendBlock(nanoTestOtherPeer, nanoTestRaw, "true"),
-		unconfirmedHash: nanoSendBlock(nanoTestPayTo, nanoTestRaw, "false"),
+		wrongPayeeHash:  nanoSendBlock(nanoTestOtherPeer, nanoTestRawFor001XNO, "true"),
+		unconfirmedHash: nanoSendBlock(nanoTestPayTo, nanoTestRawFor001XNO, "false"),
 	}
 	nodeA := newNanoRPCNode(t, ledger)
 	nodeB := newNanoRPCNode(t, ledger)
@@ -114,8 +111,8 @@ func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
 	}
 	accepted := challenge.Accepts[0]
 	if accepted.Scheme != "exact" || accepted.Network != "nano:mainnet" || accepted.Asset != "XNO" ||
-		accepted.Amount != nanoTestRaw || accepted.PayTo != nanoTestPayTo {
-		t.Fatalf("accepted = %+v, want exact nano:mainnet XNO %s to %s", accepted, nanoTestRaw, nanoTestPayTo)
+		accepted.Amount != nanoTestRawFor001XNO || accepted.PayTo != nanoTestPayTo {
+		t.Fatalf("accepted = %+v, want exact nano:mainnet XNO %s to %s", accepted, nanoTestRawFor001XNO, nanoTestPayTo)
 	}
 
 	pay := func(path, blockHash string) *httptest.ResponseRecorder {
@@ -159,8 +156,6 @@ func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
 		t.Fatalf("upstream hits = %d, want 1", hits)
 	}
 
-	// A block hash pays once per gateway, including on another route with
-	// the same price.
 	for _, path := range []string{"/paid/item", "/also-paid/item"} {
 		if rec := pay(path, paidHash); rec.Code != http.StatusPaymentRequired {
 			t.Fatalf("replayed payment on %s status = %d, want 402", path, rec.Code)
@@ -201,8 +196,6 @@ func TestComposeHTTPRoutesRejectsInvalidNanoContract(t *testing.T) {
 	}
 }
 
-// Payment and upstream dispatch must use the same longest canonical prefix,
-// including an unpaid child of a paid route and a paid child of that exception.
 func TestComposeHTTPRoutesPaymentFollowsSelectedRoute(t *testing.T) {
 	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -260,5 +253,44 @@ func TestComposeHTTPRoutesPaymentFollowsSelectedRoute(t *testing.T) {
 				t.Fatalf("status = %d, body = %q; want %d", rec.Code, rec.Body.String(), tc.status)
 			}
 		})
+	}
+}
+
+func TestComposeHTTPRoutesRejectsUnpaidMethods(t *testing.T) {
+	t.Parallel()
+	_, err := ComposeHTTPRoutes([]ExposedHTTPRoute{
+		{Prefix: "/free", Upstream: "http://127.0.0.1:1", Methods: []string{"POST"}},
+	}, X402Config{Network: "nano:mainnet", PayTo: nanoTestPayTo})
+	if err == nil {
+		t.Fatal("ComposeHTTPRoutes() error = nil, want rejection of method-scoped payment without an amount")
+	}
+}
+
+func TestComposeHTTPRoutesAcceptsLegacyXRBNanoPayTo(t *testing.T) {
+	t.Parallel()
+	legacy := "xrb_" + nanoTestPayTo[len("nano_"):]
+	handler, err := ComposeHTTPRoutes([]ExposedHTTPRoute{
+		{Prefix: "/paid", Upstream: "http://127.0.0.1:1", Amount: "0.01"},
+	}, X402Config{Network: "nano:mainnet", PayTo: legacy})
+	if err != nil {
+		t.Fatalf("ComposeHTTPRoutes() error = %v, want legacy xrb_ pay-to accepted", err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://example.com/paid/item", nil))
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("unpaid status = %d, want 402", rec.Code)
+	}
+	rawChallenge, err := base64.StdEncoding.DecodeString(rec.Header().Get(x402http.HeaderPaymentRequired))
+	if err != nil {
+		t.Fatalf("decode challenge: %v", err)
+	}
+	var challenge struct {
+		Accepts []facilitatortypes.PaymentRequirements `json:"accepts"`
+	}
+	if err := json.Unmarshal(rawChallenge, &challenge); err != nil {
+		t.Fatalf("unmarshal challenge: %v", err)
+	}
+	if len(challenge.Accepts) != 1 || challenge.Accepts[0].PayTo != nanoTestPayTo {
+		t.Fatalf("accepts = %+v, want one requirement paid to canonical %s", challenge.Accepts, nanoTestPayTo)
 	}
 }

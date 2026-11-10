@@ -67,17 +67,9 @@ const (
 )
 
 const (
-	// applicationAuthStateTokenLimit keeps a signed login state cookie well
-	// under the roughly 4 KB a browser accepts, since it silently drops a larger one.
 	applicationAuthStateTokenLimit = 3500
-	// applicationAuthNextLimit keeps a return path well inside the body limit,
-	// even doubled by JSON escaping, because the login page posts it back from
-	// its own URL.
-	applicationAuthNextLimit = 16 << 10
-	// providerMinSessionTTL is the shortest OIDC or SAML session, so a
-	// short-lived ID token or IdP session cannot produce a session that has
-	// already expired.
-	providerMinSessionTTL = 15 * time.Minute
+	applicationAuthNextLimit       = 16 << 10
+	providerMinSessionTTL          = 15 * time.Minute
 )
 
 var oidcSupportedSignatureAlgorithms = []jose.SignatureAlgorithm{
@@ -241,8 +233,6 @@ func (c Config) Normalize() (Config, error) {
 			return c, err
 		}
 	}
-	// A provider that does not take the list reads it as what it is not, so
-	// resolveApplicationAuthConfig names the mistake instead.
 	if len(c.EmailList) > 0 && ProviderTakesEmailList(c.Provider) {
 		if c.EmailList, err = normalizeAllowed(c.Provider, c.EmailList); err != nil {
 			return c, err
@@ -279,18 +269,14 @@ type applicationAuth struct {
 }
 
 type applicationAuthClaims struct {
-	Subject   string `json:"sub"`
-	Provider  string `json:"auth,omitempty"`
-	Email     string `json:"email,omitempty"`
-	Host      string `json:"host"`
-	HostEpoch string `json:"host_epoch,omitempty"`
-	// IssuedAtMillis supports the ownership cutoff for relays without epochs.
-	IssuedAtMillis int64 `json:"iat_ms,omitempty"`
-	ExpiresAt      int64 `json:"exp"`
-	// Binding names the OIDC issuer and client, the SAML identity provider
-	// and service provider, or the SMTP account and sender of email, that
-	// authenticated the visitor.
-	Binding string `json:"bnd,omitempty"`
+	Subject        string `json:"sub"`
+	Provider       string `json:"auth,omitempty"`
+	Email          string `json:"email,omitempty"`
+	Host           string `json:"host"`
+	HostEpoch      string `json:"host_epoch,omitempty"`
+	IssuedAtMillis int64  `json:"iat_ms,omitempty"`
+	ExpiresAt      int64  `json:"exp"`
+	Binding        string `json:"bnd,omitempty"`
 }
 
 type applicationAuthChallengeRequest struct {
@@ -338,10 +324,6 @@ type oidcIDTokenClaims struct {
 	EmailVerified oidcEmailVerified `json:"email_verified"`
 }
 
-// oidcEmailVerified decodes the email_verified claim. OIDC defines a JSON
-// boolean, but some providers send the string "true". Only true and "true"
-// count as verified; any other value, or none, decodes as not verified instead
-// of failing the whole claims decode, which would also lock out sub: allowlists.
 type oidcEmailVerified bool
 
 func (v *oidcEmailVerified) UnmarshalJSON(data []byte) error {
@@ -349,9 +331,6 @@ func (v *oidcEmailVerified) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// vouchedEmail is the email the ID token vouches for: the email claim, and
-// only when email_verified is true, so that an unverified address can never
-// match an email or @domain allowlist entry.
 func (c oidcIDTokenClaims) vouchedEmail() string {
 	if c.EmailVerified {
 		return c.Email
@@ -363,19 +342,14 @@ type oidcAuthenticator struct {
 	issuerURL    string
 	clientID     string
 	clientSecret string
-	// binding digests the issuer and client ID into every OIDC session, since a
-	// subject only means something at the issuer and client that produced it.
-	binding    string
-	stateKey   []byte
-	httpClient *http.Client
+	binding      string
+	stateKey     []byte
+	httpClient   *http.Client
 
 	discovery providerCache[oidcDiscoveryDocument]
 	jwks      providerCache[jose.JSONWebKeySet]
 }
 
-// providerCache holds one value fetched from the identity provider: the OIDC
-// discovery document or signing keys, or the SAML metadata. mu guards only the
-// cached value and is never held across network I/O.
 type providerCache[T any] struct {
 	flight singleflight.Group
 
@@ -385,7 +359,6 @@ type providerCache[T any] struct {
 }
 
 func newOIDCAuthenticator(settings applicationAuthSettings, stateKey []byte) *oidcAuthenticator {
-	// A parsed issuer URL cannot hold a NUL, so the separator keeps the pair unambiguous.
 	binding := sha256.Sum256([]byte(settings.issuerURL + "\x00" + settings.clientID))
 	return &oidcAuthenticator{
 		issuerURL:    settings.issuerURL,
@@ -415,17 +388,10 @@ func normalizeOIDCIssuerURL(raw string) (string, error) {
 	return strings.TrimRight(raw, "/"), nil
 }
 
-// isLoopbackHTTP reports whether u is plain http on a loopback host, the one
-// cleartext form an identity provider URL may take (local development and tests).
 func isLoopbackHTTP(u *url.URL) bool {
 	return u.Scheme == "http" && utils.IsLoopbackHost(u.Hostname())
 }
 
-// validateOIDCEndpoint checks an endpoint from the discovery document of
-// issuerURL. Unlike an issuer identifier it may carry a query (RFC 6749
-// sections 3.1/3.2). The token endpoint receives the authorization code, PKCE
-// verifier and client secret, so an endpoint must be https unless the issuer
-// itself is loopback http.
 func validateOIDCEndpoint(issuerURL, endpoint string) error {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
@@ -440,9 +406,6 @@ func validateOIDCEndpoint(issuerURL, endpoint string) error {
 	return fmt.Errorf("oidc discovery endpoint must use https (http on a loopback host only under a loopback http issuer): %q", endpoint)
 }
 
-// checkProviderRedirect keeps a provider from redirecting the gateway's requests
-// to cleartext or through a long chain. Like an endpoint, a redirect target
-// must be https, or loopback http when the chain is already plain http.
 func checkProviderRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= providerMaxRedirects {
 		return errProviderRedirectedTooManyTimes
@@ -456,13 +419,6 @@ func checkProviderRedirect(req *http.Request, via []*http.Request) error {
 	return fmt.Errorf("identity provider redirected to a non-https url: %s", req.URL.Redacted())
 }
 
-// normalizeProviderPrincipals canonicalizes the allowed
-// principals of an identity provider, oidc or saml (`--auth-email-list` /
-// `auth_email_list`). Email addresses (containing '@') are lowercased and
-// match an email the provider vouches for only, '@example.com' domain entries
-// match that exact email domain, and `sub:<subject>` entries match the opaque
-// provider subject exactly, including case. Subject entries must carry the
-// sub: prefix so an email-shaped subject cannot impersonate an email entry.
 func normalizeProviderPrincipals(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -483,11 +439,6 @@ func normalizeProviderPrincipals(values []string) ([]string, error) {
 	return normalized, nil
 }
 
-// normalizeProviderAllowlistEntry canonicalizes one `--auth-email-list` entry into its
-// typed form: `sub:<subject>` for an opaque provider subject, a lowercased
-// email for a verified-email entry, or a leading-'@' domain entry. A bare
-// token cannot be told apart from an email-shaped subject claim, so subject
-// entries must carry the sub: prefix.
 func normalizeProviderAllowlistEntry(raw string) (string, error) {
 	principal, err := normalizeProviderPrincipal(raw)
 	if err != nil {
@@ -503,19 +454,8 @@ func normalizeProviderAllowlistEntry(raw string) (string, error) {
 	return principal, nil
 }
 
-// subjectPrincipalPrefix marks a principal as the provider's opaque subject:
-// the OIDC sub claim or the SAML subject value.
 const subjectPrincipalPrefix = "sub:"
 
-// normalizeProviderPrincipal canonicalizes an OIDC or SAML principal or
-// session subject. The provider's subject is an opaque, case-sensitive identifier, so a "sub:"
-// principal keeps its subject byte for byte (only the prefix is matched without
-// regard to case); only verified-email principals are lowercased. Email
-// principals must be ASCII: Unicode lowercasing maps distinct characters onto
-// ASCII ones (the Kelvin sign U+212A to "k", U+0130 to "i"), which would let a
-// lookalike address match an allowlist entry. The length limit applies to the
-// subject itself, not to the "sub:" prefix, so a maximum-length sub claim (255
-// characters) still survives revalidation.
 func normalizeProviderPrincipal(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	isSubject := len(raw) >= len(subjectPrincipalPrefix) && strings.EqualFold(raw[:len(subjectPrincipalPrefix)], subjectPrincipalPrefix)
@@ -538,9 +478,6 @@ func normalizeProviderPrincipal(raw string) (string, error) {
 	return subject, nil
 }
 
-// providerClaimPrincipal normalizes an ID token claim or SAML subject value,
-// or returns "" when it is unusable. A leading '@' is reserved for @domain
-// allowlist entries, so a claim can never impersonate one.
 func providerClaimPrincipal(raw string) string {
 	principal, err := normalizeProviderPrincipal(raw)
 	if err != nil || strings.HasPrefix(principal, "@") {
@@ -549,11 +486,6 @@ func providerClaimPrincipal(raw string) string {
 	return principal
 }
 
-// sanitizeApplicationAuthNext keeps a post-login target on this origin. A
-// leading "//" or "/\" is read by browsers as a URL for another host, so the
-// second character must be neither. Browsers also drop tabs and newlines from
-// URLs, so "/<TAB>/host" would become "//host"; control characters and
-// backslashes are therefore refused everywhere, keeping the target a plain path.
 func sanitizeApplicationAuthNext(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") || strings.ContainsFunc(raw, isUnsafeRedirectRune) {
@@ -562,8 +494,6 @@ func sanitizeApplicationAuthNext(raw string) string {
 	return raw
 }
 
-// isUnsafeRedirectRune reports control characters and backslashes, which
-// browsers drop or reinterpret in URLs.
 func isUnsafeRedirectRune(r rune) bool {
 	return r < 0x20 || r == 0x7f || r == '\\'
 }
@@ -600,9 +530,6 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 	for _, subject := range settings.allowed {
 		allowedSubjects[subject] = struct{}{}
 	}
-	// Only a credential gate may run without a list, and siwe keeps its own.
-	// resolveApplicationAuthConfig refuses an empty list for every identity
-	// provider and for email, because any account or address would pass.
 	allowAnySubject := settings.provider == ProviderSIWE || (settings.provider == ProviderCredential && len(settings.allowed) == 0)
 	switch settings.provider {
 	case ProviderSIWE:
@@ -672,7 +599,6 @@ func Check(ctx context.Context, cfg Config) error {
 	switch settings.provider {
 	case ProviderOIDC:
 		o := newOIDCAuthenticator(settings, nil)
-		// The keys are fetched through the discovery document.
 		_, err = o.jwks.get(ctx, providerMetadataCacheTTL, o.fetchJWKS)
 	case ProviderSAML:
 		_, err = newSAMLAuthenticator(settings, nil).identityProvider(ctx)
@@ -736,10 +662,6 @@ func (a *applicationAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// heldSince returns when the application came to hold rawHost, a request's Host,
-// and the zero time for a host that cannot change hands or without PublicHosts.
-// A session or a sign-in begun before then must not count: the next owner of an
-// alias reads what a browser sends there, and the alias may have come back since.
 func (a *applicationAuth) heldSince(rawHost string) time.Time {
 	if a.publicHosts == nil {
 		return time.Time{}
@@ -748,8 +670,6 @@ func (a *applicationAuth) heldSince(rawHost string) time.Time {
 	return held.Since
 }
 
-// hostEpoch is the relay's alias ownership generation, independent of a lease
-// or process lifetime. Canonical hosts and older relays have no epoch.
 func (a *applicationAuth) hostEpoch(rawHost string) string {
 	if a.publicHosts == nil {
 		return ""
@@ -758,8 +678,6 @@ func (a *applicationAuth) hostEpoch(rawHost string) string {
 	return held.Epoch
 }
 
-// publicHost returns the normalized host and its ownership boundary. An epoch
-// supersedes the local Since fallback used with older relays.
 func (a *applicationAuth) publicHost(rawHost string) (string, PublicHost, bool) {
 	requestHost, err := normalizeHost(rawHost)
 	if err != nil {
@@ -814,13 +732,9 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 	writeSigninPage(w, page, r.Host)
 }
 
-// accountChooserPrompt is the prompt value that asks the provider to show its
-// account chooser. Only the retry on the not-allowed page sends it.
 const accountChooserPrompt = "select_account"
 
 func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request, hostEpoch string) {
-	// A login keeps its state in one cookie, so a request that never completes
-	// the login, like a HEAD probe, must not overwrite the state of one in progress.
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -877,8 +791,6 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request, h
 		oauth2.S256ChallengeOption(codeVerifier),
 		oauth2.SetAuthURLParam("nonce", nonce),
 	}
-	// A browser still signed in to the refused account is let straight back in
-	// unless asked otherwise. Any other prompt value a caller sends is not passed on.
 	if r.URL.Query().Get("prompt") == accountChooserPrompt {
 		authOptions = append(authOptions, oauth2.SetAuthURLParam("prompt", accountChooserPrompt))
 	}
@@ -892,8 +804,6 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
-	// A login that ends without a session shows a browser what happened and
-	// keeps the JSON error and status for every other caller.
 	fail := func(message, page, next string, fields ...string) {
 		if acceptsHTML(r) {
 			writeSigninFailurePage(w, r, http.StatusUnauthorized, page, urlHost(a.oidc.issuerURL), next, fields...)
@@ -933,7 +843,6 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		stateClaims.HostEpoch != a.hostEpoch(host) ||
 		now.Unix() >= stateClaims.ExpiresAt ||
 		loginStateIssuedAt(stateClaims.ExpiresAt).Before(a.heldSince(host)) {
-		// Only a state that verified carries a target worth keeping.
 		next := "/"
 		if err == nil {
 			next = stateClaims.Next
@@ -942,8 +851,6 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if errParam := strings.TrimSpace(r.URL.Query().Get("error")); errParam != "" {
-		// access_denied is how a provider reports that the visitor declined,
-		// and also how some report an account without access to the client.
 		page := signinProviderFailedPage
 		if errParam == "access_denied" {
 			page = signinProviderCanceledPage
@@ -971,11 +878,6 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// The session follows the ID token's lifetime, within providerMinSessionTTL and
-	// applicationAuthSessionTTL: a token already inside the verification leeway
-	// would otherwise give a session that is invalid on arrival, and the visitor
-	// would loop through the provider. The allowlist is checked on every request,
-	// so revoking a principal does not wait for the session to end.
 	lifetime := min(max(claims.Expiry.Time().Sub(now), providerMinSessionTTL), applicationAuthSessionTTL)
 	if err := a.setSession(w, Principal{Provider: ProviderOIDC, Subject: subject, Email: providerEmail(email)}, strings.TrimSpace(r.Host), now, now.Add(lifetime)); err != nil {
 		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
@@ -984,15 +886,11 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	http.Redirect(w, r, sanitizeApplicationAuthNext(stateClaims.Next), http.StatusSeeOther)
 }
 
-// writeSigninFailurePage shows a browser why its OIDC or SAML login ended
-// without a session. issuer names the identity provider, and the retry link
-// starts a new login that returns the visitor to next.
 func writeSigninFailurePage(w http.ResponseWriter, r *http.Request, status int, page, issuer, next string, fields ...string) {
 	query := url.Values{}
 	if next = sanitizeApplicationAuthNext(next); next != "/" {
 		query.Set("next", next)
 	}
-	// The refused account's retry asks the provider for its account chooser
 	if page == signinProviderDeniedPage {
 		query.Set("prompt", accountChooserPrompt)
 	}
@@ -1005,8 +903,6 @@ func writeSigninFailurePage(w http.ResponseWriter, r *http.Request, status int, 
 	writeSigninPage(w, page, r.Host, append([]string{"@@ISSUER@@", issuer, "@@RETRY@@", retry}, fields...)...)
 }
 
-// urlHost is the host of an identity provider URL, the name its failure
-// screens show, or raw itself when it has none.
 func urlHost(raw string) string {
 	if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
 		return parsed.Host
@@ -1014,15 +910,10 @@ func urlHost(raw string) string {
 	return raw
 }
 
-// acceptsHTML reports whether the request is a browser navigation, the only
-// kind of request that asks for HTML.
 func acceptsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-// providerEmail normalizes an email the identity provider vouches for, or
-// returns "" when raw is not one. An email shaped like a sub: entry would
-// satisfy that entry through the exact lookup; it is not an email address.
 func providerEmail(raw string) string {
 	email := providerClaimPrincipal(raw)
 	if !strings.Contains(email, "@") || strings.HasPrefix(email, subjectPrincipalPrefix) {
@@ -1031,9 +922,6 @@ func providerEmail(raw string) string {
 	return email
 }
 
-// providerAccount names the account the provider signed in, in the form an
-// allowlist entry for it takes: the email when the provider vouches for one,
-// and the sub: entry otherwise. It never reveals what the allowlist holds.
 func providerAccount(email, subject string) string {
 	if email := providerEmail(email); email != "" {
 		return email
@@ -1041,24 +929,13 @@ func providerAccount(email, subject string) string {
 	return subjectPrincipalPrefix + subject
 }
 
-// resolveAllowedPrincipal maps what an identity provider asserted to the
-// session subject. email is an address the provider vouches for, or "" when
-// it vouches for none: the verified email claim of OIDC, or the SAML subject
-// value. Only such an email can match an email or @domain allowlist entry; the
-// provider's opaque subject matches only an explicit `sub:` allowlist entry,
-// so an email-shaped subject never satisfies an email entry by itself. A
-// sub-matched session subject keeps the sub: prefix so the two principal
-// types stay unambiguous on session revalidation and identity headers.
 func (a *applicationAuth) resolveAllowedPrincipal(email, subject string) (string, bool) {
 	if email := providerEmail(email); email != "" && a.subjectAllowed(email) {
 		return email, true
 	}
-	// Reject noncanonical subjects instead of trimming an opaque identifier
-	// into a different account's allowlisted subject.
 	if subject != strings.TrimSpace(subject) {
 		return "", false
 	}
-	// Prefixing the raw subject keeps it in the sub: namespace whatever it holds.
 	sub, err := normalizeProviderPrincipal(subjectPrincipalPrefix + subject)
 	if err == nil && a.subjectAllowed(sub) {
 		return sub, true
@@ -1067,10 +944,7 @@ func (a *applicationAuth) resolveAllowedPrincipal(email, subject string) (string
 }
 
 func (o *oidcAuthenticator) oauth2Config(doc oidcDiscoveryDocument, host string) oauth2.Config {
-	// The auth style is named because the oauth2 default probes: it sends the
-	// one-time authorization code with the credentials in the Authorization
-	// header and, on any error, sends the same code again with them in the body.
-	authStyle := oauth2.AuthStyleInHeader // client_secret_basic, the OIDC default
+	authStyle := oauth2.AuthStyleInHeader
 	methods := doc.TokenEndpointAuthMethods
 	switch {
 	case o.clientSecret == "":
@@ -1096,8 +970,6 @@ func (o *oidcAuthenticator) exchangeAndVerify(ctx context.Context, code string, 
 	if err != nil {
 		return oidcIDTokenClaims{}, err
 	}
-	// Load the keys before the exchange so an unreachable JWKS does not burn
-	// the one-time authorization code.
 	jwks, err := o.jwks.get(ctx, providerMetadataCacheTTL, o.fetchJWKS)
 	if err != nil {
 		return oidcIDTokenClaims{}, err
@@ -1117,9 +989,6 @@ func (o *oidcAuthenticator) exchangeAndVerify(ctx context.Context, code string, 
 	if !errors.Is(err, jose.ErrJWKSKidNotFound) && !errors.Is(err, jose.ErrCryptoFailure) {
 		return claims, err
 	}
-	// Only a key error can be fixed by new keys: the provider may have rotated
-	// since the cached set was fetched. The cache serves the same set again
-	// when it was fetched less than oidcJWKSRefreshInterval ago.
 	jwks, refreshErr := o.jwks.get(ctx, oidcJWKSRefreshInterval, o.fetchJWKS)
 	if refreshErr != nil {
 		return oidcIDTokenClaims{}, err
@@ -1155,10 +1024,6 @@ func (o *oidcAuthenticator) verifyIDToken(rawToken, expectedNonce, issuer string
 	return claims, nil
 }
 
-// oidcVerificationKey selects what a token is verified against. go-jose finds
-// a key in a set by the token's kid and refuses a token without one, even when
-// the set holds a single key. A provider that signs with one key may omit the
-// kid, so that key, when it is a signing key, is used directly.
 func oidcVerificationKey(headers []jose.Header, jwks *jose.JSONWebKeySet) any {
 	if len(headers) != 1 || headers[0].KeyID != "" || len(jwks.Keys) != 1 {
 		return jwks
@@ -1169,17 +1034,11 @@ func oidcVerificationKey(headers []jose.Header, jwks *jose.JSONWebKeySet) any {
 	return jwks.Keys[0]
 }
 
-// get returns the cached value while it is younger than maxAge and otherwise
-// refreshes it. Concurrent callers join one shared fetch instead of queueing
-// behind a lock or fetching again, and each stops waiting when its own ctx
-// ends. The fetch is detached from the first caller's cancellation so one
-// abandoned login does not fail the others; the HTTP client timeout bounds it.
 func (c *providerCache[T]) get(ctx context.Context, maxAge time.Duration, fetch func(context.Context) (T, error)) (T, error) {
 	if value, ok := c.fresh(maxAge); ok {
 		return value, nil
 	}
 	result := c.flight.DoChan("", func() (any, error) {
-		// A caller can join just after the previous fetch finished.
 		if value, ok := c.fresh(maxAge); ok {
 			return value, nil
 		}
@@ -1210,8 +1069,6 @@ func (c *providerCache[T]) fresh(maxAge time.Duration) (T, bool) {
 	return c.value, !c.fetchedAt.IsZero() && time.Since(c.fetchedAt) < maxAge
 }
 
-// discoveryDocument is all that starting a login needs. The signing keys are
-// fetched separately, and only to verify a token.
 func (o *oidcAuthenticator) discoveryDocument(ctx context.Context) (oidcDiscoveryDocument, error) {
 	return o.discovery.get(ctx, providerMetadataCacheTTL, o.fetchDiscovery)
 }
@@ -1273,18 +1130,25 @@ func fetchOIDCJSON(ctx context.Context, client *http.Client, targetURL string, d
 	return json.NewDecoder(body).Decode(dst)
 }
 
-func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ProviderSIWE {
+func (a *applicationAuth) authorizeMutation(w http.ResponseWriter, r *http.Request, provider string) bool {
+	if a.provider != provider {
 		a.writeJSONError(w, http.StatusNotFound, "not found")
-		return
+		return false
 	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
+		return false
 	}
 	if !sameOrigin(r) {
 		a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+		return false
+	}
+	return true
+}
+
+func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeMutation(w, r, ProviderSIWE) {
 		return
 	}
 	var req applicationAuthChallengeRequest
@@ -1294,8 +1158,6 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 	}
 	host := strings.TrimSpace(r.Host)
 	now := time.Now().UTC()
-	// Stateless issuance only fails per-request (address normalization or
-	// policy), so every failure is an unauthorized challenge request.
 	challenge, err := a.siwe.ForBinding(a.hostEpoch(host)).Issue(req.Address, host, "https://"+host, now)
 	if err != nil {
 		a.writeJSONError(w, http.StatusUnauthorized, err.Error())
@@ -1305,17 +1167,7 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ProviderSIWE {
-		a.writeJSONError(w, http.StatusNotFound, "not found")
-		return
-	}
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !sameOrigin(r) {
-		a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+	if !a.authorizeMutation(w, r, ProviderSIWE) {
 		return
 	}
 	var req applicationAuthVerifyRequest
@@ -1337,17 +1189,7 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
-	if a.provider != ProviderCredential {
-		a.writeJSONError(w, http.StatusNotFound, "not found")
-		return
-	}
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !sameOrigin(r) {
-		a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+	if !a.authorizeMutation(w, r, ProviderCredential) {
 		return
 	}
 	var req applicationAuthRedeemRequest
@@ -1382,17 +1224,17 @@ func (a *applicationAuth) serveLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *applicationAuth) authenticate(r *http.Request, credential string) (Principal, bool) {
-	if credential != "" {
-		if a.provider != ProviderCredential {
-			return Principal{}, false
-		}
-		claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
-		if err == nil && a.subjectAllowed(claims.Subject) {
-			return Principal{Provider: ProviderCredential, Subject: claims.Subject}, true
-		}
+	if credential == "" {
+		return a.authenticateSession(r)
+	}
+	if a.provider != ProviderCredential {
 		return Principal{}, false
 	}
-	return a.authenticateSession(r)
+	claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
+	if err == nil && a.subjectAllowed(claims.Subject) {
+		return Principal{Provider: ProviderCredential, Subject: claims.Subject}, true
+	}
+	return Principal{}, false
 }
 
 func (a *applicationAuth) authenticateSession(r *http.Request) (Principal, bool) {
@@ -1447,16 +1289,9 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 	if !ProviderTakesEmailList(a.provider) {
 		return false
 	}
-	// A `sub:` session subject is an opaque subject principal: it matches only
-	// an explicit `sub:` allowlist entry (the exact lookup above), never an
-	// email or @domain entry.
 	if strings.HasPrefix(subject, "sub:") {
 		return false
 	}
-	// An "@example.com" entry authorizes exactly that email domain, never its
-	// subdomains. Login only passes an email the provider vouches for here, or
-	// for email the address a link is about to be mailed to, and sessions only
-	// carry subjects issued after that check.
 	if _, domain, ok := strings.Cut(subject, "@"); ok && !strings.Contains(domain, "@") {
 		_, ok = a.allowedSubjects["@"+domain]
 		return ok
@@ -1469,9 +1304,6 @@ func (a *applicationAuth) issueSession(principal Principal, host string, issuedA
 	return encodeSignedApplicationAuthJSON(a.signingKey, claims)
 }
 
-// binding is what every session of an identity provider or of email carries:
-// the digest of the OIDC issuer and client, of the SAML settings, or of the SMTP
-// account and sender. Other providers have none.
 func (a *applicationAuth) binding() string {
 	switch {
 	case a.oidc != nil:
@@ -1502,14 +1334,10 @@ func encodeSignedApplicationAuthJSON(key []byte, value any) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signApplicationAuthPayload(key, payload)), nil
 }
 
-// loginStateIssuedAt dates the state of an OIDC or SAML login from its expiry.
 func loginStateIssuedAt(expiresAt int64) time.Time {
 	return time.Unix(expiresAt, 0).Add(-applicationAuthLoginStateTTL)
 }
 
-// encodeApplicationAuthLoginState signs the state of an OIDC or SAML login in
-// progress for its cookie. A deep link too long for the cookie would fail the
-// login when the visitor returns, so next, the target inside claims, becomes /.
 func encodeApplicationAuthLoginState(key []byte, claims any, next *string) (string, error) {
 	token, err := encodeSignedApplicationAuthJSON(key, claims)
 	if err == nil && len(token) > applicationAuthStateTokenLimit {
@@ -1558,12 +1386,6 @@ func sameOrigin(r *http.Request) bool {
 	return strings.EqualFold(origin, "https://"+strings.TrimSpace(r.Host))
 }
 
-// crossOriginWrite reports a protocol upgrade or an unsafe method that a browser
-// sent from a page of another origin. A session is for the application's own
-// origin, so the gate refuses both. A request without Origin does not come from
-// such a page: browsers send Origin on both kinds. Sec-Fetch-Site settles the one
-// same-origin request whose Origin is null, a form post from a page with
-// Referrer-Policy: no-referrer. A page cannot set that header itself.
 func crossOriginWrite(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" || sameOrigin(r) {

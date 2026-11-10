@@ -21,7 +21,7 @@ Unlike traditional hosted reverse proxies:
 - **Permissionless**: No cloud SaaS account, billing setup, or API keys required.
 - **Trustless by default**: Tenant TLS terminates locally on your machine for default HTTPS stream exposures.
 - **Local cryptographic identity**: Leases and reservations are signed by a local secp256k1 key pair (`identity.json`).
-- **Flexible transport**: Expose web apps via HTTPS, mount multi-service microservices via routed HTTP, or allocate raw TCP and UDP ports.
+- **Transport**: Expose web apps via HTTPS, mount multi-service microservices via routed HTTP, or allocate raw TCP and UDP ports.
 - **Self-hostable & open source**: Run your own MIT-licensed relay server with zero telemetry, or attach to the public relay registry.
 - **Overlay networking**: Bridge reverse backhauls over an independent IVNP overlay network when enhanced routing privacy is desired.
 - **Native agentic payments**: Monetize endpoints directly using Sui or Casper x402 payment requirements.
@@ -52,4 +52,4 @@ For a complete breakdown of all 20+ supported capabilities across the CLI, Agent
 - **[Getting Started](/getting-started)**: Install the CLI and expose your first local app in seconds.
 - **[Feature Inventory](/features)**: Explore the complete capability matrix across all surfaces.
 - **[Concepts](/concepts)**: Understand Portal's transport model, relay responsibilities, and encryption flows.
-- **[CLI Reference](/cli-reference)**: Comprehensive command and flag documentation.
+- **[CLI Reference](/cli-reference)**: Command and flag documentation.

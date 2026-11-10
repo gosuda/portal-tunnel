@@ -47,14 +47,11 @@ const (
 	suiMainnetNetwork = "sui:mainnet"
 	suiTestnetNetwork = "sui:testnet"
 
-	// defaultMaxTimeoutSeconds is the published payment lifetime, matching
-	// the upstream x402 gates' default.
 	defaultMaxTimeoutSeconds = 60
 )
 
-// X402Config is the payment component of a tunnel config: the agent config,
-// the Agent API and the runtime carry it as it is, under its x402_* keys. The
-// facilitator token is a secret, so the Agent API neither takes nor returns it.
+// X402Config is the payment component of a tunnel config, carried under its
+// x402_* keys. The facilitator token is a secret: never returned by any API.
 type X402Config struct {
 	Testnet          bool     `json:"x402_testnet,omitempty" toml:"x402_testnet,omitempty"`
 	Network          string   `json:"x402_network,omitempty" toml:"x402_network,omitempty"`
@@ -83,7 +80,6 @@ const X402ClientPath = "/x402/client.js"
 
 const x402RequestBodyLimit int64 = 64 << 10
 
-// x402PreparePaymentRequest is the gateway-owned prepare endpoint request body.
 type x402PreparePaymentRequest struct {
 	Sender string `json:"sender"`
 	Method string `json:"method,omitempty"`
@@ -111,14 +107,9 @@ type ExposedHTTPRoute struct {
 	Amount string
 }
 
-// NewStripRequestHeaders wraps next with a middleware that removes the listed
-// client request headers before any Portal processing runs.  This is the trust
-// boundary: client-spoofed headers are removed before application auth injects
-// verified identity headers and before the reverse proxy regenerates
-// X-Forwarded-* values.  A listed name is removed in every spelling a gateway
-// may read as the same header: any case, and underscores for hyphens.  Host is
-// rejected because Go stores it in Request.Host, not Header, so
-// Header.Del("Host") is a silent no-op.
+// NewStripRequestHeaders removes the listed client request headers, in any
+// case or underscore spelling, before Portal processing. Host and other
+// invalid names are rejected.
 func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, error) {
 	headers := make([]string, 0, len(names))
 	seen := make(map[string]struct{}, len(names))
@@ -149,7 +140,6 @@ func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, er
 	}), nil
 }
 
-// isValidHeaderName reports whether name is an RFC 9110 token.
 func isValidHeaderName(name string) bool {
 	for i := range len(name) {
 		c := name[i]
@@ -180,8 +170,6 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (http.Han
 	sdkConfigs := make([]sdk.HTTPRouteConfig, 0, len(routes))
 	policies := make(map[string]*routePolicy, len(routes))
 	servesX402 := false
-	// Nano block hashes are single-use only within one facilitator's claim
-	// set, so every Nano route of this gateway shares one facilitator.
 	var nano *nanofacilitator.NanoFacilitator
 	for _, route := range routes {
 		prefix := strings.TrimSpace(route.Prefix)
@@ -196,10 +184,10 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (http.Han
 		})
 
 		amount := strings.TrimSpace(route.Amount)
+		if amount == "" && len(route.Methods) > 0 {
+			return nil, fmt.Errorf("http route %q payment methods require amount", prefix)
+		}
 		if amount == "" {
-			if len(route.Methods) > 0 {
-				return nil, fmt.Errorf("http route %q payment methods require amount", prefix)
-			}
 			continue
 		}
 		if contract.PayTo == "" {
@@ -232,10 +220,6 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (http.Han
 	}, nil
 }
 
-// composePaidRoute builds the payment layer for one paid route: the settling
-// gate and, for Sui routes, the shared-prepare delegate. The underlying
-// facilitators live as long as the gateway — the gateway owns the composition
-// for its whole process lifetime, so no per-route Close is wired.
 func composePaidRoute(prefix, amount string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	switch {
@@ -292,9 +276,6 @@ func composeSuiRoute(prefix, amount string, contract X402Config) (*routePolicy, 
 	gate, err := x402http.New(x402http.Config{
 		Requirements: requirements,
 		Facilitator:  facilitator,
-		// The gate re-publishes this descriptor in every 402 challenge, so
-		// it carries the route prefix rather than a per-request URL; the
-		// prepare delegate below keeps the per-request absolute URL.
 		Resource: &facilitatortypes.ResourceInfo{
 			URL:      prefix,
 			MimeType: "text/html",
@@ -331,9 +312,6 @@ func composeCasperRoute(prefix, amount string, contract X402Config) (*routePolic
 	if asset == "" {
 		return nil, errX402WcsprPaymentRequiresWcsprCep
 	}
-	// casperscheme.NormalizeAddress is strict: only account-hash-<64 hex>
-	// and hex-encoded public keys survive, so a malformed pay-to dies at
-	// composition instead of publishing an unpayable contract.
 	payTo := casperscheme.NormalizeAddress(contract.PayTo)
 	if payTo == "" {
 		return nil, errX402WcsprPaymentRequiresCasperPay
@@ -370,11 +348,6 @@ func composeCasperRoute(prefix, amount string, contract X402Config) (*routePolic
 	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate}, nil
 }
 
-// composeNanoRoute settles XNO payments in process. The payer broadcasts its
-// own send block and pays with its block hash; the Nano facilitator confirms
-// the block on independent RPC nodes (the --x402-endpoint values, or the
-// facilitator's public defaults) and claims each block hash once. The first
-// Nano route creates the gateway's shared facilitator in *nano.
 func composeNanoRoute(prefix, amount, network string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
 	payTo := normalizeNanoAddress(contract.PayTo)
 	if payTo == "" {
@@ -391,8 +364,6 @@ func composeNanoRoute(prefix, amount, network string, contract X402Config, nano 
 				endpoints = append(endpoints, endpoint)
 			}
 		}
-		// The facilitator refuses every payment with fewer independent
-		// nodes, so a short override would publish an unpayable route.
 		if len(endpoints) > 0 && len(endpoints) < nanoscheme.MinIndependentEndpoints {
 			return nil, fmt.Errorf("x402 XNO payment requires at least %d independent Nano RPC endpoints", nanoscheme.MinIndependentEndpoints)
 		}
@@ -430,20 +401,15 @@ func composeNanoRoute(prefix, amount, network string, contract X402Config, nano 
 
 const nanoAddressAlphabet = "13456789abcdefghijkmnopqrstuwxyz"
 
-// normalizeNanoAddress returns the canonical lowercase nano_ form of a Nano
-// account address, or "" when the address is malformed or its blake2b
-// checksum does not match the public key. Ledger RPC nodes report block
-// destinations in this form.
 func normalizeNanoAddress(address string) string {
 	address = strings.ToLower(strings.TrimSpace(address))
 	encoded, ok := strings.CutPrefix(address, "nano_")
 	if !ok {
-		if encoded, ok = strings.CutPrefix(address, "xrb_"); !ok {
-			return ""
-		}
+		encoded, ok = strings.CutPrefix(address, "xrb_")
 	}
-	// 60 base32 characters: 4 zero padding bits, the 256-bit public key,
-	// and a 40-bit checksum.
+	if !ok {
+		return ""
+	}
 	if len(encoded) != 60 {
 		return ""
 	}
@@ -472,9 +438,6 @@ func normalizeNanoAddress(address string) string {
 	return "nano_" + encoded
 }
 
-// xnoToRaw converts a human XNO amount to the raw atomic unit (1 XNO =
-// 10^30 raw) without floating point. Amounts must be positive and must not
-// carry more than 30 fractional digits.
 func xnoToRaw(amount string) (string, error) {
 	amount = strings.TrimSpace(amount)
 	whole, frac, _ := strings.Cut(amount, ".")
@@ -505,20 +468,12 @@ func isDecimalDigits(value string) bool {
 	return true
 }
 
-// newCasperFacilitatorClient delegates Casper verify/settle to the hosted
-// CSPR.cloud x402 facilitator (or a configured endpoint): Casper has no Go
-// chain SDK, so the remote HTTP facilitator is the settlement backend.
 func newCasperFacilitatorClient(contract X402Config) (*facilitatorclient.Client, error) {
 	endpoint := cmp.Or(firstEndpoint(contract.Endpoints), casperscheme.DefaultFacilitatorURL)
 	token := strings.TrimSpace(contract.FacilitatorToken)
 	if token == "" && strings.EqualFold(strings.TrimRight(endpoint, "/"), casperscheme.DefaultFacilitatorURL) {
 		return nil, errCsprCloudX402FacilitatorRequiresAuthorization
 	}
-	// Reject plaintext non-loopback endpoints when a token is present: the
-	// facilitator client sends the token in an Authorization header and an
-	// off-host HTTP request would leak it in transit. Loopback HTTP stays
-	// allowed for explicit local and test configurations (e.g. httptest
-	// servers on 127.0.0.1 with a local token).
 	if token != "" {
 		u, err := url.Parse(endpoint)
 		if err != nil {
@@ -552,12 +507,6 @@ func firstEndpoint(endpoints []string) string {
 	return ""
 }
 
-// canonicalRequirements returns the gate-canonical published contract: the
-// same normalized copy x402http.New keeps internally, with extra.paymentFlow
-// pinned to the upfront flow. Clients echo published requirements as their
-// accepted contract, and the gate's accepted-requirements match requires its
-// pinned paymentFlow to survive the round trip. New has already rejected any
-// conflicting paymentFlow, so this pin cannot mask a misconfiguration.
 func canonicalRequirements(requirements facilitatortypes.PaymentRequirements) facilitatortypes.PaymentRequirements {
 	extra := make(map[string]any, len(requirements.Extra)+1)
 	for key, value := range requirements.Extra {
@@ -568,9 +517,6 @@ func canonicalRequirements(requirements facilitatortypes.PaymentRequirements) fa
 	return requirements
 }
 
-// routePolicy is one route's payment layer: the composed gate, the Sui
-// prepare delegate, and the normalized paid-method set. gate is nil for
-// unpaid routes.
 type routePolicy struct {
 	prefix       string
 	requirements facilitatortypes.PaymentRequirements
@@ -579,8 +525,6 @@ type routePolicy struct {
 	methods      map[string]struct{}
 }
 
-// paidMethod reports whether method is subject to payment. An empty method
-// set pays every method.
 func (p *routePolicy) paidMethod(method string) bool {
 	if p == nil || p.gate == nil {
 		return false
@@ -600,9 +544,6 @@ type httpGateway struct {
 }
 
 func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Always remove Portal-owned credential and identity headers. Behind the
-	// application auth gate the identity headers are its own: it removes a
-	// visitor's copies before it sets them.
 	utils.DelHeaderSpellings(r.Header, types.HeaderAccessCredential)
 	if _, ok := appauth.PrincipalFromContext(r.Context()); !ok {
 		utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
@@ -672,18 +613,9 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 		policy.preparer.WritePrepare(w, r, req.Sender)
 		return
 	}
-	// Casper and Nano wallets pay the published requirements directly, so
-	// there is no server-built transaction to prepare: the prepare endpoint
-	// answers with the route's challenge instead.
 	g.writeRouteChallenge(w, r, policy)
 }
 
-// writeRouteChallenge answers a Casper or Nano prepare request with the
-// payment challenge. Neither has a server-built prepare transaction, so the shared
-// prepare endpoint re-publishes the route contract in Portal's long-standing
-// wire shape: the JSON body is echoed base64-encoded in both challenge
-// headers. The paid route itself carries the upstream x402http canonical
-// challenge; only this convenience endpoint keeps the dual-header form.
 func (g *httpGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request, policy *routePolicy) {
 	body := struct {
 		X402Version int                                    `json:"x402Version"`
@@ -709,11 +641,8 @@ func (g *httpGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(raw)
 }
 
-// NormalizePaymentMethods canonicalizes configured payment methods: trimmed,
-// uppercased, de-duplicated, and ordered for deterministic publication. A
-// blank method is a configuration error rather than an omission: an empty
-// method list pays every method, so dropping a blank entry would widen the
-// payment gate instead of narrowing it.
+// NormalizePaymentMethods trims, uppercases, de-duplicates, and orders payment
+// methods. Blank entries are rejected: an empty list pays every method.
 func NormalizePaymentMethods(methods []string) ([]string, error) {
 	set := make(map[string]struct{}, len(methods))
 	for _, raw := range methods {
@@ -734,7 +663,6 @@ func NormalizePaymentMethods(methods []string) ([]string, error) {
 	return out, nil
 }
 
-// paymentMethodSet indexes already-normalized payment methods.
 func paymentMethodSet(methods []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(methods))
 	for _, method := range methods {

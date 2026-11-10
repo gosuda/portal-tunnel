@@ -5,8 +5,6 @@ description: Complete reference for all Portal environment variables, CLI flags,
 
 # Configuration Reference
 
-Complete reference for all Portal environment variables, CLI flags, and configuration files.
-
 ## Static relay cache
 
 Capability is enabled by default in the relay binary. Exposures are eligible

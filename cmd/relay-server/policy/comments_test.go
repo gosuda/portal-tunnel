@@ -111,7 +111,6 @@ func TestReputationImportsCombinedLegacyComments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Existing installations have no comments field in reputation.json.
 	if err := utils.WriteJSONFile(path, map[string]any{
 		"voter_secret": store.state.VoterSecret,
 		"identities":   store.state.Identities,

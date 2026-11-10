@@ -160,12 +160,6 @@ type Exposure struct {
 	updatesMu      sync.Mutex
 	acceptLoops    sync.WaitGroup
 
-	// discovery is the relay-selection collaborator. It is nil when
-	// discovery is disabled, meaning Exposure owns membership directly.
-	// When non-nil, Exposure delegates relay selection to the controller
-	// and forwards user intent (AddRelay/RemoveRelay/SetMaxActiveRelays)
-	// to it — the controller is the single owner of the explicit relay
-	// list and applies each intent atomically.
 	discovery *discovery.Controller
 
 	closeOnce sync.Once
@@ -309,13 +303,6 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		return nil, errPortalSDKIdentityMustIncludeAddress
 	}
 
-	// Resolve initial membership and enforce the non-empty invariant.
-	// When discovery is enabled, the resolved set (explicit + bootstrap
-	// candidates) must be non-empty. The actual initial listeners are the
-	// explicit relays only — bootstrap candidates do not become listeners
-	// until the discovery loop confirms them, which keeps offline/test
-	// usage hermetic. The loop may later expand membership with verified
-	// bootstrap candidates.
 	var controller *discovery.Controller
 	initialRelays := relayURLs
 	if cfg.discoveryEnabled {
@@ -396,19 +383,11 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	return exposure, nil
 }
 
-// deriveSelectionKey derives a stable, per-identity secret key for MOLS relay
-// ranking from the identity private key, so rankings are unpredictable to
-// outside observers without persisting any new value: the private key is
-// already the long-lived client secret. The domain separator keeps this key
-// distinct from any other derivation from the same secret.
 func deriveSelectionKey(identity types.Identity) []byte {
 	sum := sha256.Sum256(append([]byte("portal-tunnel/mols-selection-key\x00"), identity.PrivateKey...))
 	return sum[:]
 }
 
-// applyRelays applies a discovery-selected concrete relay set without
-// restarting the exposure. It is unexported so external callers cannot bypass
-// discovery policy and overwrite runtime membership directly.
 func (e *Exposure) applyRelays(relays []string) error {
 	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
@@ -627,13 +606,6 @@ func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
 	e.applyRelayStatus(relayURL, update, nil)
 }
 
-// setListenerRelayStatus applies a status update originating from a
-// specific listener, but only while that listener still owns its relay
-// slot. A deselected or replaced listener can deliver a final update
-// after reconcileRelayListeners dropped it; letting that recreate or
-// overwrite the entry would contradict the deselection notification
-// derived from the status snapshot (and let an old listener overwrite
-// its replacement).
 func (e *Exposure) setListenerRelayStatus(relayURL string, owner *listener, update listenerStatus) {
 	e.applyRelayStatus(relayURL, update, owner)
 }
@@ -683,8 +655,7 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		status.Err = nil
 	}
 	if update.state == RelayFailed {
-		// The lease may be gone, and another identity can then take the
-		// alias; a stale AliasURL would open someone else's service.
+
 		status.AliasURL = ""
 	}
 	if update.state == RelayConnecting {
@@ -723,12 +694,6 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 	}
 	e.mu.Unlock()
 
-	// Advertise readiness from the authoritative snapshot only: the same
-	// committed PublicURL that later feeds the deselection tombstone, so
-	// every "service ready at" line is guaranteed retractable by a
-	// matching "relay no longer active for" line (issue #463).
-	// Readiness loss and failures carry the same relay_status event, so a
-	// CLI consumer sees retraction without parsing retry prose (issue #596).
 	if advertised {
 		message := "service ready at " + status.PublicURL
 		if status.AliasURL != "" {
@@ -757,20 +722,11 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		e.discovery.SetActiveRelays(e.ActiveRelays())
 	}
 
-	// Feed terminal relay failures directly to the discovery collaborator.
-	// This bypasses the Updates channel so slow consumers cannot delay
-	// policy reactions. discoveryFailureKind maps the classification
-	// explicitly so the two string types never form a hidden cross-package
-	// value contract.
 	if status.State == RelayFailed && e.discovery != nil {
 		e.discovery.Report(status.RelayURL, discoveryFailureKind(status.Failure))
 	}
 }
 
-// discoveryFailureKind maps an SDK relay failure classification onto the
-// discovery failure vocabulary. The mapping is a switch, not a string
-// conversion, so neither package's literal values become a cross-package
-// contract.
 func discoveryFailureKind(failure RelayFailure) discovery.FailureKind {
 	switch failure {
 	case RelayFailureMITM:
@@ -778,9 +734,7 @@ func discoveryFailureKind(failure RelayFailure) discovery.FailureKind {
 	case RelayFailureTerminal:
 		return discovery.FailureTerminal
 	default:
-		// RelayFailureRuntime, an unclassified failure, and RelayFailureNone
-		// on a Failed status all mean "listener stopped, relay suspect":
-		// suppression/backoff, not a permanent ban.
+
 		return discovery.FailureRuntime
 	}
 }
@@ -835,11 +789,6 @@ func (e *Exposure) notifyStateChangedLocked() {
 	e.stateChanged = make(chan struct{})
 }
 
-// syncRelayStatuses reconciles the stored status snapshot with the
-// desired relay set and returns the deselection notifications for relays
-// that left it. Callers report them once the stale listeners are
-// actually detached (see reportDeselectedRelays), so the lifecycle
-// signal lines up with the listener lifecycle.
 func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 	desired := make(map[string]RelayStatus, len(relayURLs))
 	for _, relayURL := range relayURLs {
@@ -881,11 +830,6 @@ func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
 	return deselected
 }
 
-// reportDeselectedRelays publishes the membership-shrink notifications
-// collected by syncRelayStatuses once the stale listeners are detached:
-// a structured log mirroring "service ready at" so log consumers can
-// stop advertising the URL, and a best-effort Updates() notification.
-// Relays() remains the authoritative snapshot.
 func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
 	for _, status := range deselected {
 		if status.PublicURL != "" {
@@ -896,12 +840,6 @@ func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
 	}
 }
 
-// relayStatusLogEvent attaches the relay lifecycle fields a machine
-// consumer filters by: the stable event name, the relay identity and
-// lifecycle state, and the canonical or deselected URL snapshot. It frames
-// the existing "service ready at" and "relay no longer active for" logs as
-// the documented machine-readable contract (issue #596); the SDK status
-// paths above remain the only owner of relay state.
 func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Event {
 	event = event.
 		Str("event", "relay_status").
@@ -1199,12 +1137,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		}
 		desired[relayURL] = struct{}{}
 	}
-	// Detach stale listeners before deleting their membership statuses:
-	// once a listener no longer owns its relay slot, listener-originated
-	// status updates are dropped by the ownership guard in
-	// applyRelayStatus, and updates racing ahead of the detach are
-	// re-deleted by the sync below. Either way a stale status cannot
-	// recreate a deselected entry after its tombstone is published.
+
 	e.mu.Lock()
 	staleListeners := make(map[string]*listener)
 	stateChanged := false
@@ -1243,8 +1176,6 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		}
 	}
 
-	// Report deselection only now that the stale listeners are actually
-	// detached, so the lifecycle signal matches the listener lifecycle.
 	e.reportDeselectedRelays(deselected)
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
@@ -1291,12 +1222,6 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	return nil
 }
 
-// publishCreatedListener installs a freshly created listener for relayURL,
-// rechecking under e.mu the conditions that may have changed while the
-// listener was being created: a relay MITM-blocked in that window is closed
-// and recorded as a MITM failure instead of being published — a blocked
-// relay must never receive traffic. It reports whether the listener was
-// installed.
 func (e *Exposure) publishCreatedListener(relayURL string, listener *listener) bool {
 	e.mu.Lock()
 	if blockErr, blocked := e.blockedRelays[relayURL]; blocked {
@@ -1384,9 +1309,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		}()
 	}
 	defer func() {
-		// A status send hands the update to the worker but does not wait for
-		// it to apply. Keep ownership until the worker has committed the
-		// listener's final failure, or the ownership guard would discard it.
+
 		workers.Wait()
 		e.mu.Lock()
 		if current, ok := e.relayListeners[relayURL]; ok && current == listener {

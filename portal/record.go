@@ -18,13 +18,11 @@ import (
 
 type leaseRecord struct {
 	types.Identity
-	id          string
-	ExpiresAt   time.Time
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
-	sourceAddr  netip.Addr
-	// registerSource is the address that asked for this lease's challenge.
-	// Unlike sourceAddr it never follows a renew or a reverse connect.
+	id                string
+	ExpiresAt         time.Time
+	FirstSeenAt       time.Time
+	LastSeenAt        time.Time
+	sourceAddr        netip.Addr
 	registerSource    netip.Addr
 	ReportedIP        string
 	Hostname          string
@@ -33,16 +31,9 @@ type leaseRecord struct {
 	Metadata          types.LeaseMetadata
 	Overlay           bool
 	replica           bool
-	lastSelected      uint64 // registry-serialized connection selection order
-	// pinnedChain is the relay chain (PEM) served when the lease registered,
-	// which an SDK that cannot re-pin pins as well and verifies its signer
-	// connection against. It never changes. Only the public chain is kept, never
-	// a key. nil means unknown, and such a lease is never asked to re-register.
-	pinnedChain []byte
-	// verifiedChain is the last served chain (PEM) that pinnedChain was found
-	// to verify, so that chain is not checked again. It is never a basis for a
-	// verdict.
-	verifiedChain []byte
+	lastSelected      uint64
+	pinnedChain       []byte
+	verifiedChain     []byte
 
 	registerChallenge *identity.RegisterChallenge
 
@@ -58,9 +49,7 @@ type leaseRecord struct {
 	bridges    map[*leaseBridge]struct{}
 }
 
-// cacheLease adapts registry facts to the cache's canonical hostname key while
-// the caller holds the registry lock.
-func (r *leaseRecord) cacheLease() cache.Lease {
+func (r *leaseRecord) cacheLeaseLocked() cache.Lease {
 	return cache.Lease{ID: r.id, Owner: r.ServiceKey(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
@@ -148,8 +137,6 @@ func (r *leaseRecord) Close() {
 	close(r.closeDone)
 }
 
-// leaseBridge owns a public connection from reverse acquisition through the
-// active bridge. The record mutex protects its endpoints and membership.
 type leaseBridge struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -175,11 +162,6 @@ func (r *leaseRecord) releaseBridge(bridge *leaseBridge) {
 	r.mu.Unlock()
 }
 
-// Keep revoked workers counted until they finish; allowing the identity again
-// admits only new reservations, never revives a canceled bridge. Deadlines
-// interrupt current I/O, but a subsequent framing write can replace its write
-// deadline with the helper's five-second limit. Workers close endpoints outside
-// these locks and cannot copy application data with the canceled context.
 func (r *leaseRecord) revokeBridgesLocked() {
 	for bridge := range r.bridges {
 		bridge.cancel()
@@ -192,8 +174,6 @@ func (r *leaseRecord) revokeBridgesLocked() {
 	}
 }
 
-// attachReverseMux replaces the lease's carrier without letting a late release
-// from the old handler detach the replacement. A closed lease refuses ownership.
 func (r *leaseRecord) attachReverseMux(mux *transport.ReverseMux) error {
 	r.mu.Lock()
 	if r.closed {
@@ -238,9 +218,6 @@ func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
-	// Queue DNS sync while the lease is still the current live record. A
-	// concurrent unregister/expiry must either happen after this enqueue or
-	// make this stale sync a no-op.
 	if registry.recordByLease(record.ServiceKey(), record.id, time.Now()) != record {
 		return nil
 	}
