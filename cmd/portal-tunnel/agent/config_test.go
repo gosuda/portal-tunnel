@@ -82,6 +82,9 @@ id = "sso"
 tls_auto = true
 tls_state_dir = "certs"
 tls_require_local = true
+tls_monitor_state_dir = "evidence"
+tls_monitor_baseline = "baseline.json"
+tls_monitor_dns_resolver = "9.9.9.9:53"
 target = "localhost:3001"
 auth = "saml"
 auth_allowed_wallets = ["@example.com"]
@@ -430,5 +433,39 @@ func TestAutomaticTLSConfigRoundTrip(t *testing.T) {
 	}
 	if spec.TLSStateDir != filepath.Join(dir, "identity.json")+".tls" {
 		t.Fatalf("identity-scoped default = %q", spec.TLSStateDir)
+	}
+}
+
+func TestCertificateMonitoringConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	data := `[[tunnels]]
+id = "web"
+target = "3000"
+tls_monitor_state_dir = "evidence"
+tls_monitor_baseline = "baseline.json"
+tls_monitor_dns_resolver = "9.9.9.9:53"
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor := spec.CertificateMonitor
+	if monitor == nil || monitor.StateDir != filepath.Join(dir, "evidence") || monitor.BaselineFile != filepath.Join(dir, "baseline.json") || monitor.DNSResolver != "9.9.9.9:53" {
+		t.Fatalf("persisted monitoring configuration = %+v", monitor)
 	}
 }

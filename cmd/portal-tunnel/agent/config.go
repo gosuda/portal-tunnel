@@ -179,6 +179,8 @@ func (cfg *Config) normalize(configPath string) error {
 		t.TLSCert = resolvePath(t.TLSCert)
 		t.TLSKey = resolvePath(t.TLSKey)
 		t.TLSStateDir = resolvePath(t.TLSStateDir)
+		t.TLSMonitorStateDir = resolvePath(t.TLSMonitorStateDir)
+		t.TLSMonitorBaseline = resolvePath(t.TLSMonitorBaseline)
 		if t.IdentityPath == "" {
 			if len(cfg.Tunnels) <= 1 {
 				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, defaultIdentityFilename)

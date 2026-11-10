@@ -132,6 +132,9 @@ accepted in the same command; advanced flags do not require a configuration file
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--tls-monitor-state-dir` | path | disabled | Opt into evaluation-only, warning-only [certificate monitoring](/keyless-tls#certificate-monitoring); persist evidence and send hostname queries to independent DNS and CertSpotter |
+| `--tls-monitor-baseline` | path | unconfigured | Operator-managed CAA/SPKI baseline JSON; requires `--tls-monitor-state-dir` |
+| `--tls-monitor-dns-resolver` | IP:port | `1.1.1.1:53` when enabled | Resolver for monitoring; requires `--tls-monitor-state-dir`; bracket IPv6 addresses |
 | `--max-active-relays` | int | `3` | Maximum auto-selected relays to keep connected; explicit relays are always included |
 | `--identity-json` | string | | In-memory identity JSON; takes precedence over `--identity-path` without reading or writing that file |
 | `--description` | string | | Service description metadata |

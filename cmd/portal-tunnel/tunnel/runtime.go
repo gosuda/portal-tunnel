@@ -14,6 +14,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -28,6 +29,7 @@ var (
 	errTLSCertificatePairRequired              = errors.New("tls_cert and tls_key must be configured together")
 	errLocalTLSWithRawTCP                      = errors.New("local TLS certificates cannot be combined with raw TCP")
 	errLocalTLSWithRelayCache                  = errors.New("local TLS certificates cannot be combined with relay cache")
+	errCertificateMonitorModeUnsupported       = errors.New("TLS certificate monitoring cannot be combined with relay cache or raw TCP")
 	errTunnelTargetIsRequired                  = errors.New("tunnel target is required")
 	errHTTPTunnelCannotCombinedTCPOr           = errors.New("HTTP tunnel cannot be combined with TCP or UDP")
 	errStaticServingCannotCombinedTargetOr     = errors.New("static serving cannot be combined with a target or HTTP routes")
@@ -46,16 +48,17 @@ var (
 
 // Spec is the resolved description of one tunnel that the runtime is built from.
 type Spec struct {
-	TLSAuto         bool
-	TLSStateDir     string
-	TLSRequireLocal bool
-	TLSCert         string
-	TLSKey          string
-	Identity        IdentitySpec
-	Relays          RelaySpec
-	Metadata        types.LeaseMetadata
-	Transport       TransportSpec
-	HTTP            *HTTPConfig
+	CertificateMonitor *keyless.MonitorConfig
+	TLSAuto            bool
+	TLSStateDir        string
+	TLSRequireLocal    bool
+	TLSCert            string
+	TLSKey             string
+	Identity           IdentitySpec
+	Relays             RelaySpec
+	Metadata           types.LeaseMetadata
+	Transport          TransportSpec
+	HTTP               *HTTPConfig
 }
 
 type IdentitySpec struct {
@@ -105,6 +108,14 @@ type CacheConfig struct {
 }
 
 func (spec Spec) Validate() error {
+	if spec.CertificateMonitor != nil {
+		if spec.Transport.TCP || (spec.HTTP != nil && spec.HTTP.Cache != nil) {
+			return errCertificateMonitorModeUnsupported
+		}
+		if err := spec.CertificateMonitor.Validate(); err != nil {
+			return err
+		}
+	}
 	if (spec.TLSCert == "") != (spec.TLSKey == "") {
 		return errTLSCertificatePairRequired
 	}
@@ -257,6 +268,9 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	}
 	if spec.TLSAuto {
 		opts = append(opts, sdk.WithAutomaticTLS(spec.TLSStateDir, spec.TLSRequireLocal))
+	}
+	if monitor := spec.CertificateMonitor; monitor != nil {
+		opts = append(opts, sdk.WithCertificateMonitoring(monitor.StateDir, monitor.BaselineFile, monitor.DNSResolver))
 	}
 	if spec.Transport.UDP != nil {
 		opts = append(opts, sdk.WithUDP())

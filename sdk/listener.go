@@ -60,18 +60,19 @@ const (
 )
 
 type listenerConfig struct {
-	TLSStateDir     string
-	TLSRequireLocal bool
-	TLSCertFile     string
-	TLSKeyFile      string
-	Cache           *cache.Source
-	Identity        types.Identity
-	Overlay         bool
-	UDPEnabled      bool
-	TCPEnabled      bool
-	BanMITM         bool
-	Metadata        types.LeaseMetadata
-	StartedAt       time.Time
+	CertificateMonitor *keyless.MonitorConfig
+	TLSStateDir        string
+	TLSRequireLocal    bool
+	TLSCertFile        string
+	TLSKeyFile         string
+	Cache              *cache.Source
+	Identity           types.Identity
+	Overlay            bool
+	UDPEnabled         bool
+	TCPEnabled         bool
+	BanMITM            bool
+	Metadata           types.LeaseMetadata
+	StartedAt          time.Time
 }
 
 type listenerStatus struct {
@@ -144,13 +145,14 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 }
 
 type listener struct {
-	tlsStateDir     string
-	tlsRequireLocal bool
-	tlsCertFile     string
-	tlsKeyFile      string
-	cancel          context.CancelFunc
-	doneCh          <-chan struct{}
-	closeOnce       sync.Once
+	certificateMonitor *keyless.MonitorConfig
+	tlsStateDir        string
+	tlsRequireLocal    bool
+	tlsCertFile        string
+	tlsKeyFile         string
+	cancel             context.CancelFunc
+	doneCh             <-chan struct{}
+	closeOnce          sync.Once
 
 	startedAt time.Time
 
@@ -193,22 +195,23 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 	l := &listener{
-		cancel:          cancel,
-		doneCh:          listenerCtx.Done(),
-		metadata:        cfg.Metadata.Copy(),
-		identity:        cfg.Identity,
-		overlay:         cfg.Overlay,
-		statusUpdates:   make(chan listenerStatus),
-		udpEnabled:      cfg.UDPEnabled,
-		tcpEnabled:      cfg.TCPEnabled,
-		cache:           cfg.Cache,
-		tlsCertFile:     cfg.TLSCertFile,
-		tlsKeyFile:      cfg.TLSKeyFile,
-		tlsStateDir:     cfg.TLSStateDir,
-		tlsRequireLocal: cfg.TLSRequireLocal,
-		api:             &apiClient{relayURL: relayurl},
-		lease:           utils.NewSnapshot(listenerSnapshot{}),
-		startedAt:       cfg.StartedAt,
+		cancel:             cancel,
+		doneCh:             listenerCtx.Done(),
+		metadata:           cfg.Metadata.Copy(),
+		identity:           cfg.Identity,
+		overlay:            cfg.Overlay,
+		statusUpdates:      make(chan listenerStatus),
+		udpEnabled:         cfg.UDPEnabled,
+		tcpEnabled:         cfg.TCPEnabled,
+		cache:              cfg.Cache,
+		tlsCertFile:        cfg.TLSCertFile,
+		tlsKeyFile:         cfg.TLSKeyFile,
+		tlsStateDir:        cfg.TLSStateDir,
+		tlsRequireLocal:    cfg.TLSRequireLocal,
+		certificateMonitor: cfg.CertificateMonitor,
+		api:                &apiClient{relayURL: relayurl},
+		lease:              utils.NewSnapshot(listenerSnapshot{}),
+		startedAt:          cfg.StartedAt,
 	}
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
@@ -1247,6 +1250,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		KeyFile:             l.tlsKeyFile,
 		CertificateDir:      l.tlsStateDir,
 		RequireLocal:        l.tlsRequireLocal,
+		CertificateMonitor:  l.certificateMonitor,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)

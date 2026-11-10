@@ -346,3 +346,45 @@ func TestAutomaticTLSConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestCertificateMonitoringConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantError bool
+	}{
+		{"disabled by default", Config{TargetAddr: "3000"}, false},
+		{"keyless", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence"}, false},
+		{"manual", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TLSMonitorStateDir: "evidence"}, false},
+		{"automatic", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TLSMonitorStateDir: "evidence"}, false},
+		{"explicit baseline and resolver", Config{TargetAddr: "3000", TLSMonitorStateDir: " evidence ", TLSMonitorBaseline: " baseline.json ", TLSMonitorDNSResolver: "[2606:4700:4700::1111]:53"}, false},
+		{"baseline alone", Config{TargetAddr: "3000", TLSMonitorBaseline: "baseline.json"}, true},
+		{"resolver alone", Config{TargetAddr: "3000", TLSMonitorDNSResolver: "9.9.9.9:53"}, true},
+		{"invalid resolver", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence", TLSMonitorDNSResolver: "resolver.example:53"}, true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence", TCPEnabled: true}, true},
+		{"relay cache", Config{Serve: "site", TLSMonitorStateDir: "evidence", Cache: &CacheConfig{}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() error = %v, want error %v", err, tc.wantError)
+			}
+			if tc.wantError {
+				return
+			}
+			monitor := spec.CertificateMonitor
+			if tc.config.TLSMonitorStateDir == "" {
+				if monitor != nil {
+					t.Fatal("monitoring enabled without an explicit request")
+				}
+				return
+			}
+			if monitor == nil || monitor.StateDir != tc.config.TLSMonitorStateDir || monitor.BaselineFile != tc.config.TLSMonitorBaseline || monitor.DNSResolver != tc.config.TLSMonitorDNSResolver {
+				t.Fatalf("monitoring configuration was changed: %+v", monitor)
+			}
+			if spec.TLSAuto != tc.config.TLSAuto || spec.TLSRequireLocal != tc.config.TLSRequireLocal {
+				t.Fatal("monitoring changed certificate provisioning policy")
+			}
+		})
+	}
+}

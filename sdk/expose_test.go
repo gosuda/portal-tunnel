@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -294,6 +295,26 @@ func TestExposeRejectsInvalidAutomaticTLSOptions(t *testing.T) {
 			_, err := Expose(t.Context(), types.Identity{}, []string{"https://relay.example"}, tc.opts...)
 			if err == nil || !strings.Contains(err.Error(), "TLS") {
 				t.Fatalf("expected automatic TLS option error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestExposeRejectsInvalidCertificateMonitoringOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+	}{
+		{"missing state", []Option{WithCertificateMonitoring("", "", "")}},
+		{"blank state", []Option{WithCertificateMonitoring(" ", "", "")}},
+		{"invalid resolver", []Option{WithCertificateMonitoring("evidence", "", "dns.example:53")}},
+		{"relay cache", []Option{WithCertificateMonitoring("evidence", "", ""), WithStaticRelayCache(".", time.Hour)}},
+		{"raw TCP", []Option{WithCertificateMonitoring("evidence", "", ""), WithTCP()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Expose(t.Context(), types.Identity{}, []string{"https://relay.example"}, tc.opts...)
+			if err == nil || errors.Is(err, errPortalSDKIdentityMustIncludeAddress) {
+				t.Fatalf("expected certificate monitoring option error, got %v", err)
 			}
 		})
 	}

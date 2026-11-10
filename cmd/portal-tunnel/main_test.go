@@ -209,3 +209,22 @@ func TestExposeAutomaticTLS(t *testing.T) {
 		t.Fatal("in-memory identity silently chose a persistence directory")
 	}
 }
+
+func TestExposeCertificateMonitoring(t *testing.T) {
+	spec, err := exposeSpec(t, "--tls-monitor-state-dir", "evidence", "--tls-monitor-baseline", "baseline.json", "--tls-monitor-dns-resolver", "9.9.9.9:53", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor := spec.CertificateMonitor
+	if monitor == nil || monitor.StateDir != "evidence" || monitor.BaselineFile != "baseline.json" || monitor.DNSResolver != "9.9.9.9:53" {
+		t.Fatalf("certificate monitoring options = %+v", monitor)
+	}
+	for _, args := range [][]string{
+		{"--tls-monitor-baseline", "baseline.json", "3000"},
+		{"--tls-monitor-dns-resolver", "9.9.9.9:53", "3000"},
+	} {
+		if _, err := exposeSpec(t, args...); err == nil {
+			t.Fatalf("portal expose %v silently enabled monitoring without a state directory", args)
+		}
+	}
+}

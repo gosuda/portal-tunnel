@@ -241,6 +241,24 @@ outside the relay's control. A tunnel-owned certificate key alone is insufficien
 if the relay can retain or obtain another certificate covering the hostname; see
 [#541](https://github.com/gosuda/portal-tunnel/issues/541).
 
+## Certificate monitoring
+
+Opt-in [CAA and certificate transparency monitoring](/keyless-tls#certificate-monitoring)
+adds warning-only observations for canonical hostnames. It queries independent
+DNS and CertSpotter only when explicitly enabled; an absent operator-managed
+CAA baseline remains unconfigured. Observed DNS is never automatically accepted.
+Known local key history and explicitly approved SPKIs help identify competing
+certificate keys, but do not authenticate every visitor connection.
+
+This is a best-effort evaluation pilot using CertSpotter's unauthenticated API,
+not a production monitoring SLA, complete CT auditor, or pre-attack guarantee.
+Hourly polling, coalesced unexpired-only issuance results, merge/aggregation
+delays, source outages, and missing inclusion/consistency proofs limit coverage.
+Runtime findings never mutate DNS, replace certificates, block traffic, or switch
+relays. CAA does not revoke existing certificates or remove the DNS operator's
+issuance authority. A missing or failed observation is unknown, not evidence of
+safety.
+
 ## Relay Visibility
 
 For a relay following the ordinary uncached forwarding path, visibility is as

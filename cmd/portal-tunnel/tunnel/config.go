@@ -8,6 +8,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -18,14 +19,17 @@ import (
 // holds what was set and nothing else; nil and zero values stand for defaults
 // that Spec fills in. The TOML keys are those of the agent config.
 type Config struct {
-	TLSAuto         bool   `toml:"tls_auto,omitempty"`
-	TLSStateDir     string `toml:"tls_state_dir,omitempty"`
-	TLSRequireLocal bool   `toml:"tls_require_local,omitempty"`
-	TLSCert         string `toml:"tls_cert,omitempty"`
-	TLSKey          string `toml:"tls_key,omitempty"`
-	Name            string `toml:"name,omitempty"`
-	IdentityPath    string `toml:"identity_path,omitempty"`
-	IdentityJSON    string `toml:"identity_json,omitempty"`
+	TLSMonitorStateDir    string `toml:"tls_monitor_state_dir,omitempty"`
+	TLSMonitorBaseline    string `toml:"tls_monitor_baseline,omitempty"`
+	TLSMonitorDNSResolver string `toml:"tls_monitor_dns_resolver,omitempty"`
+	TLSAuto               bool   `toml:"tls_auto,omitempty"`
+	TLSStateDir           string `toml:"tls_state_dir,omitempty"`
+	TLSRequireLocal       bool   `toml:"tls_require_local,omitempty"`
+	TLSCert               string `toml:"tls_cert,omitempty"`
+	TLSKey                string `toml:"tls_key,omitempty"`
+	Name                  string `toml:"name,omitempty"`
+	IdentityPath          string `toml:"identity_path,omitempty"`
+	IdentityJSON          string `toml:"identity_json,omitempty"`
 
 	TargetAddr          string      `toml:"target,omitempty"`
 	Serve               string      `toml:"serve,omitempty"`
@@ -159,6 +163,13 @@ func (c Config) Spec() (Spec, error) {
 	}
 	if c.UDPEnabled {
 		spec.Transport.UDP = &UDPConfig{Target: c.UDPAddr}
+	}
+	if c.TLSMonitorStateDir != "" || c.TLSMonitorBaseline != "" || c.TLSMonitorDNSResolver != "" {
+		spec.CertificateMonitor = &keyless.MonitorConfig{
+			StateDir:     c.TLSMonitorStateDir,
+			BaselineFile: c.TLSMonitorBaseline,
+			DNSResolver:  c.TLSMonitorDNSResolver,
+		}
 	}
 	auth := c.AuthConfig
 	if c.Serve != "" || len(c.HTTPRoutes) > 0 || !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) > 0 {

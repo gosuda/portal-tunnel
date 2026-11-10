@@ -46,6 +46,8 @@ type ClientConfig struct {
 	AccessToken         string
 	CertificateDir      string
 	RequireLocal        bool
+	// CertificateMonitor enables warning-only public observations for Hostname.
+	CertificateMonitor *MonitorConfig
 	// CertFile and KeyFile select local-only signing; both must be supplied.
 	CertFile string
 	KeyFile  string
@@ -73,6 +75,9 @@ type Client struct {
 	workerCancel   context.CancelFunc
 	workerDone     chan struct{}
 	ready          chan struct{}
+	monitor        *certificateMonitor
+	monitorCancel  context.CancelFunc
+	monitorDone    chan struct{}
 }
 
 type pinnedChain struct {
@@ -81,6 +86,7 @@ type pinnedChain struct {
 	pool     *x509.CertPool
 	signer   io.Closer
 	leaf     *x509.Certificate
+	local    bool
 }
 
 // NewClient loads local material when configured, otherwise pins the relay chain.
@@ -124,6 +130,12 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if config.RequireLocal && config.CertificateDir == "" && config.CertFile == "" {
 		return nil, errAutomaticCertificateDirectoryRequired
 	}
+	if config.CertificateMonitor != nil {
+		client.monitor, err = newCertificateMonitor(hostname, *config.CertificateMonitor)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if config.CertificateDir != "" {
 		if config.CertFile != "" {
 			return nil, errAutomaticAndManualCertificateConflict
@@ -131,11 +143,13 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		if err := client.startAutomatic(ctx, config.RequireLocal); err != nil {
 			return nil, err
 		}
+		client.startCertificateMonitor()
 		return client, nil
 	}
 	if client.pin, err = client.loadPin(ctx); err != nil {
 		return nil, err
 	}
+	client.startCertificateMonitor()
 	return client, nil
 }
 
@@ -278,7 +292,7 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 	}
 	c.retired = live
 	if current != nil {
-		c.retired = append(c.retired, &pinnedChain{pool: current.pool, leaf: current.leaf})
+		c.retired = append(c.retired, &pinnedChain{pool: current.pool, leaf: current.leaf, local: current.local})
 	} else if c.ready != nil {
 		close(c.ready)
 	}
@@ -348,10 +362,16 @@ func (c *Client) Close() error {
 		if c.workerCancel != nil {
 			c.workerCancel()
 		}
+		if c.monitorCancel != nil {
+			c.monitorCancel()
+		}
 		pins := append([]*pinnedChain{c.pin}, c.retired...)
 		c.mu.Unlock()
 		if c.workerDone != nil {
 			<-c.workerDone
+		}
+		if c.monitorDone != nil {
+			<-c.monitorDone
 		}
 		for _, pin := range pins {
 			if pin != nil && pin.signer != nil {
@@ -459,7 +479,7 @@ func (c *Client) localPin(certPEM, keyPEM []byte) (*pinnedChain, error) {
 	// control-plane certificate or a broader CA capable of issuing other leaves.
 	pool := x509.NewCertPool()
 	pool.AddCert(leaf)
-	return &pinnedChain{chainPEM: certPEM, server: server, pool: pool, leaf: leaf}, nil
+	return &pinnedChain{chainPEM: certPEM, server: server, pool: pool, leaf: leaf, local: true}, nil
 }
 
 // TenantTLSConfig verifies self-probes against installed tenant materials,

@@ -244,9 +244,43 @@ or raw TCP. Manual certificate files already prohibit relay-signing fallback.
 CSR issuance leaves CA account authority with the relay operator. The relay's
 existing wildcard and control of authoritative DNS can still permit competing
 certificates. The gains are client-only possession of the legitimate tunnel key
-and removal of the online `/v1/sign` dependency after activation. CAA and
-CT/precertificate monitoring remain complementary follow-up work; this mode
-does not claim prevention of malicious-relay impersonation.
+and removal of the online `/v1/sign` dependency after activation. The optional
+CAA and CT/precertificate monitor below adds warning-only observations, not
+prevention of malicious-relay impersonation.
+
+## Certificate monitoring
+
+Monitoring is disabled by default. For a best-effort evaluation pilot, opt in
+with `--tls-monitor-state-dir` alongside either Keyless, automatic, or manual
+local-certificate mode:
+
+```sh
+portal expose 3000 --tls-auto --identity-path identity.json \
+  --tls-monitor-state-dir evidence --tls-monitor-baseline baseline.json
+```
+
+This monitors each canonical hostname, not short aliases. Only an enabled runtime
+sends hostname queries to the independent DNS resolver (default `1.1.1.1:53`,
+override with `--tls-monitor-dns-resolver IP:port`) and to CertSpotter over HTTPS.
+No monitoring is activated merely by installing or updating Portal. Runtime
+findings and source outages only warn; they do not change DNS, issue or replace
+certificates, block traffic, or switch relays. Invalid initial configuration can
+still reject startup. Raw TCP, relay cache, and browser/WASM are unsupported.
+
+Persistent agents use `tls_monitor_state_dir`, `tls_monitor_baseline`, and
+`tls_monitor_dns_resolver` in their `[[tunnels]]` entry. Relative state and baseline
+paths resolve from the agent config directory. Baseline and resolver options
+require the state-directory opt-in. The Go SDK exposes
+`sdk.WithCertificateMonitoring(stateDir, baselineFile, dnsResolver)`.
+
+The baseline is operator-managed and never accepted from the first DNS answer.
+Without one, CAA is `UNCONFIGURED`. CertSpotter's unauthenticated API is for
+personal/evaluation use, not a production monitoring SLA. Its unexpired,
+coalesced precertificate/final-certificate results are not exhaustive CT history,
+and hourly polling plus publication/aggregation delays cannot guarantee
+pre-attack detection. See the
+[monitoring guide](https://gosuda.github.io/portal-tunnel/keyless-tls#certificate-monitoring)
+for the baseline schema, evidence format, and security limits.
 
 ## Canonical Documentation Links
 

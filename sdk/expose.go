@@ -18,6 +18,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -27,6 +28,7 @@ var (
 	errAutomaticTLSFilesConflict           = errors.New("automatic TLS cannot be combined with manual certificate files")
 	errLocalTLSCertificatePairRequired     = errors.New("tenant TLS requires both certificate and key files")
 	errLocalTLSModeUnsupported             = errors.New("local tenant TLS cannot be combined with relay cache, raw TCP, or the browser runtime")
+	errCertificateMonitorModeUnsupported   = errors.New("TLS certificate monitoring cannot be combined with relay cache, raw TCP, or the browser runtime")
 	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
 	errPortalSDKContextIsNil               = errors.New("portal sdk: context is nil")
 	errPortalSDKThisRuntimeSupportsHTTPS   = errors.New("portal sdk: this runtime supports HTTPS exposure only")
@@ -168,17 +170,18 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
-	AutomaticTLS    bool
-	TLSStateDir     string
-	TLSRequireLocal bool
-	TLSCertFile     string
-	TLSKeyFile      string
-	Cache           *cache.SourceConfig
-	UDPEnabled      bool
-	TCPEnabled      bool
-	BanMITM         bool
-	Overlay         bool
-	Metadata        types.LeaseMetadata
+	CertificateMonitor *keyless.MonitorConfig
+	AutomaticTLS       bool
+	TLSStateDir        string
+	TLSRequireLocal    bool
+	TLSCertFile        string
+	TLSKeyFile         string
+	Cache              *cache.SourceConfig
+	UDPEnabled         bool
+	TCPEnabled         bool
+	BanMITM            bool
+	Overlay            bool
+	Metadata           types.LeaseMetadata
 
 	discoveryEnabled bool
 	maxActiveRelays  int
@@ -214,6 +217,23 @@ func WithAutomaticTLS(directory string, requireLocal bool) Option {
 		opts.AutomaticTLS = true
 		opts.TLSStateDir = directory
 		opts.TLSRequireLocal = requireLocal
+	}
+}
+
+// WithCertificateMonitoring opts into best-effort, evaluation-only CAA and certificate
+// transparency checks for each canonical tenant hostname. stateDir is required
+// for durable evidence. baselineFile is operator-managed; an empty path leaves
+// CAA policy unconfigured. dnsResolver is an optional IP:port (default 1.1.1.1:53).
+// Enabling this sends hostname queries to that resolver and CertSpotter over
+// HTTPS. Runtime findings and query failures only warn; they do not change
+// certificates, relay selection, or traffic readiness. Invalid initial monitor
+// configuration may reject startup. Detection before an attack is not guaranteed.
+// Relay cache, raw TCP, and the browser runtime are unsupported.
+func WithCertificateMonitoring(stateDir, baselineFile, dnsResolver string) Option {
+	return func(opts *options) {
+		opts.CertificateMonitor = &keyless.MonitorConfig{
+			StateDir: stateDir, BaselineFile: baselineFile, DNSResolver: dnsResolver,
+		}
 	}
 }
 
@@ -304,6 +324,14 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	localTLSUnsupported := cfg.Cache != nil || cfg.TCPEnabled || runtime.GOOS == "js"
 	if localTLSConfigured && localTLSUnsupported {
 		return nil, errLocalTLSModeUnsupported
+	}
+	if cfg.CertificateMonitor != nil {
+		if localTLSUnsupported {
+			return nil, errCertificateMonitorModeUnsupported
+		}
+		if err := cfg.CertificateMonitor.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
 	if runtime.GOOS == "js" && requiresSocketTransport {
@@ -1203,18 +1231,19 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
-			Cache:           e.cache,
-			Identity:        e.identity,
-			Overlay:         e.options.Overlay,
-			UDPEnabled:      e.options.UDPEnabled,
-			TCPEnabled:      e.options.TCPEnabled,
-			BanMITM:         e.options.BanMITM,
-			TLSCertFile:     e.options.TLSCertFile,
-			TLSKeyFile:      e.options.TLSKeyFile,
-			TLSStateDir:     e.options.TLSStateDir,
-			TLSRequireLocal: e.options.TLSRequireLocal,
-			Metadata:        e.metadata.Copy(),
-			StartedAt:       e.startedAt,
+			Cache:              e.cache,
+			Identity:           e.identity,
+			Overlay:            e.options.Overlay,
+			UDPEnabled:         e.options.UDPEnabled,
+			TCPEnabled:         e.options.TCPEnabled,
+			BanMITM:            e.options.BanMITM,
+			TLSCertFile:        e.options.TLSCertFile,
+			TLSKeyFile:         e.options.TLSKeyFile,
+			TLSStateDir:        e.options.TLSStateDir,
+			TLSRequireLocal:    e.options.TLSRequireLocal,
+			CertificateMonitor: e.options.CertificateMonitor,
+			Metadata:           e.metadata.Copy(),
+			StartedAt:          e.startedAt,
 		})
 		if err != nil {
 			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err})
