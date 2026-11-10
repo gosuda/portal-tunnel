@@ -44,12 +44,7 @@ func NewSourceLimiter(ratePerMinute, burst, globalRate, globalBurst int) *Source
 	}
 }
 
-// Allow deducts cost only if both budgets admit the request. Rejections return
-// retry guidance and a bounded layer label; no IP history is persisted.
-func (l *SourceLimiter) Allow(source netip.Addr, cost int) (time.Duration, string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.clock()
+func (l *SourceLimiter) pruneIdleSourcesLocked(now time.Time) {
 	if l.lastPrune.IsZero() || now.Sub(l.lastPrune) >= sourceLimiterPruneInterval {
 		l.lastPrune = now
 		for key, bucket := range l.buckets {
@@ -58,6 +53,15 @@ func (l *SourceLimiter) Allow(source netip.Addr, cost int) (time.Duration, strin
 			}
 		}
 	}
+}
+
+// Allow deducts cost only if both budgets admit the request. Rejections return
+// retry guidance and a bounded layer label; no IP history is persisted.
+func (l *SourceLimiter) Allow(source netip.Addr, cost int) (time.Duration, string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.clock()
+	l.pruneIdleSourcesLocked(now)
 	if l.globalRate > 0 {
 		retry := l.global.retry(now, l.globalRate, l.globalBurst, cost)
 		if retry > 0 {

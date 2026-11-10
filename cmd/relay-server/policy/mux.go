@@ -16,136 +16,80 @@ import (
 
 const accessPublishAttempts = 8
 
-// Mux composes the relay's protocol route table over portal handlers with
-// ingress client-IP resolution and weighted pre-auth admission; other paths
-// fall through to the fallback handler. Nil ingress, admission, or access
-// disable their layer.
-func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *SourceLimiter, access *Store, preAuth PreAuthConfig) http.Handler {
-	if ingress == nil {
-		ingress = &Ingress{}
+type sourceHandler func(http.ResponseWriter, *http.Request, netip.Addr)
+
+func publishServiceAccess(s *portal.Server, access *Store, key types.ServiceIdentityKey) bool {
+	if !key.Valid() {
+		return true
 	}
-	if fallback == nil {
-		root := http.NewServeMux()
-		root.HandleFunc("/{$}", s.HandleRoot)
-		fallback = ControlBodyHandler(root)
+	if access == nil {
+		return s.SetServiceIdentityAccess(key, types.LeaseRoutable, 1)
 	}
-	publishAccess := func(key types.ServiceIdentityKey) bool {
-		if !key.Valid() {
+	for range accessPublishAttempts {
+		state := access.Snapshot()
+		if s.SetServiceIdentityAccess(key, state.Access(key), state.Revision()) {
 			return true
 		}
-		if access == nil {
-			return s.SetServiceIdentityAccess(key, types.LeaseRoutable, 1)
-		}
-		for range accessPublishAttempts {
-			state := access.Snapshot()
-			if s.SetServiceIdentityAccess(key, state.Access(key), state.Revision()) {
-				return true
+	}
+	return false
+}
+
+func admitPreAuth(admission *SourceLimiter, ingress *Ingress, cost int, next sourceHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		source := ingress.SourceAddr(r)
+		if admission != nil {
+			retry, _ := admission.Allow(source, cost)
+			if retry > 0 {
+				WriteRetryAfter(w, retry, "pre-auth request budget exhausted")
+				return
 			}
 		}
+		next(w, r, source)
+	}
+}
+
+func requireHTTPMethod(method string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !utils.RequireMethod(w, r, method) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+func withRequestSource(ingress *Ingress, next sourceHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		next(w, r, ingress.SourceAddr(r))
+	}
+}
+
+func requireTunnelSource(ingress *Ingress, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		source := ingress.SourceAddr(r)
+		if !ingress.allowsTunnelFrom(source) {
+			from := "an unresolved address"
+			if source.IsValid() {
+				from = source.String()
+			}
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeSourceNotAllowed, "this relay does not accept tunnels from "+from)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func reportAccessPublishFailure(w http.ResponseWriter, ok bool, published bool) bool {
+	if published {
 		return false
 	}
+	if ok {
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
+	}
+	return true
+}
 
-	type sourceHandler func(http.ResponseWriter, *http.Request, netip.Addr)
-	admit := func(cost int, next sourceHandler) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			source := ingress.SourceAddr(r)
-			if admission != nil {
-				retry, _ := admission.Allow(source, cost)
-				if retry > 0 {
-					WriteRetryAfter(w, retry, "pre-auth request budget exhausted")
-					return
-				}
-			}
-			next(w, r, source)
-		}
-	}
-	requireMethod := func(method string, next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if !utils.RequireMethod(w, r, method) {
-				return
-			}
-			next(w, r)
-		}
-	}
-	withSource := func(next sourceHandler) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			next(w, r, ingress.SourceAddr(r))
-		}
-	}
-	tunnelSource := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			source := ingress.SourceAddr(r)
-			if !ingress.allowsTunnelFrom(source) {
-				from := "an unresolved address"
-				if source.IsValid() {
-					from = source.String()
-				}
-				utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeSourceNotAllowed, "this relay does not accept tunnels from "+from)
-				return
-			}
-			next(w, r)
-		}
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc(types.PathHealthz, func(w http.ResponseWriter, _ *http.Request) {
-		utils.WriteAPIData(w, http.StatusOK, map[string]any{"status": "ok"})
-	})
-	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
-		if s.ApplicationOwnsDomainReport() {
-			fallback.ServeHTTP(w, r)
-			return
-		}
-		s.HandleDomain(w, r)
-	})
-	mux.HandleFunc(types.PathSDKCertificateChain, s.HandleCertificateChain)
-	mux.HandleFunc(types.PathSDKRegisterChallenge, requireMethod(http.MethodPost, tunnelSource(admit(preAuth.ChallengeCost, func(w http.ResponseWriter, r *http.Request, source netip.Addr) {
-		key, response, ok := s.HandleRegisterChallenge(w, r, source)
-		if !publishAccess(key) {
-			if ok {
-				utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
-			}
-			return
-		}
-		if ok && !s.RefuseChallengeOverBudget(w, key, response.ChallengeID, source) {
-			utils.WriteAPIData(w, http.StatusCreated, response)
-		}
-	}))))
-	mux.HandleFunc(types.PathSDKRegister, requireMethod(http.MethodPost, tunnelSource(admit(preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request, _ netip.Addr) {
-		key, response, ok := s.HandleRegister(w, r)
-		if !publishAccess(key) {
-			if ok {
-				utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeInternal, "access decision could not be published")
-			}
-			return
-		}
-		if ok {
-			utils.WriteAPIData(w, http.StatusCreated, response)
-		}
-	}))))
-	mux.HandleFunc(types.PathSDKRenew, tunnelSource(withSource(s.HandleRenew)))
-	mux.HandleFunc(types.PathSDKReverse, s.HandleReverseEndpoint)
-	mux.HandleFunc(types.PathSDKUnregister, s.HandleUnregister)
-	mux.HandleFunc(types.PathSDKConnect, withSource(s.HandleConnect))
-	mux.HandleFunc(types.PathSDKCache, s.HandleStaticCache)
-	mux.HandleFunc(types.PathV1Sign, s.HandleSign)
-	mux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
-		if !s.DiscoveryEnabled() {
-			fallback.ServeHTTP(w, r)
-			return
-		}
-		s.HandleRelayDiscovery(w, r)
-	})
-	mux.HandleFunc(types.PathDiscoveryAnnounce, requireMethod(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
-		if !s.DiscoveryEnabled() {
-			fallback.ServeHTTP(w, r)
-			return
-		}
-		admit(preAuth.AnnounceCost, s.HandleRelayDiscoveryAnnounce).ServeHTTP(w, r)
-	}))
-	mux.Handle("/", fallback)
-
-	control := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func controlCORS(mux *http.ServeMux) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		header := w.Header()
 		header.Set("Access-Control-Allow-Origin", "*")
 		header.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS")
@@ -156,9 +100,11 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			return
 		}
 		mux.ServeHTTP(w, r)
-	})
-	guarded := ControlBodyHandler(control)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}
+}
+
+func guardedRelayRoutes(guarded, control http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		escapedPath := r.URL.EscapedPath()
 		cleanPath := path.Clean(escapedPath)
 		if strings.HasSuffix(escapedPath, "/") && cleanPath != "/" {
@@ -180,7 +126,88 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			return
 		}
 		control.ServeHTTP(w, r)
+	}
+}
+
+func registerDirectRelayRoutes(mux *http.ServeMux, s *portal.Server, fallback http.Handler, ingress *Ingress) {
+	mux.HandleFunc(types.PathHealthz, func(w http.ResponseWriter, _ *http.Request) {
+		utils.WriteAPIData(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
+	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
+		if s.ApplicationOwnsDomainReport() {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		s.HandleDomain(w, r)
+	})
+	mux.HandleFunc(types.PathSDKCertificateChain, s.HandleCertificateChain)
+	mux.HandleFunc(types.PathSDKRenew, requireTunnelSource(ingress, withRequestSource(ingress, s.HandleRenew)))
+	mux.HandleFunc(types.PathSDKReverse, s.HandleReverseEndpoint)
+	mux.HandleFunc(types.PathSDKUnregister, s.HandleUnregister)
+	mux.HandleFunc(types.PathSDKConnect, withRequestSource(ingress, s.HandleConnect))
+	mux.HandleFunc(types.PathSDKCache, s.HandleStaticCache)
+	mux.HandleFunc(types.PathV1Sign, s.HandleSign)
+	mux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
+		if !s.DiscoveryEnabled() {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		s.HandleRelayDiscovery(w, r)
+	})
+}
+
+// Mux composes the relay's protocol route table over portal handlers with
+// ingress client-IP resolution and weighted pre-auth admission; other paths
+// fall through to the fallback handler. Nil ingress, admission, or access
+// disable their layer.
+func handleMuxRelayChallenge(s *portal.Server, access *Store) sourceHandler {
+	return func(w http.ResponseWriter, r *http.Request, source netip.Addr) {
+		key, response, ok := s.HandleRegisterChallenge(w, r, source)
+		if reportAccessPublishFailure(w, ok, publishServiceAccess(s, access, key)) {
+			return
+		}
+		if ok && !s.RefuseChallengeOverBudget(w, key, response.ChallengeID, source) {
+			utils.WriteAPIData(w, http.StatusCreated, response)
+		}
+	}
+}
+
+func handleMuxRelayRegister(s *portal.Server, access *Store) sourceHandler {
+	return func(w http.ResponseWriter, r *http.Request, _ netip.Addr) {
+		key, response, ok := s.HandleRegister(w, r)
+		if reportAccessPublishFailure(w, ok, publishServiceAccess(s, access, key)) {
+			return
+		}
+		if ok {
+			utils.WriteAPIData(w, http.StatusCreated, response)
+		}
+	}
+}
+
+func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *SourceLimiter, access *Store, preAuth PreAuthConfig) http.Handler {
+	if ingress == nil {
+		ingress = &Ingress{}
+	}
+	if fallback == nil {
+		root := http.NewServeMux()
+		root.HandleFunc("/{$}", s.HandleRoot)
+		fallback = ControlBodyHandler(root)
+	}
+	mux := http.NewServeMux()
+	registerDirectRelayRoutes(mux, s, fallback, ingress)
+	mux.HandleFunc(types.PathSDKRegisterChallenge, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, admitPreAuth(admission, ingress, preAuth.ChallengeCost, handleMuxRelayChallenge(s, access)))))
+	mux.HandleFunc(types.PathSDKRegister, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, admitPreAuth(admission, ingress, preAuth.RegisterCost, handleMuxRelayRegister(s, access)))))
+	mux.HandleFunc(types.PathDiscoveryAnnounce, requireHTTPMethod(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
+		if !s.DiscoveryEnabled() {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		admitPreAuth(admission, ingress, preAuth.AnnounceCost, s.HandleRelayDiscoveryAnnounce).ServeHTTP(w, r)
+	}))
+	mux.Handle("/", fallback)
+	control := controlCORS(mux)
+	guarded := ControlBodyHandler(control)
+	return guardedRelayRoutes(guarded, control)
 }
 
 // WriteRetryAfter answers a rejected admission with the limiter's retry

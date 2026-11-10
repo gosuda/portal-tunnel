@@ -1,28 +1,17 @@
 package gateway
 
 import (
-	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"net/http"
-	"net/url"
-	"slices"
-	"sort"
 	"strings"
 
-	facilitatorclient "github.com/gosuda/x402-facilitator/api/client"
 	x402http "github.com/gosuda/x402-facilitator/resource/http"
-	casperscheme "github.com/gosuda/x402-facilitator/scheme/casper"
-	nanoscheme "github.com/gosuda/x402-facilitator/scheme/nano"
 	nanofacilitator "github.com/gosuda/x402-facilitator/scheme/nano/facilitator"
-	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
-	suifacilitator "github.com/gosuda/x402-facilitator/scheme/sui/facilitator"
 	suihttp "github.com/gosuda/x402-facilitator/scheme/sui/http"
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
-	"golang.org/x/crypto/blake2b"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
@@ -107,414 +96,103 @@ type ExposedHTTPRoute struct {
 	Amount string
 }
 
-// NewStripRequestHeaders removes the listed client request headers, in any
-// case or underscore spelling, before Portal processing. Host and other
-// invalid names are rejected.
-func NewStripRequestHeaders(next http.Handler, names []string) (http.Handler, error) {
-	headers := make([]string, 0, len(names))
-	seen := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return nil, errStripRequestHeaderNameRequired
-		}
-		if !isValidHeaderName(name) {
-			return nil, fmt.Errorf("invalid strip request header name %q", name)
-		}
-		canonical := http.CanonicalHeaderKey(name)
-		switch canonical {
-		case "Host":
-			return nil, errHostCannotStrippedGoStoresIt
-		case "X-Forwarded-Proto":
-			return nil, errXForwardedProtoCannotStrippedRunhttp
-		}
-		if _, ok := seen[canonical]; ok {
-			continue
-		}
-		seen[canonical] = struct{}{}
-		headers = append(headers, canonical)
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		utils.DelHeaderSpellings(r.Header, headers...)
-		next.ServeHTTP(w, r)
-	}), nil
-}
-
-func isValidHeaderName(name string) bool {
-	for i := range len(name) {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		default:
-			switch c {
-			case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
-			default:
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // ComposeHTTPRoutes builds the payment-agnostic sdk router and explicitly
 // wraps only the routes carrying an x402 amount with payment gates. The
 // returned handler also serves the shared x402 client and prepare endpoints
 // when at least one route is paid; a fully unpaid gateway passes those paths
 // through to the routes like any other path.
+func buildPaidRoutePolicy(route ExposedHTTPRoute, prefix string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
+	methods, err := NormalizePaymentMethods(route.Methods)
+	if err != nil {
+		return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
+	}
+	paid, err := composePaidRoute(prefix, strings.TrimSpace(route.Amount), contract, nano)
+	if err != nil {
+		return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
+	}
+	paid.prefix = prefix
+	paid.methods = paymentMethodSet(methods)
+	return paid, nil
+}
+
+func normalizeComposeHTTPRoutesPrefix(raw string) string {
+	prefix := strings.TrimSpace(raw)
+	if prefix != "" && strings.HasPrefix(prefix, "/") {
+		prefix = utils.NormalizeURLPath(prefix)
+	}
+	return prefix
+}
+
+func collectComposeHTTPRoutesSDKConfigs(routes []ExposedHTTPRoute) []sdk.HTTPRouteConfig {
+	sdkConfigs := make([]sdk.HTTPRouteConfig, 0, len(routes))
+	for _, route := range routes {
+		sdkConfigs = append(sdkConfigs, sdk.HTTPRouteConfig{
+			Prefix:      normalizeComposeHTTPRoutesPrefix(route.Prefix),
+			Upstream:    route.Upstream,
+			StaticRoot:  route.StaticRoot,
+			StaticIndex: route.StaticIndex,
+		})
+	}
+	return sdkConfigs
+}
+
+func buildComposeHTTPRoutesPaidEntry(route ExposedHTTPRoute, contract X402Config, nano **nanofacilitator.NanoFacilitator) (string, *routePolicy, error) {
+	prefix := normalizeComposeHTTPRoutesPrefix(route.Prefix)
+	amount := strings.TrimSpace(route.Amount)
+	if amount == "" {
+		if len(route.Methods) > 0 {
+			return "", nil, fmt.Errorf("http route %q payment methods require amount", prefix)
+		}
+		return prefix, nil, nil
+	}
+	if contract.PayTo == "" {
+		return "", nil, fmt.Errorf("http route %q amount requires x402 pay-to", prefix)
+	}
+	paid, err := buildPaidRoutePolicy(route, prefix, contract, nano)
+	if err != nil {
+		return "", nil, err
+	}
+	return prefix, paid, nil
+}
+
+func assembleComposeHTTPRoutesPolicies(routes []ExposedHTTPRoute, contract X402Config) (map[string]*routePolicy, bool, error) {
+	policies := make(map[string]*routePolicy, len(routes))
+	servesX402 := false
+	var nano *nanofacilitator.NanoFacilitator
+	for _, route := range routes {
+		prefix, paid, err := buildComposeHTTPRoutesPaidEntry(route, contract, &nano)
+		if err != nil {
+			return nil, false, err
+		}
+		if paid == nil {
+			continue
+		}
+		servesX402 = true
+		policies[prefix] = paid
+	}
+	return policies, servesX402, nil
+}
+
 func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (http.Handler, error) {
 	if len(routes) == 0 {
 		return nil, errLeastOneHTTPRouteRequired
 	}
 	contract.PayTo = strings.TrimSpace(contract.PayTo)
-
-	sdkConfigs := make([]sdk.HTTPRouteConfig, 0, len(routes))
-	policies := make(map[string]*routePolicy, len(routes))
-	servesX402 := false
-	var nano *nanofacilitator.NanoFacilitator
-	for _, route := range routes {
-		prefix := strings.TrimSpace(route.Prefix)
-		if prefix != "" && strings.HasPrefix(prefix, "/") {
-			prefix = utils.NormalizeURLPath(prefix)
-		}
-		sdkConfigs = append(sdkConfigs, sdk.HTTPRouteConfig{
-			Prefix:      prefix,
-			Upstream:    route.Upstream,
-			StaticRoot:  route.StaticRoot,
-			StaticIndex: route.StaticIndex,
-		})
-
-		amount := strings.TrimSpace(route.Amount)
-		if amount == "" && len(route.Methods) > 0 {
-			return nil, fmt.Errorf("http route %q payment methods require amount", prefix)
-		}
-		if amount == "" {
-			continue
-		}
-		if contract.PayTo == "" {
-			return nil, fmt.Errorf("http route %q amount requires x402 pay-to", prefix)
-		}
-		methods, err := NormalizePaymentMethods(route.Methods)
-		if err != nil {
-			return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
-		}
-		paid, err := composePaidRoute(prefix, amount, contract, &nano)
-		if err != nil {
-			return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
-		}
-		paid.prefix = prefix
-		paid.methods = paymentMethodSet(methods)
-		servesX402 = true
-		policies[prefix] = paid
+	sdkConfigs := collectComposeHTTPRoutesSDKConfigs(routes)
+	policies, servesX402, err := assembleComposeHTTPRoutesPolicies(routes, contract)
+	if err != nil {
+		return nil, err
 	}
-
 	routed, err := sdk.NewHTTPRoutes(sdkConfigs)
 	if err != nil {
 		return nil, err
 	}
-
 	return &httpGateway{
 		routes:     routed,
 		policies:   policies,
 		servesX402: servesX402,
 		clientJS:   suihttp.ClientHandler(),
 	}, nil
-}
-
-func composePaidRoute(prefix, amount string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
-	network := strings.ToLower(strings.TrimSpace(contract.Network))
-	switch {
-	case network == "" || network == suiMainnetNetwork || network == suiTestnetNetwork:
-		return composeSuiRoute(prefix, amount, contract)
-	case casperscheme.IsCasperNetwork(network):
-		return composeCasperRoute(prefix, amount, contract)
-	case nanoscheme.IsNanoNetwork(network):
-		return composeNanoRoute(prefix, amount, network, contract, nano)
-	default:
-		return nil, fmt.Errorf("unsupported x402 network %q", network)
-	}
-}
-
-func composeSuiRoute(prefix, amount string, contract X402Config) (*routePolicy, error) {
-	network := strings.ToLower(strings.TrimSpace(contract.Network))
-	if network == "" {
-		if contract.Testnet {
-			network = suiTestnetNetwork
-		} else {
-			network = suiMainnetNetwork
-		}
-	}
-	asset, ok := suischeme.GetGaslessStablecoinType(network, "USDC")
-	if !ok {
-		return nil, fmt.Errorf("USDC is not gasless stablecoin allowlisted on %s", network)
-	}
-	payTo := suischeme.NormalizeAddress(contract.PayTo)
-	if payTo == "" {
-		return nil, errX402UsdcPaymentRequiresSuiPay
-	}
-	atomic, err := suischeme.StablecoinAmountToAtomic(network, "USDC", amount)
-	if err != nil {
-		return nil, err
-	}
-	requirements := facilitatortypes.PaymentRequirements{
-		Scheme:            string(facilitatortypes.Exact),
-		Network:           network,
-		Asset:             asset,
-		Amount:            atomic,
-		PayTo:             payTo,
-		MaxTimeoutSeconds: defaultMaxTimeoutSeconds,
-		Extra: map[string]any{
-			"asset":               "USDC",
-			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
-		},
-	}
-	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, firstEndpoint(contract.Endpoints), "", suifacilitator.SuiFacilitatorOptions{
-		GaslessStablecoinTypes: []string{asset},
-	})
-	if err != nil {
-		return nil, err
-	}
-	gate, err := x402http.New(x402http.Config{
-		Requirements: requirements,
-		Facilitator:  facilitator,
-		Resource: &facilitatortypes.ResourceInfo{
-			URL:      prefix,
-			MimeType: "text/html",
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	preparer, err := suihttp.NewPreparer(suihttp.Config{
-		Requirements:     requirements,
-		ResourcePath:     prefix,
-		ResourceMimeType: "text/html",
-		Endpoints:        contract.Endpoints,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate, preparer: preparer}, nil
-}
-
-func composeCasperRoute(prefix, amount string, contract X402Config) (*routePolicy, error) {
-	network := strings.ToLower(strings.TrimSpace(contract.Network))
-	if network == "" {
-		if contract.Testnet {
-			network = casperscheme.NetworkTestnet
-		} else {
-			network = casperscheme.NetworkMainnet
-		}
-	}
-	if casperscheme.GetNetworkInfo(network) == nil {
-		return nil, fmt.Errorf("unsupported Casper network %q", network)
-	}
-	asset := strings.ToLower(strings.TrimSpace(contract.Asset))
-	if asset == "" {
-		return nil, errX402WcsprPaymentRequiresWcsprCep
-	}
-	payTo := casperscheme.NormalizeAddress(contract.PayTo)
-	if payTo == "" {
-		return nil, errX402WcsprPaymentRequiresCasperPay
-	}
-	motes, err := casperscheme.CSPRToMotes(amount)
-	if err != nil {
-		return nil, err
-	}
-	requirements := facilitatortypes.PaymentRequirements{
-		Scheme:            string(facilitatortypes.Exact),
-		Network:           network,
-		Asset:             asset,
-		Amount:            motes.String(),
-		PayTo:             payTo,
-		MaxTimeoutSeconds: defaultMaxTimeoutSeconds,
-		Extra: map[string]any{
-			"asset":               casperscheme.WCSPRSymbol,
-			"assetTransferMethod": "casper-cep18-transfer",
-			"decimals":            casperscheme.MoteDecimals,
-		},
-	}
-	facilitator, err := newCasperFacilitatorClient(contract)
-	if err != nil {
-		return nil, err
-	}
-	gate, err := x402http.New(x402http.Config{
-		Requirements: requirements,
-		Facilitator:  facilitator,
-		Resource:     &facilitatortypes.ResourceInfo{URL: prefix, MimeType: "text/html"},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate}, nil
-}
-
-func composeNanoRoute(prefix, amount, network string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
-	payTo := normalizeNanoAddress(contract.PayTo)
-	if payTo == "" {
-		return nil, errX402XnoPaymentRequiresChecksummedNano
-	}
-	raw, err := xnoToRaw(amount)
-	if err != nil {
-		return nil, err
-	}
-	if *nano == nil {
-		endpoints := make([]string, 0, len(contract.Endpoints))
-		for _, endpoint := range contract.Endpoints {
-			if endpoint = strings.TrimSpace(endpoint); endpoint != "" && !slices.Contains(endpoints, endpoint) {
-				endpoints = append(endpoints, endpoint)
-			}
-		}
-		if len(endpoints) > 0 && len(endpoints) < nanoscheme.MinIndependentEndpoints {
-			return nil, fmt.Errorf("x402 XNO payment requires at least %d independent Nano RPC endpoints", nanoscheme.MinIndependentEndpoints)
-		}
-		facilitator, err := nanofacilitator.NewNanoFacilitatorWithOptions(network, "", "", nanofacilitator.NanoFacilitatorOptions{
-			Endpoints: endpoints,
-		})
-		if err != nil {
-			return nil, err
-		}
-		*nano = facilitator
-	}
-	requirements := facilitatortypes.PaymentRequirements{
-		Scheme:            string(facilitatortypes.Exact),
-		Network:           network,
-		Asset:             nanoscheme.AssetXNO,
-		Amount:            raw,
-		PayTo:             payTo,
-		MaxTimeoutSeconds: defaultMaxTimeoutSeconds,
-		Extra: map[string]any{
-			"asset":               nanoscheme.AssetXNO,
-			"assetTransferMethod": "nano-native-send",
-			"decimals":            nanoscheme.XNORawDecimals,
-		},
-	}
-	gate, err := x402http.New(x402http.Config{
-		Requirements: requirements,
-		Facilitator:  *nano,
-		Resource:     &facilitatortypes.ResourceInfo{URL: prefix, MimeType: "text/html"},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate}, nil
-}
-
-const nanoAddressAlphabet = "13456789abcdefghijkmnopqrstuwxyz"
-
-func normalizeNanoAddress(address string) string {
-	address = strings.ToLower(strings.TrimSpace(address))
-	encoded, ok := strings.CutPrefix(address, "nano_")
-	if !ok {
-		encoded, ok = strings.CutPrefix(address, "xrb_")
-	}
-	if !ok {
-		return ""
-	}
-	if len(encoded) != 60 {
-		return ""
-	}
-	bits := new(big.Int)
-	for i := range len(encoded) {
-		value := strings.IndexByte(nanoAddressAlphabet, encoded[i])
-		if value < 0 {
-			return ""
-		}
-		bits.Lsh(bits, 5).Or(bits, big.NewInt(int64(value)))
-	}
-	decoded := bits.FillBytes(make([]byte, 38))
-	if decoded[0] != 0 {
-		return ""
-	}
-	hash, err := blake2b.New(5, nil)
-	if err != nil {
-		return ""
-	}
-	_, _ = hash.Write(decoded[1:33])
-	checksum := hash.Sum(nil)
-	slices.Reverse(checksum)
-	if string(checksum) != string(decoded[33:]) {
-		return ""
-	}
-	return "nano_" + encoded
-}
-
-func xnoToRaw(amount string) (string, error) {
-	amount = strings.TrimSpace(amount)
-	whole, frac, _ := strings.Cut(amount, ".")
-	whole = cmp.Or(whole, "0")
-	fracValid := frac == "" || isDecimalDigits(frac)
-	if !isDecimalDigits(whole) || !fracValid || strings.HasSuffix(amount, ".") {
-		return "", fmt.Errorf("invalid XNO amount %q", amount)
-	}
-	if len(frac) > nanoscheme.XNORawDecimals {
-		return "", fmt.Errorf("XNO amount %q has more than %d decimals", amount, nanoscheme.XNORawDecimals)
-	}
-	raw, ok := new(big.Int).SetString(whole+frac+strings.Repeat("0", nanoscheme.XNORawDecimals-len(frac)), 10)
-	if !ok || raw.Sign() <= 0 {
-		return "", fmt.Errorf("invalid XNO amount %q", amount)
-	}
-	return raw.String(), nil
-}
-
-func isDecimalDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for i := range len(value) {
-		if value[i] < '0' || value[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func newCasperFacilitatorClient(contract X402Config) (*facilitatorclient.Client, error) {
-	endpoint := cmp.Or(firstEndpoint(contract.Endpoints), casperscheme.DefaultFacilitatorURL)
-	token := strings.TrimSpace(contract.FacilitatorToken)
-	if token == "" && strings.EqualFold(strings.TrimRight(endpoint, "/"), casperscheme.DefaultFacilitatorURL) {
-		return nil, errCsprCloudX402FacilitatorRequiresAuthorization
-	}
-	if token != "" {
-		u, err := url.Parse(endpoint)
-		if err != nil {
-			return nil, fmt.Errorf("parse x402 facilitator endpoint %q: %w", endpoint, err)
-		}
-		if u.Scheme == "http" && !utils.IsLoopbackHost(u.Hostname()) {
-			return nil, fmt.Errorf("x402 facilitator endpoint %q sends the authorization token over plaintext http; use https or a loopback endpoint", endpoint)
-		}
-	}
-	client, err := facilitatorclient.NewClient(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("create casper x402 facilitator: %w", err)
-	}
-	if token != "" {
-		client.CreateAuthHeader = func() (map[string]map[string]string, error) {
-			return map[string]map[string]string{
-				"verify": {"Authorization": token},
-				"settle": {"Authorization": token},
-			}, nil
-		}
-	}
-	return client, nil
-}
-
-func firstEndpoint(endpoints []string) string {
-	for _, endpoint := range endpoints {
-		if endpoint = strings.TrimSpace(endpoint); endpoint != "" {
-			return endpoint
-		}
-	}
-	return ""
-}
-
-func canonicalRequirements(requirements facilitatortypes.PaymentRequirements) facilitatortypes.PaymentRequirements {
-	extra := make(map[string]any, len(requirements.Extra)+1)
-	for key, value := range requirements.Extra {
-		extra[key] = value
-	}
-	extra["paymentFlow"] = x402http.PaymentFlowUpfront
-	requirements.Extra = extra
-	return requirements
 }
 
 type routePolicy struct {
@@ -639,34 +317,4 @@ func (g *httpGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request
 	w.Header().Set(x402http.HeaderXPaymentRequired, encoded)
 	w.WriteHeader(http.StatusPaymentRequired)
 	_, _ = w.Write(raw)
-}
-
-// NormalizePaymentMethods trims, uppercases, de-duplicates, and orders payment
-// methods. Blank entries are rejected: an empty list pays every method.
-func NormalizePaymentMethods(methods []string) ([]string, error) {
-	set := make(map[string]struct{}, len(methods))
-	for _, raw := range methods {
-		method := strings.ToUpper(strings.TrimSpace(raw))
-		if method == "" {
-			return nil, errX402PaymentMethodIsRequired
-		}
-		set[method] = struct{}{}
-	}
-	if len(set) == 0 {
-		return nil, nil
-	}
-	out := make([]string, 0, len(set))
-	for method := range set {
-		out = append(out, method)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-func paymentMethodSet(methods []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(methods))
-	for _, method := range methods {
-		set[method] = struct{}{}
-	}
-	return set
 }

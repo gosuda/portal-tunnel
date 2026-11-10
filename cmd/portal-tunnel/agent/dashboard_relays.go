@@ -62,13 +62,31 @@ func (m agentDashboardModel) openRelayTunnelURL(tunnelID, relayURL string) (tea.
 
 func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboardView {
 	th := &m.theme
+	pane, tunnel, tableRows, selected, ok := m.relaySectionHead(th, width, rows)
+	if !ok {
+		return pane
+	}
+	start, end := agentDashboardRowWindow(selected, len(tunnel.Relays), tableRows)
+	for i := start; i < end; i++ {
+		relay := tunnel.Relays[i]
+		marker := th.glyph.unselected
+		if i == selected {
+			marker = th.glyph.selected
+		}
+		line := marker + " " + agentDashboardRelayRow(width-agentDashboardRelayLead, relayDashboardMode(relay), relayDashboardVersion(relay), relayDashboardURL(relay))
+		style := agentDashboardRelayStyle(th, i == selected, relay)
+		pane.addClickRow(line, width, style, agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
+	}
+	return pane
+}
+
+func (m agentDashboardModel) relaySectionHead(th *agentDashboardTheme, width, rows int) (agentDashboardView, AgentTunnelStatus, int, int, bool) {
 	var pane agentDashboardView
 	tunnel, ok := m.selectedTunnelStatus()
 	if !ok {
 		pane.addStyled(width, th.muted, "select a tunnel")
-		return pane
+		return pane, AgentTunnelStatus{}, 0, 0, false
 	}
-
 	relay, hasRelay := m.selectedRelayStatus()
 	connectDisabled := !hasRelay || tunnel.State != "running" || relay.State == sdk.RelayReady || relay.State == sdk.RelayConnecting
 	disconnectDisabled := !hasRelay || tunnel.State != "running"
@@ -79,32 +97,15 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 	rowWidth := width - agentDashboardRelayLead
 	header := agentDashboardRelayRow(rowWidth, "STATUS", "VERSION", "TUNNEL URL")
 	pane.addLine(th.strong.Render(strings.Repeat(" ", agentDashboardRelayLead) + header))
-
 	if len(tunnel.Relays) == 0 {
 		pane.addStyled(width, th.muted, "no relays")
-		return pane
+		return pane, tunnel, 0, 0, false
 	}
 	tableRows := len(tunnel.Relays)
 	if rows > 0 {
 		tableRows = max(1, rows-len(pane.lines))
 	}
-	selected := m.selectedRelayIndex(tunnel)
-	start, end := agentDashboardRowWindow(selected, len(tunnel.Relays), tableRows)
-	for i := start; i < end; i++ {
-		relay := tunnel.Relays[i]
-		marker := th.glyph.unselected
-		if i == selected {
-			marker = th.glyph.selected
-		}
-		line := marker + " " + agentDashboardRelayRow(rowWidth,
-			relayDashboardMode(relay),
-			relayDashboardVersion(relay),
-			relayDashboardURL(relay),
-		)
-		style := agentDashboardRelayStyle(th, i == selected, relay)
-		pane.addClickRow(line, width, style, agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
-	}
-	return pane
+	return pane, tunnel, tableRows, m.selectedRelayIndex(tunnel), true
 }
 
 func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, relay AgentRelayStatus) lipgloss.Style {
@@ -243,11 +244,13 @@ func openDashboardURL(rawURL string) error {
 	if strings.TrimSpace(parsed.Host) == "" {
 		return fmt.Errorf("url host is required")
 	}
-
-	var cmd *exec.Cmd
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	return startDashboardURLProcess(ctx, rawURL)
+}
 
+func startDashboardURLProcess(ctx context.Context, rawURL string) error {
+	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
 		cmd = exec.CommandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", rawURL)

@@ -72,12 +72,7 @@ func runTCPCommand(args []string) error {
 
 	fs := cli.NewFlagSet("demo-app", printTCPUsage)
 	registerConnectivityFlags(fs, &cfg, "https://gosunuts.xyz")
-	fs.StringVar(&cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
-	fs.StringVar(&cfg.name, "name", "demo-app", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
-	fs.StringVar(&cfg.desc, "description", "Portal demo connectivity app", "lease description")
-	fs.StringVar(&cfg.tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
-	fs.StringVar(&cfg.thumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
-	fs.BoolVar(&cfg.hide, "hide", false, "hide this lease from listings")
+	registerRunTCPCommandFlags(fs, &cfg)
 
 	if err := cli.ParseFlagSet(fs, args, printTCPUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -89,11 +84,10 @@ func runTCPCommand(args []string) error {
 		printTCPUsage(os.Stderr)
 		return err
 	}
-	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	cfg, err := normalizeRunTCPCommandName(cfg)
 	if err != nil {
-		return fmt.Errorf("invalid --name value: %w", err)
+		return err
 	}
-	cfg.name = normalizedName
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
@@ -101,16 +95,30 @@ func runTCPCommand(args []string) error {
 	return runTCPDemo(ctx, cfg)
 }
 
+func normalizeRunTCPCommandName(cfg demoConfig) (demoConfig, error) {
+	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	if err != nil {
+		return cfg, fmt.Errorf("invalid --name value: %w", err)
+	}
+	cfg.name = normalizedName
+	return cfg, nil
+}
+
+func registerRunTCPCommandFlags(fs *flag.FlagSet, cfg *demoConfig) {
+	fs.StringVar(&cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
+	fs.StringVar(&cfg.name, "name", "demo-app", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
+	fs.StringVar(&cfg.desc, "description", "Portal demo connectivity app", "lease description")
+	fs.StringVar(&cfg.tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
+	fs.StringVar(&cfg.thumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
+	fs.BoolVar(&cfg.hide, "hide", false, "hide this lease from listings")
+}
+
 func runUDPCommand(args []string) error {
 	cfg := demoConfig{}
 	fs := cli.NewFlagSet("demo-app-udp", printUDPUsage)
 
 	registerConnectivityFlags(fs, &cfg, "https://localhost")
-	fs.StringVar(&cfg.name, "name", "demo-udp", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
-	fs.StringVar(&cfg.desc, "description", "Portal demo UDP echo service", "lease description")
-	fs.StringVar(&cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
-	fs.StringVar(&cfg.thumbnail, "thumbnail", "", "lease thumbnail")
-	fs.BoolVar(&cfg.hide, "hide", true, "hide this lease from listings")
+	registerRunUDPCommandFlags(fs, &cfg)
 
 	if err := cli.ParseFlagSet(fs, args, printUDPUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -122,16 +130,32 @@ func runUDPCommand(args []string) error {
 		printUDPUsage(os.Stderr)
 		return err
 	}
-	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	cfg, err := normalizeRunUDPCommandName(cfg)
 	if err != nil {
-		return fmt.Errorf("invalid --name value: %w", err)
+		return err
 	}
-	cfg.name = normalizedName
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	return runUDPDemo(ctx, cfg)
+}
+
+func normalizeRunUDPCommandName(cfg demoConfig) (demoConfig, error) {
+	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	if err != nil {
+		return cfg, fmt.Errorf("invalid --name value: %w", err)
+	}
+	cfg.name = normalizedName
+	return cfg, nil
+}
+
+func registerRunUDPCommandFlags(fs *flag.FlagSet, cfg *demoConfig) {
+	fs.StringVar(&cfg.name, "name", "demo-udp", "public hostname prefix (normalized single DNS label, maximum 63 ASCII characters)")
+	fs.StringVar(&cfg.desc, "description", "Portal demo UDP echo service", "lease description")
+	fs.StringVar(&cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
+	fs.StringVar(&cfg.thumbnail, "thumbnail", "", "lease thumbnail")
+	fs.BoolVar(&cfg.hide, "hide", true, "hide this lease from listings")
 }
 
 func runTCPDemo(ctx context.Context, cfg demoConfig) error {
@@ -173,22 +197,9 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 }
 
 func runUDPDemo(ctx context.Context, cfg demoConfig) error {
-	listenerIdentity, err := resolveDemoIdentity(cfg)
+	exposure, err := exposeRunUDPDemo(ctx, cfg)
 	if err != nil {
 		return err
-	}
-	exposure, err := exposeDemo(ctx, cfg, listenerIdentity,
-		sdk.WithUDP(),
-		sdk.WithMetadata(types.LeaseMetadata{
-			Description: cfg.desc,
-			Tags:        utils.SplitCSV(cfg.tags),
-			Owner:       cfg.owner,
-			Thumbnail:   cfg.thumbnail,
-			Hide:        cfg.hide,
-		}),
-	)
-	if err != nil {
-		return fmt.Errorf("exposure listen error: %w", err)
 	}
 	defer exposure.Close()
 
@@ -214,6 +225,27 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	}
 	log.Info().Msg("demo udp shutdown complete")
 	return nil
+}
+
+func exposeRunUDPDemo(ctx context.Context, cfg demoConfig) (*sdk.Exposure, error) {
+	listenerIdentity, err := resolveDemoIdentity(cfg)
+	if err != nil {
+		return nil, err
+	}
+	exposure, err := exposeDemo(ctx, cfg, listenerIdentity,
+		sdk.WithUDP(),
+		sdk.WithMetadata(types.LeaseMetadata{
+			Description: cfg.desc,
+			Tags:        utils.SplitCSV(cfg.tags),
+			Owner:       cfg.owner,
+			Thumbnail:   cfg.thumbnail,
+			Hide:        cfg.hide,
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("exposure listen error: %w", err)
+	}
+	return exposure, nil
 }
 
 func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, opts ...sdk.Option) (*sdk.Exposure, error) {
@@ -242,7 +274,11 @@ func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
 			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 		}
 	}
-	generated, err := identity.Generate(strings.TrimSpace(cfg.name))
+	return generateResolveDemoIdentity(path, strings.TrimSpace(cfg.name))
+}
+
+func generateResolveDemoIdentity(path, name string) (types.Identity, error) {
+	generated, err := identity.Generate(strings.TrimSpace(name))
 	if err != nil {
 		return types.Identity{}, err
 	}

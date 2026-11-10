@@ -22,18 +22,7 @@ type envFileEntry struct {
 	Value string
 }
 
-func prepareAppConfig(cfg *appConfig, issues []cli.EnvIssue) (*policy.Ingress, x402FacilitatorSettings, error) {
-	if err := envIssueError(issues); err != nil {
-		return nil, x402FacilitatorSettings{}, err
-	}
-	relay, err := portal.ValidateServerConfig(cfg.Relay)
-	if err != nil {
-		return nil, x402FacilitatorSettings{}, err
-	}
-	cfg.Relay = relay
-	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
-		return nil, x402FacilitatorSettings{}, err
-	}
+func applyPrepareAppConfigTransport(cfg *appConfig) (*policy.Ingress, x402FacilitatorSettings, error) {
 	mode, err := policy.ParseMode(cfg.ApprovalMode)
 	if err != nil {
 		return nil, x402FacilitatorSettings{}, err
@@ -50,6 +39,63 @@ func prepareAppConfig(cfg *appConfig, issues []cli.EnvIssue) (*policy.Ingress, x
 	return ingress, x402Settings, err
 }
 
+func prepareAppConfig(cfg *appConfig, issues []cli.EnvIssue) (*policy.Ingress, x402FacilitatorSettings, error) {
+	if err := envIssueError(issues); err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	relay, err := portal.ValidateServerConfig(cfg.Relay)
+	if err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	cfg.Relay = relay
+	if err := policy.NormalizePreAuthConfig(&cfg.PreAuth); err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	return applyPrepareAppConfigTransport(cfg)
+}
+
+func parseLoadEnvFileLine(path, line string, lineNo int) (envFileEntry, bool, error) {
+	if line == "" || strings.HasPrefix(line, "#") {
+		return envFileEntry{}, true, nil
+	}
+	line = strings.TrimPrefix(line, "export ")
+	name, value, found := strings.Cut(line, "=")
+	if !found {
+		return envFileEntry{}, false, fmt.Errorf("%s:%d: not an assignment: %q", path, lineNo, line)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return envFileEntry{}, false, fmt.Errorf("%s:%d: assignment has no name: %q", path, lineNo, line)
+	}
+	value = strings.TrimSpace(value)
+	doubleQuoted := len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"'
+	singleQuoted := len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\''
+	if doubleQuoted || singleQuoted {
+		value = value[1 : len(value)-1]
+	}
+	return envFileEntry{Name: name, Value: value}, false, nil
+}
+
+func scanLoadEnvFileEntries(scanner *bufio.Scanner, path string) ([]envFileEntry, error) {
+	var entries []envFileEntry
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		entry, skip, err := parseLoadEnvFileLine(path, strings.TrimSpace(scanner.Text()), lineNo)
+		if err != nil {
+			return nil, err
+		}
+		if skip {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 func loadEnvFile(path string) ([]envFileEntry, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -57,36 +103,7 @@ func loadEnvFile(path string) ([]envFileEntry, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	var entries []envFileEntry
-	scanner := bufio.NewScanner(file)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimPrefix(line, "export ")
-		name, value, found := strings.Cut(line, "=")
-		if !found {
-			return nil, fmt.Errorf("%s:%d: not an assignment: %q", path, lineNo, line)
-		}
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return nil, fmt.Errorf("%s:%d: assignment has no name: %q", path, lineNo, line)
-		}
-		value = strings.TrimSpace(value)
-		doubleQuoted := len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"'
-		singleQuoted := len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\''
-		if doubleQuoted || singleQuoted {
-			value = value[1 : len(value)-1]
-		}
-		entries = append(entries, envFileEntry{Name: name, Value: value})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return entries, nil
+	return scanLoadEnvFileEntries(bufio.NewScanner(file), path)
 }
 
 func knownEnvNames(vars []cli.EnvVar) map[string]cli.EnvVar {
@@ -142,14 +159,7 @@ func displayValue(name, value string) string {
 	return value
 }
 
-func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, source string, env *cli.Env) {
-	fmt.Fprintf(w, "Portal relay configuration (%s)\n", source)
-	if len(entries) > 0 {
-		fmt.Fprint(w, "Keys absent from this file take relay defaults. To inspect values supplied\n"+
-			"by a launcher, run this command in the relay's actual environment.\n")
-	}
-	fmt.Fprintln(w)
-
+func writeConfigReportKeys(w io.Writer, entries []envFileEntry, source string, env *cli.Env) {
 	supplied := make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		supplied[entry.Name] = true
@@ -162,25 +172,29 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 		fmt.Fprintf(w, "         source: %s\n", valueSource(entry, supplied, source))
 		writeWrapped(w, entry.Usage)
 	}
-	relay := knownEnvNames(env.Vars)
+}
+
+func writeConfigReportUnknownKeys(w io.Writer, entries []envFileEntry, relay map[string]cli.EnvVar) {
 	var unknown []envFileEntry
 	for _, entry := range entries {
 		if _, isRelay := relay[entry.Name]; !isRelay {
 			unknown = append(unknown, entry)
 		}
 	}
-	if len(unknown) > 0 {
-		fmt.Fprintf(w, "\nUNKNOWN  %d key(s) are not read by the relay and are silently ignored:\n", len(unknown))
-		for _, entry := range unknown {
-			if suggestion := nearestEnvName(entry.Name, relay); suggestion != "" {
-				fmt.Fprintf(w, "  %-30s did you mean %s?\n", entry.Name, suggestion)
-				continue
-			}
-			fmt.Fprintf(w, "  %-30s no equivalent key exists\n", entry.Name)
-		}
+	if len(unknown) == 0 {
+		return
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintf(w, "\nUNKNOWN  %d key(s) are not read by the relay and are silently ignored:\n", len(unknown))
+	for _, entry := range unknown {
+		if suggestion := nearestEnvName(entry.Name, relay); suggestion != "" {
+			fmt.Fprintf(w, "  %-30s did you mean %s?\n", entry.Name, suggestion)
+			continue
+		}
+		fmt.Fprintf(w, "  %-30s no equivalent key exists\n", entry.Name)
+	}
+}
 
+func writeConfigReportValidation(w io.Writer, cfg appConfig, env *cli.Env) {
 	fmt.Fprintln(w, "Validation")
 	if _, _, err := prepareAppConfig(&cfg, env.Issues); err != nil {
 		fmt.Fprintf(w, "  INVALID %s\n", err)
@@ -194,6 +208,21 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 			fmt.Fprintf(w, "  %s=%s  %s\n", issue.Name, displayValue(issue.Name, issue.Value), issue.Problem)
 		}
 	}
+}
+
+func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, source string, env *cli.Env) {
+	fmt.Fprintf(w, "Portal relay configuration (%s)\n", source)
+	if len(entries) > 0 {
+		fmt.Fprint(w, "Keys absent from this file take relay defaults. To inspect values supplied\n"+
+			"by a launcher, run this command in the relay's actual environment.\n")
+	}
+	fmt.Fprintln(w)
+
+	writeConfigReportKeys(w, entries, source, env)
+	writeConfigReportUnknownKeys(w, entries, knownEnvNames(env.Vars))
+	fmt.Fprintln(w)
+
+	writeConfigReportValidation(w, cfg, env)
 }
 
 func writeWrapped(w io.Writer, text string) {
@@ -314,6 +343,48 @@ func writeCommentWrapped(w io.Writer, text string) {
 	}
 }
 
+func resolveRunConfigCommandEnviron(envFilePath string) ([]string, []envFileEntry, string, error) {
+	environ := os.Environ()
+	if strings.TrimSpace(envFilePath) == "" {
+		return environ, nil, "process environment", nil
+	}
+	loaded, err := loadEnvFile(envFilePath)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("read env file: %w", err)
+	}
+	environ = make([]string, 0, len(loaded))
+	for _, entry := range loaded {
+		environ = append(environ, entry.Name+"="+entry.Value)
+	}
+	return environ, loaded, envFilePath, nil
+}
+
+func executeRunConfigCommand(envFilePath, format string) error {
+	environ, entries, source, err := resolveRunConfigCommandEnviron(envFilePath)
+	if err != nil {
+		return err
+	}
+	cfg, env, err := resolveAppConfig(nil, environ)
+	if err != nil {
+		return err
+	}
+
+	switch strings.TrimSpace(format) {
+	case "", "text":
+		writeConfigReport(os.Stdout, cfg, entries, source, env)
+		return nil
+	case "env":
+		writeEnvReference(os.Stdout, env.Vars)
+		return nil
+	case "names":
+		writeEnvNames(os.Stdout, env.Vars)
+		return nil
+	default:
+		printConfigUsage(os.Stderr)
+		return fmt.Errorf("unknown format %q", format)
+	}
+}
+
 func runConfigCommand(args []string) error {
 	var (
 		envFilePath string
@@ -335,41 +406,7 @@ func runConfigCommand(args []string) error {
 		return err
 	}
 
-	var entries []envFileEntry
-	environ := os.Environ()
-	source := "process environment"
-	if strings.TrimSpace(envFilePath) != "" {
-		loaded, err := loadEnvFile(envFilePath)
-		if err != nil {
-			return fmt.Errorf("read env file: %w", err)
-		}
-		entries = loaded
-		environ = make([]string, 0, len(entries))
-		for _, entry := range entries {
-			environ = append(environ, entry.Name+"="+entry.Value)
-		}
-		source = envFilePath
-	}
-
-	cfg, env, err := resolveAppConfig(nil, environ)
-	if err != nil {
-		return err
-	}
-
-	switch strings.TrimSpace(format) {
-	case "", "text":
-		writeConfigReport(os.Stdout, cfg, entries, source, env)
-		return nil
-	case "env":
-		writeEnvReference(os.Stdout, env.Vars)
-		return nil
-	case "names":
-		writeEnvNames(os.Stdout, env.Vars)
-		return nil
-	default:
-		printConfigUsage(os.Stderr)
-		return fmt.Errorf("unknown format %q", format)
-	}
+	return executeRunConfigCommand(envFilePath, format)
 }
 
 func printConfigUsage(w io.Writer) {
@@ -394,7 +431,7 @@ func envIssueError(issues []cli.EnvIssue) error {
 		messages = append(messages, fmt.Sprintf("%s=%q: %s", issue.Name, displayValue(issue.Name, issue.Value), issue.Problem))
 	}
 	slices.Sort(messages)
-	return errors.New("invalid environment values: " + strings.Join(messages, "; "))
+	return fmt.Errorf("invalid environment values: %s", strings.Join(messages, "; "))
 }
 
 func parsePortNumber(raw string, fallback int) int {

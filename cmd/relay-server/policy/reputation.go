@@ -2,12 +2,6 @@ package policy
 
 import (
 	"cmp"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,52 +76,67 @@ type ReputationStore struct {
 	secret []byte
 }
 
+func ensureLoadStoredReputationComments(path string, state *persistedReputation) (bool, error) {
+	commentsMissing := state.Comments == nil
+	if state.Comments == nil {
+		comments, err := loadLegacyComments(filepath.Dir(path))
+		if err != nil {
+			return false, err
+		}
+		state.Comments = comments
+	}
+	if state.Comments.Threads == nil {
+		state.Comments.Threads = make(map[string][]storedComment)
+	}
+	if state.Comments.Votes == nil {
+		state.Comments.Votes = make(map[string]map[string]string)
+	}
+	if state.Comments.Authors == nil {
+		state.Comments.Authors = make(map[string]string)
+	}
+	return commentsMissing, nil
+}
+
+func loadStoredReputation(path string) (persistedReputation, bool, error) {
+	var state persistedReputation
+	if _, err := utils.ReadJSONFileIfExists(path, &state); err != nil {
+		return persistedReputation{}, false, fmt.Errorf("load reputation state: %w", err)
+	}
+	if state.Identities == nil {
+		state.Identities = make(map[string]map[string]string)
+	}
+	if err := validateIdentities(state.Identities); err != nil {
+		return persistedReputation{}, false, err
+	}
+	commentsMissing, err := ensureLoadStoredReputationComments(path, &state)
+	if err != nil {
+		return persistedReputation{}, false, err
+	}
+	return state, commentsMissing, nil
+}
+
 func NewReputationStore(path string) (*ReputationStore, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, errReputationStoreRequiresStatePath
+	}
+	state, commentsMissing, err := loadStoredReputation(path)
+	if err != nil {
+		return nil, err
 	}
 	store := &ReputationStore{
 		path:               path,
 		limiter:            NewSourceLimiter(10, 20, 120, 40),
 		commentPostLimiter: NewSourceLimiter(3, 3, 30, 10),
 		commentVoteLimiter: NewSourceLimiter(10, 20, 120, 40),
-	}
-	_, err := utils.ReadJSONFileIfExists(path, &store.state)
-	if err != nil {
-		return nil, fmt.Errorf("load reputation state: %w", err)
-	}
-	if store.state.Identities == nil {
-		store.state.Identities = make(map[string]map[string]string)
-	}
-	if err := validateIdentities(store.state.Identities); err != nil {
-		return nil, err
-	}
-	needsWrite := store.state.Comments == nil || len(store.state.VoterSecret) == 0
-	if store.state.Comments == nil {
-		comments, err := loadLegacyComments(filepath.Dir(path))
-		if err != nil {
-			return nil, err
-		}
-		store.state.Comments = comments
-	}
-	if store.state.Comments.Threads == nil {
-		store.state.Comments.Threads = make(map[string][]storedComment)
-	}
-	if store.state.Comments.Votes == nil {
-		store.state.Comments.Votes = make(map[string]map[string]string)
-	}
-	if store.state.Comments.Authors == nil {
-		store.state.Comments.Authors = make(map[string]string)
+		state:              state,
 	}
 	if err := store.validateComments(); err != nil {
 		return nil, err
 	}
-	if len(store.state.VoterSecret) == 0 {
-		store.state.VoterSecret = make([]byte, reputationVoterIDBytes)
-		if _, err := rand.Read(store.state.VoterSecret); err != nil {
-			return nil, fmt.Errorf("generate reputation voter secret: %w", err)
-		}
+	needsWrite := commentsMissing || len(store.state.VoterSecret) == 0
+	if err := store.ensureVoterSecret(); err != nil {
+		return nil, err
 	}
 	if needsWrite {
 		if err := utils.WriteJSONFile(store.path, store.state, 0o600); err != nil {
@@ -188,58 +197,38 @@ func (s *ReputationStore) AllowVote(source netip.Addr, comment bool) time.Durati
 	return retry
 }
 
-func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, source netip.Addr) (VoteSummary, string, error) {
-	vote = strings.TrimSpace(vote)
-	if vote != VoteUp && vote != VoteDown && vote != VoteClear {
-		return VoteSummary{}, "", ErrVoteChoice
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if identity == "" {
-		return VoteSummary{}, "", ErrReputationUnknownHostname
-	}
-	ledger, key := s.state.Identities, identity
-	capacityErr := ErrReputationCapacity
-	if commentID != "" {
-		if !slices.ContainsFunc(s.state.Comments.Threads[identity], func(c storedComment) bool { return c.ID == commentID }) {
-			return VoteSummary{}, "", ErrCommentNotFound
-		}
-		ledger, key = s.state.Comments.Votes, commentID
-		capacityErr = ErrCommentCapacity
-	}
-	hash, minted, err := s.resolveVoterLocked(cookieID, source)
-	if err != nil {
-		return VoteSummary{}, "", err
-	}
-	previous := ledger[key]
-	if previous[hash] == vote || (vote == VoteClear && previous[hash] == "") {
-		return summarizeVotes(previous, hash), minted, nil
-	}
+func voterCapacityExceededLocked(previous map[string]string, hash, vote string) bool {
 	if _, exists := previous[hash]; !exists && vote != VoteClear {
 		if len(previous) >= reputationMaxVoters {
-			return VoteSummary{}, "", capacityErr
-		}
-		if commentID == "" {
-			if previous == nil && len(ledger) >= reputationMaxIdentities {
-				return VoteSummary{}, "", ErrReputationCapacity
-			}
-			if minted != "" {
-				if retry, _ := s.limiter.Allow(source, 10); retry > 0 {
-					return VoteSummary{}, "", ErrReputationCapacity
-				}
-			}
-		} else {
-			total := 0
-			for _, votes := range ledger {
-				total += len(votes)
-			}
-			if total >= commentsMaxVotes {
-				return VoteSummary{}, "", ErrCommentCapacity
-			}
+			return true
 		}
 	}
+	return false
+}
+
+func (s *ReputationStore) admitAppVoteCapacityLocked(source netip.Addr, minted string, ledger map[string]map[string]string, previous map[string]string) error {
+	if previous == nil && len(ledger) >= reputationMaxIdentities {
+		return ErrReputationCapacity
+	}
+	if minted != "" {
+		if retry, _ := s.limiter.Allow(source, 10); retry > 0 {
+			return ErrReputationCapacity
+		}
+	}
+	return nil
+}
+
+func countCommentVotesLocked(ledger map[string]map[string]string) int {
+	total := 0
+	for _, votes := range ledger {
+		total += len(votes)
+	}
+	return total
+}
+
+func applyVoteToLedgerLocked(ledger map[string]map[string]string, key, hash, vote string) (map[string]map[string]string, map[string]string) {
 	nextLedger := maps.Clone(ledger)
-	votes := maps.Clone(previous)
+	votes := maps.Clone(ledger[key])
 	if votes == nil {
 		votes = make(map[string]string)
 	}
@@ -253,6 +242,10 @@ func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, sourc
 	} else {
 		nextLedger[key] = votes
 	}
+	return nextLedger, votes
+}
+
+func (s *ReputationStore) storeVoteLedgerLocked(commentID, key string, nextLedger map[string]map[string]string) error {
 	nextState := s.state
 	if commentID == "" {
 		nextState.Identities = nextLedger
@@ -262,10 +255,103 @@ func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, sourc
 		nextState.Comments = &comments
 	}
 	if err := utils.WriteJSONFile(s.path, nextState, 0o600); err != nil {
-		return VoteSummary{}, "", fmt.Errorf("persist vote: %w", err)
+		return fmt.Errorf("persist vote: %w", err)
 	}
 	s.state = nextState
-	return summarizeVotes(votes, hash), minted, nil
+	return nil
+}
+
+func (s *ReputationStore) selectVoteLedgerLocked(identity, commentID string) (map[string]map[string]string, string, error) {
+	if identity == "" {
+		return nil, "", ErrReputationUnknownHostname
+	}
+	if commentID == "" {
+		return s.state.Identities, identity, nil
+	}
+	if !slices.ContainsFunc(s.state.Comments.Threads[identity], func(c storedComment) bool { return c.ID == commentID }) {
+		return nil, "", ErrCommentNotFound
+	}
+	return s.state.Comments.Votes, commentID, nil
+}
+func isVoteRepeatLocked(previous map[string]string, hash, vote string) bool {
+	return previous[hash] == vote || (vote == VoteClear && previous[hash] == "")
+}
+
+func checkVoteCapacityLocked(previous map[string]string, hash, vote, commentID string) error {
+	if !voterCapacityExceededLocked(previous, hash, vote) {
+		return nil
+	}
+	if commentID != "" {
+		return ErrCommentCapacity
+	}
+	return ErrReputationCapacity
+}
+
+func (s *ReputationStore) persistVoteBallotLocked(commentID, key, hash, vote string) (VoteSummary, error) {
+	ledger := s.state.Identities
+	if commentID != "" {
+		ledger = s.state.Comments.Votes
+	}
+	nextLedger, votes := applyVoteToLedgerLocked(ledger, key, hash, vote)
+	if err := s.storeVoteLedgerLocked(commentID, key, nextLedger); err != nil {
+		return VoteSummary{}, err
+	}
+	return summarizeVotes(votes, hash), nil
+}
+
+func isVoteChoiceValid(vote string) bool {
+	return vote == VoteUp || vote == VoteDown || vote == VoteClear
+}
+
+func (s *ReputationStore) prepareVoteBallotLocked(cookieID, identity, commentID string, source netip.Addr) (map[string]map[string]string, string, map[string]string, string, string, error) {
+	ledger, key, err := s.selectVoteLedgerLocked(identity, commentID)
+	if err != nil {
+		return nil, "", nil, "", "", err
+	}
+	hash, minted, err := s.resolveVoterLocked(cookieID, source)
+	if err != nil {
+		return nil, "", nil, "", "", err
+	}
+	return ledger, key, ledger[key], hash, minted, nil
+}
+
+func (s *ReputationStore) admitVoteNewVoterLocked(source netip.Addr, minted, commentID, key string) error {
+	if commentID != "" {
+		if countCommentVotesLocked(s.state.Comments.Votes) >= commentsMaxVotes {
+			return ErrCommentCapacity
+		}
+		return nil
+	}
+	return s.admitAppVoteCapacityLocked(source, minted, s.state.Identities, s.state.Identities[key])
+}
+
+func (s *ReputationStore) Vote(identity, commentID, vote, cookieID string, source netip.Addr) (VoteSummary, string, error) {
+	vote = strings.TrimSpace(vote)
+	if !isVoteChoiceValid(vote) {
+		return VoteSummary{}, "", ErrVoteChoice
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, key, previous, hash, minted, err := s.prepareVoteBallotLocked(cookieID, identity, commentID, source)
+	if err != nil {
+		return VoteSummary{}, "", err
+	}
+	if isVoteRepeatLocked(previous, hash, vote) {
+		return summarizeVotes(previous, hash), minted, nil
+	}
+	if err := checkVoteCapacityLocked(previous, hash, vote, commentID); err != nil {
+		return VoteSummary{}, "", err
+	}
+	if _, exists := previous[hash]; !exists && vote != VoteClear {
+		if err := s.admitVoteNewVoterLocked(source, minted, commentID, key); err != nil {
+			return VoteSummary{}, "", err
+		}
+	}
+	summary, err := s.persistVoteBallotLocked(commentID, key, hash, vote)
+	if err != nil {
+		return VoteSummary{}, "", err
+	}
+	return summary, minted, nil
 }
 
 func (s *ReputationStore) Summaries(viewerHash string, leases []types.PolicyLease) []ReputationSummary {
@@ -308,42 +394,6 @@ func (s *ReputationStore) ViewerHashFor(cookieID string) string {
 		return ""
 	}
 	return hash
-}
-
-func (s *ReputationStore) resolveVoterLocked(cookieID string, source netip.Addr) (hash, minted string, err error) {
-	if cookieID != "" {
-		if verified, ok := s.verifyVoter(cookieID); ok {
-			return verified, "", nil
-		}
-	}
-	if !source.IsValid() {
-		return "", "", ErrReputationCapacity
-	}
-	sourceMAC := hmac.New(sha256.New, s.secret)
-	_, _ = sourceMAC.Write([]byte("reputation-source-v1\x00"))
-	_, _ = sourceMAC.Write(source.Unmap().AsSlice())
-	id := sourceMAC.Sum(nil)
-	digest := s.voterMAC(id)
-	hash = hex.EncodeToString(digest)
-	return hash, base64.RawURLEncoding.EncodeToString(append(id, digest...)), nil
-}
-
-func (s *ReputationStore) verifyVoter(cookieID string) (string, bool) {
-	value, err := base64.RawURLEncoding.DecodeString(cookieID)
-	if err != nil || len(value) != reputationVoterIDBytes+sha256.Size {
-		return "", false
-	}
-	expected := s.voterMAC(value[:reputationVoterIDBytes])
-	if subtle.ConstantTimeCompare(expected, value[reputationVoterIDBytes:]) != 1 {
-		return "", false
-	}
-	return hex.EncodeToString(expected), true
-}
-
-func (s *ReputationStore) voterMAC(id []byte) []byte {
-	mac := hmac.New(sha256.New, s.secret)
-	mac.Write(id)
-	return mac.Sum(nil)
 }
 
 func summarizeVotes(votes map[string]string, viewerHash string) VoteSummary {

@@ -44,45 +44,52 @@ func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboar
 	th := &m.theme
 	var pane agentDashboardView
 	if m.confirming() {
-		question := agentDashboardStopQuestion
-		if m.confirmDelete != "" {
-			name := m.confirmDelete
-			for _, tunnel := range m.status.Tunnels {
-				if tunnel.ID == m.confirmDelete {
-					name = tunnelDashboardName(tunnel)
-				}
-			}
-			question = fmt.Sprintf("Delete tunnel %q?", name)
-		}
-		pane.addStyled(width, th.pending, question)
+		pane.addStyled(width, th.pending, m.tunnelsConfirmQuestion())
 		pane.addButtons(th, width,
 			agentDashboardButton{label: "Yes", action: agentDashboardActionAnswerYes},
 			agentDashboardButton{label: "No", action: agentDashboardActionAnswerNo},
 		)
 	} else {
-		addLabel := "Add Tunnel"
-		addDisabled := false
-		if m.addingTunnel {
-			addLabel = "Create"
-			addDisabled = strings.TrimSpace(m.addName.Value()) == ""
-		}
-		buttons := []agentDashboardButton{
-			{label: addLabel, action: agentDashboardActionAddTunnel, disabled: addDisabled},
-		}
-		if m.addingTunnel {
-			buttons = append(buttons, agentDashboardButton{label: "Cancel", action: agentDashboardActionCancelAddTunnel})
-		}
-		buttons = append(buttons,
-			agentDashboardButton{label: "Delete", action: agentDashboardActionDeleteTunnel, disabled: len(m.status.Tunnels) == 0},
-		)
-		pane.addButtons(th, width, buttons...)
+		m.addTunnelsButtons(&pane, th, width)
 	}
+	m.addTunnelsTable(&pane, th, width, rows)
+	return pane
+}
 
-	var tail []string
-	if tunnel, ok := m.selectedTunnelStatus(); ok && strings.TrimSpace(tunnel.LastError) != "" {
-		tail = append(tail, th.failed.Render(agentDashboardFit(th.glyph.ledFailed+" Error: "+tunnel.LastError, width)))
+func (m agentDashboardModel) tunnelsConfirmQuestion() string {
+	if m.confirmDelete == "" {
+		return agentDashboardStopQuestion
 	}
+	name := m.confirmDelete
+	for _, tunnel := range m.status.Tunnels {
+		if tunnel.ID == m.confirmDelete {
+			name = tunnelDashboardName(tunnel)
+		}
+	}
+	return fmt.Sprintf("Delete tunnel %q?", name)
+}
 
+func (m agentDashboardModel) addTunnelsButtons(pane *agentDashboardView, th *agentDashboardTheme, width int) {
+	addLabel := "Add Tunnel"
+	addDisabled := false
+	if m.addingTunnel {
+		addLabel = "Create"
+		addDisabled = strings.TrimSpace(m.addName.Value()) == ""
+	}
+	buttons := []agentDashboardButton{
+		{label: addLabel, action: agentDashboardActionAddTunnel, disabled: addDisabled},
+	}
+	if m.addingTunnel {
+		buttons = append(buttons, agentDashboardButton{label: "Cancel", action: agentDashboardActionCancelAddTunnel})
+	}
+	buttons = append(buttons,
+		agentDashboardButton{label: "Delete", action: agentDashboardActionDeleteTunnel, disabled: len(m.status.Tunnels) == 0},
+	)
+	pane.addButtons(th, width, buttons...)
+}
+
+func (m agentDashboardModel) addTunnelsTable(pane *agentDashboardView, th *agentDashboardTheme, width, rows int) {
+	tail := m.tunnelsErrorTail(width)
 	room := rows - len(pane.lines) - 1 - len(tail)
 	var form agentDashboardView
 	if m.addingTunnel && !m.confirming() {
@@ -94,7 +101,6 @@ func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboar
 		pane.addView(form.window(m.addFocus, formRows))
 		room -= formRows
 	}
-
 	pane.addLine(th.strong.Render(strings.Repeat(" ", agentDashboardTunnelLead) + agentDashboardTunnelRow(width-agentDashboardTunnelLead, "STATE", "TARGET", "TUNNEL")))
 	if len(m.status.Tunnels) == 0 {
 		pane.addStyled(width, th.muted, "no tunnels")
@@ -109,7 +115,15 @@ func (m agentDashboardModel) renderTunnelsSection(width, rows int) agentDashboar
 		pane.addTunnelRow(th, width, m.status.Tunnels[i], i == selected)
 	}
 	pane.lines = append(pane.lines, tail...)
-	return pane
+}
+
+func (m agentDashboardModel) tunnelsErrorTail(width int) []string {
+	th := &m.theme
+	var tail []string
+	if tunnel, ok := m.selectedTunnelStatus(); ok && strings.TrimSpace(tunnel.LastError) != "" {
+		tail = append(tail, th.failed.Render(agentDashboardFit(th.glyph.ledFailed+" Error: "+tunnel.LastError, width)))
+	}
+	return tail
 }
 
 func (v *agentDashboardView) addTunnelRow(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus, selected bool) {

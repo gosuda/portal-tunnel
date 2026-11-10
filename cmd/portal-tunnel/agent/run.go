@@ -22,114 +22,184 @@ var (
 )
 
 func Run(ctx context.Context, cfg Config) error {
-	endpointStateDir := strings.TrimSpace(cfg.Agent.StateDir)
-	if endpointStateDir == "" {
-		return errAgentStateDirIsRequired
-	}
-	if err := utils.EnsurePrivateDir(endpointStateDir); err != nil {
-		return fmt.Errorf("secure agent state directory: %w", err)
-	}
-	endpointPath := filepath.Join(endpointStateDir, endpointFilename)
-	if err := utils.EnsurePrivateFile(endpointPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("secure existing agent endpoint: %w", err)
-	}
-	token := utils.RandomID("agent_")
-
 	runtimeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
 	manager := newManager(cfg, "")
-	walletAuth, err := newWalletAuthenticator(walletAuthConfig{
-		AllowedAddresses: cfg.Agent.AllowedWallets,
-		AllowAnyAddress:  len(cfg.Agent.AllowedWallets) == 0,
-		Statement:        "Sign in to Portal agent",
-	})
+	creds, err := prepareAgentCredentials(cfg)
 	if err != nil {
 		return err
 	}
-	controlAddr := strings.TrimSpace(cfg.Agent.ControlAddr)
-	if controlAddr == "" {
-		return errControlAddressIsRequired
-	}
-	host, _, err := net.SplitHostPort(controlAddr)
-	if err != nil {
-		return fmt.Errorf("control address must be host:port: %w", err)
-	}
-	host = strings.Trim(host, "[]")
-	if host == "" {
-		return errControlAddressMustIncludeLoopbackHost
-	}
-	if !strings.EqualFold(host, "localhost") {
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return fmt.Errorf("control address must bind to loopback, got %q", host)
-		}
-	}
-	var listenConfig net.ListenConfig
-	listener, err := listenConfig.Listen(runtimeCtx, "tcp", controlAddr)
+	return manager.serveControl(runtimeCtx, cancel, creds)
+}
+
+type agentControlServer struct {
+	listener     net.Listener
+	server       *http.Server
+	manager      *manager
+	shutdown     context.CancelFunc
+	endpointPath string
+	listenAddr   string
+}
+
+type agentCredentials struct {
+	stateDir string
+	token    string
+	auth     *walletAuthenticator
+}
+
+func (m *manager) serveControl(runtimeCtx context.Context, cancel context.CancelFunc, creds agentCredentials) error {
+	server, err := m.openControlServer(runtimeCtx, cancel, creds)
 	if err != nil {
 		return err
 	}
-	listenAddr := listener.Addr().String()
-	localhostAuthority := fmt.Sprintf("localhost:%d", listener.Addr().(*net.TCPAddr).Port)
+	return server.serve(runtimeCtx)
+}
+
+func (m *manager) openControlServer(runtimeCtx context.Context, cancel context.CancelFunc, creds agentCredentials) (*agentControlServer, error) {
+	endpointPath := filepath.Join(creds.stateDir, endpointFilename)
+	listener, listenAddr, localhostAuthority, err := listenAgentControl(runtimeCtx, m.cfg.Agent.ControlAddr)
+	if err != nil {
+		return nil, err
+	}
 	control := &http.Server{
 		Handler: &controlHandler{
-			manager:            manager,
-			token:              token,
-			auth:               walletAuth,
+			manager:            m,
+			token:              creds.token,
+			auth:               creds.auth,
 			shutdown:           cancel,
 			authority:          listenAddr,
 			localhostAuthority: localhostAuthority,
 		},
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	manager.controlAddr = listenAddr
+	m.controlAddr = listenAddr
+	server := &agentControlServer{
+		listener:     listener,
+		server:       control,
+		manager:      m,
+		shutdown:     cancel,
+		endpointPath: endpointPath,
+		listenAddr:   listenAddr,
+	}
+	if err := server.publishEndpoint(creds.token); err != nil {
+		return nil, err
+	}
+	return server, nil
+}
 
-	if err := utils.WriteJSONFile(endpointPath, endpoint{
-		ControlAddr: listenAddr,
-		Token:       token,
-	}, 0o600); err != nil {
-		_ = listener.Close()
-		_ = control.Shutdown(context.Background())
+func (s *agentControlServer) publishEndpoint(token string) error {
+	if err := writeAgentEndpointFile(s.endpointPath, s.listenAddr, token); err != nil {
+		_ = s.listener.Close()
+		_ = s.server.Shutdown(context.Background())
 		return err
 	}
-	if err := utils.EnsurePrivateFile(endpointPath); err != nil {
-		_ = listener.Close()
-		_ = control.Shutdown(context.Background())
-		_ = os.Remove(endpointPath)
+	if err := utils.EnsurePrivateFile(s.endpointPath); err != nil {
+		_ = s.listener.Close()
+		_ = s.server.Shutdown(context.Background())
+		_ = os.Remove(s.endpointPath)
 		return fmt.Errorf("secure agent endpoint: %w", err)
 	}
+	return nil
+}
+
+func prepareAgentCredentials(cfg Config) (agentCredentials, error) {
+	endpointStateDir, token, err := secureAgentState(cfg)
+	if err != nil {
+		return agentCredentials{}, err
+	}
+	walletAuth, err := newAgentWalletAuth(cfg)
+	if err != nil {
+		return agentCredentials{}, err
+	}
+	return agentCredentials{stateDir: endpointStateDir, token: token, auth: walletAuth}, nil
+}
+
+func secureAgentState(cfg Config) (string, string, error) {
+	endpointStateDir := strings.TrimSpace(cfg.Agent.StateDir)
+	if endpointStateDir == "" {
+		return "", "", errAgentStateDirIsRequired
+	}
+	if err := utils.EnsurePrivateDir(endpointStateDir); err != nil {
+		return "", "", fmt.Errorf("secure agent state directory: %w", err)
+	}
+	endpointPath := filepath.Join(endpointStateDir, endpointFilename)
+	if err := utils.EnsurePrivateFile(endpointPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", "", fmt.Errorf("secure existing agent endpoint: %w", err)
+	}
+	return endpointStateDir, utils.RandomID("agent_"), nil
+}
+
+func newAgentWalletAuth(cfg Config) (*walletAuthenticator, error) {
+	return newWalletAuthenticator(walletAuthConfig{
+		AllowedAddresses: cfg.Agent.AllowedWallets,
+		AllowAnyAddress:  len(cfg.Agent.AllowedWallets) == 0,
+		Statement:        "Sign in to Portal agent",
+	})
+}
+
+func listenAgentControl(runtimeCtx context.Context, controlAddr string) (net.Listener, string, string, error) {
+	controlAddr = strings.TrimSpace(controlAddr)
+	if controlAddr == "" {
+		return nil, "", "", errControlAddressIsRequired
+	}
+	host, _, err := net.SplitHostPort(controlAddr)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("control address must be host:port: %w", err)
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return nil, "", "", errControlAddressMustIncludeLoopbackHost
+	}
+	if !strings.EqualFold(host, "localhost") {
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return nil, "", "", fmt.Errorf("control address must bind to loopback, got %q", host)
+		}
+	}
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(runtimeCtx, "tcp", controlAddr)
+	if err != nil {
+		return nil, "", "", err
+	}
+	listenAddr := listener.Addr().String()
+	localhostAuthority := fmt.Sprintf("localhost:%d", listener.Addr().(*net.TCPAddr).Port)
+	return listener, listenAddr, localhostAuthority, nil
+}
+
+func writeAgentEndpointFile(endpointPath, listenAddr, token string) error {
+	return utils.WriteJSONFile(endpointPath, endpoint{
+		ControlAddr: listenAddr,
+		Token:       token,
+	}, 0o600)
+}
+
+func (s *agentControlServer) serve(runtimeCtx context.Context) error {
 	defer func() {
-		_ = os.Remove(filepath.Join(endpointStateDir, endpointFilename))
+		_ = os.Remove(s.endpointPath)
 	}()
-
-	manager.Start(runtimeCtx)
-
+	s.manager.Start(runtimeCtx)
 	errCh := make(chan error, 1)
 	go func() {
-		err := control.Serve(listener)
+		err := s.server.Serve(s.listener)
 		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 			err = nil
 		}
 		errCh <- err
 	}()
-
 	log.Info().
-		Str("control_addr", listenAddr).
-		Int("tunnel_count", len(cfg.Tunnels)).
+		Str("control_addr", s.listenAddr).
+		Int("tunnel_count", len(s.manager.cfg.Tunnels)).
 		Msg("portal agent started")
-
 	var serveErr error
 	select {
 	case <-runtimeCtx.Done():
 	case serveErr = <-errCh:
-		cancel()
+		s.shutdown()
 	}
-
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
-	stopErr := manager.Stop(shutdownCtx)
-	closeErr := control.Shutdown(shutdownCtx)
+	stopErr := s.manager.Stop(shutdownCtx)
+	closeErr := s.server.Shutdown(shutdownCtx)
 	if serveErr == nil {
 		select {
 		case serveErr = <-errCh:

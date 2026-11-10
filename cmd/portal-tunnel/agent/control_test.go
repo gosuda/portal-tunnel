@@ -41,26 +41,26 @@ func TestControlHandlerRejectsUntrustedHostAndOrigin(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, types.PathAgentAuthStatus, nil)
-			req.Host = tt.host
-			for _, origin := range tt.origins {
-				req.Header.Add("Origin", origin)
-			}
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if rec.Code != tt.want {
-				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tt.want, rec.Body.String())
-			}
+			checkUntrustedHostAndOrigin(t, handler, tt.host, tt.origins, tt.want)
 		})
 	}
 }
 
-func TestControlHandlerRejectsUntrustedHostBeforeAuthorization(t *testing.T) {
-	handler := &controlHandler{
-		token:              "secret",
-		authority:          "127.0.0.1:4018",
-		localhostAuthority: "localhost:4018",
+func checkUntrustedHostAndOrigin(t *testing.T, handler *controlHandler, host string, origins []string, want int) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, types.PathAgentAuthStatus, nil)
+	req.Host = host
+	for _, origin := range origins {
+		req.Header.Add("Origin", origin)
 	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != want {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, want, rec.Body.String())
+	}
+}
+
+func TestControlHandlerRejectsUntrustedHostBeforeAuthorization(t *testing.T) {
 	for _, endpoint := range []struct {
 		path   string
 		method string
@@ -72,15 +72,25 @@ func TestControlHandlerRejectsUntrustedHostBeforeAuthorization(t *testing.T) {
 		{types.PathAgentShutdown, http.MethodPost},
 	} {
 		t.Run(endpoint.path, func(t *testing.T) {
-			req := httptest.NewRequest(endpoint.method, endpoint.path, nil)
-			req.Host = "attack.example:4018"
-			req.Header.Set("Authorization", "Bearer secret")
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want forbidden", rec.Code)
-			}
+			checkUntrustedHostWithAuth(t, endpoint.method, endpoint.path)
 		})
+	}
+}
+
+func checkUntrustedHostWithAuth(t *testing.T, method, path string) {
+	t.Helper()
+	handler := &controlHandler{
+		token:              "secret",
+		authority:          "127.0.0.1:4018",
+		localhostAuthority: "localhost:4018",
+	}
+	req := httptest.NewRequest(method, path, nil)
+	req.Host = "attack.example:4018"
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want forbidden", rec.Code)
 	}
 }
 
@@ -98,12 +108,45 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const domain = "127.0.0.1:4018"
+	session := testWalletSession(t, auth, domain)
+
+	handler := &controlHandler{manager: m, token: "control-token", auth: auth, authority: domain, localhostAuthority: "localhost:4018"}
+	token := fetchTunnelStatusMap(t, handler, domain, func(r *http.Request) { r.Header.Set("Authorization", "Bearer control-token") })
+	signedIn := fetchTunnelStatusMap(t, handler, domain, func(r *http.Request) { r.AddCookie(&http.Cookie{Name: agentCookieName, Value: session}) })
+	checkTunnelAllowlistViews(t, token, signedIn)
+}
+
+func fetchTunnelStatusMap(t *testing.T, handler *controlHandler, domain string, authorize func(*http.Request)) map[string]AgentTunnelStatus {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, types.PathAgentStatus, nil)
+	req.Host = domain
+	authorize(req)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data AgentStatusResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	tunnels := make(map[string]AgentTunnelStatus, len(body.Data.Tunnels))
+	for _, tunnel := range body.Data.Tunnels {
+		tunnels[tunnel.ID] = tunnel
+	}
+	return tunnels
+}
+
+func testWalletSession(t *testing.T, auth *walletAuthenticator, domain string) string {
+	t.Helper()
 	resolved, err := identity.ResolveSecp256k1Identity(strings.Repeat("0", 63) + "3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	wallet := identity.NewLocalAuthority(resolved)
-	const domain = "127.0.0.1:4018"
 	now := time.Now().UTC()
 	challenge, err := auth.issueChallenge(
 		types.WalletAuthChallengeRequest{Address: wallet.Identity().Address},
@@ -124,39 +167,17 @@ func TestWalletSessionDoesNotSeeTunnelAllowlists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return session
+}
 
-	handler := &controlHandler{manager: m, token: "control-token", auth: auth, authority: domain, localhostAuthority: "localhost:4018"}
-	statusAs := func(authorize func(*http.Request)) map[string]AgentTunnelStatus {
-		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, types.PathAgentStatus, nil)
-		req.Host = domain
-		authorize(req)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
-		}
-		var body struct {
-			Data AgentStatusResponse `json:"data"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
-		}
-		tunnels := make(map[string]AgentTunnelStatus, len(body.Data.Tunnels))
-		for _, tunnel := range body.Data.Tunnels {
-			tunnels[tunnel.ID] = tunnel
-		}
-		return tunnels
-	}
-
-	token := statusAs(func(r *http.Request) { r.Header.Set("Authorization", "Bearer control-token") })
+func checkTunnelAllowlistViews(t *testing.T, token, signedIn map[string]AgentTunnelStatus) {
+	t.Helper()
 	if got := token["web"].Allow; !slices.Equal(got, []string{"alice", "bob"}) {
 		t.Fatalf("control token sees allowlist %v, want [alice bob]", got)
 	}
 	if got := token["mail"]; !slices.Equal(got.EmailList, []string{"carol@example.com"}) || got.SMTPUsername != "me@example.com" || got.SMTPPassword != "" || !got.AuthSMTPPasswordSet {
 		t.Fatalf("control token sees %+v, want the list and the account, not the password", got.AuthConfig)
 	}
-	signedIn := statusAs(func(r *http.Request) { r.AddCookie(&http.Cookie{Name: agentCookieName, Value: session}) })
 	if got := signedIn["web"].Allow; len(got) != 0 {
 		t.Fatalf("wallet session sees allowlist %v, want none", got)
 	}
