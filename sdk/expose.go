@@ -241,14 +241,48 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err != nil {
 		return nil, err
 	}
-	build := &exposeBuild{cfg: cfg, identity: identity, relays: relays}
-	return build.assembleExpose(ctx)
-}
-
-type exposeBuild struct {
-	cfg      options
-	identity types.Identity
-	relays   []string
+	if err := validateExposeContext(ctx); err != nil {
+		return nil, err
+	}
+	if err := validateExposeConfig(cfg); err != nil {
+		return nil, err
+	}
+	source, err := newRelayCache(cfg)
+	if err != nil {
+		return nil, err
+	}
+	relayURLs, err := utils.NormalizeRelayURLs(relays...)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(identity.Address) == "" ||
+		strings.TrimSpace(identity.PublicKey) == "" ||
+		strings.TrimSpace(identity.PrivateKey) == "" {
+		return nil, errPortalSDKIdentityMustIncludeAddress
+	}
+	initialRelays, controller, err := resolveExposeMembership(relayURLs, cfg, identity)
+	if err != nil {
+		return nil, err
+	}
+	exposureCtx, cancel := context.WithCancel(ctx)
+	exposure := &Exposure{
+		cancel:         cancel,
+		done:           exposureCtx.Done(),
+		startedAt:      time.Now().UTC(),
+		identity:       identity,
+		options:        cfg,
+		metadata:       cfg.Metadata.Copy(),
+		cache:          source,
+		accepted:       make(chan net.Conn, max(len(initialRelays)*defaultReadyTarget*2, 1)),
+		datagrams:      make(chan types.DatagramFrame, max(len(initialRelays)*32, 1)),
+		relayListeners: make(map[string]*listener, len(initialRelays)),
+		blockedRelays:  make(map[string]error),
+		statuses:       make(map[string]RelayStatus, len(initialRelays)),
+		stateChanged:   make(chan struct{}),
+		updates:        make(chan RelayStatus, 1),
+		discovery:      controller,
+	}
+	return exposure.startExposeRunners(exposureCtx, initialRelays)
 }
 
 func validateExposeContext(ctx context.Context) error {
@@ -270,71 +304,6 @@ func validateExposeConfig(cfg options) error {
 		return errPortalSDKThisRuntimeSupportsHTTPS
 	}
 	return nil
-}
-
-func (b *exposeBuild) assembleExpose(ctx context.Context) (*Exposure, error) {
-	if err := validateExposeContext(ctx); err != nil {
-		return nil, err
-	}
-	if err := validateExposeConfig(b.cfg); err != nil {
-		return nil, err
-	}
-	return b.loadExposeSource(ctx)
-}
-
-func (b *exposeBuild) loadExposeSource(ctx context.Context) (*Exposure, error) {
-	var source *cache.Source
-	s, err := newRelayCache(b.cfg)
-	if err != nil {
-		return nil, err
-	}
-	source = s
-	var relayURLs []string
-	r, err := utils.NormalizeRelayURLs(b.relays...)
-	if err != nil {
-		return nil, err
-	}
-	relayURLs = r
-	return b.finishExposeAssembly(ctx, source, relayURLs)
-}
-
-func (b *exposeBuild) finishExposeAssembly(ctx context.Context, source *cache.Source, relayURLs []string) (*Exposure, error) {
-	if strings.TrimSpace(b.identity.Address) == "" ||
-		strings.TrimSpace(b.identity.PublicKey) == "" ||
-		strings.TrimSpace(b.identity.PrivateKey) == "" {
-		return nil, errPortalSDKIdentityMustIncludeAddress
-	}
-	var initialRelays []string
-	var controller *discovery.Controller
-	r, c, err := resolveExposeMembership(relayURLs, b.cfg, b.identity)
-	if err != nil {
-		return nil, err
-	}
-	initialRelays = r
-	controller = c
-	return b.newExposeValue(ctx, source, initialRelays, controller)
-}
-
-func (b *exposeBuild) newExposeValue(ctx context.Context, source *cache.Source, initialRelays []string, controller *discovery.Controller) (*Exposure, error) {
-	exposureCtx, cancel := context.WithCancel(ctx)
-	exposure := &Exposure{
-		cancel:         cancel,
-		done:           exposureCtx.Done(),
-		startedAt:      time.Now().UTC(),
-		identity:       b.identity,
-		options:        b.cfg,
-		metadata:       b.cfg.Metadata.Copy(),
-		cache:          source,
-		accepted:       make(chan net.Conn, max(len(initialRelays)*defaultReadyTarget*2, 1)),
-		datagrams:      make(chan types.DatagramFrame, max(len(initialRelays)*32, 1)),
-		relayListeners: make(map[string]*listener, len(initialRelays)),
-		blockedRelays:  make(map[string]error),
-		statuses:       make(map[string]RelayStatus, len(initialRelays)),
-		stateChanged:   make(chan struct{}),
-		updates:        make(chan RelayStatus, 1),
-		discovery:      controller,
-	}
-	return exposure.startExposeRunners(exposureCtx, initialRelays)
 }
 
 func (e *Exposure) startExposeRunners(exposureCtx context.Context, initialRelays []string) (*Exposure, error) {
