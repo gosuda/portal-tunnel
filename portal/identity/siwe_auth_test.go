@@ -36,9 +36,6 @@ func issueTestChallenge(t *testing.T, auth *SIWEAuthenticator, wallet LocalAutho
 	return challenge
 }
 
-// TestIssueIsStatelessUnderFlood is the issue #530 regression: issuance
-// must never fail for volume alone, even far past the old 4096 pending
-// pool, and a challenge issued after the flood still verifies.
 func TestIssueIsStatelessUnderFlood(t *testing.T) {
 	auth := newTestAuthenticator(t)
 	wallet := testWallet(t)
@@ -99,19 +96,11 @@ func TestVerifyRejectsExpiredChallenge(t *testing.T) {
 	now := time.Now().UTC()
 	challenge := issueTestChallenge(t, auth, wallet, now)
 
-	// Expiry is checked before the signature, so an unsigned placeholder
-	// keeps the assertion on the expiry path.
 	if _, err := auth.Verify(challenge.ID, challenge.Message, "", testDomain, time.Time{}, now.Add(siweChallengeTTL+time.Minute)); !errors.Is(err, ErrSIWEChallengeExpired) {
 		t.Fatalf("err = %v; want ErrSIWEChallengeExpired", err)
 	}
 }
 
-// TestVerifyAllowsReplayWithinTTL pins the accepted session semantic: a
-// verified challenge is a short-lived proof, so re-submitting the same
-// token and signature re-authenticates the same wallet. Replay tracking
-// is deliberately omitted: it cannot create a new identity, and its
-// global consumed set would reintroduce the capacity failure mode issue
-// #530 removes.
 func TestVerifyRejectsChallengeFromBeforeNotBefore(t *testing.T) {
 	auth := newTestAuthenticator(t)
 	wallet := testWallet(t)
@@ -159,8 +148,6 @@ func TestVerifyRejectsTamperedMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A valid signature over the issued message plus any edit to the
-	// submitted message must fail: the wallet signs exactly what is issued.
 	tampered := strings.Replace(challenge.Message, "Sign in to Portal", "Sign in to Portsl", 1)
 	if tampered == challenge.Message {
 		t.Fatal("message tamper did not change anything")
@@ -184,11 +171,6 @@ func TestVerifyRejectsWrongDomain(t *testing.T) {
 	}
 }
 
-// TestNewKeyIsInstanceLocal pins the instance rule: each authenticator
-// signs with its own freshly generated key, so a recreated authenticator
-// rejects challenges issued by the previous instance. Challenges are
-// instance-bound, not process-bound: a managed tunnel can recreate its
-// authenticator within the same process.
 func TestNewKeyIsInstanceLocal(t *testing.T) {
 	wallet := testWallet(t)
 	now := time.Now().UTC()

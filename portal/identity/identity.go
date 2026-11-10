@@ -22,9 +22,6 @@ var (
 	errIdentityPublicKeyDoesNotMatch          = errors.New("identity public key does not match private key")
 )
 
-// normalizeOptionalName normalizes an optional service name: returns an empty
-// string when the trimmed name is empty, or validates and returns a service
-// name label.
 func normalizeOptionalName(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -53,15 +50,6 @@ func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
 	return normalized, nil
 }
 
-// resolve returns the canonical Portal identity for id: it trims the fields,
-// derives the private key from a mnemonic when provided, requires key
-// material, derives the public key and address from the private key exactly
-// once, verifies explicitly supplied address and public key against the
-// derived values exactly once, normalizes the name as a DNS label (allowing
-// empty for the unnamed service), and fills the token secret when missing.
-// It never generates key material; use Generate for that. Valid identities
-// leave the package only through Parse and Generate; callers trust them from
-// there on.
 func resolve(id types.Identity) (types.Identity, error) {
 	resolved, err := resolveKeyMaterial(id)
 	if err != nil {
@@ -120,12 +108,6 @@ func Marshal(id types.Identity) ([]byte, error) {
 	return json.MarshalIndent(storedIdentityFromIdentity(id), "", "  ")
 }
 
-// resolveKeyMaterial trims the identity fields, derives the private key from
-// a mnemonic when provided, requires key material, derives the public key and
-// address from the private key exactly once, and verifies supplied address
-// and public key values against the derived values exactly once. Lease
-// identities (Resolve), relay identities, and local authorities share this
-// one derivation path; each applies its own naming and policy on top.
 func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
 	resolved := id
 
@@ -181,9 +163,6 @@ func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
 	return resolved, nil
 }
 
-// storedIdentity is the canonical identity file format: the same fields as
-// types.Identity in the same order, so values convert directly. The JSON tags
-// control which fields are exposed in the at-rest format.
 type storedIdentity struct {
 	Name           string `json:"name,omitempty"`
 	Address        string `json:"address,omitempty"`
@@ -194,8 +173,6 @@ type storedIdentity struct {
 	TokenSecret    string `json:"token_secret,omitempty"`
 }
 
-// storedIdentityFromIdentity serializes a resolved identity, hiding the
-// derived private key when a mnemonic can regenerate it.
 func storedIdentityFromIdentity(id types.Identity) storedIdentity {
 	stored := storedIdentity(id)
 	if id.Mnemonic != "" {

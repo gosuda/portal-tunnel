@@ -184,8 +184,6 @@ func TestNewRegisterChallengeNormalizesWireIdentity(t *testing.T) {
 	}
 }
 
-// Names up to the DNS label limit are valid service names, but a name shaped
-// like a canonical label would let a friendly alias take a canonical origin.
 func TestGenerateServiceNameRules(t *testing.T) {
 	t.Parallel()
 
@@ -202,5 +200,24 @@ func TestGenerateServiceNameRules(t *testing.T) {
 		if _, err := Generate(name); err == nil {
 			t.Fatalf("Generate(%q) error = nil", name)
 		}
+	}
+}
+
+func TestParseDerivationPathRejectsEmptyAbsolutePath(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want error
+	}{
+		{"", errAmbiguousPathUseMPrefixAbsolute},
+		{"m", errEmptyDerivationPath},
+		{"/44'/60'/0'/0/0", errAmbiguousPathUseMPrefixAbsolute},
+	} {
+		if _, err := parseDerivationPath(tc.raw); !errors.Is(err, tc.want) {
+			t.Fatalf("parseDerivationPath(%q) error = %v, want %v", tc.raw, err, tc.want)
+		}
+	}
+	path, err := parseDerivationPath("m/44'/60'/0'/0/0")
+	if err != nil || path.String() != "m/44'/60'/0'/0/0" {
+		t.Fatalf("parseDerivationPath canonical = %v, %v", path, err)
 	}
 }
