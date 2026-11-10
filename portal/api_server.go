@@ -286,6 +286,8 @@ func (s *Server) HandleDomain(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, s.DomainReport())
 }
 
+// HandleCertificateChain serves the public chain already presented by the relay's
+// TLS endpoint to runtimes whose TLS stack does not expose peer certificates.
 func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
