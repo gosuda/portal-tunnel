@@ -46,24 +46,12 @@ type dnsProvider interface {
 // dnsChallengeProvider stops lego's context-free propagation loop at the next
 // poll after cancellation. Keep issuance synchronous: releasing issuanceMu while
 // lego is still using the DNS provider would allow overlapping orders/cleanup.
-// An in-flight DNS lookup or provider Present/CleanUp still uses the underlying
-// implementation's timeouts; this is not a hard deadline for the entire order.
-// CleanUp delegates even after cancellation, retaining the provider's existing
-// lifetime and failure modes. See the TLS configuration docs for provider limits.
+// Provider publication uses the order context and cleanup has a separate bounded
+// lifetime. Lego's in-flight DNS lookups still use their own timeouts, so this is
+// not a hard deadline for the entire order. See the TLS configuration docs.
 type dnsChallengeProvider struct {
 	challenge.Provider
 	ctx context.Context
-}
-
-func (p dnsChallengeProvider) Present(domain, token, keyAuth string) error {
-	if err := p.ctx.Err(); err != nil {
-		return err
-	}
-	err := p.Provider.Present(domain, token, keyAuth)
-	if ctxErr := p.ctx.Err(); ctxErr != nil {
-		return ctxErr
-	}
-	return err
 }
 
 func (p dnsChallengeProvider) Timeout() (time.Duration, time.Duration) {

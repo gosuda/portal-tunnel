@@ -245,27 +245,40 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
 
 ACME cancellation is cooperative, not an end-to-end issuance deadline. ACME HTTP
-requests carry the operation context, and DNS propagation stops between probes;
-idle propagation polling sleeps are capped at five seconds. An in-flight probe
-still completes its context-free DNS lookups: lego allows 10 seconds per exchange
-on Unix or 20 seconds on Windows, with additional exchanges for TCP fallback,
-CNAME chains, zone discovery, and multiple nameservers.
+requests and DNS provider publication use the operation context, including
+provider API requests and change-status polling. Providers retain their
+configured TTL, propagation, polling, HTTP timeout, zone, and credential options.
 
-DNS provider publication and cleanup retain their own limits. Cleanup is still
-attempted after cancellation, but TXT removal is not guaranteed. Google Cloud
-uses a 30-second timeout for DNS HTTP transport; OAuth token refresh retains the
-original operation context, can outlive that timeout, and can fail during
-cleanup after cancellation. Cloudflare, Hetzner, Njalla, and Vultr default to
-30-second HTTP timeouts but allow provider environment overrides. Google Cloud's
-change-wait retry budget is 30 seconds;
-Hetzner and Route53 use their configured propagation budgets for provider-side
-change waits (120 seconds by default). These budgets can be exceeded by an
-in-flight API call, and Route53's underlying AWS HTTP client has no overall
-request timeout. The shared issuance lock stays held until the order and cleanup
-actually return, so canceled tenant orders can still delay other orders and
-relay renewal during those stages. Tenant issuance remains disabled by default.
-The polling cap also applies to relay certificate issuance without shortening
-its configured propagation budget.
+Each order keeps the TXT record's original CNAME target and its exact value for
+cleanup. Existing matching values and unrelated TXT records are preserved.
+After cancellation, cleanup uses fresh request and credential contexts with a
+shared 30-second API/context budget starting at the first cleanup attempt. This
+is not a strict wall-clock bound for an operator-configured AWS
+`credential_process`: its SDK timeout is capped when the client is constructed,
+but the command may start later and the SDK waits for local process completion.
+Commands or descendant processes that do not terminate promptly can extend that
+wait. Google external-account executable credentials also depend on local
+process termination after cancellation. Nested AWS credential caches can finish
+internal refresh work after a caller returns; their network requests retain operation cancellation and cannot
+resume DNS publication. The issuance lock remains held until the provider calls
+and cleanup return. Portal does not detach an issuance worker to run alongside
+another order.
+
+Cleanup is best effort, not a guarantee that a remote record was removed. A
+provider can accept a write but lose its response, or complete it after a
+canceled request. Cleanup failures produce an ACME warning; lego does not
+automatically retry them. After a provider outage or cleanup warning, inspect the
+original challenge target and remove only the stale challenge value, preserving
+other TXT values.
+
+DNS propagation stops between probes, and idle polling sleeps are capped at five
+seconds. Lego's CNAME resolution, in-flight DNS probes, and ACME authorization
+polling still have context-free stages. DNS exchanges allow 10 seconds on Unix
+or 20 seconds on Windows, with additional exchanges for TCP fallback, CNAME
+chains, zone discovery, and multiple nameservers. These stages can still delay
+other tenant orders and relay renewal after cancellation. Tenant issuance
+remains disabled by default. The same cancellation and cleanup behavior applies
+to relay certificates without shortening the configured propagation budget.
 
 ### IPv4 and IPv6
 

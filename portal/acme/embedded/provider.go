@@ -187,40 +187,48 @@ func (p *Provider) Addr() string { return p.listenAddr }
 
 func (p *Provider) Name() string { return "embedded" }
 
-func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
-	return p, nil
-}
-
-func (p *Provider) Present(domain, _, keyAuth string) error {
-	info := dns01.GetChallengeInfo(domain, keyAuth)
-	name, err := p.zoneHostname(info.EffectiveFQDN)
-	if err != nil {
-		return err
+func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
+	if p == nil {
+		return nil, errEmbeddedDNSProviderIsNil
 	}
-	return p.EnsureTXTRecord(context.Background(), name, info.Value)
+	return dnsrecord.NewChallengeProvider(ctx, dns01.DefaultPropagationTimeout, dns01.DefaultPollingInterval, p.presentTXT), nil
 }
 
-func (p *Provider) CleanUp(domain, _, keyAuth string) error {
-	info := dns01.GetChallengeInfo(domain, keyAuth)
-	name, err := p.zoneHostname(info.EffectiveFQDN)
+func (p *Provider) presentTXT(ctx context.Context, fqdn, value string) (dnsrecord.Cleanup, error) {
+	name, err := p.zoneHostname(fqdn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	values := p.txt[name]
-	idx := slices.Index(values, info.Value)
-	if idx < 0 {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	values = slices.Delete(values, idx, idx+1)
-	if len(values) == 0 {
-		delete(p.txt, name)
-	} else {
-		p.txt[name] = values
+	if slices.Contains(p.txt[name], value) {
+		return nil, nil
 	}
+	p.txt[name] = append(p.txt[name], value)
 	p.bumpSerialLocked()
-	return nil
+	return func(ctx context.Context) error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		values := p.txt[name]
+		idx := slices.Index(values, value)
+		if idx < 0 {
+			return nil
+		}
+		values = slices.Delete(values, idx, idx+1)
+		if len(values) == 0 {
+			delete(p.txt, name)
+		} else {
+			p.txt[name] = values
+		}
+		p.bumpSerialLocked()
+		return nil
+	}, nil
 }
 
 // EnsureAddressRecords updates the supplied address family for the zone apex

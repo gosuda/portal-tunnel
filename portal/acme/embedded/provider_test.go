@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -247,10 +248,17 @@ func TestTXTRecordLifecycle(t *testing.T) {
 }
 
 func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
+	t.Setenv("LEGO_DISABLE_CNAME_SUPPORT", "true")
 	p := newTestProvider(t, nil)
 	keyAuth := "token.example-key-authorization"
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	provider, err := p.ChallengeProvider(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if err := p.Present(testZone, "token", keyAuth); err != nil {
+	if err := provider.Present(testZone, "token", keyAuth); err != nil {
 		t.Fatalf("present: %v", err)
 	}
 	info := dns01.GetChallengeInfo(testZone, keyAuth)
@@ -262,13 +270,54 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 		t.Fatalf("got txt %q, want %q", got, info.Value)
 	}
 
-	if err := p.CleanUp(testZone, "token", keyAuth); err != nil {
+	cancel()
+	if err := provider.CleanUp(testZone, "token", keyAuth); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
 	resp = exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
 	requireRcode(t, resp, dns.RcodeRefused)
 	if len(resp.Answer) != 0 {
 		t.Fatalf("txt survived cleanup")
+	}
+}
+
+func TestDNS01CleanupPreservesExistingTXT(t *testing.T) {
+	t.Setenv("LEGO_DISABLE_CNAME_SUPPORT", "true")
+	for _, preexisting := range []bool{false, true} {
+		t.Run(map[bool]string{false: "new value", true: "preexisting value"}[preexisting], func(t *testing.T) {
+			p := newTestProvider(t, nil)
+			info := dns01.GetChallengeInfo(testZone, "key")
+			values := []string{"unrelated", info.Value + "-longer"}
+			if preexisting {
+				values = append(values, info.Value)
+			}
+			for _, value := range values {
+				if err := p.EnsureTXTRecord(t.Context(), info.EffectiveFQDN, value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			provider, err := p.ChallengeProvider(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := provider.Present(testZone, "token", "key"); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := provider.CleanUp(testZone, "token", "key"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resp := exchange(t, p, "tcp", dns.TypeTXT, info.EffectiveFQDN)
+			if len(resp.Answer) != len(values) {
+				t.Fatalf("remaining TXT = %v, want %v", resp.Answer, values)
+			}
+			for _, rr := range resp.Answer {
+				if got := strings.Join(rr.(*dns.TXT).Txt, ""); !slices.Contains(values, got) {
+					t.Fatalf("unexpected TXT %q, want %v", got, values)
+				}
+			}
+		})
 	}
 }
 

@@ -51,7 +51,7 @@ func (p *Provider) Name() string {
 	return "njalla"
 }
 
-func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
+func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
 	if p == nil {
 		return nil, errNjallaProviderIsNil
 	}
@@ -60,13 +60,54 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 	}
 
 	cfg := legonjalla.NewDefaultConfig()
-	cfg.Token = p.token
+	client := &apiClient{token: p.token, endpoint: apiEndpoint, httpClient: cfg.HTTPClient}
+	return dnsrecord.NewChallengeProvider(ctx, cfg.PropagationTimeout, cfg.PollingInterval,
+		func(ctx context.Context, fqdn, value string) (dnsrecord.Cleanup, error) {
+			zone, err := p.findZone(ctx, client, fqdn)
+			if err != nil {
+				return nil, err
+			}
+			return presentChallenge(ctx, client, zone, fqdn, value, cfg.TTL)
+		}), nil
+}
 
-	provider, err := legonjalla.NewDNSProviderConfig(cfg)
+func presentChallenge(ctx context.Context, client *apiClient, zone, fqdn, value string, ttl int) (dnsrecord.Cleanup, error) {
+	name, err := dnsrecord.RelativeName("njalla", fqdn, zone)
 	if err != nil {
-		return nil, fmt.Errorf("create njalla lego provider: %w", err)
+		return nil, err
 	}
-	return provider, nil
+	existing, err := listRecords(ctx, client, zone, fqdn, "TXT")
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range existing {
+		if dnsrecord.TXTContent(rec.Content) == value {
+			return nil, nil
+		}
+	}
+	var recordID string
+	cleanup := func(ctx context.Context) error {
+		records, err := listRecords(ctx, client, zone, fqdn, "TXT")
+		if err != nil {
+			return err
+		}
+		for _, rec := range records {
+			if dnsrecord.TXTContent(rec.Content) != value || (recordID != "" && rec.ID.String() != recordID) {
+				continue
+			}
+			if err := client.removeRecord(ctx, rec.ID.String(), zone); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	rec, err := client.addRecord(ctx, record{Domain: zone, Name: name, Type: "TXT", TTL: ttl, Content: value})
+	if rec != nil {
+		recordID = rec.ID.String()
+	}
+	// A failed response does not prove the write failed. The preceding read
+	// established absence, so cleanup can recover the exact value if necessary.
+	return cleanup, err
 }
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
@@ -218,15 +259,18 @@ func (p *Provider) findZone(ctx context.Context, client *apiClient, domain strin
 	candidates := utils.DomainCandidates(domain)
 
 	zones := p.zones.Load()
+	var lastErr error
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if zone := zones[candidate]; zone != "" {
 			return zone, nil
 		}
-	}
-
-	var lastErr error
-	for _, candidate := range candidates {
 		if _, err := client.listRecords(ctx, candidate); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
 			lastErr = err
 			continue
 		}
