@@ -18,21 +18,13 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
-func TestRelayMembershipRemoveAndAdd(t *testing.T) {
-	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, marker)
-	}))
-	defer service.Close()
-	target, err := url.Parse(service.URL)
-	if err != nil {
-		t.Fatalf("parse local service URL: %v", err)
-	}
+type observedRelay struct {
+	relay     membershipRelay
+	publicURL string
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	relayA := startMembershipRelay(t, ctx)
-	relayB := startMembershipRelay(t, ctx)
-
+func establishDualRelay(t *testing.T, ctx context.Context, targetHost string, relayA, relayB membershipRelay) (*sdk.Exposure, string, string) {
+	t.Helper()
 	clientIdentity, err := identity.Generate("membership")
 	if err != nil {
 		t.Fatalf("generate client identity: %v", err)
@@ -44,7 +36,7 @@ func TestRelayMembershipRemoveAndAdd(t *testing.T) {
 	t.Cleanup(func() { _ = exposure.Close() })
 	proxyDone := make(chan error, 1)
 	go func() {
-		proxyDone <- sdk.Proxy(ctx, exposure, target.Host)
+		proxyDone <- sdk.Proxy(ctx, exposure, targetHost)
 	}()
 	t.Cleanup(func() {
 		select {
@@ -62,17 +54,18 @@ func TestRelayMembershipRemoveAndAdd(t *testing.T) {
 	publicB := waitPublicURLOnPort(t, exposure, relayB.sniPort, readyDeadline)
 	waitServesMarker(t, "relay A before removal", relayA, publicA, 15*time.Second)
 	waitServesMarker(t, "relay B before removal", relayB, publicB, 15*time.Second)
+	return exposure, publicA, publicB
+}
 
-	if err := exposure.RemoveRelay(relayA.relayURL); err != nil {
-		t.Fatalf("remove relay A: %v", err)
-	}
+func awaitRelayRemoval(t *testing.T, exposure *sdk.Exposure, removed, kept observedRelay) {
+	t.Helper()
 	removedDeadline := time.Now().Add(15 * time.Second)
 	for {
-		_, servedA := tenantGet(relayA.sniAddr, relayA.certPath, publicA)
-		gotB, servedB := tenantGet(relayB.sniAddr, relayB.certPath, publicB)
-		_, stillMember := relayStatusOnPort(exposure.Relays(), relayA.sniPort)
+		_, servedA := tenantGet(removed.relay.sniAddr, removed.relay.certPath, removed.publicURL)
+		gotB, servedB := tenantGet(kept.relay.sniAddr, kept.relay.certPath, kept.publicURL)
+		_, stillMember := relayStatusOnPort(exposure.Relays(), removed.relay.sniPort)
 		if !servedA && servedB && gotB == marker && !stillMember {
-			break
+			return
 		}
 		if !time.Now().Before(removedDeadline) {
 			t.Fatalf("relay A removal did not converge: A served=%v, B served=%v body=%q, relays=%+v",
@@ -80,13 +73,38 @@ func TestRelayMembershipRemoveAndAdd(t *testing.T) {
 		}
 		<-time.After(250 * time.Millisecond)
 	}
+}
 
-	if err := exposure.AddRelay(relayA.relayURL); err != nil {
+func cycleRelayA(t *testing.T, exposure *sdk.Exposure, removed, kept observedRelay) {
+	t.Helper()
+	if err := exposure.RemoveRelay(removed.relay.relayURL); err != nil {
+		t.Fatalf("remove relay A: %v", err)
+	}
+	awaitRelayRemoval(t, exposure, removed, kept)
+	if err := exposure.AddRelay(removed.relay.relayURL); err != nil {
 		t.Fatalf("add relay A back: %v", err)
 	}
-	publicAAfterAdd := waitPublicURLOnPort(t, exposure, relayA.sniPort, time.Now().Add(30*time.Second))
-	waitServesMarker(t, "relay A after re-add", relayA, publicAAfterAdd, 30*time.Second)
-	waitServesMarker(t, "relay B after re-add", relayB, publicB, 15*time.Second)
+	publicAAfterAdd := waitPublicURLOnPort(t, exposure, removed.relay.sniPort, time.Now().Add(30*time.Second))
+	waitServesMarker(t, "relay A after re-add", removed.relay, publicAAfterAdd, 30*time.Second)
+	waitServesMarker(t, "relay B after re-add", kept.relay, kept.publicURL, 15*time.Second)
+}
+
+func TestRelayMembershipRemoveAndAdd(t *testing.T) {
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, marker)
+	}))
+	defer service.Close()
+	target, err := url.Parse(service.URL)
+	if err != nil {
+		t.Fatalf("parse local service URL: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	relayA := startMembershipRelay(t, ctx)
+	relayB := startMembershipRelay(t, ctx)
+	exposure, publicA, publicB := establishDualRelay(t, ctx, target.Host, relayA, relayB)
+	cycleRelayA(t, exposure, observedRelay{relay: relayA, publicURL: publicA}, observedRelay{relay: relayB, publicURL: publicB})
 }
 
 type membershipRelay struct {
