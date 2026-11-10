@@ -64,21 +64,19 @@ type reverseEndpointInput struct {
 	useOverlay    bool
 }
 
-func (r *leaseRegistry) verifyRenewClaim(req types.RenewRequest) (identity.LeaseAccessTokenClaims, time.Duration, types.ServiceIdentityKey, string, error) {
+func (r *leaseRegistry) verifyRenewClaim(req types.RenewRequest) (identity.LeaseAccessTokenClaims, time.Duration, types.ServiceIdentityKey, error) {
 	claims, err := identity.VerifyLeaseAccessToken(req.AccessToken, r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, time.Now().UTC())
 	if err != nil {
-		return identity.LeaseAccessTokenClaims{}, 0, types.ServiceIdentityKey{}, "", errUnauthorized
+		return identity.LeaseAccessTokenClaims{}, 0, types.ServiceIdentityKey{}, errUnauthorized
 	}
 	if err := req.Metadata.Validate(); err != nil {
-		return identity.LeaseAccessTokenClaims{}, 0, types.ServiceIdentityKey{}, "", err
+		return identity.LeaseAccessTokenClaims{}, 0, types.ServiceIdentityKey{}, err
 	}
 	ttl, err := requestedLeaseTTL(req.TTL)
 	if err != nil {
-		return identity.LeaseAccessTokenClaims{}, 0, types.ServiceIdentityKey{}, "", err
+		return identity.LeaseAccessTokenClaims{}, 0, types.ServiceIdentityKey{}, err
 	}
-	leaseKey := claims.Identity.ServiceKey()
-	reportedIP := utils.SanitizeReportedIP(req.ReportedIP)
-	return claims, ttl, leaseKey, reportedIP, nil
+	return claims, ttl, claims.Identity.ServiceKey(), nil
 }
 
 func (r *leaseRegistry) refreshRenewRecordLocked(record *leaseRecord, req types.RenewRequest, ttl time.Duration, sourceAddr netip.Addr) (types.Identity, string, bool, time.Time) {
@@ -101,7 +99,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 	if r == nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, errFeatureUnavailable
 	}
-	claims, ttl, leaseKey, _, err := r.verifyRenewClaim(req)
+	claims, ttl, leaseKey, err := r.verifyRenewClaim(req)
 	if err != nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, err
 	}

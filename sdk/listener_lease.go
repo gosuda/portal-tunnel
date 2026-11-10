@@ -458,6 +458,9 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 		return errRelayReturnedOverlayReverseEndpointBut
 	}
 	if !endpoint.Overlay {
+		if alternate {
+			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL", endpoint.URL)
+		}
 		return l.validateDirectReverseEndpoint(endpoint)
 	}
 
@@ -465,9 +468,6 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 }
 
 func (l *listener) validateDirectReverseEndpoint(endpoint types.ReverseEndpoint) error {
-	if l.isAlternateReverseEndpoint(endpoint.URL) {
-		return fmt.Errorf("relay reverse endpoint %s does not match the relay URL", endpoint.URL)
-	}
 	if endpoint.Gateway != nil {
 		return errRelayReturnedGatewayMetadataDirectReverse
 	}

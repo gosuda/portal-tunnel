@@ -19,9 +19,9 @@ func composePaidRoute(prefix, amount string, contract X402Config, nano **nanofac
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	switch {
 	case network == "" || network == suiMainnetNetwork || network == suiTestnetNetwork:
-		return composeSuiRoute(prefix, amount, contract)
+		return composeSuiRoute(prefix, amount, network, contract)
 	case casperscheme.IsCasperNetwork(network):
-		return composeCasperRoute(prefix, amount, contract)
+		return composeCasperRoute(prefix, amount, network, contract)
 	case nanoscheme.IsNanoNetwork(network):
 		return composeNanoRoute(prefix, amount, network, contract, nano)
 	default:
@@ -74,8 +74,7 @@ func newSuiPaymentGate(requirements facilitatortypes.PaymentRequirements, prefix
 	return gate, preparer, nil
 }
 
-func composeSuiRoute(prefix, amount string, contract X402Config) (*routePolicy, error) {
-	network := strings.ToLower(strings.TrimSpace(contract.Network))
+func composeSuiRoute(prefix, amount, network string, contract X402Config) (*routePolicy, error) {
 	if network == "" {
 		if contract.Testnet {
 			network = suiTestnetNetwork
@@ -103,8 +102,7 @@ func composeSuiRoute(prefix, amount string, contract X402Config) (*routePolicy, 
 	return &routePolicy{requirements: canonicalRequirements(requirements), gate: gate, preparer: preparer}, nil
 }
 
-func composeCasperRoute(prefix, amount string, contract X402Config) (*routePolicy, error) {
-	network := strings.ToLower(strings.TrimSpace(contract.Network))
+func composeCasperRoute(prefix, amount, network string, contract X402Config) (*routePolicy, error) {
 	if network == "" {
 		if contract.Testnet {
 			network = casperscheme.NetworkTestnet

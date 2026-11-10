@@ -247,7 +247,7 @@ func resolvePaymentIdentity(cfg paymentConfig) (types.Identity, error) {
 }
 
 func generateResolvePaymentIdentity(path, name string) (types.Identity, error) {
-	generated, err := identity.Generate(strings.TrimSpace(name))
+	generated, err := identity.Generate(name)
 	if err != nil {
 		return types.Identity{}, err
 	}

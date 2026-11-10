@@ -261,7 +261,7 @@ func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
 }
 
 func generateResolveDemoIdentity(path, name string) (types.Identity, error) {
-	generated, err := identity.Generate(strings.TrimSpace(name))
+	generated, err := identity.Generate(name)
 	if err != nil {
 		return types.Identity{}, err
 	}

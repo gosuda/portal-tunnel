@@ -96,25 +96,6 @@ type ExposedHTTPRoute struct {
 	Amount string
 }
 
-// ComposeHTTPRoutes builds the payment-agnostic sdk router and explicitly
-// wraps only the routes carrying an x402 amount with payment gates. The
-// returned handler also serves the shared x402 client and prepare endpoints
-// when at least one route is paid; a fully unpaid gateway passes those paths
-// through to the routes like any other path.
-func buildPaidRoutePolicy(route ExposedHTTPRoute, prefix string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
-	methods, err := NormalizePaymentMethods(route.Methods)
-	if err != nil {
-		return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
-	}
-	paid, err := composePaidRoute(prefix, strings.TrimSpace(route.Amount), contract, nano)
-	if err != nil {
-		return nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
-	}
-	paid.prefix = prefix
-	paid.methods = paymentMethodSet(methods)
-	return paid, nil
-}
-
 func normalizeComposeHTTPRoutesPrefix(raw string) string {
 	prefix := strings.TrimSpace(raw)
 	if prefix != "" && strings.HasPrefix(prefix, "/") {
@@ -148,10 +129,16 @@ func buildComposeHTTPRoutesPaidEntry(route ExposedHTTPRoute, contract X402Config
 	if contract.PayTo == "" {
 		return "", nil, fmt.Errorf("http route %q amount requires x402 pay-to", prefix)
 	}
-	paid, err := buildPaidRoutePolicy(route, prefix, contract, nano)
+	methods, err := NormalizePaymentMethods(route.Methods)
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 	}
+	paid, err := composePaidRoute(prefix, amount, contract, nano)
+	if err != nil {
+		return "", nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
+	}
+	paid.prefix = prefix
+	paid.methods = paymentMethodSet(methods)
 	return prefix, paid, nil
 }
 
@@ -173,6 +160,11 @@ func assembleComposeHTTPRoutesPolicies(routes []ExposedHTTPRoute, contract X402C
 	return policies, servesX402, nil
 }
 
+// ComposeHTTPRoutes builds the payment-agnostic sdk router and explicitly
+// wraps only the routes carrying an x402 amount with payment gates. The
+// returned handler also serves the shared x402 client and prepare endpoints
+// when at least one route is paid; a fully unpaid gateway passes those paths
+// through to the routes like any other path.
 func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (http.Handler, error) {
 	if len(routes) == 0 {
 		return nil, errLeastOneHTTPRouteRequired
