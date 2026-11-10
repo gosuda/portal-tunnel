@@ -145,6 +145,10 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 		}
 	}
 
+	if ctx.Err() != nil && shutdownErr != nil {
+		log.Warn().Err(shutdownErr).Msg("http shutdown completed with cleanup errors")
+		shutdownErr = nil
+	}
 	return errors.Join(serveErr, shutdownErr)
 }
 
