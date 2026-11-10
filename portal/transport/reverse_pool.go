@@ -132,7 +132,7 @@ func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
 			p.ready = p.ready[1:]
 			close(c.stop)
 			p.mu.Unlock()
-			conn, err, ok := transferAcquiredForAcquire(ctx, c)
+			conn, ok, err := settleAcquiredForAcquire(ctx, c)
 			if !ok {
 				continue
 			}
@@ -144,14 +144,6 @@ func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
 			return nil, ctx.Err()
 		}
 	}
-}
-
-func transferAcquiredForAcquire(ctx context.Context, c *pooledConn) (net.Conn, error, bool) {
-	conn, ok, err := settleAcquiredForAcquire(ctx, c)
-	if !ok {
-		return nil, nil, false
-	}
-	return conn, err, true
 }
 
 func settleAcquiredForAcquire(ctx context.Context, c *pooledConn) (net.Conn, bool, error) {
