@@ -2,11 +2,15 @@ package e2e_test
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +40,7 @@ func TestHTTPReplicasShareURLAndSurviveOneClientStopping(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		exposure, err := sdk.Expose(t.Context(), serviceIdentity, []string{relayURL}, sdk.WithReplicas())
+		exposure, err := sdk.Expose(t.Context(), serviceIdentity, []string{relayURL}, sdk.WithReplicas(), sdk.WithMITMProtection(true))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,6 +67,44 @@ func TestHTTPReplicasShareURLAndSurviveOneClientStopping(t *testing.T) {
 	}
 	if !seen["replica-one"] || !seen["replica-two"] {
 		t.Fatalf("new connections did not reach both origins: %v", seen)
+	}
+	// Identity-bound exporter verification must work regardless of which
+	// replica receives the connection, with no shared pending-nonce map.
+	public, err := url.Parse(publicURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, err := os.ReadFile(h.certificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(certPEM) {
+		t.Fatal("invalid relay certificate")
+	}
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return sdk.DialCanonicalTLS(ctx, h.sniAddr, public.Hostname(), &tls.Config{RootCAs: roots})
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	boundOrigins := make(map[string]bool)
+	for range 16 {
+		resp, err := client.Get(publicURL + "/marker")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		boundOrigins[string(body)] = true
+	}
+	if !boundOrigins["replica-one"] || !boundOrigins["replica-two"] {
+		t.Fatalf("verified TLS connections did not reach both origins: %v", boundOrigins)
 	}
 	listed := 0
 	for _, lease := range h.server.PublicLeases() {

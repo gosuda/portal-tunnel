@@ -138,24 +138,34 @@ func (m *mitmIngress) serve(ctx context.Context, raw net.Conn) {
 }
 
 func TestMITMTerminationExcludesRelay(t *testing.T) {
-	h := newHarnessWithName(t, "termination", "127.0.0.1", "terminate", sdk.WithMITMProtection(true))
-	deadline := time.NewTimer(10 * time.Second)
-	defer deadline.Stop()
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		statuses := h.exposure.Relays()
-		if len(statuses) == 1 && statuses[0].State == sdk.RelayFailed && statuses[0].Failure == sdk.RelayFailureMITM {
-			return
-		}
-		select {
-		case <-deadline.C:
-			t.Fatalf("forwarded TLS termination did not exclude relay: %+v", statuses)
-		case <-tick.C:
-		}
+	for _, tc := range []struct {
+		name string
+		opts []sdk.Option
+	}{
+		{"exclusive", []sdk.Option{sdk.WithMITMProtection(true)}},
+		{"replica", []sdk.Option{sdk.WithMITMProtection(true), sdk.WithReplicas()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessWithName(t, "termination", "127.0.0.1", "terminate", tc.opts...)
+			deadline := time.NewTimer(10 * time.Second)
+			defer deadline.Stop()
+
+			tick := time.NewTicker(10 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				statuses := h.exposure.Relays()
+				if len(statuses) == 1 && statuses[0].State == sdk.RelayFailed && statuses[0].Failure == sdk.RelayFailureMITM {
+					return
+				}
+				select {
+				case <-deadline.C:
+					t.Fatalf("forwarded TLS termination did not exclude relay: %+v", statuses)
+				case <-tick.C:
+				}
+			}
+		})
 	}
 }
-
 func TestMITMProbeFailureBudget(t *testing.T) {
 	h := newHarnessWithName(t, "failure-budget", "127.0.0.1", "reject", sdk.WithMITMProtection(true))
 	publicURL := h.waitForPublicURL()

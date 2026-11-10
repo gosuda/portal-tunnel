@@ -1131,6 +1131,9 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 			continue
 		}
 		claimDeadline := deadline
+		if attempt := time.Now().Add(replicaWaitSlice); replica && attempt.Before(claimDeadline) {
+			claimDeadline = attempt
+		}
 		if !waitUntil.IsZero() {
 			claimDeadline = waitUntil
 		}
@@ -1155,7 +1158,7 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		binding := s.registry.bindings.Issue(record.id, helloSpan)
 		err = s.registry.activateBridge(record, bridge, session, nil)
 		if err == nil {
-			err = transport.WriteTLSStart(session, binding, deadline)
+			err = transport.WriteTLSStart(session, binding, claimDeadline)
 		}
 		if err == nil && !time.Now().Before(deadline) {
 			err = context.DeadlineExceeded

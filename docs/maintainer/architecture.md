@@ -295,6 +295,9 @@ login state bind to the epoch. Older relays without epochs retain the SDK's loca
 alias lifetime fallback. SIWE challenges use an identity-derived, domain-separated
 key and are scoped to the alias epoch, allowing another replica to verify them.
 The CLI and agent support SIWE, credential and OIDC authentication with replicas.
+Replica self-probes use the existing identity-bound TLS channel-binding exchange,
+so any sibling can answer and exporter mismatches still trigger MITM exclusion.
+They do not depend on another process's pending probe nonce map.
 Email links, SAML assertions and paid Nano routes still require a single consumption
 owner, so those combinations are rejected. SDK embedders own handler compatibility
 and must pass relay-issued alias epochs to application auth.
@@ -309,8 +312,9 @@ claims so a lost readiness race can try another candidate. Attempts share a clai
 deadline and visit each ready replica at most once; when none is ready, ingress
 waits briefly on one live replica, then rescans all of them, until that
 deadline. A crashed client keeps its lease until expiry, so one wait target
-never holds the whole deadline. TLS start framing uses the earlier of the
-remaining claim deadline and the session write limit, and expiry is checked
+never holds the whole deadline. Replica acquisition and TLS start framing share
+a 250 ms candidate budget within the overall claim deadline, so stalled writers
+leave time to try healthy siblings. Expiry is checked
 again before taking ownership of the inbound connection. A bridge initially
 owns only the reverse stream, taking the inbound connection after TLS framing
 succeeds and admission is rechecked. Each attempt has its own lease-bound TLS
