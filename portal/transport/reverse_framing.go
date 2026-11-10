@@ -55,22 +55,32 @@ func ReadStart(ctx context.Context, conn net.Conn, timeout time.Duration) (bindi
 	}
 }
 
-func WriteTLSStart(conn net.Conn, binding [types.TLSBindingSize]byte) error {
+// WriteTLSStart bounds framing by both the caller's deadline and the five-second
+// session write limit. A zero deadline uses only the session write limit.
+func WriteTLSStart(conn net.Conn, binding [types.TLSBindingSize]byte, deadline time.Time) error {
 	frame := [1 + types.TLSBindingSize]byte{types.ReverseMarkerTLSStart}
 	copy(frame[1:], binding[:])
-	return writeStartFrame(conn, frame[:])
+	return writeStartFrame(conn, frame[:], deadline)
 }
 
 func WriteRawStart(conn net.Conn) error {
-	return writeStartFrame(conn, []byte{types.ReverseMarkerRawStart})
+	return writeStartFrame(conn, []byte{types.ReverseMarkerRawStart}, time.Time{})
 }
 
 func WriteKeepalive(conn net.Conn) error {
-	return writeStartFrame(conn, []byte{types.ReverseMarkerKeepalive})
+	return writeStartFrame(conn, []byte{types.ReverseMarkerKeepalive}, time.Time{})
 }
 
-func writeStartFrame(conn net.Conn, frame []byte) error {
-	if err := conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit)); err != nil {
+func writeStartFrame(conn net.Conn, frame []byte, deadline time.Time) error {
+	now := time.Now()
+	if !deadline.IsZero() && !now.Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	writeDeadline := now.Add(defaultSessionWriteLimit)
+	if !deadline.IsZero() && deadline.Before(writeDeadline) {
+		writeDeadline = deadline
+	}
+	if err := conn.SetWriteDeadline(writeDeadline); err != nil {
 		return err
 	}
 	defer conn.SetWriteDeadline(time.Time{})

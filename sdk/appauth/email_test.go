@@ -428,28 +428,38 @@ func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"})
 	now := time.Now().UTC()
 
-	token := e.issue("alice@example.com", true, emailTestHost, "/next", now)
-	if email, next, ok := e.redeem(token, emailTestHost, time.Time{}, now.Add(emailLinkTTL-time.Second)); !ok || email != "alice@example.com" || next != "/next" {
+	token := e.issue("alice@example.com", true, emailTestHost, "", "/next", now)
+	if email, next, ok := e.redeem(token, emailTestHost, "", time.Time{}, now.Add(emailLinkTTL-time.Second)); !ok || email != "alice@example.com" || next != "/next" {
 		t.Fatalf("redeem = %q, %q, %v", email, next, ok)
 	}
-	if _, _, ok := e.redeem(token, emailTestHost, time.Time{}, now); ok {
+	if _, _, ok := e.redeem(token, emailTestHost, "", time.Time{}, now); ok {
 		t.Fatal("a used link worked again")
 	}
 
-	token = e.issue("bob@example.com", true, emailTestHost, "/", now)
-	if _, _, ok := e.redeem(token, emailTestHost, time.Time{}, now.Add(emailLinkTTL)); ok {
+	token = e.issue("bob@example.com", true, emailTestHost, "", "/", now)
+	if _, _, ok := e.redeem(token, emailTestHost, "", time.Time{}, now.Add(emailLinkTTL)); ok {
 		t.Fatal("an expired link worked")
 	}
 
-	token = e.issue("carol@example.com", true, emailTestHost, "/", now)
-	if _, _, ok := e.redeem(token, "other.example", time.Time{}, now); ok {
+	token = e.issue("carol@example.com", true, emailTestHost, "", "/", now)
+	if _, _, ok := e.redeem(token, "other.example", "", time.Time{}, now); ok {
 		t.Fatal("a link worked at another host")
 	}
-	if _, _, ok := e.redeem(token, emailTestHost, time.Time{}, now); ok {
+	if _, _, ok := e.redeem(token, emailTestHost, "", time.Time{}, now); ok {
 		t.Fatal("a link tried at another host still worked")
 	}
-	if _, _, ok := e.redeem("not-a-token", emailTestHost, time.Time{}, now); ok {
+	if _, _, ok := e.redeem("not-a-token", emailTestHost, "", time.Time{}, now); ok {
 		t.Fatal("an unknown token worked")
+	}
+	for _, epoch := range []string{"one", "two"} {
+		token = e.issue("epoch-"+epoch+"@example.com", true, emailTestHost, "one", "/", now)
+		if token == "" {
+			t.Fatal("could not issue an epoch-bound email link")
+		}
+		<-e.sendSlots
+		if _, _, ok := e.redeem(token, emailTestHost, epoch, time.Time{}, now); ok != (epoch == "one") {
+			t.Fatalf("email link issued in epoch one, redeemed in epoch %s: %v", epoch, ok)
+		}
 	}
 }
 
@@ -459,7 +469,7 @@ func TestEmailSendLimits(t *testing.T) {
 	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"})
 	start := time.Now().UTC()
 	issueAs := func(email string, listed bool, at time.Duration) bool {
-		if e.issue(email, listed, emailTestHost, "/", start.Add(at)) == "" {
+		if e.issue(email, listed, emailTestHost, "", "/", start.Add(at)) == "" {
 			return false
 		}
 		<-e.sendSlots
@@ -509,7 +519,7 @@ func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
 		e.sendSlots <- struct{}{}
 	}
 	now := time.Now().UTC()
-	e.send("alice@example.com", true, emailTestHost, "/", now)
+	e.send("alice@example.com", true, emailTestHost, "", "/", now)
 	e.mu.Lock()
 	links, sent := len(e.links), len(e.sent)
 	e.mu.Unlock()
@@ -519,7 +529,7 @@ func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
 	for range emailSendSlots {
 		<-e.sendSlots
 	}
-	if e.issue("alice@example.com", true, emailTestHost, "/", now) == "" {
+	if e.issue("alice@example.com", true, emailTestHost, "", "/", now) == "" {
 		t.Fatal("the dropped send spent the cooldown of the address")
 	}
 }
@@ -529,16 +539,16 @@ func TestEmailRefusedSendsLeaveTheSlotsFree(t *testing.T) {
 
 	e := newEmailAuthenticator(applicationAuthSettings{emailSMTPAddr: "127.0.0.1:25"})
 	now := time.Now().UTC()
-	if e.issue("alice@example.com", true, emailTestHost, "/", now) == "" {
+	if e.issue("alice@example.com", true, emailTestHost, "", "/", now) == "" {
 		t.Fatal("the first link was refused")
 	}
 	<-e.sendSlots
 	for range emailSendSlots + 1 {
-		if e.issue("alice@example.com", true, emailTestHost, "/", now) != "" {
+		if e.issue("alice@example.com", true, emailTestHost, "", "/", now) != "" {
 			t.Fatal("the cooldown let a send through")
 		}
 	}
-	if e.issue("bob@example.com", true, emailTestHost, "/", now) == "" {
+	if e.issue("bob@example.com", true, emailTestHost, "", "/", now) == "" {
 		t.Fatal("refused sends took the slot of a real one")
 	}
 }
@@ -595,7 +605,7 @@ func TestEmailEndpointsRefuseAnotherOrigin(t *testing.T) {
 	}
 	server.expectNoMore(t)
 
-	token := gate.email.issue("bob@example.com", true, emailTestHost, "/", time.Now().UTC())
+	token := gate.email.issue("bob@example.com", true, emailTestHost, "", "/", time.Now().UTC())
 	<-gate.email.sendSlots
 	if code := post(types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token}); code != http.StatusForbidden {
 		t.Fatalf("redeem status = %d; want 403", code)
@@ -638,7 +648,7 @@ func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate := handler.(*applicationAuth)
-	token := gate.email.issue("alice@example.com", true, alias, "/", now)
+	token := gate.email.issue("alice@example.com", true, alias, "", "/", now)
 	<-gate.email.sendSlots
 
 	public.Store([]PublicHost{{URL: "https://" + emailTestHost}})
@@ -650,7 +660,7 @@ func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 	if rec := postEmailJSON(gate, alias, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token}); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("redeem of a link from the earlier hold = %d; want 401", rec.Code)
 	}
-	fresh := gate.email.issue("alice@example.com", true, alias, "/", newHold)
+	fresh := gate.email.issue("alice@example.com", true, alias, "", "/", newHold)
 	<-gate.email.sendSlots
 	if rec := postEmailJSON(gate, alias, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: fresh}); rec.Code != http.StatusOK {
 		t.Fatalf("redeem of a link from this hold = %d; want 200", rec.Code)
@@ -692,7 +702,7 @@ func TestEmailSessionEndsWithItsPublicHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate := handler.(*applicationAuth)
-	token := gate.email.issue("alice@example.com", true, alias, "/", time.Now().UTC())
+	token := gate.email.issue("alice@example.com", true, alias, "", "/", time.Now().UTC())
 	<-gate.email.sendSlots
 	redeem := postEmailJSON(gate, alias, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token})
 	if redeem.Code != http.StatusOK || len(redeem.Result().Cookies()) != 1 {
@@ -988,7 +998,7 @@ func TestEmailPrincipalIsTheAddress(t *testing.T) {
 	t.Parallel()
 
 	gate := newEmailTestGate(t, emailTestConfig("127.0.0.1:25", "alice@example.com"), http.NotFoundHandler())
-	token := gate.email.issue("alice@example.com", true, emailTestHost, "/", time.Now().UTC())
+	token := gate.email.issue("alice@example.com", true, emailTestHost, "", "/", time.Now().UTC())
 	<-gate.email.sendSlots
 	rec := postEmailJSON(gate, emailTestHost, types.PathApplicationAuthEmailRedeem, applicationAuthEmailRedeemRequest{Token: token})
 	if rec.Code != http.StatusOK {

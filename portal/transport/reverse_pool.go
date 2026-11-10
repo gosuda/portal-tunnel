@@ -117,6 +117,16 @@ func (r *offerReservation) Cancel() {
 // Acquire stops idle writes before transferring a connection to its caller.
 // It does not write a raw/TLS start frame or retain the acquired connection.
 func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
+	return p.acquire(ctx, true)
+}
+
+// TryAcquire claims an already-ready stream. A nil connection and nil error mean
+// another lease can be tried immediately instead of waiting on this pool.
+func (p *ReversePool) TryAcquire(ctx context.Context) (net.Conn, error) {
+	return p.acquire(ctx, false)
+}
+
+func (p *ReversePool) acquire(ctx context.Context, wait bool) (net.Conn, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -147,6 +157,10 @@ func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
 				return nil, err
 			}
 			return c.Conn, nil
+		}
+		if !wait {
+			p.mu.Unlock()
+			return nil, nil
 		}
 		notify := p.notify
 		p.mu.Unlock()

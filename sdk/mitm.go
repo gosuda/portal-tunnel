@@ -142,11 +142,6 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	probeCtx, cancel := context.WithTimeout(ctx, defaultMITMProbeTimeout)
 	defer cancel()
 
-	var nonce mitmProbeNonce
-	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
-		return report, fmt.Errorf("generate probe nonce: %w", err)
-	}
-
 	dialAddr, err := m.probeDialAddress(publicURL)
 	if err != nil {
 		return report, err
@@ -179,10 +174,28 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	stopClose := context.AfterFunc(probeCtx, func() { _ = rawConn.Close() })
 	defer stopClose()
 
-	resultCh := m.reserveProbe(nonce)
-	defer m.releaseProbe(nonce)
+	var nonce mitmProbeNonce
+	var resultCh <-chan string
+	if !l.replica {
+		if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
+			return report, fmt.Errorf("generate probe nonce: %w", err)
+		}
+		resultCh = m.reserveProbe(nonce)
+		defer m.releaseProbe(nonce)
+	}
 	if err := tlsConn.HandshakeContext(probeCtx); err != nil {
 		return report, fmt.Errorf("mitm probe tls handshake: %w", err)
+	}
+	if l.replica {
+		// Any sibling can answer the existing identity-bound exchange; no
+		// instance-local nonce/result state needs to follow replica selection.
+		err := VerifyTLSChannelBinding(probeCtx, tlsConn, lease.hostname)
+		if errors.Is(err, errTLSChannelBindingExporterMismatchRelay) {
+			report.Detected = true
+			report.Reason = types.MITMProbeReasonExporterMismatch
+			return report, nil
+		}
+		return report, err
 	}
 
 	clientState := tlsConn.ConnectionState()

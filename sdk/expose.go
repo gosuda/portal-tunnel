@@ -24,6 +24,7 @@ import (
 
 var (
 	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
+	errReplicaRequiresDirectHTTP           = errors.New("replicas require direct HTTP tunnels without dedicated TCP/UDP ports, relay cache, or overlay")
 	errPortalSDKContextIsNil               = errors.New("portal sdk: context is nil")
 	errPortalSDKThisRuntimeSupportsHTTPS   = errors.New("portal sdk: this runtime supports HTTPS exposure only")
 	errRelayStaticCacheCannotCombinedUDP   = errors.New("relay static cache cannot be combined with UDP, raw TCP, or MITM blocking")
@@ -94,8 +95,12 @@ type RelayStatus struct {
 	// origin. The RelayReady rule is for display only: show the alias only
 	// while State is RelayReady.
 	AliasURL string
-	// AliasSince is when this exposure came to hold AliasURL, zero without one.
-	// Another identity may have held the name before that.
+	// AliasEpoch is the relay-issued alias ownership generation, shared by replicas.
+	// Empty means the relay predates ownership generations; AliasSince then
+	// supplies a conservative local lifetime for application authentication.
+	AliasEpoch string
+	// AliasSince dates a local alias hold on relays without AliasEpoch.
+	// It is zero when AliasEpoch is available or there is no alias.
 	AliasSince time.Time
 	UDPAddr    string
 	TCPAddr    string
@@ -164,6 +169,7 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
+	Replica    bool
 	Cache      *cache.SourceConfig
 	UDPEnabled bool
 	TCPEnabled bool
@@ -177,6 +183,16 @@ type options struct {
 
 // Option configures an optional capability of a relay-backed exposure.
 type Option func(*options)
+
+// WithReplicas joins independent HTTP leases sharing this service's identity key.
+// Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with it.
+// Handler state is not shared: embedders must provide their own service-wide
+// login and payment replay guarantees. Built-in appauth supports SIWE, credentials
+// and OIDC with relay-issued alias epochs; email, SAML and the CLI's Nano payment
+// gate require a single consumption owner and do not support replica rotation.
+func WithReplicas() Option {
+	return func(opts *options) { opts.Replica = true }
+}
 
 // WithStaticRelayCache opts a static site into relay TLS termination and bounded
 // offline serving. A zero TTL accepts the relay's maximum offline lifetime.
@@ -255,6 +271,11 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	}
 	if err := cfg.Metadata.Validate(); err != nil {
 		return nil, err
+	}
+	if cfg.Replica {
+		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.Overlay || cfg.Cache != nil {
+			return nil, errReplicaRequiresDirectHTTP
+		}
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
 	if runtime.GOOS == "js" && requiresSocketTransport {
@@ -654,10 +675,14 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 		status.TCPAddr = update.tcpAddr
 	}
 	switch {
-	case status.AliasURL == "":
+	case status.AliasURL == "" || update.aliasEpoch != "":
 		status.AliasSince = time.Time{}
-	case status.AliasURL != previous.AliasURL:
+	case status.AliasURL != previous.AliasURL || previous.AliasEpoch != "":
 		status.AliasSince = time.Now()
+	}
+	status.AliasEpoch = ""
+	if status.AliasURL != "" {
+		status.AliasEpoch = update.aliasEpoch
 	}
 	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
 	if !relayStatusEqual(previous, status) {
@@ -746,6 +771,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 	return a.RelayURL == b.RelayURL &&
 		a.PublicURL == b.PublicURL &&
 		a.AliasURL == b.AliasURL &&
+		a.AliasEpoch == b.AliasEpoch &&
 		a.UDPAddr == b.UDPAddr &&
 		a.TCPAddr == b.TCPAddr &&
 		a.Version == b.Version &&
@@ -1154,6 +1180,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
+			Replica:    e.options.Replica,
 			Cache:      e.cache,
 			Identity:   e.identity,
 			Overlay:    e.options.Overlay,

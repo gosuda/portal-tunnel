@@ -43,6 +43,7 @@ type apiClient struct {
 	tls            *tls.Config
 	releaseVersion string
 	cache          *types.StaticCacheLimits
+	replicas       bool
 }
 
 func (c *apiClient) resetTransport() {
@@ -55,6 +56,7 @@ func (c *apiClient) resetTransport() {
 	c.transport = nil
 	c.tls = nil
 	c.cache = nil
+	c.replicas = false
 }
 
 func (c *apiClient) initHTTPTransport(ctx context.Context) error {
@@ -92,6 +94,7 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 	}
 	c.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
 	c.cache = domainResp.Cache
+	c.replicas = domainResp.Replicas
 	c.http = httpClient
 	c.transport = httpTransport
 	c.tls = tlsConfig
@@ -138,6 +141,12 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	if err := c.initHTTPTransport(ctx); err != nil {
 		return types.RegisterResponse{}, err
 	}
+	c.mu.RLock()
+	replicas := c.replicas
+	c.mu.RUnlock()
+	if registerReq.Replica && !replicas {
+		return types.RegisterResponse{}, fmt.Errorf("%w: relay does not support HTTP replicas", errRelayIncompatible)
+	}
 
 	var challenge types.RegisterChallengeResponse
 	var request types.RegisterRequest
@@ -147,6 +156,9 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
 			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge)
 			if err == nil {
+				if registerReq.Replica && !challenge.Replica {
+					return types.RegisterResponse{}, fmt.Errorf("%w: relay did not confirm replica registration", errRelayIncompatible)
+				}
 				if err := identity.ValidateRegisterSIWEChallenge(challenge, c.relayURL, registerReq.Identity.Address, time.Now()); err != nil {
 					return types.RegisterResponse{}, err
 				}

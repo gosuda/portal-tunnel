@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -117,6 +118,83 @@ func TestConfigSpecModes(t *testing.T) {
 			tc.edit(&cfg)
 			if _, err := cfg.Spec(); (err == nil) != tc.valid {
 				t.Fatalf("Spec() = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}
+
+func TestReplicaConfigResolvesHTTPAndRejectsUnsupportedModes(t *testing.T) {
+	cfg := Config{Replica: true, TargetAddr: "localhost:3000"}
+	spec, err := cfg.Spec()
+	if err != nil || spec.HTTP == nil || !spec.Transport.Replica {
+		t.Fatalf("replica did not resolve to HTTP: %+v, %v", spec, err)
+	}
+	for _, invalid := range []Config{
+		{Replica: true, TargetAddr: "localhost:3000", Overlay: true},
+		{Replica: true, TargetAddr: "localhost:3000", TCPEnabled: true},
+		{Replica: true, TargetAddr: "localhost:3000", UDPEnabled: true},
+		{Replica: true, Serve: ".", Cache: &CacheConfig{}},
+	} {
+		if _, err := invalid.Spec(); err == nil {
+			t.Fatalf("unsupported replica mode accepted: %+v", invalid)
+		}
+	}
+}
+
+func TestReplicaAuthCompatibility(t *testing.T) {
+	for _, auth := range []appauth.Config{
+		{Provider: appauth.ProviderSIWE},
+		{Provider: appauth.ProviderCredential},
+		{Provider: appauth.ProviderOIDC, Allow: []string{"alice@example.com"}, OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: "client"}},
+		{Provider: appauth.ProviderSAML, Allow: []string{"alice@example.com"}, SAMLConfig: appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"}},
+		{Provider: appauth.ProviderEmail, EmailList: []string{"alice@example.com"}, EmailConfig: appauth.EmailConfig{SMTPAddr: "smtp.example.com:465", SMTPFrom: "signin@example.com"}},
+	} {
+		t.Run(auth.Provider, func(t *testing.T) {
+			cfg := Config{TargetAddr: "localhost:3000", AuthConfig: auth}
+			if _, err := cfg.Spec(); err != nil {
+				t.Fatalf("exclusive auth config rejected: %v", err)
+			}
+			cfg.Replica = true
+			_, err := cfg.Spec()
+			reject := auth.Provider == appauth.ProviderEmail || auth.Provider == appauth.ProviderSAML
+			if reject {
+				if !errors.Is(err, errReplicaApplicationAuth) {
+					t.Fatalf("replica %s config: got %v, want %v", auth.Provider, err, errReplicaApplicationAuth)
+				}
+			} else if err != nil {
+				t.Fatalf("replica %s config: unexpected error: %v", auth.Provider, err)
+			}
+		})
+	}
+}
+
+func TestReplicaRejectsPaidNanoRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		network string
+		replica bool
+		amount  string
+		reject  bool
+	}{
+		{name: "Nano replica", network: "nano:mainnet", replica: true, amount: "0.01", reject: true},
+		{name: "normalized Nano replica", network: " NANO:MAINNET ", replica: true, amount: "0.01", reject: true},
+		{name: "exclusive Nano", network: "nano:mainnet", amount: "0.01"},
+		{name: "unpaid replica", network: "nano:mainnet", replica: true},
+		{name: "Sui replica", network: "sui:mainnet", replica: true, amount: "0.01"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{
+				Replica:    tc.replica,
+				HTTPRoutes: []HTTPRoute{{Prefix: "/", Upstream: "localhost:3000", Amount: tc.amount}},
+				X402Config: gateway.X402Config{Network: tc.network, PayTo: "recipient"},
+			}
+			_, err := cfg.Spec()
+			if tc.reject {
+				if !errors.Is(err, errReplicaNanoPayments) {
+					t.Fatalf("got %v, want incompatible-Nano error", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

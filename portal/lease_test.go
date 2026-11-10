@@ -569,7 +569,7 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 		}
 		return challenge, registry.refuseChallengeOverBudget(leaseIdentity.ServiceKey(), challenge.ChallengeID, from)
 	}
-	register := func(name string, from netip.Addr, access types.LeaseAccess, revision uint64) (types.Identity, types.RegisterResponse) {
+	register := func(name string, from netip.Addr, access types.LeaseAccess, revision uint64) (types.Identity, *leaseRecord, types.RegisterResponse) {
 		t.Helper()
 		leaseIdentity := newTestLeaseIdentity(t, name)
 		registry.setIdentityAccess(leaseIdentity.ServiceKey(), access, revision)
@@ -593,10 +593,10 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(record.Close)
-		return leaseIdentity, registered
+		return leaseIdentity, record, registered
 	}
-	first, firstLease := register("first", source, types.LeasePending, 1)
-	second, _ := register("second", source, types.LeaseDenied, 2)
+	first, _, firstLease := register("first", source, types.LeasePending, 1)
+	second, secondRecord, _ := register("second", source, types.LeaseDenied, 2)
 	register("approved", source, types.LeaseRoutable, 3)
 
 	newcomer := newTestLeaseIdentity(t, "third")
@@ -616,7 +616,7 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: firstLease.AccessToken, TTL: 60}, other, nil); err != nil {
 		t.Fatal(err)
 	}
-	registry.Touch(second.ServiceKey(), other, time.Now())
+	registry.Touch(second.ServiceKey(), secondRecord.id, other, time.Now())
 	if _, err := ask(newcomer, source); !errors.Is(err, errUnapprovedLeaseLimit) {
 		t.Fatalf("a renew from elsewhere freed a slot: %v", err)
 	}
@@ -1141,7 +1141,7 @@ func TestLeaseBridgeCapacityAndRevocation(t *testing.T) {
 		if index < 16 {
 			reverse, other := net.Pipe()
 			t.Cleanup(func() { _ = other.Close() })
-			if err := registry.activateBridge(record, bridge, reverse); err != nil {
+			if err := registry.activateBridge(record, bridge, reverse, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1161,7 +1161,7 @@ func TestLeaseBridgeCapacityAndRevocation(t *testing.T) {
 			t.Fatal("deny did not cancel bridge")
 		}
 		reverse, peer := net.Pipe()
-		err := registry.activateBridge(record, bridge, reverse)
+		err := registry.activateBridge(record, bridge, reverse, nil)
 		_ = reverse.Close()
 		_ = peer.Close()
 		if !errors.Is(err, net.ErrClosed) {
@@ -1196,7 +1196,7 @@ func TestLeaseBridgeRejectsExpiredAdmissionAfterWait(t *testing.T) {
 	reverse, other := net.Pipe()
 	defer reverse.Close()
 	defer other.Close()
-	if err := registry.activateBridge(record, bridge, reverse); !errors.Is(err, errLeaseNotFound) {
+	if err := registry.activateBridge(record, bridge, reverse, nil); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("expired activation=%v", err)
 	}
 }
@@ -1227,7 +1227,7 @@ func TestLeaseConcurrentRenewAndBridgeAdmission(t *testing.T) {
 				return
 			}
 			reverse, other := net.Pipe()
-			if err := registry.activateBridge(record, bridge, reverse); err != nil {
+			if err := registry.activateBridge(record, bridge, reverse, nil); err != nil {
 				t.Error(err)
 			}
 			record.releaseBridge(bridge)

@@ -81,6 +81,7 @@ type exposeFlags struct {
 }
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
+	fs.BoolVar(&cfg.Replica, "replica", false, "Join HTTP replicas sharing this service identity key; requires a supporting relay; excludes dedicated TCP/UDP ports, relay cache, overlay, email/SAML authentication, and Nano payments")
 	env := cli.NewEnv(os.Environ())
 	fs.StringVar(&flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	fs.BoolVar(&flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	nanoscheme "github.com/gosuda/x402-facilitator/scheme/nano"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
@@ -35,6 +36,9 @@ var (
 	errStripRequestHeaderHostNotSupported      = errors.New(`strip request header "Host" is not supported: Go stores it in Request.Host, not Header`)
 	errStripRequestHeaderXForwardedProto       = errors.New(`strip request header "X-Forwarded-Proto" is not supported: RunHTTP always overwrites it with the trusted https value`)
 	errCasperPaymentsRequireAnAsset            = errors.New("casper payments require an asset")
+	errReplicaRequiresHTTP                     = errors.New("replicas require HTTP without dedicated TCP/UDP ports, relay cache, or overlay")
+	errReplicaApplicationAuth                  = errors.New("replicas cannot use email or SAML authentication: one-time login consumption is local to each gateway")
+	errReplicaNanoPayments                     = errors.New("replicas cannot use Nano payments: payment proof consumption is local to each gateway")
 )
 
 // Spec is the resolved description of one tunnel that the runtime is built from.
@@ -61,9 +65,10 @@ type RelaySpec struct {
 }
 
 type TransportSpec struct {
-	Target string
-	TCP    bool
-	UDP    *UDPConfig
+	Replica bool
+	Target  string
+	TCP     bool
+	UDP     *UDPConfig
 }
 
 type UDPConfig struct {
@@ -93,6 +98,14 @@ type CacheConfig struct {
 }
 
 func (spec Spec) Validate() error {
+	if spec.Transport.Replica {
+		if spec.HTTP == nil || spec.Relays.Overlay || spec.Transport.TCP || spec.Transport.UDP != nil {
+			return errReplicaRequiresHTTP
+		}
+		if spec.HTTP.Cache != nil {
+			return errReplicaRequiresHTTP
+		}
+	}
 	target := strings.TrimSpace(spec.Transport.Target)
 	if spec.HTTP == nil {
 		if target == "" {
@@ -127,6 +140,9 @@ func (spec Spec) Validate() error {
 		}
 	}
 	for _, route := range httpConfig.Routes {
+		if spec.Transport.Replica && strings.TrimSpace(route.Amount) != "" && nanoscheme.IsNanoNetwork(strings.ToLower(httpConfig.Payment.Network)) {
+			return errReplicaNanoPayments
+		}
 		prefix := strings.TrimSpace(route.Prefix)
 		if prefix == "" || strings.TrimSpace(route.Upstream) == "" {
 			return errHTTPRoutesRequirePrefixAndUpstream
@@ -164,6 +180,10 @@ func (spec Spec) Validate() error {
 	if auth := httpConfig.Auth; auth != nil {
 		if err := appauth.Validate(*auth); err != nil {
 			return err
+		}
+		provider := strings.ToLower(strings.TrimSpace(auth.Provider))
+		if spec.Transport.Replica && (provider == appauth.ProviderEmail || provider == appauth.ProviderSAML) {
+			return errReplicaApplicationAuth
 		}
 	}
 	return nil
@@ -217,6 +237,9 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	opts := []sdk.Option{
 		sdk.WithMITMProtection(spec.Relays.BanMITM),
 		sdk.WithMetadata(spec.Metadata),
+	}
+	if spec.Transport.Replica {
+		opts = append(opts, sdk.WithReplicas())
 	}
 	if spec.Transport.UDP != nil {
 		opts = append(opts, sdk.WithUDP())
@@ -278,7 +301,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 func (runtime *Runtime) publicHosts() []appauth.PublicHost {
 	var hosts []appauth.PublicHost
 	for _, relay := range runtime.Exposure.Relays() {
-		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
+		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.AliasURL, Epoch: relay.AliasEpoch, Since: relay.AliasSince})
 	}
 	return hosts
 }

@@ -81,6 +81,34 @@ func TestAliasSinceDatesTheCurrentHold(t *testing.T) {
 	}
 }
 
+func TestAliasEpochUsesRelayOwnership(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exposure := &Exposure{
+		cancel: cancel, done: ctx.Done(), accepted: make(chan net.Conn, 1),
+		relayListeners: make(map[string]*listener),
+	}
+	const relay = "https://relay.example"
+	update := listenerStatus{state: RelayReady, publicURL: "https://canonical.example", aliasURL: "https://alias.example", aliasEpoch: "first"}
+	exposure.applyRelayStatus(relay, update, nil)
+	if got := exposure.statuses[relay]; got.AliasEpoch != "first" || !got.AliasSince.IsZero() {
+		t.Fatalf("relay ownership was replaced by local time: %+v", got)
+	}
+	exposure.applyRelayStatus(relay, listenerStatus{state: RelayConnecting}, nil)
+	if got := exposure.statuses[relay]; got.AliasEpoch != "" || got.AliasURL != "" {
+		t.Fatalf("lost alias retained ownership: %+v", got)
+	}
+	exposure.applyRelayStatus(relay, update, nil)
+	if got := exposure.statuses[relay]; got.AliasEpoch != "first" {
+		t.Fatalf("reconnecting changed relay ownership: %+v", got)
+	}
+	update.aliasEpoch = "second"
+	exposure.applyRelayStatus(relay, update, nil)
+	if got := exposure.statuses[relay]; got.AliasEpoch != "second" {
+		t.Fatalf("reassigned alias kept the old epoch: %+v", got)
+	}
+}
+
 func TestProxyValidationDoesNotCloseExposure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	exposure := &Exposure{

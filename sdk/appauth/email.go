@@ -65,6 +65,7 @@ type emailAuthenticator struct {
 }
 
 type emailLink struct {
+	hostEpoch string
 	email     string
 	host      string
 	next      string
@@ -177,7 +178,7 @@ func (e *emailAuthenticator) admit(email string, listed bool, now time.Time) boo
 	return true
 }
 
-func (e *emailAuthenticator) issue(email string, listed bool, host, next string, now time.Time) string {
+func (e *emailAuthenticator) issue(email string, listed bool, host, hostEpoch, next string, now time.Time) string {
 	var secret [emailLinkTokenBytes]byte
 	_, _ = rand.Read(secret[:])
 	token := base64.RawURLEncoding.EncodeToString(secret[:])
@@ -192,24 +193,24 @@ func (e *emailAuthenticator) issue(email string, listed bool, host, next string,
 			delete(e.links, key)
 		}
 	}
-	e.links[sha256.Sum256([]byte(token))] = emailLink{email: email, host: host, next: next, expiresAt: now.Add(emailLinkTTL)}
+	e.links[sha256.Sum256([]byte(token))] = emailLink{email: email, host: host, hostEpoch: hostEpoch, next: next, expiresAt: now.Add(emailLinkTTL)}
 	return token
 }
 
-func (e *emailAuthenticator) redeem(token, host string, heldSince, now time.Time) (email, next string, ok bool) {
+func (e *emailAuthenticator) redeem(token, host, hostEpoch string, heldSince, now time.Time) (email, next string, ok bool) {
 	key := sha256.Sum256([]byte(strings.TrimSpace(token)))
 	e.mu.Lock()
 	link, found := e.links[key]
 	delete(e.links, key)
 	e.mu.Unlock()
-	if !found || !now.Before(link.expiresAt) || !sameApplicationHost(link.host, host) || link.expiresAt.Add(-emailLinkTTL).Before(heldSince) {
+	if !found || !now.Before(link.expiresAt) || !sameApplicationHost(link.host, host) || link.hostEpoch != hostEpoch || link.expiresAt.Add(-emailLinkTTL).Before(heldSince) {
 		return "", "", false
 	}
 	return link.email, link.next, true
 }
 
-func (e *emailAuthenticator) send(email string, listed bool, host, next string, now time.Time) {
-	token := e.issue(email, listed, host, next, now)
+func (e *emailAuthenticator) send(email string, listed bool, host, hostEpoch, next string, now time.Time) {
+	token := e.issue(email, listed, host, hostEpoch, next, now)
 	if token == "" {
 		return
 	}
@@ -383,14 +384,14 @@ func (a *applicationAuth) serveEmailRequest(w http.ResponseWriter, r *http.Reque
 		a.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	host, _, public := a.publicHost(r.Host)
+	host, held, public := a.publicHost(r.Host)
 	if !public {
 		a.writeJSONError(w, http.StatusMisdirectedRequest, errRequestHostNotPublic.Error())
 		return
 	}
 	if a.subjectAllowed(email) {
 		_, listed := a.allowedSubjects[email]
-		a.email.send(email, listed, host, sanitizeApplicationAuthNext(req.Next), time.Now().UTC())
+		a.email.send(email, listed, host, held.Epoch, sanitizeApplicationAuthNext(req.Next), time.Now().UTC())
 	}
 	a.writeJSON(w, http.StatusAccepted, struct{}{})
 }
@@ -415,7 +416,7 @@ func (a *applicationAuth) serveEmailRedeem(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	now := time.Now().UTC()
-	email, next, ok := a.email.redeem(req.Token, r.Host, a.heldSince(r.Host), now)
+	email, next, ok := a.email.redeem(req.Token, r.Host, a.hostEpoch(r.Host), a.heldSince(r.Host), now)
 	if !ok || !a.subjectAllowed(email) {
 		a.writeJSONError(w, http.StatusUnauthorized, errEmailLinkInvalidOrExpired.Error())
 		return

@@ -500,6 +500,77 @@ func TestSIWEChallengeFromAnEarlierHoldIsRefused(t *testing.T) {
 	}
 }
 
+func TestSIWEReplicasShareChallengesAndAliasSessions(t *testing.T) {
+	const host = "alias.example"
+	wallet := applicationAuthTestWallet(t, "1")
+	var hosts atomic.Value
+	hosts.Store([]PublicHost{{URL: "https://" + host, Epoch: "ownership-one", Since: time.Now().Add(time.Hour)}})
+	id := applicationAuthTestIdentity()
+	newGate := func() http.Handler {
+		t.Helper()
+		gate, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}), id, Config{Provider: ProviderSIWE, Allow: []string{wallet.Identity().Address}, PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return gate
+	}
+	first, second := newGate(), newGate()
+	post := func(gate http.Handler, path string, value any) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "https://"+host+path, bytes.NewReader(body))
+		req.Header.Set("Origin", "https://"+host)
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		return rec
+	}
+	asked := post(first, types.PathApplicationAuthChallenge, applicationAuthChallengeRequest{Address: wallet.Identity().Address})
+	var challenge applicationAuthChallengeResponse
+	if asked.Code != http.StatusOK {
+		t.Fatalf("challenge: %d %s", asked.Code, asked.Body)
+	}
+	if err := json.Unmarshal(asked.Body.Bytes(), &challenge); err != nil {
+		t.Fatal(err)
+	}
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature}
+	signedIn := post(second, types.PathApplicationAuthVerify, proof)
+	if signedIn.Code != http.StatusOK {
+		t.Fatalf("challenge from another replica: %d %s", signedIn.Code, signedIn.Body)
+	}
+	cookies := signedIn.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected a session cookie: %v", cookies)
+	}
+	open := func(gate http.Handler) int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+host+"/private", nil)
+		req.AddCookie(cookies[0])
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, gate := range []http.Handler{first, second, newGate()} {
+		if status := open(gate); status != http.StatusNoContent {
+			t.Fatalf("session at an existing or restarted replica: %d", status)
+		}
+	}
+	hosts.Store([]PublicHost{{URL: "https://" + host, Epoch: "ownership-two"}})
+	if status := open(first); status != http.StatusSeeOther {
+		t.Fatalf("session from an earlier ownership: %d", status)
+	}
+	if rec := post(second, types.PathApplicationAuthVerify, proof); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("challenge from an earlier ownership: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestApplicationCredentialHeaderPassesFromAnyOrigin(t *testing.T) {
 	t.Parallel()
 

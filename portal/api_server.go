@@ -66,6 +66,9 @@ var (
 	errLeaseRejected            = &apiError{types.APIErrorCodeLeaseRejected, "lease is not approved for routing", http.StatusForbidden}
 	errLeaseDenied              = &apiError{types.APIErrorCodeLeaseDenied, "lease is denied by the relay", http.StatusForbidden}
 	errTransportMismatch        = &apiError{types.APIErrorCodeTransportMismatch, "transport mismatch", http.StatusConflict}
+	errReplicaMode              = &apiError{types.APIErrorCodeInvalidRequest, "replicas require direct HTTP leases without dedicated TCP/UDP ports, cache, or overlay", http.StatusBadRequest}
+	errReplicaLimit             = &apiError{types.APIErrorCodeRateLimited, "replica limit reached for this identity", http.StatusServiceUnavailable}
+	errReplicaConflict          = &apiError{types.APIErrorCodeReplicaConflict, "replicas cannot join an exclusive lease or retained cache entry", http.StatusConflict}
 	errUnauthorized             = &apiError{types.APIErrorCodeUnauthorized, "unauthorized", http.StatusForbidden}
 	errUDPDisabled              = &apiError{types.APIErrorCodeUDPDisabled, "udp disabled", http.StatusForbidden}
 	errUDPCapacityExceeded      = &apiError{types.APIErrorCodeUDPCapacityExceeded, "udp capacity exceeded", http.StatusServiceUnavailable}
@@ -272,6 +275,7 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 // facilitator (cmd/relay-server); this report stays x402-blind.
 func (s *Server) DomainReport() types.DomainResponse {
 	return types.DomainResponse{
+		Replicas:        true,
 		Cache:           s.registry.cache.Limits(),
 		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,
@@ -322,9 +326,12 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 	identityKey := challenge.Request.Identity.ServiceKey()
-	// A registering identity starts fail-closed. Mux replaces this projection
-	// with the relay's current access decision before publishing success.
-	s.registry.suspendIdentity(identityKey)
+	// Exclusive registration starts fail-closed. Replicas keep the existing
+	// identity decision so joining a service cannot interrupt its siblings.
+	// Mux publishes the current decision before returning either kind of token.
+	if !challenge.Request.Replica {
+		s.registry.suspendIdentity(identityKey)
+	}
 
 	var self types.RelayDescriptor
 	var descriptors []types.RelayDescriptor
@@ -512,7 +519,7 @@ func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseM
 		if err := lease.reverse.Offer(stream); err != nil {
 			continue
 		}
-		s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
+		s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
 	}
 }
 
@@ -589,7 +596,7 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAdd
 		return
 	}
 
-	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
+	s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
 	log.Info().
 		Str("address", lease.Address).
 		Str("lease_name", lease.Name).
@@ -657,7 +664,8 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 					s.registry.bindings.Discard(binding)
 					return nil, err
 				}
-				if err := transport.WriteTLSStart(upstream, binding); err == nil {
+				deadline, _ := ctx.Deadline()
+				if err := transport.WriteTLSStart(upstream, binding, deadline); err == nil {
 					break
 				}
 				_ = upstream.Close()

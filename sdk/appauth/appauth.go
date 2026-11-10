@@ -90,10 +90,13 @@ type principalContextKey struct{}
 // PublicHost is a URL the application is reachable at now.
 type PublicHost struct {
 	URL string
-	// Since is when the application came to hold URL. Set it for a URL that can
-	// change hands, such as an alias, so that a session or a sign-in from an
-	// earlier hold does not count. Credentials are not dated, because they have to
-	// outlive a restart. Leave Since zero for a URL only this identity can hold.
+	// Epoch identifies uninterrupted ownership of a reassignable URL. All
+	// replicas must use the relay's value. When set it supersedes Since.
+	Epoch string
+	// Since is the fallback ownership cutoff for relays without epochs. Set it
+	// for a reassignable URL so earlier sessions and sign-ins do not count.
+	// Credentials are not dated, because they have to outlive a restart.
+	// Leave both Epoch and Since zero for a URL only this identity can hold.
 	Since time.Time
 }
 
@@ -270,6 +273,7 @@ type applicationAuthClaims struct {
 	Provider       string `json:"auth,omitempty"`
 	Email          string `json:"email,omitempty"`
 	Host           string `json:"host"`
+	HostEpoch      string `json:"host_epoch,omitempty"`
 	IssuedAtMillis int64  `json:"iat_ms,omitempty"`
 	ExpiresAt      int64  `json:"exp"`
 	Binding        string `json:"bnd,omitempty"`
@@ -308,6 +312,7 @@ type oidcStateClaims struct {
 	Nonce        string `json:"nonce"`
 	CodeVerifier string `json:"cv"`
 	Host         string `json:"host"`
+	HostEpoch    string `json:"host_epoch,omitempty"`
 	Next         string `json:"next"`
 	ExpiresAt    int64  `json:"exp"`
 }
@@ -500,6 +505,9 @@ func isUnsafeRedirectRune(r rune) bool {
 // provider. A gate built from the same id, including its TokenSecret, and the same
 // provider settings accepts the sessions of an earlier gate; the allowlist is
 // checked again on every request.
+// Replicas using SIWE, credentials or OIDC must share id and provider settings,
+// and supply relay-issued PublicHost epochs. Email links and SAML assertion
+// consumption remain instance-local and do not support replica rotation.
 func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error) {
 	if next == nil {
 		return nil, errApplicationAuthHandlerIsRequired
@@ -525,7 +533,12 @@ func New(next http.Handler, id types.Identity, cfg Config) (http.Handler, error)
 	allowAnySubject := settings.provider == ProviderSIWE || (settings.provider == ProviderCredential && len(settings.allowed) == 0)
 	switch settings.provider {
 	case ProviderSIWE:
+		challengeKey, keyErr := identity.DeriveToken(id, "application-access-siwe-challenge")
+		if keyErr != nil {
+			return nil, fmt.Errorf("derive wallet auth challenge key: %w", keyErr)
+		}
 		siwe, err = identity.NewSIWEAuthenticator(identity.SIWEAuthConfig{
+			ChallengeKey:     []byte(challengeKey),
 			AllowedAddresses: settings.allowed,
 			AllowAnyAddress:  len(settings.allowed) == 0,
 			Statement:        "Sign in to this Portal application",
@@ -653,21 +666,32 @@ func (a *applicationAuth) heldSince(rawHost string) time.Time {
 	if a.publicHosts == nil {
 		return time.Time{}
 	}
-	_, since, _ := a.publicHost(rawHost)
-	return since
+	_, held, _ := a.publicHost(rawHost)
+	return held.Since
 }
 
-func (a *applicationAuth) publicHost(rawHost string) (string, time.Time, bool) {
+func (a *applicationAuth) hostEpoch(rawHost string) string {
+	if a.publicHosts == nil {
+		return ""
+	}
+	_, held, _ := a.publicHost(rawHost)
+	return held.Epoch
+}
+
+func (a *applicationAuth) publicHost(rawHost string) (string, PublicHost, bool) {
 	requestHost, err := normalizeHost(rawHost)
 	if err != nil {
-		return "", time.Time{}, false
+		return "", PublicHost{}, false
 	}
 	for _, candidate := range a.publicHosts() {
 		if host, err := normalizeHost(candidate.URL); err == nil && host == requestHost {
-			return host, candidate.Since, true
+			if candidate.Epoch != "" {
+				candidate.Since = time.Time{}
+			}
+			return host, candidate, true
 		}
 	}
-	return "", time.Time{}, false
+	return "", PublicHost{}, false
 }
 
 func stripApplicationAuthCookie(r *http.Request) {
@@ -682,11 +706,11 @@ func stripApplicationAuthCookie(r *http.Request) {
 
 func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 	if a.provider == ProviderOIDC && a.oidc != nil {
-		a.oidc.serveLogin(w, r)
+		a.oidc.serveLogin(w, r, a.hostEpoch(r.Host))
 		return
 	}
 	if a.provider == ProviderSAML && a.saml != nil {
-		a.saml.serveLogin(w, r)
+		a.saml.serveLogin(w, r, a.hostEpoch(r.Host))
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -710,7 +734,7 @@ func (a *applicationAuth) serveLogin(w http.ResponseWriter, r *http.Request) {
 
 const accountChooserPrompt = "select_account"
 
-func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
+func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request, hostEpoch string) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -738,6 +762,7 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 	next := sanitizeApplicationAuthNext(r.URL.Query().Get("next"))
 
 	stateClaims := oidcStateClaims{
+		HostEpoch:    hostEpoch,
 		State:        state,
 		Nonce:        nonce,
 		CodeVerifier: codeVerifier,
@@ -815,6 +840,7 @@ func (a *applicationAuth) serveOIDCCallback(w http.ResponseWriter, r *http.Reque
 	var stateClaims oidcStateClaims
 	if err := decodeSignedApplicationAuthJSON(a.oidc.stateKey, stateCookie.Value, &stateClaims); err != nil ||
 		!sameApplicationHost(stateClaims.Host, host) ||
+		stateClaims.HostEpoch != a.hostEpoch(host) ||
 		now.Unix() >= stateClaims.ExpiresAt ||
 		loginStateIssuedAt(stateClaims.ExpiresAt).Before(a.heldSince(host)) {
 		next := "/"
@@ -1132,7 +1158,7 @@ func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request)
 	}
 	host := strings.TrimSpace(r.Host)
 	now := time.Now().UTC()
-	challenge, err := a.siwe.Issue(req.Address, host, "https://"+host, now)
+	challenge, err := a.siwe.ForBinding(a.hostEpoch(host)).Issue(req.Address, host, "https://"+host, now)
 	if err != nil {
 		a.writeJSONError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -1150,7 +1176,7 @@ func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	address, err := a.siwe.Verify(req.ChallengeID, req.Message, req.Signature, r.Host, a.heldSince(r.Host), now)
+	address, err := a.siwe.ForBinding(a.hostEpoch(r.Host)).Verify(req.ChallengeID, req.Message, req.Signature, r.Host, a.heldSince(r.Host), now)
 	if err != nil {
 		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
 		return
@@ -1224,7 +1250,7 @@ func (a *applicationAuth) authenticateSession(r *http.Request) (Principal, bool)
 	if provider != a.provider {
 		return Principal{}, false
 	}
-	if claims.IssuedAtMillis < a.heldSince(r.Host).UnixMilli() {
+	if claims.HostEpoch != a.hostEpoch(r.Host) || claims.IssuedAtMillis < a.heldSince(r.Host).UnixMilli() {
 		return Principal{}, false
 	}
 	if provider == ProviderSIWE {
@@ -1274,7 +1300,7 @@ func (a *applicationAuth) subjectAllowed(subject string) bool {
 }
 
 func (a *applicationAuth) issueSession(principal Principal, host string, issuedAt, expiresAt time.Time) (string, error) {
-	claims := applicationAuthClaims{Subject: principal.Subject, Provider: principal.Provider, Email: principal.Email, Host: host, IssuedAtMillis: issuedAt.UnixMilli(), ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
+	claims := applicationAuthClaims{Subject: principal.Subject, Provider: principal.Provider, Email: principal.Email, Host: host, HostEpoch: a.hostEpoch(host), IssuedAtMillis: issuedAt.UnixMilli(), ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
 	return encodeSignedApplicationAuthJSON(a.signingKey, claims)
 }
 

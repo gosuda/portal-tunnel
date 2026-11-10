@@ -60,6 +60,7 @@ const (
 )
 
 type listenerConfig struct {
+	Replica    bool
 	Cache      *cache.Source
 	Identity   types.Identity
 	Overlay    bool
@@ -71,15 +72,16 @@ type listenerConfig struct {
 }
 
 type listenerStatus struct {
-	state     RelayState
-	failure   RelayFailure
-	approval  RelayApproval
-	err       error
-	publicURL string
-	aliasURL  string
-	udpAddr   string
-	tcpAddr   string
-	version   string
+	state      RelayState
+	failure    RelayFailure
+	approval   RelayApproval
+	err        error
+	publicURL  string
+	aliasURL   string
+	aliasEpoch string
+	udpAddr    string
+	tcpAddr    string
+	version    string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -94,6 +96,11 @@ var terminalAPIErrorCodes = []string{
 
 func isTerminalRelayError(err error) bool {
 	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok && apiErr.IsRateLimited() {
+		return false
+	}
+	// A replica conflict clears when the exclusive lease expires or the
+	// retained cache entry ages out, so the replica keeps retrying.
+	if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeReplicaConflict}) {
 		return false
 	}
 	if errors.Is(err, errRelayIncompatible) {
@@ -149,6 +156,7 @@ type listener struct {
 	metadataMu        sync.RWMutex
 	metadata          types.LeaseMetadata
 	identity          types.Identity
+	replica           bool
 	overlay           bool
 	warnOverlayDirect sync.Once
 	udpEnabled        bool
@@ -189,6 +197,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		doneCh:        listenerCtx.Done(),
 		metadata:      cfg.Metadata.Copy(),
 		identity:      cfg.Identity,
+		replica:       cfg.Replica,
 		overlay:       cfg.Overlay,
 		statusUpdates: make(chan listenerStatus),
 		udpEnabled:    cfg.UDPEnabled,
@@ -318,12 +327,13 @@ func (l *listener) reportAvailable() {
 		udpAddr = lease.udpAddr
 	}
 	l.report(listenerStatus{
-		state:     state,
-		publicURL: l.publicURLForLease(lease),
-		aliasURL:  l.aliasURLForLease(lease),
-		udpAddr:   udpAddr,
-		tcpAddr:   lease.tcpAddr,
-		version:   l.api.relayReleaseVersion(),
+		state:      state,
+		publicURL:  l.publicURLForLease(lease),
+		aliasURL:   l.aliasURLForLease(lease),
+		aliasEpoch: lease.aliasEpoch,
+		udpAddr:    udpAddr,
+		tcpAddr:    lease.tcpAddr,
+		version:    l.api.relayReleaseVersion(),
 	})
 }
 
@@ -367,6 +377,9 @@ func (l *listener) run(ctx context.Context) {
 
 		if errors.Is(err, errLeaseRefreshRequired) {
 			lease := l.clearLease("lease refresh required")
+			if l.replica && lease != nil && lease.accessToken != "" {
+				_ = l.api.unregister(ctx, lease.accessToken)
+			}
 			if lease != nil && lease.tenantTLS != nil {
 				_ = lease.tenantTLS.Close()
 			}
@@ -436,6 +449,7 @@ type listenerSnapshot struct {
 	hostname string
 
 	aliasHostname string
+	aliasEpoch    string
 	udpAddr       string
 	tcpAddr       string
 	accessToken   string
@@ -1191,6 +1205,7 @@ func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Cli
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	registerReq := types.RegisterChallengeRequest{
+		Replica:                l.replica,
 		AllowCanonicalFallback: true,
 		Identity:               l.identity,
 		Metadata:               l.metadataSnapshot(),
@@ -1234,6 +1249,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	next := listenerSnapshot{
 		hostname:       canonicalHostname,
 		aliasHostname:  resp.Hostname,
+		aliasEpoch:     resp.AliasEpoch,
 		udpAddr:        resp.UDPAddr,
 		tcpAddr:        resp.TCPAddr,
 		accessToken:    resp.AccessToken,
@@ -1243,6 +1259,11 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		chainCheckedAt: time.Now(),
 	}
 	oldLease := l.lease.Swap(next)
+	if l.replica && oldLease.accessToken != "" {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = l.api.unregister(cleanupCtx, oldLease.accessToken)
+		cancel()
+	}
 	if oldLease.tenantTLS != nil {
 		_ = oldLease.tenantTLS.Close()
 	}

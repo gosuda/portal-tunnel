@@ -164,6 +164,7 @@ type Lease struct {
 
 type PolicyLease struct {
 	Lease
+	LeaseID     string `json:"lease_id"`
 	IdentityKey string `json:"identity_key,omitempty"`
 	BPS         int64  `json:"bps"`
 	ClientIP    string `json:"client_ip"`

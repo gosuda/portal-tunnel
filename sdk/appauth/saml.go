@@ -83,6 +83,7 @@ type samlIdentityProvider struct {
 type samlStateClaims struct {
 	RequestID string `json:"rid"`
 	Host      string `json:"host"`
+	HostEpoch string `json:"host_epoch,omitempty"`
 	Next      string `json:"next"`
 	ExpiresAt int64  `json:"exp"`
 }
@@ -294,7 +295,7 @@ func (s *samlAuthenticator) issuerHost(idp samlIdentityProvider) string {
 	}
 }
 
-func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
+func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request, hostEpoch string) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -322,6 +323,7 @@ func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stateClaims := samlStateClaims{
+		HostEpoch: hostEpoch,
 		RequestID: request.Root().SelectAttrValue("ID", ""),
 		Host:      host,
 		Next:      sanitizeApplicationAuthNext(r.URL.Query().Get("next")),
@@ -388,6 +390,7 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 	var state samlStateClaims
 	if err := decodeSignedApplicationAuthJSON(a.saml.stateKey, stateCookie.Value, &state); err != nil ||
 		!sameApplicationHost(state.Host, host) ||
+		state.HostEpoch != a.hostEpoch(host) ||
 		now.Unix() >= state.ExpiresAt ||
 		loginStateIssuedAt(state.ExpiresAt).Before(a.heldSince(host)) {
 		next := "/"
