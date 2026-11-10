@@ -90,19 +90,10 @@ func buildTenantClient(ctx context.Context, config ClientConfig, normalizedRelay
 		serverName:  serverName,
 		hostname:    hostname,
 	}
-	if err := attachPinForNewClient(client, chainPEM); err != nil {
+	if client.pin, err = client.newPin(chainPEM); err != nil {
 		return nil, err
 	}
 	return client, nil
-}
-
-func attachPinForNewClient(client *Client, chainPEM []byte) error {
-	pin, err := client.newPin(chainPEM)
-	if err != nil {
-		return err
-	}
-	client.pin = pin
-	return nil
 }
 
 func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
