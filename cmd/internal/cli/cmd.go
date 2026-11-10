@@ -127,8 +127,8 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 		}
 
 		name := strings.TrimLeft(strings.TrimSpace(arg), "-")
-		hasInlineValue := strings.Contains(name, "=")
-		if before, _, ok := strings.Cut(name, "="); ok {
+		before, _, hasInlineValue := strings.Cut(name, "=")
+		if hasInlineValue {
 			name = strings.TrimSpace(before)
 		}
 		if name == "" {

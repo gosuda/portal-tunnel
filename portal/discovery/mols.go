@@ -291,6 +291,7 @@ func rankRelayPool(autoPool []relayState, localAddress string, key []byte) []str
 	fallbackURLs := rankTier(fallbackStates)
 	return append(activeURLs, fallbackURLs...)
 }
+
 func selectPriority(states []relayState, routeState routeState) []string {
 	now := time.Now().UTC()
 	explicit := make([]string, 0, len(routeState.ExplicitRelayURLs))
