@@ -140,14 +140,8 @@ func (s *RelaySet) refreshCandidates(now time.Time) []relayState {
 		if state.Banned {
 			continue
 		}
-		if !state.hasObservedDescriptor() {
-			if !state.Bootstrap {
-				continue
-			}
-		} else if !state.Bootstrap {
-			if !state.nextDiscoveryRefreshAt.IsZero() && state.nextDiscoveryRefreshAt.After(now) {
-				continue
-			}
+		if !state.Bootstrap && (!state.hasObservedDescriptor() || state.nextDiscoveryRefreshAt.After(now)) {
+			continue
 		}
 		if state.Descriptor.APIHTTPSAddr == "" {
 			continue
