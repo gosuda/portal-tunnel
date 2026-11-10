@@ -85,10 +85,6 @@ type paymentPageData struct {
 }
 
 func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
-	handler := &paymentHandler{
-		metadata: cfg.Metadata.Copy(),
-		photoURL: strings.TrimSpace(cfg.PhotoURL),
-	}
 	network := suiNetwork(cfg.Testnet)
 	asset, ok := suischeme.GetGaslessStablecoinType(network, usdcAssetSymbol)
 	if !ok {
@@ -106,11 +102,15 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 	if maxTimeoutSeconds <= 0 {
 		maxTimeoutSeconds = defaultMaxTimeoutSeconds
 	}
-	handler.network = network
-	handler.networkName = suischeme.GetNetworkName(network)
-	handler.asset = asset
-	handler.amount = amount
-	handler.payTo = payTo
+	handler := &paymentHandler{
+		metadata:    cfg.Metadata.Copy(),
+		photoURL:    strings.TrimSpace(cfg.PhotoURL),
+		network:     network,
+		networkName: suischeme.GetNetworkName(network),
+		asset:       asset,
+		amount:      amount,
+		payTo:       payTo,
+	}
 	requirements := facilitatortypes.PaymentRequirements{
 		Scheme:            string(facilitatortypes.Exact),
 		Network:           network,
