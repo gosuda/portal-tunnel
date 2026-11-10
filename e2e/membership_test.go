@@ -18,12 +18,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
-// RemoveRelay and AddRelay are public membership operations on one
-// exposure spanning two real relays. Removal must take exactly the
-// removed relay's public URL out of service while the surviving relay
-// keeps serving, and re-adding must restore service — all observed
-// through real TLS round trips and the Relays() snapshot, never the
-// listener registry underneath.
 func TestRelayMembershipRemoveAndAdd(t *testing.T) {
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, marker)
@@ -72,9 +66,6 @@ func TestRelayMembershipRemoveAndAdd(t *testing.T) {
 	if err := exposure.RemoveRelay(relayA.relayURL); err != nil {
 		t.Fatalf("remove relay A: %v", err)
 	}
-	// Removal converges on all three public observables together: the
-	// removed URL stops answering, the survivor keeps answering with the
-	// marker, and the snapshot drops the removed relay.
 	removedDeadline := time.Now().Add(15 * time.Second)
 	for {
 		_, servedA := tenantGet(relayA.sniAddr, relayA.certPath, publicA)
@@ -98,9 +89,6 @@ func TestRelayMembershipRemoveAndAdd(t *testing.T) {
 	waitServesMarker(t, "relay B after re-add", relayB, publicB, 15*time.Second)
 }
 
-// membershipRelay carries the per-relay coordinates the tenant client
-// needs: where to dial, which certificate to trust, and which public
-// endpoint the relay issued.
 type membershipRelay struct {
 	relayURL string
 	sniAddr  string
@@ -109,9 +97,6 @@ type membershipRelay struct {
 	stateDir string
 }
 
-// startMembershipRelay boots one real relay on an explicit
-// out-of-ephemeral port with its own state dir, mirroring newHarness,
-// and registers its shutdown with t.Cleanup.
 func startMembershipRelay(t *testing.T, ctx context.Context) membershipRelay {
 	t.Helper()
 	sniPort := harnessPort(t, "127.0.0.1")
@@ -143,9 +128,6 @@ func startMembershipRelay(t *testing.T, ctx context.Context) membershipRelay {
 	}
 }
 
-// relayStatusOnPort finds the snapshot entry for the relay listening on
-// sniPort. Relay URLs are normalized, so membership is matched by the
-// configured SNI port rather than string identity.
 func relayStatusOnPort(relays []sdk.RelayStatus, sniPort int) (sdk.RelayStatus, bool) {
 	suffix := ":" + strconv.Itoa(sniPort)
 	for _, status := range relays {
@@ -156,8 +138,6 @@ func relayStatusOnPort(relays []sdk.RelayStatus, sniPort int) (sdk.RelayStatus, 
 	return sdk.RelayStatus{}, false
 }
 
-// waitPublicURLOnPort polls the public snapshot until the relay on
-// sniPort reports a public URL and returns it.
 func waitPublicURLOnPort(t *testing.T, exposure *sdk.Exposure, sniPort int, deadline time.Time) string {
 	t.Helper()
 	for {
@@ -171,8 +151,6 @@ func waitPublicURLOnPort(t *testing.T, exposure *sdk.Exposure, sniPort int, dead
 	}
 }
 
-// waitServesMarker polls tenant round trips until publicURL answers with
-// the marker through the relay's verified TLS endpoint.
 func waitServesMarker(t *testing.T, label string, relay membershipRelay, publicURL string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

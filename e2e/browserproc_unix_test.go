@@ -7,9 +7,6 @@ import (
 	"syscall"
 )
 
-// browserTree owns the browser process tree teardown. The browser runs in its
-// own process group so cleanup can signal the whole tree even after a
-// launcher hands off to a real browser process.
 type browserTree struct {
 	pid  int
 	done bool
@@ -22,7 +19,6 @@ func newBrowserTree(cmd *exec.Cmd) *browserTree {
 	return &browserTree{pid: cmd.Process.Pid}
 }
 
-// kill ends every process in the browser tree; it is safe to call twice.
 func (b *browserTree) kill() error {
 	if b == nil || b.done {
 		return nil
@@ -37,8 +33,6 @@ func (b *browserTree) kill() error {
 	return nil
 }
 
-// browserSysProcAttr puts the browser in its own process group so the whole
-// tree can be signalled together.
 func browserSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true}
 }

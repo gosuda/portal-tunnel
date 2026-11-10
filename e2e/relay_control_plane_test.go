@@ -15,8 +15,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// stopRelay runs the public shutdown lifecycle and fails the test if either
-// phase misbehaves.
 func stopRelay(t *testing.T, server *portal.Server) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -29,8 +27,6 @@ func stopRelay(t *testing.T, server *portal.Server) {
 	}
 }
 
-// awaitServeExit requires the cancelled serve loop to return within the
-// graceful-shutdown budget; nil or a context error are both a clean exit.
 func awaitServeExit(t *testing.T, serveResult <-chan error) {
 	t.Helper()
 	select {
@@ -43,9 +39,6 @@ func awaitServeExit(t *testing.T, serveResult <-chan error) {
 	}
 }
 
-// Serve is the public lifecycle entry point: relay-owned routes answer
-// alongside the mounted application handler, and cancelling the context ends
-// the serve loop within the shutdown budget.
 func TestRelayServeRoutesAndCancellation(t *testing.T) {
 	t.Run("application handler coexists with relay routes", func(t *testing.T) {
 		sniPort := harnessPort(t, "127.0.0.1")
@@ -99,9 +92,6 @@ func TestRelayServeRoutesAndCancellation(t *testing.T) {
 	})
 }
 
-// The domain document carries compatibility information that the client bootstraps from, an
-// explicitly configured ACME.KeyDir must be honored, and the relay discovery
-// envelope is served only when discovery is enabled.
 func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 	t.Run("domain reports compatibility info with discovery enabled", func(t *testing.T) {
 		sniPort := harnessPort(t, "127.0.0.1")
@@ -123,8 +113,6 @@ func TestRelayDomainCompatibilityAndDiscovery(t *testing.T) {
 		}
 		defer stopRelay(t, server)
 
-		// Certificate material lands in the explicitly configured KeyDir,
-		// not the state directory.
 		waitForRelayCertificateMaterial(t, keyDir)
 		client := relayControlClient(t, keyDir)
 		baseURL := "https://127.0.0.1:" + strconv.Itoa(sniPort)

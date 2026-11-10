@@ -210,17 +210,18 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 		}
 		body, _ := io.ReadAll(response.Body)
 		response.Body.Close()
-		if response.Header.Get("ETag") != "" {
-			if string(body) != "cached site" || response.Header.Get("X-Origin") != "" {
-				t.Fatalf("cache response: %q, %v", body, response.Header)
+		if response.Header.Get("ETag") == "" {
+			select {
+			case <-readyCtx.Done():
+				t.Fatal("cache did not populate")
+			case <-time.After(50 * time.Millisecond):
 			}
-			break
+			continue
 		}
-		select {
-		case <-readyCtx.Done():
-			t.Fatal("cache did not populate")
-		case <-time.After(50 * time.Millisecond):
+		if string(body) != "cached site" || response.Header.Get("X-Origin") != "" {
+			t.Fatalf("cache response: %q, %v", body, response.Header)
 		}
+		break
 	}
 	leases := relay.PublicLeases()
 	if len(leases) != 1 || leases[0].Hostname == "" {
@@ -256,8 +257,6 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if response.StatusCode != http.StatusPartialContent || string(body) != "cached" || originCalls.Load() != before {
 		t.Fatalf("cache hit crossed origin or lost Range support: %d, %q", response.StatusCode, body)
 	}
-	// A Host header that disagrees with the tenant TLS server name must never
-	// reach cached content, even while the tenant is online.
 	spoofed, _ := http.NewRequestWithContext(ctx, http.MethodGet, publicURL, nil)
 	spoofed.Host = "spoofed.example.com"
 	response, err = client.Do(spoofed)
@@ -269,8 +268,6 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if response.StatusCode != http.StatusMisdirectedRequest {
 		t.Fatalf("spoofed host status = %d, want %d", response.StatusCode, http.StatusMisdirectedRequest)
 	}
-	// A non-cacheable method on a terminated connection uses the existing
-	// reverse tunnel, with authenticated tenant TLS on the upstream leg.
 	response, err = client.Post(publicURL, "text/plain", strings.NewReader(""))
 	if err != nil {
 		t.Fatal(err)
@@ -284,8 +281,6 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	if err := exposure.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// The relay processes unregister between the start and end of Close.
-	// Before this lower bound, a failed request cannot be legitimate expiry.
 	earliestExpiry := closeStartedAt.Add(offlineTTL)
 	deadline := time.Now().Add(offlineTTL + 3*time.Second)
 	response, err = client.Get(publicURL)
@@ -305,12 +300,10 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 			if time.Now().Before(earliestExpiry) {
 				t.Fatalf("offline cache failed before its TTL: %v", err)
 			}
-			// An unknown tenant closes the TLS connection. A dial timeout or
-			// certificate failure must not masquerade as successful expiry.
 			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, syscall.ECONNRESET) {
 				t.Fatalf("unexpected error while checking cache expiry: %v", err)
 			}
-			return // Cache TTL has expired and there is no live origin.
+			return
 		}
 		body, err = io.ReadAll(response.Body)
 		response.Body.Close()

@@ -25,8 +25,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// mitmIngress holds the real relay's key and splits tenant TLS into two real
-// sessions. Control, reverse transport and transcript signing remain unchanged.
 type mitmIngress struct {
 	backend     string
 	cert        tls.Certificate
@@ -94,11 +92,8 @@ func (m *mitmIngress) serve(ctx context.Context, raw net.Conn) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	var upstream net.Conn
 	if hello.ServerName == "" {
-		// IP-literal API/reverse connections have no SNI.
 		upstream, err = dialer.DialContext(ctx, "tcp", m.backend)
 	} else {
-		// Visitors explicitly offer HTTP/1.1. Only the native probe omits
-		// ALPN in this fixture; the rejection rule uses public metadata.
 		if len(hello.ALPNProtocols) == 0 {
 			m.probeStarts.Add(1)
 			if m.reject {
@@ -144,8 +139,6 @@ func (m *mitmIngress) serve(ctx context.Context, raw net.Conn) {
 
 func TestMITMTerminationExcludesRelay(t *testing.T) {
 	h := newHarnessWithName(t, "termination", "127.0.0.1", "terminate", sdk.WithMITMProtection(true))
-	// No visitor traffic: reverse readiness alone must start the probe and
-	// expose the TLS split through the SDK's public MITM failure verdict.
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
 	tick := time.NewTicker(10 * time.Millisecond)
@@ -163,7 +156,6 @@ func TestMITMTerminationExcludesRelay(t *testing.T) {
 	}
 }
 
-// Failure must not amplify an ordinary visitor burst into fresh probe retries.
 func TestMITMProbeFailureBudget(t *testing.T) {
 	h := newHarnessWithName(t, "failure-budget", "127.0.0.1", "reject", sdk.WithMITMProtection(true))
 	publicURL := h.waitForPublicURL()
@@ -192,11 +184,6 @@ func TestMITMProbeFailureBudget(t *testing.T) {
 	}
 }
 
-// A native client binds its own TLS connection to the tunnel identity in the
-// hostname. Through an honest relay the binding succeeds and application
-// traffic continues on the verified connection; through a relay that
-// terminates TLS, even for this client alone, the client aborts before it
-// sends any application data.
 func TestTLSChannelBindingThroughRelays(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -254,9 +241,6 @@ func TestTLSChannelBindingThroughRelays(t *testing.T) {
 	}
 }
 
-// captureSDKLogs redirects the SDK's global zerolog logger into a locked
-// buffer so the test can observe the probe verdict. The original logger and
-// global level are restored at test end.
 func captureSDKLogs(t *testing.T) *logCapture {
 	t.Helper()
 
@@ -295,16 +279,12 @@ func (c *logCapture) snapshot() string {
 	return c.buf.String()
 }
 
-// Reverse readiness must start verification without a visitor request, and
-// an honest relay must remain usable after the background probe completes.
 func TestMITMSelfProbeRunsWithoutTenantTraffic(t *testing.T) {
 	logs := captureSDKLogs(t)
 
 	h := newHarness(t, sdk.WithMITMProtection(true))
 	publicURL := h.waitForPublicURL()
 
-	// The probe is asynchronous: poll the captured SDK log instead of
-	// racing it. A verdict must arrive well inside the probe timeout.
 	deadline := time.Now().Add(20 * time.Second)
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
@@ -321,8 +301,6 @@ func TestMITMSelfProbeRunsWithoutTenantTraffic(t *testing.T) {
 		<-tick.C
 	}
 
-	// The exposure must keep serving normally after the probe: ban-mitm
-	// fired nothing on a clean relay.
 	if got := h.get(publicURL); got != marker {
 		t.Fatalf("post-probe tenant response = %q, want %q", got, marker)
 	}

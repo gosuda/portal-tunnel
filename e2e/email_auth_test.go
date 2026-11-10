@@ -29,8 +29,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// mailCatcher is the smallest SMTP server a tunnel can send through: it answers
-// on a loopback address, where no TLS is required, and keeps each mail.
 type mailCatcher struct {
 	addr  string
 	mails chan caughtMail
@@ -114,7 +112,6 @@ func (c *mailCatcher) expectNone(t *testing.T) {
 	}
 }
 
-// link reads the sign-in link out of a mail.
 func (m caughtMail) link(t *testing.T) string {
 	t.Helper()
 	for line := range strings.Lines(m.data) {
@@ -126,9 +123,6 @@ func (m caughtMail) link(t *testing.T) string {
 	return ""
 }
 
-// browserPage drives one Chrome tab over --remote-debugging-pipe: Chrome reads
-// commands from descriptor 3 and writes replies to descriptor 4, each ending in
-// a NUL, so no WebSocket client is needed.
 type browserPage struct {
 	t         *testing.T
 	commands  *os.File
@@ -237,8 +231,6 @@ func (p *browserPage) call(method string, params map[string]any, result any) err
 	}
 }
 
-// open loads a URL in the tab. The blank page first makes a link that differs
-// from the current address only in its fragment a real load.
 func (p *browserPage) open(address string) {
 	p.t.Helper()
 	for _, target := range []string{"about:blank", address} {
@@ -248,8 +240,6 @@ func (p *browserPage) open(address string) {
 	}
 }
 
-// evaluate runs an expression in the page and reports whether it is true. A page
-// that is still loading has no answer yet.
 func (p *browserPage) evaluate(expression string) bool {
 	var evaluated struct {
 		Result struct {
@@ -288,11 +278,6 @@ func signinView(name string) string {
 	return fmt.Sprintf(`!!document.querySelector('[data-view=%s]') && !document.querySelector('[data-view=%s]').hidden`, name, name)
 }
 
-// The whole of an email sign-in, through a real relay, a real tunnel and a real
-// browser, which also enforces the page's CSP. A browser that only opens the
-// link and runs the page, as a mail scanner can, leaves it usable; the visitor's
-// click signs in; and the link then works no more. The mail is only ever for a
-// host of this tunnel, whichever host the request names.
 func TestEmailSignInInARealBrowser(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the debugging pipe needs inherited descriptors")
@@ -370,7 +355,6 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 
 	page := startBrowserPage(t, browser)
 
-	// A visitor without a session lands on the form and asks for a link.
 	page.open(publicURL + "/inbox")
 	page.waitFor("the email form", signinView("form"))
 	page.evaluate(`document.querySelector('#email').value='alice@example.com';document.querySelector('#email-form').requestSubmit();true`)
@@ -384,30 +368,21 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 		t.Fatalf("link %q is not for %s", link, publicURL)
 	}
 
-	// A scanner opens the link and runs the page, and clicks nothing. The script
-	// has run once the confirm screen shows; a page that spent the token on load
-	// would never show it.
 	page.open(link)
 	page.waitFor("the confirm screen", signinView("confirm"))
 	if !page.evaluate(`location.hash === ''`) {
 		t.Fatal("the token stayed in the address")
 	}
 
-	// The visitor opens the same link and clicks, and lands where they were going.
 	page.open(link)
 	page.waitFor("the confirm screen", signinView("confirm"))
 	page.evaluate(`document.querySelector('#redeem').click();true`)
 	page.waitFor("the application", `document.body.innerText.includes('signed in as alice@example.com at /inbox')`)
 
-	// The link has been used.
 	page.open(link)
 	page.waitFor("the confirm screen", signinView("confirm"))
 	page.evaluate(`document.querySelector('#redeem').click();true`)
 	page.waitFor("the used-link screen", signinView("invalid"))
-
-	// A request names its own Host. The alias of this tunnel is a host of the
-	// tunnel, so its link is for the alias. Any other is refused, and no mail goes
-	// out, because the link would carry the token to whoever answers there.
 	canonical, err := url.Parse(publicURL)
 	if err != nil {
 		t.Fatal(err)
@@ -451,9 +426,6 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 		t.Fatalf("link %q is not for the alias %s", link, aliasURL)
 	}
 
-	// Each visitor connection takes an idle reverse session, so a burst makes the
-	// relay report connecting while it is serving that very burst. The tunnel
-	// still holds the alias, so nobody on the short URL may be refused.
 	const burst = 24
 	codes := make(chan int, burst)
 	for range burst {
