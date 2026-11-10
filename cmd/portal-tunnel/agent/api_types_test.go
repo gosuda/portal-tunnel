@@ -9,9 +9,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
-// The auth fields of an update sit next to its other fields on the wire, as
-// they did when each had a field of its own; a null one is left out. Field names
-// match without regard to case, so one field sent in two spellings is refused.
 func TestAgentTunnelUpdateRequestJSON(t *testing.T) {
 	var req AgentTunnelUpdateRequest
 	body := `{"max_active_relays":2,"Auth":"oidc","auth_allowed_wallets":null,"auth_oidc_issuer":"https://idp.example","unknown":1}`
@@ -35,9 +32,6 @@ func TestAgentTunnelUpdateRequestJSON(t *testing.T) {
 	}
 }
 
-// authChanges names what an update must send to turn the stored settings into
-// the desired ones, and applying it gives the desired settings. The write-only
-// client secret is never among the changes, so the stored one stays.
 func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
 	stored := appauth.Config{
 		Provider:        appauth.ProviderOIDC,
@@ -74,8 +68,6 @@ func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
 	}
 }
 
-// An update decodes over the stored settings, and decoding reuses the array of a
-// slice, so a refused update must not have written into the stored lists.
 func TestApplyAuthLeavesTheStoredListsAlone(t *testing.T) {
 	t.Parallel()
 

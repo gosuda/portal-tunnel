@@ -15,7 +15,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
-// agentDashboardRelayLead is the width of the row marker and the space after it.
 const agentDashboardRelayLead = 2
 
 func (m agentDashboardModel) connectSelectedRelay() (tea.Model, tea.Cmd) {

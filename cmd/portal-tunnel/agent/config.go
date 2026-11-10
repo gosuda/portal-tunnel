@@ -128,10 +128,6 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 	if err := utils.EnsurePrivateFile(path); err != nil {
 		return fmt.Errorf("secure agent config before update: %w", err)
 	}
-	// EnsurePrivateFile does nothing outside Windows, and os.WriteFile keeps the
-	// mode of a file that exists, so a 0644 config would hold a secret anyone can
-	// read. The mode is restricted before the secret is written; when that is not
-	// possible, nothing is written.
 	if runtime.GOOS != "windows" && slices.ContainsFunc(cfg.Tunnels, TunnelConfig.holdsSecret) && mode&0o077 != 0 {
 		mode &^= 0o077
 		if err := os.Chmod(path, mode); err != nil {
@@ -141,9 +137,6 @@ func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
 	return os.WriteFile(path, data, mode)
 }
 
-// holdsSecret reports whether writing the tunnel stores a credential: the
-// OIDC client secret, the SMTP password, an identity with its private key, or
-// an x402 facilitator token.
 func (cfg TunnelConfig) holdsSecret() bool {
 	return strings.TrimSpace(cfg.OIDCClientSecret) != "" ||
 		strings.TrimSpace(cfg.SMTPPassword) != "" ||
@@ -151,13 +144,6 @@ func (cfg TunnelConfig) holdsSecret() bool {
 		strings.TrimSpace(cfg.FacilitatorToken) != ""
 }
 
-// normalize puts cfg in the form the agent saves and runs. The agent section
-// gets its defaults. Each tunnel is normalized by tunnel.Config.Normalize, and
-// its relative paths are resolved against the directory of the config file. A
-// tunnel without an ID or an identity path gets one: they name the tunnel and
-// its identity, so they are saved with it rather than derived again, which would
-// move a tunnel to another identity once a second tunnel is added. No other
-// default enters the config; Spec fills them in.
 func (cfg *Config) normalize(configPath string) error {
 	configDir := "."
 	if absConfig, err := filepath.Abs(strings.TrimSpace(configPath)); err == nil {

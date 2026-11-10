@@ -25,6 +25,17 @@ const (
 	agentDashboardSettingsFieldCount
 )
 
+func (m *agentDashboardModel) settingsInputs() []*textinput.Model {
+	return []*textinput.Model{
+		&m.settingsMaxRelays,
+		&m.metadataDescription,
+		&m.metadataTags,
+		&m.metadataOwner,
+		&m.metadataThumbnail,
+		&m.metadataHide,
+	}
+}
+
 func (m *agentDashboardModel) focusSettingsField(field int) {
 	fieldCount := agentDashboardSettingsFieldCount
 	if field < 0 {
@@ -35,14 +46,7 @@ func (m *agentDashboardModel) focusSettingsField(field int) {
 	}
 	m.blurAddTunnelInputs()
 	m.settingsFocus = field
-	for _, input := range []*textinput.Model{
-		&m.settingsMaxRelays,
-		&m.metadataDescription,
-		&m.metadataTags,
-		&m.metadataOwner,
-		&m.metadataThumbnail,
-		&m.metadataHide,
-	} {
+	for _, input := range m.settingsInputs() {
 		input.Blur()
 	}
 	if input := m.focusedSettingsInput(); input != nil {
@@ -70,28 +74,14 @@ func (m *agentDashboardModel) focusedSettingsInput() *textinput.Model {
 }
 
 func (m *agentDashboardModel) blurSettingsInputs() {
-	for _, input := range []*textinput.Model{
-		&m.settingsMaxRelays,
-		&m.metadataDescription,
-		&m.metadataTags,
-		&m.metadataOwner,
-		&m.metadataThumbnail,
-		&m.metadataHide,
-	} {
+	for _, input := range m.settingsInputs() {
 		input.Blur()
 	}
 }
 
 func (m *agentDashboardModel) clearSettingsDraft() {
 	m.settingsEditTunnelID = ""
-	for _, input := range []*textinput.Model{
-		&m.settingsMaxRelays,
-		&m.metadataDescription,
-		&m.metadataTags,
-		&m.metadataOwner,
-		&m.metadataThumbnail,
-		&m.metadataHide,
-	} {
+	for _, input := range m.settingsInputs() {
 		input.Reset()
 	}
 	m.blurSettingsInputs()
@@ -207,8 +197,6 @@ func (m agentDashboardModel) renderSettingsSection(width, rows int) agentDashboa
 	return pane
 }
 
-// renderSettingsInputRows draws one line per input, in field order, followed by
-// the read-only details.
 func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, width int, tunnel AgentTunnelStatus) {
 	th := &m.theme
 	rows := []struct {

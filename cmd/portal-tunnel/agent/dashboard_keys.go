@@ -12,25 +12,19 @@ import (
 
 const agentDashboardKeyBarGap = "  "
 
-// agentDashboardBinding declares a key action once. updateKeys dispatches on
-// the table of bindings and the key bar lists the same table.
 type agentDashboardBinding struct {
-	keys  []string // every key that runs it, most prominent first
-	label string   // key bar text; empty keeps the binding off the bar
+	keys  []string
+	label string
 	when  func(agentDashboardModel) bool
 	run   func(m agentDashboardModel, key string) (tea.Model, tea.Cmd)
 }
 
-// agentDashboardBindings is ordered by priority: the first binding that claims
-// a key in the current context wins, and the key bar lists them in this order.
 var agentDashboardBindings = []agentDashboardBinding{
 	{
 		keys: []string{"y"}, label: "Yes", when: agentDashboardModel.confirming,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.answerYes() },
 	},
 	{
-		// F10 answers No as well: while a question is open it must not fall through
-		// to Quit, which would stop a foreground agent without asking.
 		keys: []string{"n", "esc", "q", "f10"}, label: "No", when: agentDashboardModel.confirming,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m.answerNo() },
 	},
@@ -174,8 +168,6 @@ var agentDashboardBindings = []agentDashboardBinding{
 		},
 	},
 	{
-		// Under agent run --foreground closing the dashboard stops the agent and
-		// every tunnel, so the easy keys ask first; ctrl+c still stops at once.
 		keys: []string{"f10", "q"}, label: "Stop agent", when: agentDashboardModel.asksBeforeStopping,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) {
 			m.confirmStop = true
@@ -183,7 +175,6 @@ var agentDashboardBindings = []agentDashboardBinding{
 		},
 	},
 	{
-		// Off the bar, so that Stop agent is its last entry and stays there.
 		keys: []string{"ctrl+c"}, when: agentDashboardModel.asksBeforeStopping,
 		run: func(m agentDashboardModel, _ string) (tea.Model, tea.Cmd) { return m, tea.Quit },
 	},
@@ -193,14 +184,11 @@ var agentDashboardBindings = []agentDashboardBinding{
 	},
 }
 
-// agentDashboardKeyNames are the key bar names that differ from the key string.
 var agentDashboardKeyNames = map[string]string{
 	"enter": "Enter", "esc": "Esc", "tab": "Tab", "shift+tab": "S-Tab", "delete": "Del", "backspace": "Bksp",
 	"ctrl+c": "^C", "ctrl+r": "^R", "ctrl+x": "^X",
 }
 
-// agentDashboardLiveBinding is a binding together with the keys that reach it
-// in the current context.
 type agentDashboardLiveBinding struct {
 	binding agentDashboardBinding
 	keys    []string
@@ -208,12 +196,8 @@ type agentDashboardLiveBinding struct {
 
 func (m agentDashboardModel) confirming() bool { return m.confirmDelete != "" || m.confirmStop }
 
-// asksBeforeStopping holds wherever F10 would otherwise close a dashboard that
-// stops the agent, except while a question already waits for an answer.
 func (m agentDashboardModel) asksBeforeStopping() bool { return m.stopsAgent && !m.confirming() }
 
-// browsing reports whether the panes take keys: no question is open and the
-// Access screen does not stand in their place.
 func (m agentDashboardModel) browsing() bool { return !m.confirming() && !m.accessing() }
 
 func (m agentDashboardModel) inList() bool {
@@ -258,30 +242,19 @@ func (m agentDashboardModel) onAccessSecret() bool {
 	return m.onAccessRow(agentDashboardAccessRowSecret)
 }
 
-// onAccessChoice reports whether the focused row of the Access screen is a
-// choice that left and right change, not a text input.
 func (m agentDashboardModel) onAccessChoice() bool {
 	return m.onAccessRow(agentDashboardAccessRowMode) || m.onAccessRow(agentDashboardAccessRowHeaders)
 }
 
-// canClearAccessSecret reports whether the focused row is the secret of a
-// tunnel that has one stored for the draft's provider.
 func (m agentDashboardModel) canClearAccessSecret() bool {
 	tunnel, ok := m.accessTunnel()
 	return ok && m.onAccessSecret() && agentDashboardSecretSet(m.access.provider, tunnel)
 }
 
-// inAccess reports whether the Access screen takes keys: it is open and no
-// question waits for an answer on top of it.
 func (m agentDashboardModel) inAccess() bool { return m.accessing() && !m.confirming() }
 
-// editing reports whether plain characters belong to a focused input. The
-// Access screen counts as editing throughout, so that no letter on it quits.
 func (m agentDashboardModel) editing() bool { return m.inForm() || m.inSettings() || m.inAccess() }
 
-// liveBindings returns the bindings that act in the current context with the
-// keys that reach them. A key goes to the first binding that claims it, and
-// plain characters are left to the focused input while one is being edited.
 func (m agentDashboardModel) liveBindings() []agentDashboardLiveBinding {
 	editing := m.editing()
 	claimed := make(map[string]bool)
@@ -315,7 +288,6 @@ func (m agentDashboardModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.updateInput(msg)
 }
 
-// updateInput hands a key no binding claimed to the focused input, if one is being edited.
 func (m agentDashboardModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var input *textinput.Model
 	switch {
@@ -332,14 +304,12 @@ func (m agentDashboardModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	*input, cmd = input.Update(msg)
 	if m.inAccess() && input == &m.access.secret && input.Value() != "" && m.access.clearSecret {
-		// A typed secret replaces the stored one, so it takes the removal mark with it.
 		tunnel, _ := m.accessTunnel()
 		m.access.setClearSecret(false, tunnel)
 	}
 	return m, cmd
 }
 
-// agentDashboardKeyStep is the direction a navigation key moves.
 func agentDashboardKeyStep(key string) int {
 	switch key {
 	case "up", "shift+tab", "left":
@@ -359,8 +329,6 @@ func (m agentDashboardModel) renderKeyBar(width int) string {
 		}
 	}
 
-	// The last entry, the way out (Quit or Stop agent), always stays; earlier ones are dropped from
-	// the end when they do not fit.
 	entryWidth := func(e entry) int { return lipgloss.Width(e.hint) + 1 + lipgloss.Width(e.label) }
 	gap := lipgloss.Width(agentDashboardKeyBarGap)
 	used := 1
@@ -380,7 +348,6 @@ func (m agentDashboardModel) renderKeyBar(width int) string {
 	return agentDashboardPadLine(" "+strings.Join(parts, agentDashboardKeyBarGap), width)
 }
 
-// keyHint names the first two keys of a binding, so a function key shows its alias.
 func (th *agentDashboardTheme) keyHint(keys []string) string {
 	names := make([]string, 0, 2)
 	for _, key := range keys[:min(2, len(keys))] {
