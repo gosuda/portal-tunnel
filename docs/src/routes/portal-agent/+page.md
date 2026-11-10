@@ -11,6 +11,10 @@ registered with the selected relays.
 
 Use the agent when tunnels should survive terminal closes, login sessions, or
 manual restarts. Use `portal expose` for one-off development sessions.
+Applications that own a subprocess tunnel's lifetime can use
+[`portal expose --exit-on-stdin-eof`](/cli-reference#application-owned-tunnel-lifetime)
+to stop it when their stdin pipe closes, including after an application crash.
+The agent instead runs independently of the calling application.
 
 ## What The Agent Owns
 

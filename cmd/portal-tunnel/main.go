@@ -39,6 +39,7 @@ var (
 	errSubjectIsRequired                   = errors.New("--subject is required")
 	errExpiresMustBePositive               = errors.New("--expires must be positive")
 	errNoRelayURLsConfigured               = errors.New("no relay URLs configured")
+	errStdinPipeRequired                   = errors.New("--exit-on-stdin-eof requires a caller-owned stdin pipe")
 )
 
 func main() {
@@ -69,15 +70,16 @@ func main() {
 }
 
 type exposeFlags struct {
-	relayCSV    string
-	tags        string
-	httpRoutes  []string
-	discovery   bool
-	banMITM     bool
-	cache       bool
-	cacheTTL    time.Duration
-	metricsAddr string
-	logFormat   string
+	relayCSV       string
+	tags           string
+	httpRoutes     []string
+	discovery      bool
+	banMITM        bool
+	cache          bool
+	cacheTTL       time.Duration
+	metricsAddr    string
+	logFormat      string
+	exitOnStdinEOF bool
 }
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
@@ -127,6 +129,7 @@ func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlag
 	env.Int(fs, &cfg.MaxActiveRelays, "max-active-relays", discovery.DefaultMaxActiveRelays, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	fs.StringVar(&flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
 	fs.StringVar(&flags.logFormat, "log-format", "text", "Log output format: text (default human-readable console) or json (one structured JSON log record per line on stdout; integrations filter relay lifecycle records by event=relay_status)")
+	fs.BoolVar(&flags.exitOnStdinEOF, "exit-on-stdin-eof", false, "Stop when the caller-owned stdin pipe closes; requires a pipe, ignores bytes, and uses normal tunnel shutdown")
 }
 
 func runExposeCommand(args []string) error {
@@ -164,6 +167,22 @@ func runExposeCommand(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
+	if flags.exitOnStdinEOF {
+		info, err := os.Stdin.Stat()
+		if err != nil {
+			return fmt.Errorf("inspect stdin: %w", err)
+		}
+		if info.Mode()&os.ModeNamedPipe == 0 {
+			return errStdinPipeRequired
+		}
+		go func() {
+			// Only pipe ownership controls lifetime; bytes are not commands.
+			if _, err := io.Copy(io.Discard, os.Stdin); err != nil && ctx.Err() == nil {
+				log.Warn().Err(err).Msg("stdin pipe read failed; stopping tunnel")
+			}
+			stop()
+		}()
+	}
 
 	if flags.metricsAddr != "" {
 		mux := http.NewServeMux()
@@ -183,6 +202,9 @@ func runExposeCommand(args []string) error {
 
 	runtime, err := tunnel.Start(ctx, spec)
 	if err != nil {
+		if flags.exitOnStdinEOF && ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	defer runtime.Close()

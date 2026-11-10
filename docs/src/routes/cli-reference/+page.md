@@ -150,6 +150,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
 | `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
 | `--log-format` | string | `text` | Log output format; `json` sends application log records as one structured JSON record per line on stdout for machine integration; top-level command errors stay on stderr (see [Machine-Readable Relay Lifecycle](#machine-readable-relay-lifecycle)) |
+| `--exit-on-stdin-eof` | bool | `false` | Bind the tunnel lifetime to a caller-owned stdin pipe; closing its last writer requests normal shutdown |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
@@ -207,6 +208,44 @@ rename an existing one. Use a separate `--identity-path` for a new identity.
   `--x402-network nano:mainnet` and a `nano_` pay-to address; repeat
   `--x402-endpoint` for at least two RPC nodes or omit it for the public
   defaults.
+
+### Application-Owned Tunnel Lifetime
+
+Applications launching Portal as a subprocess can own its lifetime through a
+stdin pipe:
+
+```bash
+portal expose --http-route /=7317 --identity-path ./portal-identity.json \
+  --exit-on-stdin-eof --log-format json
+```
+
+Create the child with piped stdin and keep its writer open while the tunnel is
+desired. Portal drains and ignores bytes; stdin is not a command protocol. A
+terminal, regular file, or null device is rejected when this flag is enabled.
+Without the flag, stdin does not control the tunnel's lifetime.
+
+Closing the last writer requests the same cancellation and cleanup as a normal
+shutdown signal, including best-effort relay unregister and listener closure.
+This applies during startup, after readiness, and while reconnecting or failed.
+Cancellation during startup exits successfully. An unexpected stdin read error
+also requests shutdown and logs a warning. Existing shutdown timeouts apply;
+unregister has a five-second timeout per relay, not a five-second process deadline.
+
+Normal application exit or a forced kill closes its pipe handles. This stops
+Portal only if no other process retains a writer: prevent writer inheritance
+and close unused copies. This is pipe ownership, not universal parent-death
+detection. Continue draining stdout and stderr and observing subprocess exit.
+Use the existing JSON relay lifecycle records below for readiness, and retract
+advertised URLs when the subprocess exits.
+
+The application owns restart policy, authorization, and identity persistence
+through the existing identity options. Its access checks and header filtering
+remain its responsibility. Cleanup of older unmanaged processes may still be
+needed during migration.
+
+Use [`portal agent`](/portal-agent) for durable tunnels whose lifetime Portal
+and the OS service manager own. Use this option when the calling application
+owns the tunnel's lifetime; it adds no daemon or control API.
 
 ### Machine-Readable Relay Lifecycle
 
