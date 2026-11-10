@@ -20,16 +20,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// TestMITMProbeCompletionClassifiesExporter covers the probe completion
-// decision at the manager boundary, with no TLS peer: a completion matching
-// the armed exporter passes, a differing one reports the exporter mismatch,
-// a reservation that was never armed counts as a mismatch, and an unknown
-// nonce is dropped without touching live reservations.
 func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	listener := &listener{}
 	listener.mitmManager = newMITMManager(listener, false)
 
-	// Matching exporter value: the probe passes with an empty reason.
 	expected := bytes.Repeat([]byte{0xAB}, 32)
 	matchNonce := mitmProbeNonce{1}
 	resultCh := listener.mitmManager.reserveProbe(matchNonce)
@@ -45,7 +39,6 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 		t.Fatal("matching probe completion produced no result")
 	}
 
-	// Differing exporter value: exporter mismatch.
 	mismatchNonce := mitmProbeNonce{2}
 	resultCh = listener.mitmManager.reserveProbe(mismatchNonce)
 	defer listener.mitmManager.releaseProbe(mismatchNonce)
@@ -60,8 +53,6 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 		t.Fatal("mismatched probe completion produced no result")
 	}
 
-	// A reservation that was never armed holds no exporter value and must
-	// count as a mismatch, never as a pass.
 	unarmedNonce := mitmProbeNonce{3}
 	resultCh = listener.mitmManager.reserveProbe(unarmedNonce)
 	defer listener.mitmManager.releaseProbe(unarmedNonce)
@@ -75,8 +66,6 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 		t.Fatal("unarmed probe completion produced no result")
 	}
 
-	// An unknown nonce is dropped: completing it must neither block nor
-	// consume the result of a live reservation.
 	armed := bytes.Repeat([]byte{0xAB}, 32)
 	liveNonce := mitmProbeNonce{4}
 	resultCh = listener.mitmManager.reserveProbe(liveNonce)
@@ -94,9 +83,6 @@ func TestMITMProbeCompletionClassifiesExporter(t *testing.T) {
 	}
 }
 
-// TestWrapBufferedConnRedeliversPeekedBytes proves tenant stream integrity
-// while a probe is pending: the nonce frame the probe peek consumed from the
-// wire is re-delivered to the passthrough conn ahead of the remaining bytes.
 func TestWrapBufferedConnRedeliversPeekedBytes(t *testing.T) {
 	const frameSize = 16
 	payload := append(bytes.Repeat([]byte{0x00}, frameSize), bytes.Repeat([]byte{0xAB}, 8)...)
@@ -193,9 +179,6 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 	}
 }
 
-// Lease cancellation must join the loop both before reverse readiness and
-// while waiting between failed attempts. Virtual time avoids network fixtures,
-// production injection seams, and wall-clock waits for the retry interval.
 func TestMITMProbeLoopLeaseCancellation(t *testing.T) {
 	for _, ready := range []bool{false, true} {
 		name := "before-reverse-ready"
@@ -216,8 +199,7 @@ func TestMITMProbeLoopLeaseCancellation(t *testing.T) {
 					manager.run(ctx, reverseReady)
 				}()
 				if ready {
-					// No API is configured, so each attempted probe fails
-					// locally. The background worker must remain scheduled.
+
 					reverseReady <- struct{}{}
 				}
 				synctest.Wait()
@@ -285,7 +267,6 @@ func (c *testExporterConn) ExportKeyingMaterial(label string, context []byte, le
 	return out, nil
 }
 
-// fragmentingConn delivers each Write in two parts with a pause between them.
 type fragmentingConn struct {
 	*testExporterConn
 	splitAt int
@@ -305,8 +286,6 @@ func (c *fragmentingConn) Write(p []byte) (int, error) {
 	return n + m, err
 }
 
-// newChannelBindingListener returns a listener able to answer channel binding
-// requests for the canonical hostname of the identity derived from seed.
 func newChannelBindingListener(t *testing.T, seed, hostname string) *listener {
 	t.Helper()
 	tunnelIdentity, err := identity.ResolveSecp256k1Identity(strings.Repeat(seed, 64))
@@ -388,8 +367,6 @@ func TestTLSChannelBindingAbortsOnSelectiveRelayMITM(t *testing.T) {
 	l := newChannelBindingListener(t, "2", "")
 	canonicalHost := canonicalTestHostname(t, l.identity.Address)
 
-	// Selective MITM: client-to-relay session has exporter Ec (0xAA), while
-	// relay-to-tunnel session has a different exporter Et (0xBB).
 	clientRaw, serverRaw := net.Pipe()
 	clientConn := &testExporterConn{Conn: clientRaw, exported: bytes.Repeat([]byte{0xAA}, 32)}
 	serverConn := &testExporterConn{Conn: serverRaw, exported: bytes.Repeat([]byte{0xBB}, 32)}
@@ -405,14 +382,12 @@ func TestTLSChannelBindingAbortsOnSelectiveRelayMITM(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exporter mismatch") {
 		t.Fatalf("VerifyTLSChannelBinding() = %v; want exporter mismatch error", err)
 	}
-	// The client connection was aborted before any application data.
+
 	if _, writeErr := clientConn.Write([]byte("secret")); writeErr == nil {
 		t.Fatal("client connection remained writable after MITM abort")
 	}
 }
 
-// A request may arrive split across TLS records, and the part after the
-// recognized magic may arrive after the short sniff window. Both must still bind.
 func TestTLSChannelBindingToleratesSplitRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -459,8 +434,6 @@ func TestTLSChannelBindingToleratesSplitRequest(t *testing.T) {
 	}
 }
 
-// A suppressed, garbled, or wrongly signed answer must abort the client with an
-// error that says why, before any application data is sent.
 func TestTLSChannelBindingFailsClosed(t *testing.T) {
 	exporter := bytes.Repeat([]byte{0x42}, 32)
 	for _, tc := range []struct {
@@ -509,8 +482,7 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			owner := newChannelBindingListener(t, "5", "")
 			canonicalHost := canonicalTestHostname(t, owner.identity.Address)
-			// A relay-side responder holds its own key, not the tunnel's, but
-			// answers for the tunnel's canonical hostname.
+
 			impostor := newChannelBindingListener(t, "6", canonicalHost)
 			clientRaw, serverRaw := net.Pipe()
 			client := &testExporterConn{Conn: clientRaw, exported: exporter}
@@ -529,9 +501,6 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 		})
 	})
 
-	// A recorded answer carries the exporter of the TLS session it was made
-	// for, so replayed into the client's own session it fails the exporter
-	// check, with an error distinct from a signature mismatch.
 	t.Run("replayed answer from an earlier session", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			l := newChannelBindingListener(t, "8", "")
@@ -554,11 +523,6 @@ func TestTLSChannelBindingFailsClosed(t *testing.T) {
 	})
 }
 
-// A tunnel that does not offer binding, such as an older SDK or a cache
-// exposure, hands the request to its application. The application's reply is
-// no claim about the connection, so the client fails closed with an error that
-// says the tunnel did not answer, never with an exporter mismatch that would
-// accuse the relay.
 func TestTLSChannelBindingReportsATunnelThatDoesNotAnswer(t *testing.T) {
 	// What net/http writes for a request line it cannot parse.
 	const httpBadRequest = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n400 Bad Request"
@@ -594,14 +558,12 @@ func TestTLSChannelBindingReportsATunnelThatDoesNotAnswer(t *testing.T) {
 	}
 }
 
-// Canceling the caller's context ends a pending exchange at once, not at the
-// binding deadline, and leaves the connection closed.
 func TestTLSChannelBindingReturnsWhenContextIsCanceled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		hostname := canonicalTestHostname(t, "0x1234567890abcdef1234567890abcdef12345678")
 		clientRaw, serverRaw := net.Pipe()
 		client := &testExporterConn{Conn: clientRaw, exported: bytes.Repeat([]byte{0x42}, 32)}
-		// The tunnel takes the request and never answers.
+
 		go func() { _, _ = io.Copy(io.Discard, serverRaw) }()
 		const cancelAfter = 50 * time.Millisecond
 		ctx, cancel := context.WithCancel(t.Context())
@@ -621,8 +583,6 @@ func TestTLSChannelBindingReturnsWhenContextIsCanceled(t *testing.T) {
 	})
 }
 
-// recordChannelBindingAnswer plays the honest tunnel for one earlier client
-// request and returns the answer frame a relay could have recorded from it.
 func recordChannelBindingAnswer(t *testing.T, l *listener, exporter []byte) []byte {
 	t.Helper()
 	clientRaw, serverRaw := net.Pipe()
@@ -644,11 +604,6 @@ func recordChannelBindingAnswer(t *testing.T, l *listener, exporter []byte) []by
 	return answer
 }
 
-// A client that sends the start of a binding request and withholds the nonce
-// holds an admitting slot without any credential, so the tunnel closes the
-// connection after a short budget of its own, not the client's round-trip
-// budget, while a request fragmented within that budget still binds (see
-// TestTLSChannelBindingToleratesSplitRequest).
 func TestAdmissionOfAWithheldBindingNonceEndsQuickly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := newChannelBindingListener(t, "a", "")
@@ -659,7 +614,6 @@ func TestAdmissionOfAWithheldBindingNonceEndsQuickly(t *testing.T) {
 		}()
 		go func() { _, _ = clientRaw.Write([]byte(types.TLSChannelBindingRequestMagic)) }()
 
-		// Well before the client's own ten second budget would run out.
 		const budget = 2 * time.Second
 		_ = clientRaw.SetReadDeadline(time.Now().Add(budget))
 		if _, err := clientRaw.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
@@ -668,9 +622,6 @@ func TestAdmissionOfAWithheldBindingNonceEndsQuickly(t *testing.T) {
 	})
 }
 
-// A client that sends a whole binding request and never reads the answer must
-// not hold its admitting slot either: the tunnel gives up writing the answer
-// and closes the connection within the same short budget.
 func TestAdmissionOfAClientThatNeverReadsTheAnswerEndsQuickly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := newChannelBindingListener(t, "b", "")
@@ -690,10 +641,6 @@ func TestAdmissionOfAClientThatNeverReadsTheAnswerEndsQuickly(t *testing.T) {
 	})
 }
 
-// Accept is serial, so a client that is slow to speak must delay only itself.
-// One that sends the start of a channel binding request and stops, and one that
-// stays silent, are admitted off the accept path while an ordinary client is
-// accepted at once.
 func TestAcceptIsNotHeldUpByClientsThatStallDuringAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -711,8 +658,6 @@ func TestAcceptIsNotHeldUpByClientsThatStallDuringAdmission(t *testing.T) {
 				l.api = &apiClient{relayURL: &url.URL{Scheme: "https", Host: "relay.example"}}
 				exporter := bytes.Repeat([]byte{0x42}, 32)
 
-				// admit starts one client the way a reverse session does: it takes
-				// an admitting slot and hands the connection to l.admit.
 				admit := func(first []byte) net.Conn {
 					clientRaw, serverRaw := net.Pipe()
 					if len(first) > 0 {
@@ -723,8 +668,7 @@ func TestAcceptIsNotHeldUpByClientsThatStallDuringAdmission(t *testing.T) {
 					return clientRaw
 				}
 				stalled := admit(tc.prefix)
-				// The stalled client is now queued, or still being admitted, ahead
-				// of the ordinary one.
+
 				synctest.Wait()
 				ordinary := admit([]byte("GET / HTTP/1.1\r\n\r\n"))
 
@@ -748,8 +692,6 @@ func TestAcceptIsNotHeldUpByClientsThatStallDuringAdmission(t *testing.T) {
 	}
 }
 
-// Connections without a TLS exporter and cache exposures pass channel-binding
-// requests through as ordinary application bytes.
 func TestTLSChannelBindingIsNotServedOutsideResponderBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

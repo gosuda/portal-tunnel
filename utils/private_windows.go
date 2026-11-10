@@ -29,7 +29,7 @@ func EnsurePrivateFile(path string) error {
 	return secureWindowsPath(path, false)
 }
 
-// CreatePrivateFile installs the DACL at creation time, not after writing the secret.
+// CreatePrivateFile creates a secret file readable only by its owner. It never replaces an existing file.
 func CreatePrivateFile(path string, data []byte) error {
 	sd, _, err := privateWindowsDescriptor(false)
 	if err != nil {
@@ -55,7 +55,7 @@ func CreatePrivateFile(path string, data []byte) error {
 		_ = os.Remove(path)
 		return err
 	}
-	// Windows may add inheritable entries on some volumes. Verify the final result.
+
 	if err := secureWindowsPath(path, false); err != nil {
 		_ = os.Remove(path)
 		return err
@@ -120,8 +120,6 @@ func secureWindowsPath(path string, directory bool) error {
 	return err
 }
 
-// privateWindowsDescriptor allows only the running service identity, SYSTEM,
-// and Administrators. Directory ACEs are inheritable by its children.
 func privateWindowsDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, *windows.SID, error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -152,10 +150,6 @@ func privateWindowsDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, *wi
 	return sd, owner, nil
 }
 
-// verifyWindowsPath returns a trusted owner even when the DACL needs repair.
-// Existing owners and narrower permissions are preserved when only trusted
-// principals have access and inheritance from the parent is disabled.
-// Directories must pass those permissions on to child files and directories.
 func verifyWindowsPath(path string, currentUser *windows.SID, directory bool) (*windows.SID, error) {
 	actual, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
@@ -167,8 +161,8 @@ func verifyWindowsPath(path string, currentUser *windows.SID, directory bool) (*
 	}
 	allowed := map[string]bool{
 		currentUser.String(): true,
-		"S-1-5-18":           true, // SYSTEM
-		"S-1-5-32-544":       true, // Administrators
+		"S-1-5-18":           true,
+		"S-1-5-32-544":       true,
 	}
 	owner, _, err := actual.Owner()
 	if err != nil {

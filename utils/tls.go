@@ -59,16 +59,14 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 		NextProtos: []string{"http/1.1"},
 	}
 	httpClient := NewHTTPClient(
-		WithHTTPTLSConfig(rawTLSConfig), // will be cloned internally
+		WithHTTPTLSConfig(rawTLSConfig),
 		WithoutHTTP2(),
 		WithHTTPTimeout(timeout),
 	)
 	return rawTLSConfig, httpClient, httpClient.Transport.(*http.Transport), nil
 }
 
-// FetchEndpointCertificateChain returns the certificate chain presented by endpoint.
-// Browsers ask the relay for the public chain because their TLS stack does not expose
-// peer certificates; native runtimes read it directly from the TLS handshake.
+// FetchEndpointCertificateChain dials endpoint and returns its PEM-encoded peer chain.
 func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
 	raw := strings.TrimSpace(endpoint)
 	if raw == "" {
@@ -110,8 +108,7 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 	if host == "" {
 		return nil, errEndpointHostnameIsEmpty
 	}
-	port := u.Port()
-	port = cmp.Or(port, "443")
+	port := cmp.Or(u.Port(), "443")
 	serverName = cmp.Or(serverName, host)
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
