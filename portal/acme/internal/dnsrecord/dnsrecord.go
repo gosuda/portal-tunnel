@@ -30,28 +30,28 @@ func BaseDomain(raw string) (string, error) {
 	return name, nil
 }
 
-func AddressRecordInputs(name, publicIP string) (string, string, string, error) {
-	name, err := RecordName(name)
+func AddressRecordInputs(name, publicIP string) (recordName, recordType, canonicalIP string, err error) {
+	recordName, err = RecordName(name)
 	if err != nil {
 		return "", "", "", err
 	}
-	recordType, publicIP, err := address(publicIP)
+	recordType, canonicalIP, err = address(publicIP)
 	if err != nil {
 		return "", "", "", err
 	}
-	return name, recordType, publicIP, nil
+	return recordName, recordType, canonicalIP, nil
 }
 
-func AddressRecordsInputs(baseDomain, publicIP string) (string, string, string, error) {
-	baseDomain, err := BaseDomain(baseDomain)
+func AddressRecordsInputs(baseDomain, publicIP string) (normalizedBaseDomain, recordType, canonicalIP string, err error) {
+	normalizedBaseDomain, err = BaseDomain(baseDomain)
 	if err != nil {
 		return "", "", "", err
 	}
-	recordType, publicIP, err := address(publicIP)
+	recordType, canonicalIP, err = address(publicIP)
 	if err != nil {
 		return "", "", "", err
 	}
-	return baseDomain, recordType, publicIP, nil
+	return normalizedBaseDomain, recordType, canonicalIP, nil
 }
 
 func address(raw string) (recordType, canonicalIP string, err error) {
