@@ -29,7 +29,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return manager.serveControl(runtimeCtx, cancel, creds)
+	server, err := manager.openControlServer(runtimeCtx, cancel, creds)
+	if err != nil {
+		return err
+	}
+	return server.serve(runtimeCtx)
 }
 
 type agentControlServer struct {
@@ -45,14 +49,6 @@ type agentCredentials struct {
 	stateDir string
 	token    string
 	auth     *walletAuthenticator
-}
-
-func (m *manager) serveControl(runtimeCtx context.Context, cancel context.CancelFunc, creds agentCredentials) error {
-	server, err := m.openControlServer(runtimeCtx, cancel, creds)
-	if err != nil {
-		return err
-	}
-	return server.serve(runtimeCtx)
 }
 
 func (m *manager) openControlServer(runtimeCtx context.Context, cancel context.CancelFunc, creds agentCredentials) (*agentControlServer, error) {

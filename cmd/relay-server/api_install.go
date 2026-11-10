@@ -23,19 +23,6 @@ func installContentType(filename string) string {
 	return "application/octet-stream"
 }
 
-func installReleasePath(requestedVersion string) string {
-	if requestedVersion != "" {
-		return "/download/" + url.PathEscape(types.ReleaseVersion) + "/"
-	}
-	return "/latest/download/"
-}
-
-func serveInstallChecksum(w http.ResponseWriter, r *http.Request, filename, checksumHex string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if r.Method == http.MethodGet {
-		_, _ = fmt.Fprintf(w, "%s  %s\n", checksumHex, filename)
-	}
-}
 func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
@@ -61,7 +48,11 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := embeddedDistFS.ReadFile("dist/tunnel/" + filename)
 	if err != nil {
-		redirectURL := types.OfficialReleaseBaseURL + installReleasePath(requestedVersion) + filename
+		releasePath := "/latest/download/"
+		if requestedVersion != "" {
+			releasePath = "/download/" + url.PathEscape(types.ReleaseVersion) + "/"
+		}
+		redirectURL := types.OfficialReleaseBaseURL + releasePath + filename
 		if checksumRequest {
 			redirectURL += ".sha256"
 		}
@@ -72,7 +63,10 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 	checksumHex := hex.EncodeToString(sum[:])
 
 	if checksumRequest {
-		serveInstallChecksum(w, r, filename, checksumHex)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if r.Method == http.MethodGet {
+			_, _ = fmt.Fprintf(w, "%s  %s\n", checksumHex, filename)
+		}
 		return
 	}
 

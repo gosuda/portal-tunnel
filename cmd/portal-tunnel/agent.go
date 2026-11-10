@@ -110,7 +110,10 @@ func runAgentRestartCommand(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	stopRunAgentRestartCommandService(ctx, cfg)
-	status, err := restartAgentService(ctx, configPath, cfg)
+	if err := waitAgentStopped(ctx, cfg.Agent.StateDir); err != nil {
+		return err
+	}
+	status, err := startAgentService(ctx, configPath, cfg)
 	if err != nil {
 		return err
 	}
@@ -148,13 +151,6 @@ func stopRunAgentRestartCommandService(ctx context.Context, cfg agent.Config) {
 			fmt.Fprintf(os.Stderr, "Warning: service manager stop failed: %v\n", err)
 		}
 	}
-}
-
-func restartAgentService(ctx context.Context, configPath string, cfg agent.Config) (agent.AgentStatusResponse, error) {
-	if err := waitAgentStopped(ctx, cfg.Agent.StateDir); err != nil {
-		return agent.AgentStatusResponse{}, err
-	}
-	return startAgentService(ctx, configPath, cfg)
 }
 
 func startAgentService(ctx context.Context, configPath string, cfg agent.Config) (agent.AgentStatusResponse, error) {

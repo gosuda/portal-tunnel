@@ -65,16 +65,6 @@ func runServeRelayWithPprofUntilStopped(ctx context.Context, server *portal.Serv
 	return serveErr
 }
 
-func serveRelayWithPprof(ctx context.Context, pprofAddr string, server *portal.Server, handler http.Handler) error {
-	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(pprofAddr))
-	if err != nil {
-		return err
-	}
-	log.Info().Str("pprof_addr", hostPortOrLoopback(bound.String())).Msg("starting pprof server")
-
-	return runServeRelayWithPprofUntilStopped(ctx, server, handler, stopPprof, pprofErrs)
-}
-
 func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402Settings x402FacilitatorSettings) error {
 	server, policies, relayAPI, err := openRelayServer(cfg, ingress)
 	if err != nil {
@@ -94,5 +84,11 @@ func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402
 		return server.Serve(ctx, handler)
 	}
 
-	return serveRelayWithPprof(ctx, cfg.PprofListenAddr, server, handler)
+	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofListenAddr))
+	if err != nil {
+		return err
+	}
+	log.Info().Str("pprof_addr", hostPortOrLoopback(bound.String())).Msg("starting pprof server")
+
+	return runServeRelayWithPprofUntilStopped(ctx, server, handler, stopPprof, pprofErrs)
 }

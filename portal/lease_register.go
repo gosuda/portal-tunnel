@@ -109,16 +109,12 @@ func formatRegisterResponse(record *leaseRecord, accessToken string, reverseEndp
 	return resp
 }
 
-func (r *leaseRegistry) checkRegisterLeaseTTL(req types.RegisterChallengeRequest) (time.Duration, error) {
-	if err := req.Metadata.Validate(); err != nil {
-		return 0, err
-	}
-	return requestedLeaseTTL(req.TTL)
-}
-
 func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, served *acme.TLSMaterial) (*leaseRecord, string, error) {
 	leaseIdentity := req.Identity
-	ttl, err := r.checkRegisterLeaseTTL(req)
+	if err := req.Metadata.Validate(); err != nil {
+		return nil, "", err
+	}
+	ttl, err := requestedLeaseTTL(req.TTL)
 	if err != nil {
 		return nil, "", err
 	}
@@ -303,30 +299,6 @@ func (r *leaseRegistry) removeRegisterRecordLocked(record *leaseRecord, identity
 	}
 }
 
-func (r *leaseRegistry) startRegisterRecord(record *leaseRecord) error {
-	if err := record.Start(); err != nil {
-		r.rollbackRecord(record)
-		return err
-	}
-	return nil
-}
-
-func (r *leaseRegistry) abandonRegisterRecord(record *leaseRecord) {
-	if r.overlay != nil {
-		r.overlay.ForgetLease(record.id)
-	}
-	r.rollbackRecord(record)
-}
-
-func (r *leaseRegistry) issueRegisterReverseEndpoint(record *leaseRecord, self types.RelayDescriptor, descriptors []types.RelayDescriptor) (types.ReverseEndpoint, error) {
-	return r.issueReverseEndpoint(reverseEndpointInput{
-		leaseIdentity: record.Identity,
-		leaseID:       record.id,
-		expiresAt:     record.ExpiresAt,
-		useOverlay:    record.Overlay,
-	}, self, descriptors)
-}
-
 func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
@@ -345,7 +317,8 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	r.mu.Unlock()
 
-	if err := r.startRegisterRecord(record); err != nil {
+	if err := record.Start(); err != nil {
+		r.rollbackRecord(record)
 		return nil, types.RegisterResponse{}, err
 	}
 
@@ -368,12 +341,20 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 
 	r.closeRegisterReplaced(replaced)
 
-	reverseEndpoint, err := r.issueRegisterReverseEndpoint(record, self, descriptors)
+	reverseEndpoint, err := r.issueReverseEndpoint(reverseEndpointInput{
+		leaseIdentity: record.Identity,
+		leaseID:       record.id,
+		expiresAt:     record.ExpiresAt,
+		useOverlay:    record.Overlay,
+	}, self, descriptors)
 	if err != nil {
 		r.mu.Lock()
 		r.removeRegisterRecordLocked(record, identityKey)
 		r.mu.Unlock()
-		r.abandonRegisterRecord(record)
+		if r.overlay != nil {
+			r.overlay.ForgetLease(record.id)
+		}
+		r.rollbackRecord(record)
 		return nil, types.RegisterResponse{}, err
 	}
 

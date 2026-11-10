@@ -50,7 +50,10 @@ func RunCommands(
 
 	runCommand, ok := commands[command]
 	if !ok {
-		return reportRunCommandsUnknown(command, stderr, usage)
+		if usage != nil {
+			usage(stderr)
+		}
+		return fmt.Errorf("unknown command %q", command)
 	}
 	return runCommand(args[1:])
 }
@@ -63,13 +66,6 @@ func dispatchRunCommandsHelp(args []string, stdout io.Writer, usage func(io.Writ
 		usage(stdout)
 	}
 	return nil
-}
-
-func reportRunCommandsUnknown(command string, stderr io.Writer, usage func(io.Writer)) error {
-	if usage != nil {
-		usage(stderr)
-	}
-	return fmt.Errorf("unknown command %q", command)
 }
 
 func dispatchRunCommandsNoArgs(stdout io.Writer, usage func(io.Writer), commands map[string]CommandFunc) error {
@@ -115,15 +111,6 @@ func ParseFlagSet(fs *flag.FlagSet, args []string, usage func(io.Writer)) error 
 		return err
 	}
 	return nil
-}
-
-func splitFlagName(arg string) (string, bool) {
-	name := strings.TrimLeft(strings.TrimSpace(arg), "-")
-	before, _, hasInlineValue := strings.Cut(name, "=")
-	if hasInlineValue {
-		name = strings.TrimSpace(before)
-	}
-	return name, hasInlineValue
 }
 
 func appendFlagOperand(flagDef *flag.Flag, args []string, i int, flags []string) ([]string, int) {
@@ -174,7 +161,11 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 }
 
 func consumeSingleFlagArg(fs *flag.FlagSet, args []string, i int, flags []string) ([]string, int, bool) {
-	name, hasInlineValue := splitFlagName(args[i])
+	name := strings.TrimLeft(strings.TrimSpace(args[i]), "-")
+	before, _, hasInlineValue := strings.Cut(name, "=")
+	if hasInlineValue {
+		name = strings.TrimSpace(before)
+	}
 	if name == "" {
 		return flags, i, false
 	}

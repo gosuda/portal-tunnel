@@ -124,7 +124,9 @@ func registerRelayHandlerPolicyRoutes(mux *http.ServeMux, api *RelayAPI) {
 	mux.HandleFunc(types.PathCommentsDelete, api.deleteComment)
 }
 
-func registerRelayHandlerInstallRoutes(mux *http.ServeMux, api *RelayAPI) {
+func (api *RelayAPI) Handler() *http.ServeMux {
+	mux := http.NewServeMux()
+	registerRelayHandlerPolicyRoutes(mux, api)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, api.server.PortalURL(), false)
 	})
@@ -133,12 +135,6 @@ func registerRelayHandlerInstallRoutes(mux *http.ServeMux, api *RelayAPI) {
 	})
 	mux.HandleFunc(types.PathInstallBinPrefix, serveInstallBinary)
 	mux.HandleFunc("/", api.serveFrontend)
-}
-
-func (api *RelayAPI) Handler() *http.ServeMux {
-	mux := http.NewServeMux()
-	registerRelayHandlerPolicyRoutes(mux, api)
-	registerRelayHandlerInstallRoutes(mux, api)
 	return mux
 }
 func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {

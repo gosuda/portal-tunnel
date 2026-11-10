@@ -85,7 +85,10 @@ func (v *agentDashboardView) addAccessBodyFields(th *agentDashboardTheme, inner 
 		}
 		switch field.row {
 		case agentDashboardAccessRowMode:
-			v.addAccessModeRow(th, inner, a, index, focused)
+			v.addAccessChoice(th, inner, "Mode", agentDashboardAccessMode(a.provider), index, focused)
+			if a.provider != "" {
+				v.addAccessAllowed(th, inner, a)
+			}
 		case agentDashboardAccessRowEntry:
 			v.addAccessEntryRow(th, inner, a.allowed[field.entry], index, focused)
 		case agentDashboardAccessRowAdd:
@@ -138,13 +141,6 @@ func (a agentDashboardAccess) accessSecretField(tunnel AgentTunnelStatus) (strin
 		label = "Secret (shown)"
 	}
 	return label, input
-}
-
-func (v *agentDashboardView) addAccessModeRow(th *agentDashboardTheme, inner int, a agentDashboardAccess, index int, focused bool) {
-	v.addAccessChoice(th, inner, "Mode", agentDashboardAccessMode(a.provider), index, focused)
-	if a.provider != "" {
-		v.addAccessAllowed(th, inner, a)
-	}
 }
 
 func (v *agentDashboardView) addAccessProviderCheck(th *agentDashboardTheme, inner int, tunnel AgentTunnelStatus) {

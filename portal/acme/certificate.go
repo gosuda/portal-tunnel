@@ -177,8 +177,12 @@ func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, r
 	if err != nil {
 		return nil, err
 	}
-	if err := m.newClientSetChallengeProvider(ctx, client); err != nil {
-		return nil, err
+	challengeProvider, err := m.dns.ChallengeProvider(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create dns challenge provider: %w", err)
+	}
+	if err := client.Challenge.SetDNS01Provider(challengeProvider); err != nil {
+		return nil, fmt.Errorf("set dns01 provider: %w", err)
 	}
 	if err := m.newClientRegisterUser(client, user, registrationFile); err != nil {
 		return nil, err
@@ -198,17 +202,6 @@ func (m *Manager) newClientBuildWithUser(user *acmeUser) (*lego.Client, error) {
 		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
 	}
 	return client, nil
-}
-
-func (m *Manager) newClientSetChallengeProvider(ctx context.Context, client *lego.Client) error {
-	challengeProvider, err := m.dns.ChallengeProvider(ctx)
-	if err != nil {
-		return fmt.Errorf("create dns challenge provider: %w", err)
-	}
-	if err := client.Challenge.SetDNS01Provider(challengeProvider); err != nil {
-		return fmt.Errorf("set dns01 provider: %w", err)
-	}
-	return nil
 }
 
 func (m *Manager) newClientRegisterUser(client *lego.Client, user *acmeUser, registrationFile string) error {

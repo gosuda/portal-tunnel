@@ -11,24 +11,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func loadRelayIdentityAuthority(cfg ServerConfig) (identity.RelayIdentity, identity.Authority, error) {
-	identityPath := filepath.Join(cfg.StateDir, types.RelayIdentityFilename)
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(cfg.PortalURL))
-	if err != nil {
-		return identity.RelayIdentity{}, nil, fmt.Errorf("load relay identity: %w", err)
-	}
-	return relayIdentity, identity.NewLocalAuthority(relayIdentity.Identity), nil
-}
-
-func createLeaseRegistry(cfg ServerConfig, relayIdentity identity.RelayIdentity, relayAuthority identity.Authority) (*leaseRegistry, error) {
-	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, relayAuthority, cfg.PortalURL, int64(cfg.DefaultIdentityBPS))
-	if err != nil {
-		return nil, err
-	}
-	registry.unapprovedPerSource = cfg.UnapprovedLeasesPerSource
-	return registry, nil
-}
-
 func resolveRelaySet(cfg ServerConfig) (ServerConfig, *discovery.RelaySet, error) {
 	if !cfg.DiscoveryEnabled {
 		return cfg, nil, nil
@@ -58,14 +40,6 @@ func attachOverlay(server *Server, cfg ServerConfig, relayAuthority identity.Aut
 	return nil
 }
 
-func finishNewServer(cfg ServerConfig, relayIdentity identity.RelayIdentity, relayAuthority identity.Authority) (*Server, error) {
-	registry, err := createLeaseRegistry(cfg, relayIdentity, relayAuthority)
-	if err != nil {
-		return nil, err
-	}
-	return completeNewServer(cfg, registry, relayIdentity, relayAuthority)
-}
-
 func completeNewServer(cfg ServerConfig, registry *leaseRegistry, relayIdentity identity.RelayIdentity, relayAuthority identity.Authority) (*Server, error) {
 	resolved, relaySet, err := resolveRelaySet(cfg)
 	if err != nil {
@@ -84,18 +58,21 @@ func completeNewServer(cfg ServerConfig, registry *leaseRegistry, relayIdentity 
 	return server, nil
 }
 
-func assembleNewServer(cfg ServerConfig) (*Server, error) {
-	relayIdentity, relayAuthority, err := loadRelayIdentityAuthority(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return finishNewServer(cfg, relayIdentity, relayAuthority)
-}
-
 func NewServer(cfg ServerConfig) (*Server, error) {
 	validated, err := ValidateServerConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return assembleNewServer(validated)
+	identityPath := filepath.Join(validated.StateDir, types.RelayIdentityFilename)
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(validated.PortalURL))
+	if err != nil {
+		return nil, fmt.Errorf("load relay identity: %w", err)
+	}
+	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
+	registry, err := newLeaseRegistry(validated.MinPort, validated.MaxPort, relayIdentity.Name, relayAuthority, validated.PortalURL, int64(validated.DefaultIdentityBPS))
+	if err != nil {
+		return nil, err
+	}
+	registry.unapprovedPerSource = validated.UnapprovedLeasesPerSource
+	return completeNewServer(validated, registry, relayIdentity, relayAuthority)
 }

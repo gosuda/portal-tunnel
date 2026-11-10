@@ -33,8 +33,10 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 	// with the relay's current access decision before publishing success.
 	s.registry.suspendIdentity(identityKey)
 
-	record, resp, ok := s.registerChallengeLease(w, challenge, sourceAddr, req.ReportedIP)
-	if !ok {
+	self, descriptors := s.issueHandleRegisterDescriptors(challenge)
+	record, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial())
+	if err != nil {
+		writeAPIErrorResponse(w, err)
 		return identityKey, types.RegisterResponse{}, false
 	}
 	if !s.syncHandleRegisterLeaseDNS(w, r, record, resp) {
@@ -66,16 +68,6 @@ func (s *Server) issueHandleRegisterDescriptors(challenge *identity.RegisterChal
 		return types.RelayDescriptor{}, nil
 	}
 	return self, descriptors
-}
-
-func (s *Server) registerChallengeLease(w http.ResponseWriter, challenge *identity.RegisterChallenge, sourceAddr netip.Addr, reportedIP string) (*leaseRecord, types.RegisterResponse, bool) {
-	self, descriptors := s.issueHandleRegisterDescriptors(challenge)
-	record, resp, err := s.registry.Register(challenge.Request, sourceAddr, reportedIP, self, descriptors, s.acmeManager.TLSMaterial())
-	if err != nil {
-		writeAPIErrorResponse(w, err)
-		return nil, types.RegisterResponse{}, false
-	}
-	return record, resp, true
 }
 
 func (s *Server) syncHandleRegisterLeaseDNS(w http.ResponseWriter, r *http.Request, record *leaseRecord, resp types.RegisterResponse) bool {
@@ -113,8 +105,9 @@ func (s *Server) createChallengeResponse(w http.ResponseWriter, r *http.Request,
 	if s.rejectDisabledTransports(w, req) {
 		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
-	normalized, ok := normalizeChallengeIdentity(w, req.Identity)
-	if !ok {
+	normalized, err := identity.NormalizeIdentity(req.Identity)
+	if err != nil {
+		writeAPIErrorResponse(w, err)
 		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
 	req.Identity = normalized
@@ -154,15 +147,6 @@ func (s *Server) rejectDisabledTransports(w http.ResponseWriter, req types.Regis
 		return true
 	}
 	return false
-}
-
-func normalizeChallengeIdentity(w http.ResponseWriter, id types.Identity) (types.Identity, bool) {
-	normalized, err := identity.NormalizeIdentity(id)
-	if err != nil {
-		writeAPIErrorResponse(w, err)
-		return types.Identity{}, false
-	}
-	return normalized, true
 }
 
 // RefuseChallengeOverBudget reports whether it answered 429 because the source

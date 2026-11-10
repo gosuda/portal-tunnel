@@ -53,14 +53,30 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 	for {
 		select {
 		case <-m.stopCh:
-			m.maintenanceLoopHandleStop(state)
+			syncCtx, cancel := context.WithTimeout(m.stopCtx, defaultSyncTimeout)
+			m.stopErr = m.maintenanceLoopFlushCommands(syncCtx, state)
+			cancel()
+			if m.stopErr != nil {
+				log.Warn().Err(m.stopErr).Str("base_domain", m.cfg.BaseDomain).Msg("flush dns records")
+			}
 			return
 		case command := <-m.ensCommands:
 			m.maintenanceLoopHandleENSCommand(ctx, state, command)
 		case <-state.dnsTicker.C:
-			m.maintenanceLoopHandleDNSTick(ctx, state)
+			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+			publicIPs, err := m.maintenanceLoopSyncDNSAttempt(syncCtx, state)
+			err = errors.Join(err, m.syncChangedAddressRecords(syncCtx, state, publicIPs))
+			cancel()
+			if err != nil {
+				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync managed dns records")
+			}
 		case <-state.retryTimer.C:
-			m.maintenanceLoopHandleRetryTick(ctx, state)
+			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+			err := m.maintenanceLoopSyncRetryTick(syncCtx, state)
+			cancel()
+			if err != nil {
+				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
+			}
 		case <-state.renewTimer.C:
 			state.renewTimer.Reset(m.maintenanceLoopRenewTick(ctx))
 		}
@@ -213,15 +229,6 @@ func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
 	return defaultRenewInterval
 }
 
-func (m *Manager) maintenanceLoopHandleStop(state *maintenanceLoopState) {
-	syncCtx, cancel := context.WithTimeout(m.stopCtx, defaultSyncTimeout)
-	m.stopErr = m.maintenanceLoopFlushCommands(syncCtx, state)
-	cancel()
-	if m.stopErr != nil {
-		log.Warn().Err(m.stopErr).Str("base_domain", m.cfg.BaseDomain).Msg("flush dns records")
-	}
-}
-
 func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *maintenanceLoopState, command ensDNSCommand) {
 	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
 	err := m.applyENSCommand(syncCtx, command)
@@ -234,24 +241,5 @@ func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *ma
 		if !command.remove {
 			clear(state.lastPublicIPs)
 		}
-	}
-}
-
-func (m *Manager) maintenanceLoopHandleDNSTick(ctx context.Context, state *maintenanceLoopState) {
-	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-	publicIPs, err := m.maintenanceLoopSyncDNSAttempt(syncCtx, state)
-	err = errors.Join(err, m.syncChangedAddressRecords(syncCtx, state, publicIPs))
-	cancel()
-	if err != nil {
-		log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync managed dns records")
-	}
-}
-
-func (m *Manager) maintenanceLoopHandleRetryTick(ctx context.Context, state *maintenanceLoopState) {
-	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-	err := m.maintenanceLoopSyncRetryTick(syncCtx, state)
-	cancel()
-	if err != nil {
-		log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
 	}
 }

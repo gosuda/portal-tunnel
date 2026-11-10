@@ -17,7 +17,13 @@ func agentDashboardRenderButtons(th *agentDashboardTheme, width, y, x int, butto
 		if i > 0 && accum.line.Len() > 0 {
 			space = 1
 		}
-		space = accum.wrapButtonLine(space, face.width)
+		if accum.line.Len() > 0 && accum.lineX+space+face.width > accum.width {
+			accum.lines = append(accum.lines, accum.line.String())
+			accum.line.Reset()
+			accum.lineY++
+			accum.lineX = accum.x
+			space = 0
+		}
 		accum.appendButtonFace(face, space)
 	}
 	if accum.line.Len() > 0 || len(accum.lines) == 0 {
@@ -34,17 +40,6 @@ type agentDashboardButtonLine struct {
 	lineX   int
 	width   int
 	x       int
-}
-
-func (a *agentDashboardButtonLine) wrapButtonLine(space, faceWidth int) int {
-	if a.line.Len() > 0 && a.lineX+space+faceWidth > a.width {
-		a.lines = append(a.lines, a.line.String())
-		a.line.Reset()
-		a.lineY++
-		a.lineX = a.x
-		return 0
-	}
-	return space
 }
 
 func (a *agentDashboardButtonLine) appendButtonFace(face agentDashboardButtonFace, space int) {

@@ -272,15 +272,6 @@ func validateExposeConfig(cfg options) error {
 	return nil
 }
 
-func checkExposeIdentity(identity types.Identity) error {
-	if strings.TrimSpace(identity.Address) == "" ||
-		strings.TrimSpace(identity.PublicKey) == "" ||
-		strings.TrimSpace(identity.PrivateKey) == "" {
-		return errPortalSDKIdentityMustIncludeAddress
-	}
-	return nil
-}
-
 func (b *exposeBuild) assembleExpose(ctx context.Context) (*Exposure, error) {
 	if err := validateExposeContext(ctx); err != nil {
 		return nil, err
@@ -308,8 +299,10 @@ func (b *exposeBuild) loadExposeSource(ctx context.Context) (*Exposure, error) {
 }
 
 func (b *exposeBuild) finishExposeAssembly(ctx context.Context, source *cache.Source, relayURLs []string) (*Exposure, error) {
-	if err := checkExposeIdentity(b.identity); err != nil {
-		return nil, err
+	if strings.TrimSpace(b.identity.Address) == "" ||
+		strings.TrimSpace(b.identity.PublicKey) == "" ||
+		strings.TrimSpace(b.identity.PrivateKey) == "" {
+		return nil, errPortalSDKIdentityMustIncludeAddress
 	}
 	var initialRelays []string
 	var controller *discovery.Controller

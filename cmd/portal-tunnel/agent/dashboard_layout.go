@@ -260,7 +260,13 @@ func (v *agentDashboardView) addFrame(th *agentDashboardTheme, title string, act
 	g := th.glyph
 	inner := max(0, width-agentDashboardFrameWidth)
 	edge := max(0, width-2)
-	border, labelStyle, open, closing := agentDashboardFrameEdge(th, active)
+	var border, labelStyle lipgloss.Style
+	var open, closing string
+	if active {
+		border, labelStyle, open, closing = th.strong, th.selected, th.glyph.activeOpen, th.glyph.activeClose
+	} else {
+		border, labelStyle, open, closing = th.rule, th.muted, " ", " "
+	}
 	label := open + agentDashboardFit(title, max(1, edge-1-lipgloss.Width(g.activeOpen+g.activeClose))) + closing
 	labelWidth := lipgloss.Width(label)
 	v.addLine(border.Render(g.topLeft+g.horizontal) + labelStyle.Render(label) +
@@ -281,13 +287,6 @@ func (v *agentDashboardView) addFrame(th *agentDashboardTheme, title string, act
 	}
 	v.addLine(border.Render(g.bottomLeft + strings.Repeat(g.horizontal, edge) + g.bottomRight))
 	return 2, 2 + labelWidth
-}
-
-func agentDashboardFrameEdge(th *agentDashboardTheme, active bool) (lipgloss.Style, lipgloss.Style, string, string) {
-	if active {
-		return th.strong, th.selected, th.glyph.activeOpen, th.glyph.activeClose
-	}
-	return th.rule, th.muted, " ", " "
 }
 
 func (v *agentDashboardView) addFrameRows(side string, inner int, content agentDashboardView, rows int) {

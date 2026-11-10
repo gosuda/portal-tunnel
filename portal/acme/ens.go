@@ -226,36 +226,25 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
-	cleanupErr := m.withdrawDisabledENSBaseTXT(ctx)
-	return m.withdrawTrackedENSHosts(ctx, cleanupErr)
-}
-
-func (m *Manager) withdrawDisabledENSBaseTXT(ctx context.Context) error {
+	var cleanupErr error
 	if !m.cfg.ENSGaslessEnabled && strings.TrimSpace(m.cfg.ENSGaslessAddress) != "" {
 		if err := m.dns.DeleteTXTRecords(ctx, m.cfg.BaseDomain, gaslessENSTXTPrefix); err != nil {
-			return fmt.Errorf("delete ens gasless txt for %s: %w", m.cfg.BaseDomain, err)
+			cleanupErr = fmt.Errorf("delete ens gasless txt for %s: %w", m.cfg.BaseDomain, err)
 		}
 	}
-	return nil
-}
-
-func (m *Manager) deleteTrackedENSHost(ctx context.Context, hostname string) error {
-	if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
-		return fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err)
-	}
-	if err := m.dns.DeleteAddressRecords(ctx, hostname); err != nil {
-		return fmt.Errorf("delete ens gasless address record for %s: %w", hostname, err)
-	}
-	return nil
+	return m.withdrawTrackedENSHosts(ctx, cleanupErr)
 }
 
 func (m *Manager) withdrawTrackedENSHosts(ctx context.Context, cleanupErr error) error {
 	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
 		remaining := hostnames[:0]
 		for _, hostname := range hostnames {
-			if err := m.deleteTrackedENSHost(ctx, hostname); err != nil {
+			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
 				remaining = append(remaining, hostname)
-				cleanupErr = errors.Join(cleanupErr, err)
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
+			} else if err := m.dns.DeleteAddressRecords(ctx, hostname); err != nil {
+				remaining = append(remaining, hostname)
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless address record for %s: %w", hostname, err))
 			}
 		}
 		return remaining

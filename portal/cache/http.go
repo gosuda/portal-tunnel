@@ -32,7 +32,13 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		return
 	}
 	site := &cachedSite{host: lease.Hostname, owner: lease.Owner, leaseID: lease.ID, ttl: lease.ttl, expiresAt: lease.cacheExpiry(), usedAt: time.Now()}
-	if c.serveHandleDeleteCacheRequest(w, req, site, generation) {
+	if req.Method == http.MethodDelete {
+		c.mu.Lock()
+		if existing := c.entries[site.host]; existing != nil && existing.leaseID == site.leaseID && c.eligibleLocked(site.leaseID) && c.leases[site.leaseID].generation == generation {
+			c.retireLocked(existing)
+		}
+		c.mu.Unlock()
+		utils.WriteAPIData(w, http.StatusOK, types.StaticCacheStatus{})
 		return
 	}
 	readTimeout, release, ok := c.admitHandleRequestSlot(w, req, site.owner)
@@ -64,8 +70,11 @@ func (c *Manager) Handle(w http.ResponseWriter, req *http.Request, leaseID strin
 		utils.InvalidRequestError(err).Write(w)
 		return
 	}
-	uploadStatus, published := c.publishHandleStagedCache(w, site, generation)
+	c.mu.Lock()
+	uploadStatus, published := c.publishStagedLocked(site, generation)
+	c.mu.Unlock()
 	if !published {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "cache lease unavailable")
 		return
 	}
 	c.collect(time.Now())
@@ -98,17 +107,6 @@ func (c *Manager) admitHandleRequestSlot(w http.ResponseWriter, req *http.Reques
 	}
 }
 
-func (c *Manager) serveHandleDeleteCacheRequest(w http.ResponseWriter, req *http.Request, site *cachedSite, generation uint64) bool {
-	if req.Method != http.MethodDelete {
-		return false
-	}
-	c.mu.Lock()
-	c.retireCacheEntryLocked(site, generation)
-	c.mu.Unlock()
-	utils.WriteAPIData(w, http.StatusOK, types.StaticCacheStatus{})
-	return true
-}
-
 func (c *Manager) serveHandlePostCacheRequest(w http.ResponseWriter, req *http.Request, site *cachedSite, generation uint64) bool {
 	if req.Method != http.MethodPost {
 		return false
@@ -138,16 +136,6 @@ func (c *Manager) retireHandleUnpublished(site *cachedSite) {
 	c.collect(time.Now())
 }
 
-func (c *Manager) publishHandleStagedCache(w http.ResponseWriter, site *cachedSite, generation uint64) (types.StaticCacheStatus, bool) {
-	c.mu.Lock()
-	uploadStatus, published := c.publishStagedLocked(site, generation)
-	c.mu.Unlock()
-	if !published {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, "cache lease unavailable")
-		return types.StaticCacheStatus{}, false
-	}
-	return uploadStatus, true
-}
 func (c *Manager) rejectUnhandledCacheRequest(w http.ResponseWriter, req *http.Request) bool {
 	if c == nil {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "cache unavailable")
@@ -191,12 +179,6 @@ func (c *Manager) decodeUploadManifest(req *http.Request, w http.ResponseWriter,
 	}
 	site.digest, site.bytes = digest, size
 	return controller, parts, manifest, nil
-}
-
-func (c *Manager) retireCacheEntryLocked(site *cachedSite, generation uint64) {
-	if existing := c.entries[site.host]; existing != nil && existing.leaseID == site.leaseID && c.eligibleLocked(site.leaseID) && c.leases[site.leaseID].generation == generation {
-		c.retireLocked(existing)
-	}
 }
 
 func (c *Manager) publishStagedLocked(site *cachedSite, generation uint64) (types.StaticCacheStatus, bool) {

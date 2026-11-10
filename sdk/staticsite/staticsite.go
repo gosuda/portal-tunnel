@@ -23,8 +23,9 @@ func NewHandler(prefix, root, index string) http.Handler {
 			http.NotFound(w, req)
 			return
 		}
-		dir, ok := openStaticSiteRoot(w, req, root)
-		if !ok {
+		dir, err := os.OpenRoot(root)
+		if err != nil {
+			http.NotFound(w, req)
 			return
 		}
 		defer dir.Close()
@@ -48,15 +49,6 @@ func serveStaticSiteFile(w http.ResponseWriter, req *http.Request, dir *os.Root,
 		return true
 	}
 	return served
-}
-
-func openStaticSiteRoot(w http.ResponseWriter, req *http.Request, root string) (*os.Root, bool) {
-	dir, err := os.OpenRoot(root)
-	if err != nil {
-		http.NotFound(w, req)
-		return nil, false
-	}
-	return dir, true
 }
 
 func serveStaticFile(w http.ResponseWriter, req *http.Request, dir *os.Root, rel string) (bool, error) {

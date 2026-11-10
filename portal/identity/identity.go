@@ -139,19 +139,12 @@ func keyedIdentityFromTrimmed(trimmed types.Identity) (types.Identity, error) {
 	if err := resolveIdentityAddress(&resolved, signingIdentity.Address); err != nil {
 		return types.Identity{}, err
 	}
-	if err := appliedSigningKeys(&resolved, signingIdentity); err != nil {
-		return types.Identity{}, err
-	}
-	return resolved, nil
-}
-
-func appliedSigningKeys(resolved *types.Identity, signingIdentity types.Identity) error {
 	if resolved.PublicKey != "" && !strings.EqualFold(utils.TrimHexPrefix(resolved.PublicKey), signingIdentity.PublicKey) {
-		return errIdentityPublicKeyDoesNotMatch
+		return types.Identity{}, errIdentityPublicKeyDoesNotMatch
 	}
 	resolved.PublicKey = signingIdentity.PublicKey
 	resolved.PrivateKey = signingIdentity.PrivateKey
-	return nil
+	return resolved, nil
 }
 
 func applyMnemonicKeyMaterial(resolved *types.Identity) error {

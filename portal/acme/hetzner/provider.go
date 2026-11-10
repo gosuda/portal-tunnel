@@ -269,8 +269,9 @@ func ensureRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone,
 	if err != nil {
 		return err
 	}
-	if value, err = normalizeRecordValueHetzner(value); err != nil {
-		return err
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errRecordValueIsRequired
 	}
 	desired := []hcloud.ZoneRRSetRecord{{Value: value}}
 
@@ -280,33 +281,17 @@ func ensureRecord(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone,
 	}
 	if existing == nil {
 		ttl := defaultRecordTTL
-		return createRecordHetzner(ctx, client, zone, hcloud.ZoneRRSetCreateOpts{
+		result, _, err := client.Zone.CreateRRSet(ctx, zone, hcloud.ZoneRRSetCreateOpts{
 			Name:    recordName,
 			Type:    recordType,
 			TTL:     &ttl,
 			Records: desired,
 		})
+		if err != nil {
+			return err
+		}
+		return waitAction(ctx, client, result.Action)
 	}
-	return replaceRecordHetzner(ctx, client, existing, desired)
-}
-
-func normalizeRecordValueHetzner(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", errRecordValueIsRequired
-	}
-	return value, nil
-}
-
-func createRecordHetzner(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, opts hcloud.ZoneRRSetCreateOpts) error {
-	result, _, err := client.Zone.CreateRRSet(ctx, zone, opts)
-	if err != nil {
-		return err
-	}
-	return waitAction(ctx, client, result.Action)
-}
-
-func replaceRecordHetzner(ctx context.Context, client *hcloud.Client, existing *hcloud.ZoneRRSet, desired []hcloud.ZoneRRSetRecord) error {
 	if sameRecords(existing.Records, desired) {
 		return nil
 	}

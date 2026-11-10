@@ -272,7 +272,12 @@ func (r *httpRoute) rewriteProxyLocation(header http.Header, publicHost, publicS
 	if target == nil {
 		return
 	}
-	r.rewriteProxyLocationApply(header, target)
+	mapped := r.mapPublicPath(target.Path)
+	if isSafeAbsoluteURLPath(mapped) {
+		target.Path = mapped
+		target.RawPath = ""
+		header.Set("Location", target.String())
+	}
 }
 
 func (r *httpRoute) rewriteProxyLocationTarget(parsed *url.URL, location, publicHost, publicScheme string) *url.URL {
@@ -290,15 +295,6 @@ func (r *httpRoute) rewriteProxyLocationTarget(parsed *url.URL, location, public
 		return nil
 	}
 	return parsed
-}
-
-func (r *httpRoute) rewriteProxyLocationApply(header http.Header, target *url.URL) {
-	mapped := r.mapPublicPath(target.Path)
-	if isSafeAbsoluteURLPath(mapped) {
-		target.Path = mapped
-		target.RawPath = ""
-		header.Set("Location", target.String())
-	}
 }
 
 func (r *httpRoute) rewriteProxyCookies(header http.Header, publicHost string) {
@@ -323,7 +319,11 @@ func (r *httpRoute) rewriteProxyCookiesValue(value, publicDomain string) string 
 		return value
 	}
 	changed := r.rewriteProxyCookiesPath(cookie)
-	if r.rewriteProxyCookiesDomain(cookie, publicDomain) {
+	domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
+	rewriteDomain := domain != "" && domain != publicDomain &&
+		(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain))
+	if rewriteDomain {
+		cookie.Domain = ""
 		changed = true
 	}
 	if changed {
@@ -338,17 +338,6 @@ func (r *httpRoute) rewriteProxyCookiesPath(cookie *http.Cookie) bool {
 	}
 	if rewritten := r.mapPublicPath(cookie.Path); rewritten != cookie.Path {
 		cookie.Path = rewritten
-		return true
-	}
-	return false
-}
-
-func (r *httpRoute) rewriteProxyCookiesDomain(cookie *http.Cookie, publicDomain string) bool {
-	domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
-	rewriteDomain := domain != "" && domain != publicDomain &&
-		(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain))
-	if rewriteDomain {
-		cookie.Domain = ""
 		return true
 	}
 	return false

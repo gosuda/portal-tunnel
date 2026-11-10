@@ -78,16 +78,6 @@ func molsMultipliersVariant(order, baseM1, baseM2 int) (m1, m2 int, ok bool) {
 	})
 }
 
-func molsMultipliersBase(order int) (m1, m2 int, ok bool) {
-	p1, p2 := int(molsBaseM1), int(molsBaseM2)
-	if molsPairValid(order, p1, p2) {
-		return p1, p2, true
-	}
-	return molsMultipliersSearch(order, func(a, b int) bool {
-		return a != b && molsPairValid(order, a, b)
-	})
-}
-
 func molsMultipliersSearch(order int, allow func(a, b int) bool) (m1, m2 int, ok bool) {
 	for a := 1; a < order; a++ {
 		for b := 1; b < order; b++ {
@@ -110,7 +100,13 @@ func molsMultipliers(order int, variant bool) (m1, m2 int, ok bool) {
 		}
 		return molsMultipliersVariant(order, baseM1, baseM2)
 	}
-	return molsMultipliersBase(order)
+	p1, p2 := int(molsBaseM1), int(molsBaseM2)
+	if molsPairValid(order, p1, p2) {
+		return p1, p2, true
+	}
+	return molsMultipliersSearch(order, func(a, b int) bool {
+		return a != b && molsPairValid(order, a, b)
+	})
 }
 
 func molsCongestionScore(row, col, j, m1, m2, order int, ok bool) int {
@@ -241,14 +237,6 @@ func rankRelayPoolGridCols(autoPool []relayState, key []byte) map[string]int {
 	return relayCols
 }
 
-func (g rankRelayPoolGrid) scoreForRankRelayPool(state relayState) int {
-	col := g.cols[state.Descriptor.APIHTTPSAddr]
-	if g.congested {
-		return molsCongestionScore(g.ingressRow, g.ingressCol, col, g.m1, g.m2, g.order, g.ok)
-	}
-	return molsScore(g.ingressRow, g.ingressCol, col, g.m1, g.m2, g.order, g.ok)
-}
-
 func rankRelayPoolActive(autoPool []relayState) (activeStates, fallbackStates []relayState) {
 	activeStates = make([]relayState, 0, len(autoPool))
 	fallbackStates = make([]relayState, 0)
@@ -295,9 +283,16 @@ func rankRelayPoolTier(states []relayState, grid rankRelayPoolGrid) []string {
 func rankRelayPoolCandidates(states []relayState, grid rankRelayPoolGrid) []molsCandidate {
 	candidates := make([]molsCandidate, 0, len(states))
 	for i, state := range states {
+		col := grid.cols[state.Descriptor.APIHTTPSAddr]
+		var score int
+		if grid.congested {
+			score = molsCongestionScore(grid.ingressRow, grid.ingressCol, col, grid.m1, grid.m2, grid.order, grid.ok)
+		} else {
+			score = molsScore(grid.ingressRow, grid.ingressCol, col, grid.m1, grid.m2, grid.order, grid.ok)
+		}
 		candidates = append(candidates, molsCandidate{
 			state: state,
-			score: grid.scoreForRankRelayPool(state),
+			score: score,
 			seq:   i,
 		})
 	}

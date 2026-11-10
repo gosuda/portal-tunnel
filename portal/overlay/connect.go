@@ -43,7 +43,10 @@ func (r *Runtime) HandleConnect(w http.ResponseWriter, request *http.Request, ca
 			closeNow(upstream)
 		}
 	}()
-	client := r.wrapHandleConnectClient(downstream, buffered, upstream, release)
+	_ = downstream.SetDeadline(time.Time{})
+	_ = upstream.SetDeadline(time.Time{})
+	client := &bufferedConn{Conn: downstream, reader: buffered.Reader, release: release}
+	client.stop = context.AfterFunc(r.ctx, func() { _ = client.Close() })
 	handoff = true
 	return client, upstream
 }
@@ -192,14 +195,6 @@ func acceptHandleConnectHijack(w http.ResponseWriter) (net.Conn, *bufio.ReadWrit
 		return nil, nil, false
 	}
 	return downstream, buffered, true
-}
-
-func (r *Runtime) wrapHandleConnectClient(downstream net.Conn, buffered *bufio.ReadWriter, upstream net.Conn, release func()) *bufferedConn {
-	_ = downstream.SetDeadline(time.Time{})
-	_ = upstream.SetDeadline(time.Time{})
-	client := &bufferedConn{Conn: downstream, reader: buffered.Reader, release: release}
-	client.stop = context.AfterFunc(r.ctx, func() { _ = client.Close() })
-	return client
 }
 
 func (r *Runtime) openHandleConnectBridge(w http.ResponseWriter, request *http.Request, capability string, destination string) (net.Conn, *bufio.ReadWriter, net.Conn, bool) {

@@ -339,19 +339,15 @@ func fetchFindZoneIDCandidate(ctx context.Context, p *Provider, candidate string
 			continue
 		}
 		zoneName := utils.NormalizeHostname(z.Name)
-		storeFindZoneIDEntry(p, zoneName, zoneID)
+		p.zones.UpdateCopy(func(cached *map[string]string) {
+			if *cached == nil {
+				*cached = make(map[string]string)
+			}
+			(*cached)[zoneName] = zoneID
+		})
 		return zoneID, nil
 	}
 	return "", nil
-}
-
-func storeFindZoneIDEntry(p *Provider, zoneName, zoneID string) {
-	p.zones.UpdateCopy(func(cached *map[string]string) {
-		if *cached == nil {
-			*cached = make(map[string]string)
-		}
-		(*cached)[zoneName] = zoneID
-	})
 }
 
 func ensureDNSRecord(ctx context.Context, token, zoneID, name, recordType, content string) error {

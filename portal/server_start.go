@@ -26,15 +26,6 @@ type serverStartBundle struct {
 	groupCtx         context.Context
 }
 
-func (s *Server) listenSNIStart(serverCtx context.Context, addr string) (net.Listener, error) {
-	var listenConfig net.ListenConfig
-	sniListener, err := listenConfig.Listen(serverCtx, "tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("listen sni: %w", err)
-	}
-	return sniListener, nil
-}
-
 func (s *Server) buildRedirectServerStart(serverCtx context.Context, cfg ServerConfig) (net.Listener, *http.Server, error) {
 	if !cfg.HTTPRedirect.Enabled {
 		return nil, nil, nil
@@ -83,9 +74,10 @@ func (s *Server) enterOverlayStart(serverCtx context.Context) error {
 }
 
 func (s *Server) fillBundleFrontListeners(serverCtx context.Context, cfg ServerConfig, apiHandler http.Handler, apiTLS *tls.Config, bundle *serverStartBundle) error {
-	sniListener, err := s.listenSNIStart(serverCtx, cfg.SNIListenAddr)
+	var listenConfig net.ListenConfig
+	sniListener, err := listenConfig.Listen(serverCtx, "tcp", cfg.SNIListenAddr)
 	if err != nil {
-		return err
+		return fmt.Errorf("listen sni: %w", err)
 	}
 	bundle.sniListener = sniListener
 	bundle.group, bundle.groupCtx = errgroup.WithContext(serverCtx)

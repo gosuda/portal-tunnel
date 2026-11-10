@@ -182,10 +182,6 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		lease:         utils.NewSnapshot(listenerSnapshot{}),
 		startedAt:     cfg.StartedAt,
 	}
-	return l.finishnewListenerSetup(listenerCtx, cfg)
-}
-
-func (l *listener) finishnewListenerSetup(listenerCtx context.Context, cfg listenerConfig) (*listener, error) {
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
 	l.admitting = make(chan struct{}, maxAdmitting)
@@ -328,7 +324,10 @@ func (l *listener) run(ctx context.Context) {
 			continue
 		}
 		retries = 0
-		l.reportRegistered()
+		lease, ok := l.leaseSnapshot()
+		if !ok || (l.publicURLForLease(lease) == "" && !lease.hasRawEndpoint()) {
+			log.Info().Str("address", l.identity.Address).Msg("relay listener registered")
+		}
 		err = l.runLease(ctx)
 		if l.settlelistenerLease(err) {
 			continue
@@ -344,9 +343,12 @@ func (l *listener) settlelistenerRegistration(ctx context.Context, err error, re
 	if l.closeForTerminalRelayError(err) {
 		return retries, true
 	}
-	var proceed bool
-	retries, proceed = l.retryRegistration(ctx, err, retries)
-	if !proceed {
+	retries++
+	if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
+		if ctx.Err() == nil {
+			l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
+		}
+		_ = l.Close()
 		return retries, true
 	}
 	return retries, false
@@ -363,31 +365,15 @@ func (l *listener) settlelistenerLease(err error) bool {
 		l.resetForLeaseRefresh(err)
 		return true
 	}
-	l.failLease(err)
-	return false
-}
-
-func (l *listener) reportRegistered() {
-	lease, ok := l.leaseSnapshot()
-	if !ok || (l.publicURLForLease(lease) == "" && !lease.hasRawEndpoint()) {
-		log.Info().Str("address", l.identity.Address).Msg("relay listener registered")
-	}
-}
-
-func (l *listener) retryRegistration(ctx context.Context, err error, retries int) (int, bool) {
-	retries++
-	if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
-		l.failRegistration(ctx, err)
-		return retries, false
-	}
-	return retries, true
-}
-
-func (l *listener) failRegistration(ctx context.Context, err error) {
-	if ctx.Err() == nil {
-		l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
-	}
+	relayURL := l.api.relayURL.String()
+	log.Error().
+		Err(err).
+		Str("relay_url", relayURL).
+		Str("address", l.identity.Address).
+		Msg("listener connection retry budget exhausted; closing listener")
+	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
 	_ = l.Close()
+	return false
 }
 
 func (l *listener) resetForLeaseRefresh(err error) {
@@ -403,17 +389,6 @@ func (l *listener) resetForLeaseRefresh(err error) {
 		Str("relay_url", relayURL).
 		Str("address", l.identity.Address).
 		Msg("lease refresh required; re-registering")
-}
-
-func (l *listener) failLease(err error) {
-	relayURL := l.api.relayURL.String()
-	log.Error().
-		Err(err).
-		Str("relay_url", relayURL).
-		Str("address", l.identity.Address).
-		Msg("listener connection retry budget exhausted; closing listener")
-	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
-	_ = l.Close()
 }
 
 func (l *listener) Close() error {

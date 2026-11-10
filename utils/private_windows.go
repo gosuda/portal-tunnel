@@ -35,7 +35,11 @@ func CreatePrivateFile(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := writeCreatePrivateFileData(handle, path, data); err != nil {
+	f := os.NewFile(uintptr(handle), path)
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		_ = os.Remove(path)
 		return err
 	}
 	if err := secureWindowsPath(path, false); err != nil {
@@ -66,17 +70,6 @@ func openCreatePrivateFileHandle(path string) (windows.Handle, error) {
 		return 0, fmt.Errorf("create private file %q: %w", path, err)
 	}
 	return handle, nil
-}
-
-func writeCreatePrivateFileData(handle windows.Handle, path string, data []byte) error {
-	f := os.NewFile(uintptr(handle), path)
-	_, writeErr := f.Write(data)
-	closeErr := f.Close()
-	if err := errors.Join(writeErr, closeErr); err != nil {
-		_ = os.Remove(path)
-		return err
-	}
-	return nil
 }
 
 func secureWindowsPath(path string, directory bool) error {
@@ -200,7 +193,11 @@ func verifyWindowsPath(path string, currentUser *windows.SID, directory bool) (*
 	if err != nil {
 		return nil, err
 	}
-	allowed := allowedVerifyWindowsPathSids(currentUser)
+	allowed := map[string]bool{
+		currentUser.String():     true,
+		localSystemSID:           true,
+		builtinAdministratorsSID: true,
+	}
 	owner, err := checkVerifyWindowsPathOwner(actual, allowed, path)
 	if err != nil {
 		return nil, err
@@ -228,14 +225,6 @@ func fetchVerifyWindowsPathDescriptor(path string) (*windows.SECURITY_DESCRIPTOR
 		return nil, fmt.Errorf("private path %q has no security descriptor", path)
 	}
 	return actual, nil
-}
-
-func allowedVerifyWindowsPathSids(currentUser *windows.SID) map[string]bool {
-	return map[string]bool{
-		currentUser.String():     true,
-		localSystemSID:           true,
-		builtinAdministratorsSID: true,
-	}
 }
 
 func checkVerifyWindowsPathOwner(actual *windows.SECURITY_DESCRIPTOR, allowed map[string]bool, path string) (*windows.SID, error) {

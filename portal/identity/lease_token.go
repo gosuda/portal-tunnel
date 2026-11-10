@@ -91,7 +91,12 @@ func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.
 	if leaseID == "" {
 		return "", LeaseAccessTokenClaims{}, errLeaseIDIsRequired
 	}
-	signer, err := leaseTokenSigner(authority)
+	signer, err := jose.NewSigner(jose.SigningKey{
+		Algorithm: leaseTokenAlgorithm,
+		Key: &es256kOpaqueSigner{
+			authority: authority,
+		},
+	}, (&jose.SignerOptions{}).WithType("JWT"))
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
@@ -106,15 +111,6 @@ func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.
 		return "", LeaseAccessTokenClaims{}, err
 	}
 	return token, claims, nil
-}
-
-func leaseTokenSigner(authority Authority) (jose.Signer, error) {
-	return jose.NewSigner(jose.SigningKey{
-		Algorithm: leaseTokenAlgorithm,
-		Key: &es256kOpaqueSigner{
-			authority: authority,
-		},
-	}, (&jose.SignerOptions{}).WithType("JWT"))
 }
 
 func addressedLeaseClaims(issuer string, leaseIdentity types.Identity, audience, leaseID string) LeaseAccessTokenClaims {

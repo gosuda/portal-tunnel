@@ -132,15 +132,6 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func isLoadFrontendAssetCompressible(contentType string) bool {
-	return strings.HasPrefix(contentType, "text/") ||
-		strings.HasPrefix(contentType, "application/javascript") ||
-		strings.HasPrefix(contentType, "application/json") ||
-		strings.HasPrefix(contentType, "application/wasm") ||
-		strings.HasPrefix(contentType, "application/xml") ||
-		strings.HasPrefix(contentType, "image/svg+xml")
-}
-
 func gzipLoadFrontendAssetData(data []byte) ([]byte, error) {
 	var compressed bytes.Buffer
 	writer, err := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
@@ -171,7 +162,13 @@ func (api *RelayAPI) loadFrontendAsset(assetPath string) (*frontendAsset, error)
 	contentType := mime.TypeByExtension(path.Ext(assetPath))
 	contentType = cmp.Or(contentType, http.DetectContentType(data))
 	asset := &frontendAsset{contentType: contentType, data: data}
-	if len(data) >= 1024 && isLoadFrontendAssetCompressible(contentType) {
+	compressible := strings.HasPrefix(contentType, "text/") ||
+		strings.HasPrefix(contentType, "application/javascript") ||
+		strings.HasPrefix(contentType, "application/json") ||
+		strings.HasPrefix(contentType, "application/wasm") ||
+		strings.HasPrefix(contentType, "application/xml") ||
+		strings.HasPrefix(contentType, "image/svg+xml")
+	if len(data) >= 1024 && compressible {
 		compressed, err := gzipLoadFrontendAssetData(data)
 		if err != nil {
 			return nil, err

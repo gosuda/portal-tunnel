@@ -79,7 +79,12 @@ func NewManager(cfg Config) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newManagerWithBaseConfig(baseCfg)
+	baseCfg = newManagerTrimProviderTokens(baseCfg)
+	trimmed, err := newManagerENSGaslessAddress(baseCfg)
+	if err != nil {
+		return nil, err
+	}
+	return buildManagerFromConfig(trimmed)
 }
 
 func newManagerBaseConfig(cfg Config) (Config, error) {
@@ -95,15 +100,6 @@ func newManagerBaseConfig(cfg Config) (Config, error) {
 		cfg.DNSProvider = TypeEmbedded
 	}
 	return cfg, nil
-}
-
-func newManagerWithBaseConfig(cfg Config) (*Manager, error) {
-	cfg = newManagerTrimProviderTokens(cfg)
-	trimmed, err := newManagerENSGaslessAddress(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return buildManagerFromConfig(trimmed)
 }
 
 func newManagerTrimProviderTokens(cfg Config) Config {
@@ -173,19 +169,11 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 		return "", "", errACMEManagerIsNil
 	}
 	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
-		return m.ensureCertificateLocalHost()
+		if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
+			return "", "", err
+		}
+		return m.TLSFiles()
 	}
-	return m.ensureCertificateRemote(ctx)
-}
-
-func (m *Manager) ensureCertificateLocalHost() (string, string, error) {
-	if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
-		return "", "", err
-	}
-	return m.TLSFiles()
-}
-
-func (m *Manager) ensureCertificateRemote(ctx context.Context) (string, string, error) {
 	if err := m.reconcileTrackedENSGaslessHostnames(ctx); err != nil {
 		return "", "", err
 	}

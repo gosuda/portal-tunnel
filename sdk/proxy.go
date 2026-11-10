@@ -185,13 +185,6 @@ func proxyRelayConnectionsTrySlot(slots chan struct{}, relayConn net.Conn) bool 
 	}
 }
 
-func proxyRelayConnectionsServeConn(ctx context.Context, localAddr string, relayConn net.Conn, connID int64) {
-	if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
-		log.Debug().Err(err).Int64("conn_id", connID).Msg("proxy connection closed with an I/O error")
-	}
-	log.Debug().Int64("conn_id", connID).Msg("proxy connection closed")
-}
-
 func proxyRelayConnectionsServe(ctx context.Context, exposure *Exposure, localAddr string, workers *sync.WaitGroup) error {
 	slots := make(chan struct{}, maxTCPConnections)
 	var connCount int64
@@ -213,7 +206,10 @@ func proxyRelayConnectionsServe(ctx context.Context, exposure *Exposure, localAd
 		go func(connID int64, relayConn net.Conn) {
 			defer workers.Done()
 			defer func() { <-slots }()
-			proxyRelayConnectionsServeConn(ctx, localAddr, relayConn, connID)
+			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
+				log.Debug().Err(err).Int64("conn_id", connID).Msg("proxy connection closed with an I/O error")
+			}
+			log.Debug().Int64("conn_id", connID).Msg("proxy connection closed")
 		}(connID, relayConn)
 	}
 }
@@ -242,7 +238,11 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
 	if err != nil {
-		return answerOriginUnavailable(ctx, relayConn)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		_ = relayConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		return writeEmptyHTTPResponse(relayConn)
 	}
 	defer localConn.Close()
 	localClosed := make(chan struct{})
@@ -261,14 +261,6 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 		return nil
 	}
 	return firstErr
-}
-
-func answerOriginUnavailable(ctx context.Context, relayConn net.Conn) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	_ = relayConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	return writeEmptyHTTPResponse(relayConn)
 }
 
 func relayProxyCopies(localConn, relayConn net.Conn) error {

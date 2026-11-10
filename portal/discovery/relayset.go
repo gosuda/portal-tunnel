@@ -225,12 +225,6 @@ func (s *RelaySet) crossIdentityTakeoverBlockedLocked(relayURL, address string, 
 	return differentIdentity && unexpired
 }
 
-func (s *RelaySet) upsertDescriptorLockedConflicting(existing, record relayState) bool {
-	oldContents, oldErr := canonicalRelayDescriptorBytes(existing.Descriptor)
-	newContents, newErr := canonicalRelayDescriptorBytes(record.Descriptor)
-	return oldErr != nil || newErr != nil || !bytes.Equal(oldContents, newContents)
-}
-
 func (s *RelaySet) trackDescriptorIdentityLocked(address string, issuedAt time.Time) {
 	tombstoneUntil := issuedAt.Add(AnnounceMaxValidity)
 	if prev, ok := s.keyIndex[address]; ok {
@@ -257,7 +251,9 @@ func (s *RelaySet) upsertDescriptorLocked(record relayState, now time.Time, allo
 		return upsertRejected
 	}
 	if hasExisting && strings.EqualFold(existing.Descriptor.Address, record.Descriptor.Address) && existing.Descriptor.IssuedAt.Equal(record.Descriptor.IssuedAt) {
-		if s.upsertDescriptorLockedConflicting(existing, record) {
+		oldContents, oldErr := canonicalRelayDescriptorBytes(existing.Descriptor)
+		newContents, newErr := canonicalRelayDescriptorBytes(record.Descriptor)
+		if oldErr != nil || newErr != nil || !bytes.Equal(oldContents, newContents) {
 			return upsertConflicting
 		}
 	}

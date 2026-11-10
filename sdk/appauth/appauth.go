@@ -296,7 +296,12 @@ func buildApplicationAuthNewProviders(id types.Identity, settings applicationAut
 	var providers applicationAuthNewProviders
 	switch settings.provider {
 	case ProviderSIWE:
-		siweAuth, err := buildSIWEAuthenticator(settings)
+		siweAuth, err := identity.NewSIWEAuthenticator(identity.SIWEAuthConfig{
+			AllowedAddresses: settings.allowed,
+			AllowAnyAddress:  len(settings.allowed) == 0,
+			Statement:        "Sign in to this Portal application",
+			ChallengePrefix:  "pac_",
+		})
 		if err != nil {
 			return applicationAuthNewProviders{}, err
 		}
@@ -314,14 +319,6 @@ func buildApplicationAuthNewProviders(id types.Identity, settings applicationAut
 		providers.email = newEmailAuthenticator(settings)
 	}
 	return providers, nil
-}
-func buildSIWEAuthenticator(settings applicationAuthSettings) (*identity.SIWEAuthenticator, error) {
-	return identity.NewSIWEAuthenticator(identity.SIWEAuthConfig{
-		AllowedAddresses: settings.allowed,
-		AllowAnyAddress:  len(settings.allowed) == 0,
-		Statement:        "Sign in to this Portal application",
-		ChallengePrefix:  "pac_",
-	})
 }
 func buildOIDCSAMLProviders(id types.Identity, settings applicationAuthSettings) (*oidcAuthenticator, *samlAuthenticator, error) {
 	stateKey, err := identity.DeriveToken(id, "application-access-"+settings.provider+"-state")

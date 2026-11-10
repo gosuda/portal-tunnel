@@ -69,7 +69,17 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 	}
 
 	if trimmed := strings.TrimSpace(explicit); trimmed != "" {
-		return p.resolveFindManagedZoneExplicit(ctx, service, projectID, domain, trimmed)
+		zone, err := service.ManagedZones.Get(projectID, trimmed).Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("get gcloud managed zone %q: %w", trimmed, err)
+		}
+		if err := validateManagedZone(zone, domain, trimmed); err != nil {
+			return nil, err
+		}
+		if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" {
+			p.cacheFindManagedZoneEntry(zoneDomain, zone.Name)
+		}
+		return zone, nil
 	}
 
 	return p.resolveFindManagedZoneCandidates(ctx, service, projectID, domain, candidates)
@@ -105,17 +115,6 @@ func lookupFindManagedZoneCache(zones map[string]string, candidates []string) (s
 	return "", "", false
 }
 
-func fetchFindManagedZoneExplicit(ctx context.Context, service *dns.Service, projectID, domain, explicit string) (*dns.ManagedZone, error) {
-	zone, err := service.ManagedZones.Get(projectID, explicit).Context(ctx).Do()
-	if err != nil {
-		return nil, fmt.Errorf("get gcloud managed zone %q: %w", explicit, err)
-	}
-	if err := validateManagedZone(zone, domain, explicit); err != nil {
-		return nil, err
-	}
-	return zone, nil
-}
-
 func matchFindManagedZoneCandidate(zoneList []*dns.ManagedZone, candidate string) *dns.ManagedZone {
 	for _, zone := range zoneList {
 		if !isPublicZone(zone) || utils.NormalizeHostname(zone.DnsName) != candidate {
@@ -146,17 +145,6 @@ func (p *Provider) cacheFindManagedZoneEntry(key, value string) {
 		}
 		(*zones)[key] = value
 	})
-}
-
-func (p *Provider) resolveFindManagedZoneExplicit(ctx context.Context, service *dns.Service, projectID, domain, explicit string) (*dns.ManagedZone, error) {
-	zone, err := fetchFindManagedZoneExplicit(ctx, service, projectID, domain, explicit)
-	if err != nil {
-		return nil, err
-	}
-	if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" {
-		p.cacheFindManagedZoneEntry(zoneDomain, zone.Name)
-	}
-	return zone, nil
 }
 
 func (p *Provider) resolveFindManagedZoneCandidates(ctx context.Context, service *dns.Service, projectID, domain string, candidates []string) (*dns.ManagedZone, error) {

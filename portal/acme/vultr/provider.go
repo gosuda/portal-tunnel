@@ -319,9 +319,20 @@ func ensureRecord(ctx context.Context, client *govultr.Client, zone, fqdn, recor
 		return nil
 	}
 	if len(existing) > 0 {
-		return client.DomainRecord.Update(ctx, zone, existing[0].ID, updateRequestEnsureRecord(recordName, recordType, data))
+		updateName := recordName
+		return client.DomainRecord.Update(ctx, zone, existing[0].ID, &govultr.DomainRecordUpdateReq{
+			Name: &updateName,
+			Type: recordType,
+			Data: data,
+			TTL:  defaultRecordTTL,
+		})
 	}
-	if _, _, err := client.DomainRecord.Create(ctx, zone, createRequestEnsureRecord(recordName, recordType, data)); err != nil {
+	if _, _, err := client.DomainRecord.Create(ctx, zone, &govultr.DomainRecordCreateReq{
+		Name: recordName,
+		Type: recordType,
+		Data: data,
+		TTL:  defaultRecordTTL,
+	}); err != nil {
 		return err
 	}
 	return nil
@@ -346,25 +357,6 @@ func hasRecordDataVultr(existing []govultr.DomainRecord, data string) bool {
 		}
 	}
 	return false
-}
-
-func updateRequestEnsureRecord(recordName, recordType, data string) *govultr.DomainRecordUpdateReq {
-	name := recordName
-	return &govultr.DomainRecordUpdateReq{
-		Name: &name,
-		Type: recordType,
-		Data: data,
-		TTL:  defaultRecordTTL,
-	}
-}
-
-func createRequestEnsureRecord(recordName, recordType, data string) *govultr.DomainRecordCreateReq {
-	return &govultr.DomainRecordCreateReq{
-		Name: recordName,
-		Type: recordType,
-		Data: data,
-		TTL:  defaultRecordTTL,
-	}
 }
 
 func ensureTXTRecord(ctx context.Context, client *govultr.Client, zone, fqdn, value string) error {

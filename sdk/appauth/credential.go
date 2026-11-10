@@ -306,20 +306,17 @@ func normalizeAllowed(provider string, values []string) ([]string, error) {
 	case ProviderOIDC, ProviderSAML:
 		return normalizeProviderPrincipals(values)
 	case ProviderEmail:
-		return filterNormalizeAllowedEmail(values)
+		allowed, err := normalizeProviderPrincipals(values)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateEmailPrincipals(allowed); err != nil {
+			return nil, err
+		}
+		return allowed, nil
 	default:
 		return nil, fmt.Errorf("unsupported application auth provider %q", provider)
 	}
-}
-func filterNormalizeAllowedEmail(values []string) ([]string, error) {
-	allowed, err := normalizeProviderPrincipals(values)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateEmailPrincipals(allowed); err != nil {
-		return nil, err
-	}
-	return allowed, nil
 }
 
 func validateEmailPrincipals(allowed []string) error {

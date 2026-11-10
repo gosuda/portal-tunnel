@@ -50,7 +50,12 @@ func FormatSIWEMessage(m SIWEMessage) (string, error) {
 	if err := validateSIWEFields(m); err != nil {
 		return "", err
 	}
-	return formatSIWEMessage(m, address, uri), nil
+	header := fmt.Sprintf("%s wants you to sign in with your Ethereum account:\n%s\n\n", m.Domain, address)
+	if m.Statement != "" {
+		header += m.Statement + "\n"
+	}
+	return fmt.Sprintf("%s\nURI: %s\nVersion: %s\nChain ID: %d\nNonce: %s\nIssued At: %s\nExpiration Time: %s\nRequest ID: %s",
+		header, uri.String(), siweVersion, siweChainID, m.Nonce, m.IssuedAt.UTC().Format(time.RFC3339), m.ExpiresAt.UTC().Format(time.RFC3339), m.RequestID), nil
 }
 
 func validateSIWEDomain(raw string) error {
@@ -99,15 +104,6 @@ func validateSIWEFields(m SIWEMessage) error {
 		return errInvalidSIWERequestID
 	}
 	return nil
-}
-
-func formatSIWEMessage(m SIWEMessage, address string, uri *url.URL) string {
-	header := fmt.Sprintf("%s wants you to sign in with your Ethereum account:\n%s\n\n", m.Domain, address)
-	if m.Statement != "" {
-		header += m.Statement + "\n"
-	}
-	return fmt.Sprintf("%s\nURI: %s\nVersion: %s\nChain ID: %d\nNonce: %s\nIssued At: %s\nExpiration Time: %s\nRequest ID: %s",
-		header, uri.String(), siweVersion, siweChainID, m.Nonce, m.IssuedAt.UTC().Format(time.RFC3339), m.ExpiresAt.UTC().Format(time.RFC3339), m.RequestID)
 }
 
 // VerifySIWEMessage verifies the stored challenge after the caller has matched

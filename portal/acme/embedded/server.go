@@ -87,7 +87,8 @@ func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, 
 		p.answerProofs(m, z, source, nextCloser)
 	}
 	if qtype == dns.TypeNS && name == p.zone {
-		p.answerGlue(m, z, do)
+		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeA], "", do)
+		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeAAAA], "", do)
 	}
 	return exists && source != name
 }
@@ -133,11 +134,6 @@ func (p *Provider) answerProofs(m *dns.Msg, z *signedZone, source, nextCloser st
 	if len(m.Answer) == 0 {
 		addProof(z.denial(source))
 	}
-}
-
-func (p *Provider) answerGlue(m *dns.Msg, z *signedZone, do bool) {
-	m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeA], "", do)
-	m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeAAAA], "", do)
 }
 
 func (p *Provider) writeResponse(w dns.ResponseWriter, query, m *dns.Msg) {

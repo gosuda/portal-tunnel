@@ -152,7 +152,12 @@ func (cfg TunnelConfig) holdsSecret() bool {
 }
 
 func (cfg *Config) normalize(configPath string) error {
-	configDir := agentConfigDir(configPath)
+	var configDir string
+	if absConfig, err := filepath.Abs(strings.TrimSpace(configPath)); err == nil {
+		configDir = filepath.Dir(absConfig)
+	} else {
+		configDir = "."
+	}
 
 	cfg.Agent.StateDir = strings.TrimSpace(cfg.Agent.StateDir)
 	cfg.Agent.ControlAddr = strings.TrimSpace(cfg.Agent.ControlAddr)
@@ -172,19 +177,20 @@ func (cfg *Config) normalize(configPath string) error {
 		if err := t.Normalize(); err != nil {
 			return fmt.Errorf("normalize tunnel %q: %w", t.ID, err)
 		}
-		t.resolvePaths(configDir)
+		t.Serve = resolveAgentPath(configDir, t.Serve)
+		t.SAMLMetadataFile = resolveAgentPath(configDir, t.SAMLMetadataFile)
+		if t.IdentityPath != "" {
+			t.IdentityPath = resolveAgentPath(configDir, t.IdentityPath)
+		}
 		if t.IdentityPath == "" {
-			t.IdentityPath = defaultTunnelIdentityPath(cfg.Agent.StateDir, t.ID, len(cfg.Tunnels))
+			if len(cfg.Tunnels) <= 1 {
+				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, defaultIdentityFilename)
+			} else {
+				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, t.ID, defaultIdentityFilename)
+			}
 		}
 	}
 	return nil
-}
-
-func agentConfigDir(configPath string) string {
-	if absConfig, err := filepath.Abs(strings.TrimSpace(configPath)); err == nil {
-		return filepath.Dir(absConfig)
-	}
-	return "."
 }
 
 func resolveAgentPath(configDir, path string) string {
@@ -192,21 +198,6 @@ func resolveAgentPath(configDir, path string) string {
 		return filepath.Join(configDir, path)
 	}
 	return path
-}
-
-func (t *TunnelConfig) resolvePaths(configDir string) {
-	t.Serve = resolveAgentPath(configDir, t.Serve)
-	t.SAMLMetadataFile = resolveAgentPath(configDir, t.SAMLMetadataFile)
-	if t.IdentityPath != "" {
-		t.IdentityPath = resolveAgentPath(configDir, t.IdentityPath)
-	}
-}
-
-func defaultTunnelIdentityPath(stateDir, tunnelID string, tunnelCount int) string {
-	if tunnelCount <= 1 {
-		return filepath.Join(stateDir, defaultIdentityFilename)
-	}
-	return filepath.Join(stateDir, tunnelID, defaultIdentityFilename)
 }
 
 func (cfg Config) Validate() error {

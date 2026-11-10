@@ -96,8 +96,12 @@ type exchangeVerifyTLSChannelBindingFlow struct {
 }
 
 func (f *exchangeVerifyTLSChannelBindingFlow) completeVerifyTLSChannelBinding(ctx context.Context) error {
-	if err := f.writeBindingFlowRequest(ctx); err != nil {
-		return err
+	reqFrame := make([]byte, types.TLSChannelBindingRequestSize)
+	copy(reqFrame, types.TLSChannelBindingRequestMagic)
+	copy(reqFrame[len(types.TLSChannelBindingRequestMagic):], f.nonce[:])
+	if _, err := f.conn.Write(reqFrame); err != nil {
+		_ = f.conn.Close()
+		return fmt.Errorf("write channel binding request: %w", cmp.Or(ctx.Err(), err))
 	}
 	var compactSig []byte
 	s, err := f.readBindingFlowAnswer(ctx)
@@ -105,21 +109,13 @@ func (f *exchangeVerifyTLSChannelBindingFlow) completeVerifyTLSChannelBinding(ct
 		return err
 	}
 	compactSig = s
-	if err := f.confirmBindingFlowSigner(compactSig); err != nil {
+	if err := verifyChannelBindingSigner(f.hostname, f.nonce[:], f.clientExporter, f.expectedAddr, compactSig); err != nil {
+		_ = f.conn.Close()
 		return err
 	}
 	if !f.stop() {
 		_ = f.conn.Close()
 		return ctx.Err()
-	}
-	return nil
-}
-
-func (f *exchangeVerifyTLSChannelBindingFlow) writeBindingFlowRequest(ctx context.Context) error {
-	reqFrame := buildChannelBindingRequest(f.nonce)
-	if _, err := f.conn.Write(reqFrame); err != nil {
-		_ = f.conn.Close()
-		return fmt.Errorf("write channel binding request: %w", cmp.Or(ctx.Err(), err))
 	}
 	return nil
 }
@@ -135,21 +131,6 @@ func (f *exchangeVerifyTLSChannelBindingFlow) readBindingFlowAnswer(ctx context.
 		return nil, errTLSChannelBindingExporterMismatchRelay
 	}
 	return compactSig, nil
-}
-
-func (f *exchangeVerifyTLSChannelBindingFlow) confirmBindingFlowSigner(compactSig []byte) error {
-	if err := verifyChannelBindingSigner(f.hostname, f.nonce[:], f.clientExporter, f.expectedAddr, compactSig); err != nil {
-		_ = f.conn.Close()
-		return err
-	}
-	return nil
-}
-
-func buildChannelBindingRequest(nonce [types.TLSChannelBindingNonceSize]byte) []byte {
-	reqFrame := make([]byte, types.TLSChannelBindingRequestSize)
-	copy(reqFrame, types.TLSChannelBindingRequestMagic)
-	copy(reqFrame[len(types.TLSChannelBindingRequestMagic):], nonce[:])
-	return reqFrame
 }
 
 func readChannelBindingAnswer(ctx context.Context, conn net.Conn) ([]byte, []byte, error) {

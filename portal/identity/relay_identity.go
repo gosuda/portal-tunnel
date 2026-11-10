@@ -55,15 +55,12 @@ func LoadOrCreateRelayIdentity(path, rootHost string) (RelayIdentity, error) {
 	default:
 		return RelayIdentity{}, fmt.Errorf("load identity: %w", err)
 	}
-	return persistRelayIdentity(path, relay, normalizeRelayHostname(rootHost), created)
-}
-
-func normalizeRelayHostname(rootHost string) string {
-	rootHost = strings.TrimSpace(rootHost)
-	if normalizedRootHost := utils.PortalRootHost(rootHost); normalizedRootHost != "" {
-		return normalizedRootHost
+	trimmedRootHost := strings.TrimSpace(rootHost)
+	rootHostname := utils.NormalizeHostname(trimmedRootHost)
+	if normalizedRootHost := utils.PortalRootHost(trimmedRootHost); normalizedRootHost != "" {
+		rootHostname = normalizedRootHost
 	}
-	return utils.NormalizeHostname(rootHost)
+	return persistRelayIdentity(path, relay, rootHostname, created)
 }
 
 func persistRelayIdentity(path string, relay RelayIdentity, rootHost string, created bool) (RelayIdentity, error) {

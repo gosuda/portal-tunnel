@@ -67,16 +67,6 @@ func writeCommentErrorResponse(w http.ResponseWriter, err error) {
 	}
 }
 
-func mintCommentAuthor() (string, string, error) {
-	token := make([]byte, 32)
-	if _, err := rand.Read(token); err != nil {
-		return "", "", err
-	}
-	minted := base64.RawURLEncoding.EncodeToString(token)
-	hash := sha256.Sum256(token)
-	return minted, hex.EncodeToString(hash[:]), nil
-}
-
 func (api *RelayAPI) serveComments(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var hostname, text string
@@ -112,12 +102,14 @@ func (api *RelayAPI) serveComments(w http.ResponseWriter, r *http.Request) {
 	}
 	minted := ""
 	if authorHash == "" {
-		var err error
-		minted, authorHash, err = mintCommentAuthor()
-		if err != nil {
+		token := make([]byte, 32)
+		if _, err := rand.Read(token); err != nil {
 			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "Could not create comment identity.")
 			return
 		}
+		minted = base64.RawURLEncoding.EncodeToString(token)
+		hash := sha256.Sum256(token)
+		authorHash = hex.EncodeToString(hash[:])
 	}
 	comments, err := api.reputation.AddComment(identity, text, viewerHash, authorHash)
 	if err != nil {

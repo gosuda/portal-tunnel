@@ -30,7 +30,7 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil, errDnssecKeyPathIsRequired
 	}
-	key := loadSigningKeyTemplate(zone)
+	key := &dns.DNSKEY{Hdr: dns.RR_Header{Name: zone, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: recordTTL}, Flags: 257, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, nil, fmt.Errorf("read dnssec key: %w", err)
@@ -44,10 +44,6 @@ func loadSigningKey(path, zone string) (*dns.DNSKEY, crypto.Signer, error) {
 type loadSigningKeyStored struct {
 	DNSKEY     string
 	PrivateKey string
-}
-
-func loadSigningKeyTemplate(zone string) *dns.DNSKEY {
-	return &dns.DNSKEY{Hdr: dns.RR_Header{Name: zone, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: recordTTL}, Flags: 257, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}
 }
 
 func loadSigningKeyFresh(key *dns.DNSKEY) (crypto.PrivateKey, error) {

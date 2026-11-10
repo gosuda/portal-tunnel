@@ -142,15 +142,6 @@ func applyValidateServerConfigRelayURLs(cfg ServerConfig) (ServerConfig, error) 
 	return cfg, nil
 }
 
-func finishValidateServerConfigPorts(cfg ServerConfig) ServerConfig {
-	if cfg.SNIPort == 0 {
-		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
-	}
-	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
-	cfg.SNIListenAddr = cmp.Or(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
-	return cfg
-}
-
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.DefaultIdentityBPS < 0 {
 		return ServerConfig{}, errDefaultIdentityBPSMustNonNegative
@@ -183,7 +174,12 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 	cfg = next
-	return finishValidateServerConfigPorts(cfg), nil
+	if cfg.SNIPort == 0 {
+		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
+	}
+	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
+	cfg.SNIListenAddr = cmp.Or(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
+	return cfg, nil
 }
 
 // DefaultSNIPort returns the local SNI listener port for a deployment that

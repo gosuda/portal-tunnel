@@ -97,17 +97,6 @@ func (r *leaseRegistry) refreshRenewRecordLocked(record *leaseRecord, req types.
 	return record.Identity, record.id, record.Overlay, expiresAt
 }
 
-func (r *leaseRegistry) finishRenewResponse(input reverseEndpointInput, ttl time.Duration) (types.RenewResponse, reverseEndpointInput, error) {
-	nextAccessToken, _, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, input.leaseIdentity, input.leaseID, ttl)
-	if err != nil {
-		return types.RenewResponse{}, reverseEndpointInput{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
-	}
-	return types.RenewResponse{
-		ExpiresAt:   input.expiresAt,
-		AccessToken: nextAccessToken,
-	}, input, nil
-}
-
 func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, current *acme.TLSMaterial) (types.RenewResponse, reverseEndpointInput, error) {
 	if r == nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, errFeatureUnavailable
@@ -129,12 +118,19 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 	recordIdentity, leaseID, useOverlay, expiresAt := r.refreshRenewRecordLocked(record, req, ttl, sourceAddr)
 	r.mu.Unlock()
 
-	return r.finishRenewResponse(reverseEndpointInput{
+	nextAccessToken, _, err := identity.IssueLeaseAccessToken(r.tokenAuthority, r.tokenIssuer, recordIdentity, leaseID, ttl)
+	if err != nil {
+		return types.RenewResponse{}, reverseEndpointInput{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
+	}
+	return types.RenewResponse{
+		ExpiresAt:   expiresAt,
+		AccessToken: nextAccessToken,
+	}, reverseEndpointInput{
 		leaseIdentity: recordIdentity,
 		leaseID:       leaseID,
 		expiresAt:     expiresAt,
 		useOverlay:    useOverlay,
-	}, ttl)
+	}, nil
 }
 
 func (r *leaseRegistry) stalePinLocked(record *leaseRecord, current *acme.TLSMaterial) bool {

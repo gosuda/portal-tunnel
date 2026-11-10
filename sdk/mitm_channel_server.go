@@ -51,12 +51,12 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		_ = conn.Close()
 		return nil, errListenerCanonicalHostnameUnavailableChannelBinding
 	}
-	var nonce []byte
-	n, err := m.readChannelBindingRequest(conn, reader)
-	if err != nil {
-		return nil, err
+	var reqFrame [types.TLSChannelBindingRequestSize]byte
+	if _, err := io.ReadFull(reader, reqFrame[:]); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read channel binding request: %w", err)
 	}
-	nonce = n
+	nonce := bytes.Clone(reqFrame[len(types.TLSChannelBindingRequestMagic):])
 	var exported []byte
 	e, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
 	if err != nil {
@@ -72,16 +72,6 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 	}
 	compactSig = s
 	return m.writeChannelBindingAnswer(conn, reader, exported, compactSig)
-}
-
-func (m *mitmManager) readChannelBindingRequest(conn net.Conn, reader *bufio.Reader) ([]byte, error) {
-	var reqFrame [types.TLSChannelBindingRequestSize]byte
-	if _, err := io.ReadFull(reader, reqFrame[:]); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("read channel binding request: %w", err)
-	}
-	nonce := bytes.Clone(reqFrame[len(types.TLSChannelBindingRequestMagic):])
-	return nonce, nil
 }
 
 func signChannelBindingPayload(hostname string, nonce, exported []byte, id types.Identity) ([]byte, error) {

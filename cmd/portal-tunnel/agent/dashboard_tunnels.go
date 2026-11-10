@@ -89,7 +89,10 @@ func (m agentDashboardModel) addTunnelsButtons(pane *agentDashboardView, th *age
 }
 
 func (m agentDashboardModel) addTunnelsTable(pane *agentDashboardView, th *agentDashboardTheme, width, rows int) {
-	tail := m.tunnelsErrorTail(width)
+	var tail []string
+	if tunnel, ok := m.selectedTunnelStatus(); ok && strings.TrimSpace(tunnel.LastError) != "" {
+		tail = append(tail, m.theme.failed.Render(agentDashboardFit(m.theme.glyph.ledFailed+" Error: "+tunnel.LastError, width)))
+	}
 	room := rows - len(pane.lines) - 1 - len(tail)
 	var form agentDashboardView
 	if m.addingTunnel && !m.confirming() {
@@ -115,15 +118,6 @@ func (m agentDashboardModel) addTunnelsTable(pane *agentDashboardView, th *agent
 		pane.addTunnelRow(th, width, m.status.Tunnels[i], i == selected)
 	}
 	pane.lines = append(pane.lines, tail...)
-}
-
-func (m agentDashboardModel) tunnelsErrorTail(width int) []string {
-	th := &m.theme
-	var tail []string
-	if tunnel, ok := m.selectedTunnelStatus(); ok && strings.TrimSpace(tunnel.LastError) != "" {
-		tail = append(tail, th.failed.Render(agentDashboardFit(th.glyph.ledFailed+" Error: "+tunnel.LastError, width)))
-	}
-	return tail
 }
 
 func (v *agentDashboardView) addTunnelRow(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus, selected bool) {
