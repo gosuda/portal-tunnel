@@ -101,7 +101,7 @@ func issueIdentityToken(authority Authority, issuer string, leaseIdentity types.
 		return "", LeaseAccessTokenClaims{}, errTokenExpiryMustBeInTheFuture
 	}
 	claims := timedLeaseClaims(addressedLeaseClaims(issuer, leaseIdentity, audience, leaseID), now, expiresAt)
-	token, err := signedLeaseToken(signer, claims)
+	token, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
@@ -135,10 +135,6 @@ func timedLeaseClaims(base LeaseAccessTokenClaims, now, expiresAt time.Time) Lea
 	base.NotBefore = jwt.NewNumericDate(now)
 	base.Expiry = jwt.NewNumericDate(expiresAt)
 	return base
-}
-
-func signedLeaseToken(signer jose.Signer, claims LeaseAccessTokenClaims) (string, error) {
-	return jwt.Signed(signer).Claims(claims).Serialize()
 }
 
 func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, now time.Time) (LeaseAccessTokenClaims, error) {
