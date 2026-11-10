@@ -180,3 +180,16 @@ func TestExposeRefusesExplicitIdentityProofWithoutIdentityHeaders(t *testing.T) 
 		}
 	}
 }
+
+func TestExposeLocalTLSCertificates(t *testing.T) {
+	spec, err := exposeSpec(t, "--tls-cert", "cert.pem", "--tls-key", "key.pem", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSCert != "cert.pem" || spec.TLSKey != "key.pem" {
+		t.Fatalf("certificate paths = %q, %q", spec.TLSCert, spec.TLSKey)
+	}
+	if _, err := exposeSpec(t, "--tls-cert", "cert.pem", "3000"); err == nil {
+		t.Fatal("unpaired certificate flag accepted")
+	}
+}

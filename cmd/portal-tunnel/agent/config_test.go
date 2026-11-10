@@ -61,6 +61,8 @@ relays = ["https://relay.example.com"]
 discovery = false
 overlay = true
 identity_path = "/absolute/identity.json"
+tls_cert = "cert.pem"
+tls_key = "key.pem"
 ban_mitm = true
 max_active_relays = 5
 description = "described"
@@ -332,7 +334,8 @@ func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 		credential := key == "identity_json" || slices.ContainsFunc([]string{"secret", "token", "key", "password"}, func(word string) bool {
 			return strings.Contains(key, word)
 		})
-		if !field.IsExported() || key == "" || key == "-" || !credential {
+		// tls_key stores a file path, not private key bytes.
+		if !field.IsExported() || key == "" || key == "-" || key == "tls_key" || !credential {
 			continue
 		}
 		found++
@@ -363,4 +366,31 @@ func tunnelConfigKeys(typ reflect.Type) []string {
 		}
 	}
 	return keys
+}
+
+func TestLocalTLSCertificateConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := "[[tunnels]]\nid = \"web\"\ntarget = \"3000\"\ntls_cert = \"certs/tenant.pem\"\ntls_key = \"certs/tenant.key\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := reloaded.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSCert != filepath.Join(dir, "certs", "tenant.pem") || spec.TLSKey != filepath.Join(dir, "certs", "tenant.key") {
+		t.Fatalf("certificate paths after restart = %q, %q", spec.TLSCert, spec.TLSKey)
+	}
 }

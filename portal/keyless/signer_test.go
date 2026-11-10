@@ -218,8 +218,8 @@ func TestTenantsAcrossARelayCertificateRenewal(t *testing.T) {
 	pinned := x509.NewCertPool()
 	pinned.AddCert(renewed.leaf)
 	pinned.AddCert(issuer.cert)
-	if !registeredBefore.RelayCertPool().Equal(pinned) {
-		t.Fatal("RelayCertPool() after RefreshChain is not the chain the tenant presents")
+	if !registeredBefore.TenantCertPool().Equal(pinned) {
+		t.Fatal("TenantCertPool() after RefreshChain is not the chain the tenant presents")
 	}
 	if changed, err := registeredBefore.RefreshChain(context.Background()); err != nil || changed {
 		t.Fatalf("RefreshChain() with nothing renewed = %v, %v; want no change", changed, err)
@@ -361,7 +361,7 @@ func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	if changed, err := client.refreshChain(ctx, staleOfTheBurst); err != nil || changed {
 		t.Fatalf("later check of the same burst = %v, %v; want it to share the first check", changed, err)
 	}
-	if !client.RelayCertPool().Equal(pinnedChain(second.leaf)) {
+	if !client.TenantCertPool().Equal(pinnedChain(second.leaf)) {
 		t.Fatal("a check of the same burst fetched the relay chain again")
 	}
 	if changed, err := client.RefreshChain(ctx); err != nil || !changed {
@@ -376,7 +376,7 @@ func TestRefreshChainPinsNothingAfterClose(t *testing.T) {
 	before, renewed := issuer.issue(t, 2), issuer.issue(t, 3)
 	relay := newRelayStandIn(t, before)
 	client := relay.newClient(t)
-	pinnedBefore := client.RelayCertPool()
+	pinnedBefore := client.TenantCertPool()
 
 	if err := client.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -386,7 +386,7 @@ func TestRefreshChainPinsNothingAfterClose(t *testing.T) {
 	if changed, err := client.RefreshChain(context.Background()); err != nil || changed {
 		t.Fatalf("RefreshChain() after Close = %v, %v; want nothing pinned", changed, err)
 	}
-	if client.RelayCertPool() != pinnedBefore {
+	if client.TenantCertPool() != pinnedBefore {
 		t.Fatal("RefreshChain() after Close replaced the pinned chain")
 	}
 }

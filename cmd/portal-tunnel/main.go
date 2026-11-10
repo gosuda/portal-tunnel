@@ -82,6 +82,8 @@ type exposeFlags struct {
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
 	env := cli.NewEnv(os.Environ())
+	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "Tenant certificate chain PEM file; requires --tls-key and never falls back to relay signing")
+	fs.StringVar(&cfg.TLSKey, "tls-key", "", "Tenant private key PEM file; requires --tls-cert")
 	fs.StringVar(&flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	fs.BoolVar(&flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
 	env.Bool(fs, &cfg.Overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")

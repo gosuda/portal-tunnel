@@ -393,7 +393,7 @@ func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 		t.Fatalf("keyless.NewClient() error = %v", err)
 	}
 	defer tenantTLS.Close()
-	if !tenantTLS.RelayCertPool().Equal(firstPool) {
+	if !tenantTLS.TenantCertPool().Equal(firstPool) {
 		t.Fatal("the tenant did not pin the certificate the relay served")
 	}
 	listener := &listener{
@@ -414,7 +414,7 @@ func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 
 	serving.Store(&renewed)
 	renew()
-	if !tenantTLS.RelayCertPool().Equal(firstPool) {
+	if !tenantTLS.TenantCertPool().Equal(firstPool) {
 		t.Fatal("renewLease() checked the relay chain again within the hour after it was found current")
 	}
 
@@ -423,13 +423,13 @@ func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 		return lease
 	})
 	renew()
-	if !tenantTLS.RelayCertPool().Equal(renewedPool) {
+	if !tenantTLS.TenantCertPool().Equal(renewedPool) {
 		t.Fatal("renewLease() an hour after the last check left the tenant on the replaced relay certificate")
 	}
 
 	serving.Store(&later)
 	renew()
-	if !tenantTLS.RelayCertPool().Equal(renewedPool) {
+	if !tenantTLS.TenantCertPool().Equal(renewedPool) {
 		t.Fatal("renewLease() checked the relay chain again right after a scheduled check")
 	}
 }

@@ -33,7 +33,6 @@ var (
 	errListenerIsNotRegistered                            = errors.New("listener is not registered")
 	errListenerHostnameIsUnavailable                      = errors.New("listener hostname is unavailable")
 	errListenerRelayMaterialsAreUnavailable               = errors.New("listener relay materials are unavailable")
-	errListenerRelayCertificatePoolUnavailable            = errors.New("listener relay certificate pool is unavailable")
 	errTLSConnectionIsRequired                            = errors.New("tls connection is required")
 	errTLSConnectionDoesNotSupportKeying                  = errors.New("tls connection does not support keying material export")
 	errTunnelDidNotAnswerChannelBinding                   = errors.New("tunnel did not answer channel binding")
@@ -155,16 +154,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	if lease.tenantTLS == nil {
 		return report, errListenerRelayMaterialsAreUnavailable
 	}
-	relayPool := lease.tenantTLS.RelayCertPool()
-	if relayPool == nil {
-		return report, errListenerRelayCertificatePoolUnavailable
-	}
-
-	probeTLSConf := &tls.Config{
-		ServerName: lease.hostname,
-		RootCAs:    relayPool,
-		MinVersion: tls.VersionTLS13,
-	}
+	probeTLSConf := lease.tenantTLS.TenantTLSConfig()
 
 	rawConn, err := (&net.Dialer{Timeout: defaultDialTimeout}).DialContext(probeCtx, "tcp", dialAddr)
 	if err != nil {

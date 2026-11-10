@@ -278,3 +278,38 @@ func TestConfigNormalizeKeepsProofAndPaths(t *testing.T) {
 		t.Fatalf("normalized = %+v", cfg)
 	}
 }
+
+func TestLocalTLSCertificateConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantError bool
+	}{
+		{"paired", Config{TargetAddr: "3000", TLSCert: " cert.pem ", TLSKey: " key.pem "}, false},
+		{"certificate only", Config{TargetAddr: "3000", TLSCert: "cert.pem"}, true},
+		{"key only", Config{TargetAddr: "3000", TLSKey: "key.pem"}, true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TCPEnabled: true}, true},
+		{"relay cache", Config{Serve: "site", TLSCert: "cert.pem", TLSKey: "key.pem", Cache: &CacheConfig{}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() error = %v, want error %v", err, tc.wantError)
+			}
+			if !tc.wantError && (spec.TLSCert != tc.config.TLSCert || spec.TLSKey != tc.config.TLSKey) {
+				t.Fatalf("certificate paths = %q, %q", spec.TLSCert, spec.TLSKey)
+			}
+		})
+	}
+}
+
+func TestLocalTLSPathsAreNotNormalizedAway(t *testing.T) {
+	cfg := Config{TargetAddr: "3000", TLSCert: " ", TLSKey: " "}
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSCert != " " || spec.TLSKey != " " {
+		t.Fatal("configured local TLS file paths were silently removed")
+	}
+}

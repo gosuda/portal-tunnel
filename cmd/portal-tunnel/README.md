@@ -112,6 +112,63 @@ The CLI enforces the following contractual invariants at startup:
 
 ---
 
+## Tunnel-owned TLS certificate files
+
+For a hostname you already have a certificate for, use:
+
+```sh
+portal expose 3000 --relays https://relay.example.com --discovery=false \
+  --identity-path identity.json --tls-cert tenant-chain.pem --tls-key tenant-key.pem
+```
+
+The PEM chain and matching private key must be supplied together. The certificate
+must be valid for the identity's canonical hostname on each selected relay.
+Include any short alias hostname visitors use in the certificate SANs too;
+a certificate for only the alias does not cover the canonical hostname.
+Choose explicit relays and disable discovery unless the certificate covers all
+additional relay hostnames. Public browsers still require a publicly trusted
+certificate chain.
+
+Tenant handshakes use the same TLS engine as Keyless TLS, but sign in process
+with the local key instead of calling the relay's `/v1/sign` endpoint. The
+exporter self-probe verifies tenant certificates separately from the relay
+control API's TLS trust. This option cannot be combined with `--cache` or
+raw `--tcp`.
+
+For a persistent agent, set both paths in the tunnel's existing configuration:
+
+```toml
+[[tunnels]]
+id = "web"
+target = "3000"
+relays = ["https://relay.example.com"]
+discovery = false
+tls_cert = "certs/tenant-chain.pem"
+tls_key = "certs/tenant-key.pem"
+```
+
+Relative agent paths resolve from the config file's directory. Protect the
+private key file with permissions appropriate to the account running Portal.
+Portal reads these files on startup and checks for replacements during ordinary
+lease renewal, at most hourly after a successful check. Replace the files with a
+matching pair; a temporarily mismatched or invalid replacement leaves the
+previous usable pair installed. Newly accepted handshakes use the replacement;
+in-flight handshakes and established connections keep their original material.
+Restart to load a replacement immediately.
+
+Configured local files are required: missing, corrupt, expired, or mismatched
+material does not silently restore relay-backed signing, including after a
+restart. An unsuccessful refresh keeps the previous material, but does not make
+an expired certificate valid. Renew the files before expiry. This file-backed
+path does not obtain or automatically renew certificates through ACME; issuance,
+key persistence, and timely renewal are the operator's responsibility.
+
+Local key possession removes the signing round trip and dependency. It is not
+independent visitor authentication or complete MITM prevention: the relay still
+provides routing and availability, authoritative DNS control can permit competing
+certificate issuance, and a relay wildcard certificate can also cover tenant
+names.
+
 ## Canonical Documentation Links
 
 - **[Feature Inventory](https://gosuda.github.io/portal-tunnel/features)**: Complete matrix of Portal capabilities, surfaces, and constraints.

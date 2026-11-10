@@ -1,9 +1,10 @@
-// Package keyless owns Portal's tenant TLS feature boundary: terminating tenant TLS with transcript-bound relay signatures and resolving the pinned relay certificate chain.
+// Package keyless owns tenant TLS with relay-backed or in-process transcript signing.
 package keyless
 
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -12,17 +13,24 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
 	"github.com/gosuda/keyless_tls/keyless/t13server"
+	ksigner "github.com/gosuda/keyless_tls/relay/signer"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
+	errTenantCertificatePairRequired                = errors.New("tenant certificate and key files must be supplied together")
+	errTenantKeyCannotSign                          = errors.New("tenant private key cannot sign")
+	errTenantPeerCertificateMissing                 = errors.New("tenant peer certificate is missing")
+	errTenantCertificateNotValid                    = errors.New("tenant certificate is not currently valid")
 	errRelayHostnameIsRequired                      = errors.New("relay hostname is required")
 	errKeylessHostnameIsRequired                    = errors.New("keyless hostname is required")
 	errKeylessPinnedRelayCertificateChainUnparsable = errors.New("keyless pinned relay certificate chain is unparsable")
@@ -32,28 +40,31 @@ var (
 
 // ClientConfig contains the lease-scoped inputs for a tenant TLS client.
 type ClientConfig struct {
-	RelayURL    string
-	Hostname    string
-	AccessToken string
+	RelayURL            string
+	Hostname            string
+	AlternativeHostname string
+	AccessToken         string
+	// CertFile and KeyFile select local-only signing; both must be supplied.
+	CertFile string
+	KeyFile  string
 }
 
-// Client terminates tenant TLS on raw reverse-session connections. The
-// presented certificate chain is pinned from the relay's HTTPS endpoint, and
-// the CertificateVerify signatures for every handshake are requested from the
-// relay's transcript-bound /v1/sign endpoint. Access tokens can be updated
-// without rebuilding the client, and RefreshChain pins a renewed relay
-// certificate without one.
+// Client owns one tenant TLS engine and atomically replaces certificate/signer material.
 type Client struct {
 	mu          sync.RWMutex
 	accessToken string
 	pin         *pinnedChain
+	retired     []*pinnedChain
+	certFile    string
+	keyFile     string
 	closed      bool
 	closeOnce   sync.Once
 	closeErr    error
 
-	relayURL   string
-	serverName string
-	hostname   string
+	relayURL            string
+	serverName          string
+	hostname            string
+	alternativeHostname string
 
 	refreshMu sync.Mutex
 }
@@ -63,12 +74,11 @@ type pinnedChain struct {
 	server   *t13server.Server
 	pool     *x509.CertPool
 	signer   io.Closer
+	leaf     *x509.Certificate
 }
 
-// NewClient creates one lease-scoped tenant TLS client. It resolves and pins
-// the relay certificate chain, verifies the chain covers the lease hostname,
-// and wires the remote transcript signer to the relay's /v1/sign endpoint.
-// ctx controls initialization; subsequent operations use their own contexts.
+// NewClient loads local material when configured, otherwise pins the relay chain.
+// Local file errors fail closed; they never select relay-backed signing.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	normalizedRelayURL, err := utils.NormalizeRelayURL(config.RelayURL)
 	if err != nil {
@@ -84,22 +94,27 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		return nil, errRelayHostnameIsRequired
 	}
 
-	chainPEM, err := relayChain(ctx, normalizedRelayURL, serverName)
-	if err != nil {
-		return nil, fmt.Errorf("prepare keyless materials: %w", err)
-	}
 	hostname := strings.TrimSpace(config.Hostname)
 	if hostname == "" {
 		return nil, errKeylessHostnameIsRequired
 	}
 	client := &Client{
-		accessToken: strings.TrimSpace(config.AccessToken),
-		relayURL:    normalizedRelayURL,
-		serverName:  serverName,
-		hostname:    hostname,
+		accessToken:         strings.TrimSpace(config.AccessToken),
+		relayURL:            normalizedRelayURL,
+		serverName:          serverName,
+		hostname:            hostname,
+		alternativeHostname: strings.TrimSpace(config.AlternativeHostname),
+		certFile:            config.CertFile,
+		keyFile:             config.KeyFile,
 	}
 
-	if client.pin, err = client.newPin(chainPEM); err != nil {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if (client.certFile == "") != (client.keyFile == "") {
+		return nil, errTenantCertificatePairRequired
+	}
+	if client.pin, err = client.loadPin(ctx); err != nil {
 		return nil, err
 	}
 	return client, nil
@@ -133,7 +148,8 @@ func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 		_ = remoteSigner.Close()
 		return nil, fmt.Errorf("create keyless tls server: %w", err)
 	}
-	return &pinnedChain{chainPEM: chainPEM, server: server, pool: pool, signer: remoteSigner}, nil
+	leaf, _ := utils.ParseCertificatePEM(chainPEM)
+	return &pinnedChain{chainPEM: chainPEM, server: server, pool: pool, signer: remoteSigner, leaf: leaf}, nil
 }
 
 func (c *Client) pinned() *pinnedChain {
@@ -166,12 +182,8 @@ func (c *Client) SetAccessToken(token string) {
 	c.mu.Unlock()
 }
 
-// RefreshChain pins the certificate chain the relay serves now when it is not
-// the pinned one, and reports whether it changed. A renewal gives the relay a
-// new certificate and key, while a client keeps presenting the chain it pinned
-// until this runs. The relay signs for the replaced certificate until it
-// expires, so every client has to come here before then; connections already
-// terminated are not affected.
+// RefreshChain reloads configured local files or the relay chain. Invalid replacements
+// leave the previous generation intact; existing connections are not restarted.
 func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
 	return c.refreshChain(ctx, nil)
 }
@@ -185,27 +197,41 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 	if stale != nil && c.pinned() != stale {
 		return false, nil
 	}
-	chainPEM, err := relayChain(ctx, c.relayURL, c.serverName)
-	if err != nil {
-		return false, err
-	}
 	current := c.pinned()
-	if bytes.Equal(chainPEM, current.chainPEM) {
-		return false, nil
-	}
-	next, err := c.newPin(chainPEM)
+	next, err := c.loadPin(ctx)
 	if err != nil {
 		return false, err
+	}
+	if bytes.Equal(next.chainPEM, current.chainPEM) {
+		if next.signer != nil {
+			_ = next.signer.Close()
+		}
+		return false, nil
 	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		_ = next.signer.Close()
+		if next.signer != nil {
+			_ = next.signer.Close()
+		}
 		return false, nil
 	}
+	// Retain only public verification material. The handshake owns its server
+	// and local key for as long as it needs them.
+	live := c.retired[:0]
+	for _, old := range c.retired {
+		if old.leaf != nil && time.Now().Before(old.leaf.NotAfter) {
+			live = append(live, old)
+		}
+	}
+	c.retired = append(live, &pinnedChain{pool: current.pool, leaf: current.leaf})
 	c.pin = next
 	c.mu.Unlock()
-	_ = current.signer.Close()
+	// RemoteSigner.Close only closes idle HTTP connections; it neither cancels
+	// an in-flight signature nor prevents one on an already captured server.
+	if current.signer != nil {
+		_ = current.signer.Close()
+	}
 	return true, nil
 }
 
@@ -217,22 +243,23 @@ func pinIsStale(err error) bool {
 	return verification
 }
 
-// TerminateConn terminates tenant TLS on raw, presenting the pinned relay
-// chain and proving possession of its key through a transcript-bound
-// signature from the relay. binding is the relay-minted per-connection value
-// forwarded with every /v1/sign request for the handshake. The returned
-// net.Conn is ready for application traffic.
+// TerminateConn uses one captured certificate/signer generation. Local signing
+// stays in process; relay-backed signing forwards the per-connection binding.
 func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte) (net.Conn, error) {
 	pin := c.pinned()
 	if pin == nil {
 		return nil, errKeylessClientIsUnavailable
+	}
+	if pin.leaf != nil && (time.Now().Before(pin.leaf.NotBefore) || !time.Now().Before(pin.leaf.NotAfter)) {
+		_ = raw.Close()
+		return nil, errTenantCertificateNotValid
 	}
 	conn := pin.server.NewConn(raw, binding)
 	if err := conn.HandshakeContext(ctx); err != nil {
 		_ = conn.Close()
 		if pinIsStale(err) {
 			if _, refreshErr := c.refreshChain(ctx, pin); refreshErr != nil {
-				err = errors.Join(err, fmt.Errorf("refresh relay certificate chain: %w", refreshErr))
+				err = errors.Join(err, fmt.Errorf("refresh tenant certificate chain: %w", refreshErr))
 			}
 		}
 		return nil, fmt.Errorf("tenant tls handshake: %w", err)
@@ -240,10 +267,9 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 	return conn, nil
 }
 
-// RelayCertPool returns the pinned relay certificate chain as a verification
-// pool. Callers that dial the relay themselves, such as the MITM self-probe,
-// verify against this pool instead of disabling certificate verification.
-func (c *Client) RelayCertPool() *x509.CertPool {
+// TenantCertPool returns the current tenant trust snapshot. Use TenantTLSConfig
+// for probes that can overlap rotation. This is not relay control API trust.
+func (c *Client) TenantCertPool() *x509.CertPool {
 	pin := c.pinned()
 	if pin == nil {
 		return nil
@@ -262,10 +288,12 @@ func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
-		pin := c.pin
+		pins := append([]*pinnedChain{c.pin}, c.retired...)
 		c.mu.Unlock()
-		if pin != nil && pin.signer != nil {
-			c.closeErr = pin.signer.Close()
+		for _, pin := range pins {
+			if pin != nil && pin.signer != nil {
+				c.closeErr = errors.Join(c.closeErr, pin.signer.Close())
+			}
 		}
 	})
 	return c.closeErr
@@ -288,4 +316,120 @@ func verifyCertificateHostname(certPEM []byte, hostname string) error {
 		return err
 	}
 	return leaf.VerifyHostname(hostname)
+}
+
+// loadPin keeps provisioning separate from the shared tenant handshake engine.
+func (c *Client) loadPin(ctx context.Context) (*pinnedChain, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if c.certFile == "" {
+		chain, err := relayChain(ctx, c.relayURL, c.serverName)
+		if err != nil {
+			return nil, err
+		}
+		return c.newPin(chain)
+	}
+	certPEM, err := os.ReadFile(c.certFile)
+	if err != nil {
+		return nil, fmt.Errorf("read tenant certificate: %w", err)
+	}
+	keyPEM, err := os.ReadFile(c.keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("read tenant key: %w", err)
+	}
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("load tenant certificate/key: %w", err)
+	}
+	key, ok := pair.PrivateKey.(crypto.Signer)
+	if !ok {
+		return nil, errTenantKeyCannotSign
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, err
+	}
+	roots := x509.NewCertPool()
+	intermediates := x509.NewCertPool()
+	for i, der := range pair.Certificate {
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		if i == len(pair.Certificate)-1 {
+			roots.AddCert(cert)
+		} else if i > 0 {
+			intermediates.AddCert(cert)
+		}
+	}
+	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: c.hostname, Roots: roots, Intermediates: intermediates}); err != nil {
+		return nil, fmt.Errorf("validate tenant certificate: %w", err)
+	}
+	if c.alternativeHostname != "" {
+		if err := leaf.VerifyHostname(c.alternativeHostname); err != nil {
+			return nil, fmt.Errorf("tenant certificate alias: %w", err)
+		}
+	}
+	store := ksigner.NewStaticKeyStore()
+	if err := store.Put(types.KeylessRelayKeyID, key); err != nil {
+		return nil, err
+	}
+	service := &ksigner.Service{Store: store}
+	server, err := t13server.NewServer(t13server.Config{
+		Certificates:     pair.Certificate,
+		NextProtos:       []string{"http/1.1"},
+		KeyID:            types.KeylessRelayKeyID,
+		TranscriptSigner: service,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create local tenant tls server: %w", err)
+	}
+	// The exact installed leaf is the probe's trust anchor, not the relay's
+	// control-plane certificate or a broader CA capable of issuing other leaves.
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return &pinnedChain{chainPEM: certPEM, server: server, pool: pool, leaf: leaf}, nil
+}
+
+// TenantTLSConfig verifies self-probes against installed tenant materials,
+// including a previous generation still used by an in-flight handshake.
+// It must not be used for the relay control API.
+func (c *Client) TenantTLSConfig() *tls.Config {
+	return &tls.Config{
+		ServerName: c.hostname,
+		MinVersion: tls.VersionTLS13,
+		// Replace the static-root verification with full verification against
+		// the installed generations at handshake time; verification is not skipped.
+		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection performs x509 verification below.
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return errTenantPeerCertificateMissing
+			}
+			c.mu.RLock()
+			pins := append([]*pinnedChain{c.pin}, c.retired...)
+			c.mu.RUnlock()
+			intermediates := x509.NewCertPool()
+			for _, cert := range state.PeerCertificates[1:] {
+				intermediates.AddCert(cert)
+			}
+			var verificationErr error
+			for _, pin := range pins {
+				if pin == nil {
+					continue
+				}
+				_, err := state.PeerCertificates[0].Verify(x509.VerifyOptions{
+					DNSName: c.hostname, Roots: pin.pool, Intermediates: intermediates,
+				})
+				if err == nil {
+					return nil
+				}
+				verificationErr = err
+			}
+			if verificationErr == nil {
+				return errKeylessClientIsUnavailable
+			}
+			return verificationErr
+		},
+	}
 }

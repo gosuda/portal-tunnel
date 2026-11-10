@@ -259,3 +259,22 @@ func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
 		t.Fatal("rejected metadata update changed exposure or listener metadata")
 	}
 }
+
+func TestExposeRejectsInvalidLocalTLSOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+	}{
+		{"certificate only", []Option{WithTLSCertificate("cert.pem", "")}},
+		{"key only", []Option{WithTLSCertificate("", "key.pem")}},
+		{"relay cache", []Option{WithTLSCertificate("cert.pem", "key.pem"), WithStaticRelayCache(".", time.Hour)}},
+		{"raw TCP", []Option{WithTLSCertificate("cert.pem", "key.pem"), WithTCP()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Expose(t.Context(), types.Identity{}, []string{"https://relay.example"}, tc.opts...)
+			if err == nil || !strings.Contains(err.Error(), "TLS") {
+				t.Fatalf("expected local TLS option error, got %v", err)
+			}
+		})
+	}
+}

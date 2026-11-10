@@ -23,6 +23,8 @@ import (
 )
 
 var (
+	errLocalTLSCertificatePairRequired     = errors.New("tenant TLS requires both certificate and key files")
+	errLocalTLSModeUnsupported             = errors.New("local tenant TLS cannot be combined with relay cache, raw TCP, or the browser runtime")
 	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
 	errPortalSDKContextIsNil               = errors.New("portal sdk: context is nil")
 	errPortalSDKThisRuntimeSupportsHTTPS   = errors.New("portal sdk: this runtime supports HTTPS exposure only")
@@ -164,12 +166,14 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
-	Cache      *cache.SourceConfig
-	UDPEnabled bool
-	TCPEnabled bool
-	BanMITM    bool
-	Overlay    bool
-	Metadata   types.LeaseMetadata
+	TLSCertFile string
+	TLSKeyFile  string
+	Cache       *cache.SourceConfig
+	UDPEnabled  bool
+	TCPEnabled  bool
+	BanMITM     bool
+	Overlay     bool
+	Metadata    types.LeaseMetadata
 
 	discoveryEnabled bool
 	maxActiveRelays  int
@@ -183,6 +187,17 @@ type Option func(*options)
 // Cache errors never stop the exposure; the caller still serves the same path.
 func WithStaticRelayCache(path string, ttl time.Duration) Option {
 	return func(opts *options) { opts.Cache = &cache.SourceConfig{Path: path, TTL: ttl} }
+}
+
+// WithTLSCertificate requires a locally held tenant certificate and private key.
+// Both PEM files must cover every registered canonical hostname. They are
+// reloaded during certificate refresh; failures never enable relay signing.
+// This option cannot be combined with relay cache or raw TCP.
+func WithTLSCertificate(certFile, keyFile string) Option {
+	return func(opts *options) {
+		opts.TLSCertFile = certFile
+		opts.TLSKeyFile = keyFile
+	}
 }
 
 // WithUDP enables the datagram transport capability.
@@ -255,6 +270,13 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	}
 	if err := cfg.Metadata.Validate(); err != nil {
 		return nil, err
+	}
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return nil, errLocalTLSCertificatePairRequired
+	}
+	localTLSUnsupported := cfg.Cache != nil || cfg.TCPEnabled || runtime.GOOS == "js"
+	if cfg.TLSCertFile != "" && localTLSUnsupported {
+		return nil, errLocalTLSModeUnsupported
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
 	if runtime.GOOS == "js" && requiresSocketTransport {
@@ -1154,14 +1176,16 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	for _, relayURL := range missingRelayURLs {
 		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
 		listener, err := newListener(context.Background(), relayURL, listenerConfig{
-			Cache:      e.cache,
-			Identity:   e.identity,
-			Overlay:    e.options.Overlay,
-			UDPEnabled: e.options.UDPEnabled,
-			TCPEnabled: e.options.TCPEnabled,
-			BanMITM:    e.options.BanMITM,
-			Metadata:   e.metadata.Copy(),
-			StartedAt:  e.startedAt,
+			Cache:       e.cache,
+			Identity:    e.identity,
+			Overlay:     e.options.Overlay,
+			UDPEnabled:  e.options.UDPEnabled,
+			TCPEnabled:  e.options.TCPEnabled,
+			BanMITM:     e.options.BanMITM,
+			TLSCertFile: e.options.TLSCertFile,
+			TLSKeyFile:  e.options.TLSKeyFile,
+			Metadata:    e.metadata.Copy(),
+			StartedAt:   e.startedAt,
 		})
 		if err != nil {
 			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err})

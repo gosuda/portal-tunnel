@@ -176,6 +176,8 @@ func (cfg *Config) normalize(configPath string) error {
 		}
 		t.Serve = resolvePath(t.Serve)
 		t.SAMLMetadataFile = resolvePath(t.SAMLMetadataFile)
+		t.TLSCert = resolvePath(t.TLSCert)
+		t.TLSKey = resolvePath(t.TLSKey)
 		if t.IdentityPath == "" {
 			if len(cfg.Tunnels) <= 1 {
 				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, defaultIdentityFilename)

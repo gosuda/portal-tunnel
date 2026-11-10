@@ -60,14 +60,16 @@ const (
 )
 
 type listenerConfig struct {
-	Cache      *cache.Source
-	Identity   types.Identity
-	Overlay    bool
-	UDPEnabled bool
-	TCPEnabled bool
-	BanMITM    bool
-	Metadata   types.LeaseMetadata
-	StartedAt  time.Time
+	TLSCertFile string
+	TLSKeyFile  string
+	Cache       *cache.Source
+	Identity    types.Identity
+	Overlay     bool
+	UDPEnabled  bool
+	TCPEnabled  bool
+	BanMITM     bool
+	Metadata    types.LeaseMetadata
+	StartedAt   time.Time
 }
 
 type listenerStatus struct {
@@ -140,9 +142,11 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 }
 
 type listener struct {
-	cancel    context.CancelFunc
-	doneCh    <-chan struct{}
-	closeOnce sync.Once
+	tlsCertFile string
+	tlsKeyFile  string
+	cancel      context.CancelFunc
+	doneCh      <-chan struct{}
+	closeOnce   sync.Once
 
 	startedAt time.Time
 
@@ -194,6 +198,8 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		udpEnabled:    cfg.UDPEnabled,
 		tcpEnabled:    cfg.TCPEnabled,
 		cache:         cfg.Cache,
+		tlsCertFile:   cfg.TLSCertFile,
+		tlsKeyFile:    cfg.TLSKeyFile,
 		api:           &apiClient{relayURL: relayurl},
 		lease:         utils.NewSnapshot(listenerSnapshot{}),
 		startedAt:     cfg.StartedAt,
@@ -1152,7 +1158,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 	}
 	if lease.tenantTLS != nil {
 		lease.tenantTLS.SetAccessToken(resp.AccessToken)
-		if !time.Now().Before(lease.chainCheckedAt.Add(defaultChainCheckInterval)) && l.refreshRelayChain(ctx, lease.tenantTLS) {
+		if !time.Now().Before(lease.chainCheckedAt.Add(defaultChainCheckInterval)) && l.refreshTenantChain(ctx, lease.tenantTLS) {
 			checkedAt := time.Now()
 			_, _ = l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
 				if current.tenantTLS != lease.tenantTLS {
@@ -1166,7 +1172,7 @@ func (l *listener) renewLease(ctx context.Context) error {
 	return nil
 }
 
-func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Client) bool {
+func (l *listener) refreshTenantChain(ctx context.Context, tenantTLS *keyless.Client) bool {
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	changed, err := tenantTLS.RefreshChain(checkCtx)
@@ -1177,14 +1183,14 @@ func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Cli
 				Err(err).
 				Str("relay_url", l.api.relayURL.String()).
 				Str("address", l.identity.Address).
-				Msg("relay certificate check failed; keeping the pinned chain")
+				Msg("tenant certificate check failed; keeping the pinned chain")
 		}
 		return false
 	case changed:
 		log.Info().
 			Str("relay_url", l.api.relayURL.String()).
 			Str("address", l.identity.Address).
-			Msg("relay certificate renewed; presenting the new chain")
+			Msg("tenant certificate renewed; presenting the new chain")
 	}
 	return true
 }
@@ -1218,9 +1224,12 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		}
 	}
 	tenantTLS, err := keyless.NewClient(ctx, keyless.ClientConfig{
-		RelayURL:    l.api.relayURL.String(),
-		Hostname:    canonicalHostname,
-		AccessToken: resp.AccessToken,
+		RelayURL:            l.api.relayURL.String(),
+		Hostname:            canonicalHostname,
+		AlternativeHostname: resp.Hostname,
+		AccessToken:         resp.AccessToken,
+		CertFile:            l.tlsCertFile,
+		KeyFile:             l.tlsKeyFile,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)

@@ -21,6 +21,9 @@ import (
 )
 
 var (
+	errTLSCertificatePairRequired              = errors.New("tls_cert and tls_key must be configured together")
+	errLocalTLSWithRawTCP                      = errors.New("local TLS certificates cannot be combined with raw TCP")
+	errLocalTLSWithRelayCache                  = errors.New("local TLS certificates cannot be combined with relay cache")
 	errTunnelTargetIsRequired                  = errors.New("tunnel target is required")
 	errHTTPTunnelCannotCombinedTCPOr           = errors.New("HTTP tunnel cannot be combined with TCP or UDP")
 	errStaticServingCannotCombinedTargetOr     = errors.New("static serving cannot be combined with a target or HTTP routes")
@@ -39,6 +42,8 @@ var (
 
 // Spec is the resolved description of one tunnel that the runtime is built from.
 type Spec struct {
+	TLSCert   string
+	TLSKey    string
 	Identity  IdentitySpec
 	Relays    RelaySpec
 	Metadata  types.LeaseMetadata
@@ -93,6 +98,17 @@ type CacheConfig struct {
 }
 
 func (spec Spec) Validate() error {
+	if (spec.TLSCert == "") != (spec.TLSKey == "") {
+		return errTLSCertificatePairRequired
+	}
+	if spec.TLSCert != "" {
+		if spec.Transport.TCP {
+			return errLocalTLSWithRawTCP
+		}
+		if spec.HTTP != nil && spec.HTTP.Cache != nil {
+			return errLocalTLSWithRelayCache
+		}
+	}
 	target := strings.TrimSpace(spec.Transport.Target)
 	if spec.HTTP == nil {
 		if target == "" {
@@ -216,6 +232,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	}
 	opts := []sdk.Option{
 		sdk.WithMITMProtection(spec.Relays.BanMITM),
+		sdk.WithTLSCertificate(spec.TLSCert, spec.TLSKey),
 		sdk.WithMetadata(spec.Metadata),
 	}
 	if spec.Transport.UDP != nil {

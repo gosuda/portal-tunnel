@@ -18,6 +18,8 @@ import (
 // holds what was set and nothing else; nil and zero values stand for defaults
 // that Spec fills in. The TOML keys are those of the agent config.
 type Config struct {
+	TLSCert      string `toml:"tls_cert,omitempty"`
+	TLSKey       string `toml:"tls_key,omitempty"`
 	Name         string `toml:"name,omitempty"`
 	IdentityPath string `toml:"identity_path,omitempty"`
 	IdentityJSON string `toml:"identity_json,omitempty"`
@@ -136,6 +138,8 @@ func (c Config) Spec() (Spec, error) {
 		return Spec{}, err
 	}
 	spec := Spec{
+		TLSCert:  c.TLSCert,
+		TLSKey:   c.TLSKey,
 		Identity: IdentitySpec{Name: c.Name, Path: c.IdentityPath, JSON: c.IdentityJSON},
 		Relays: RelaySpec{
 			URLs:      c.RelayURLs,
