@@ -240,9 +240,9 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	}()
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	localConn, err := dialLocalTarget(ctx, dialer, localAddr, relayConn)
+	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
 	if err != nil {
-		return err
+		return answerOriginUnavailable(ctx, relayConn)
 	}
 	defer localConn.Close()
 	localClosed := make(chan struct{})
@@ -263,16 +263,12 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	return firstErr
 }
 
-func dialLocalTarget(ctx context.Context, dialer *net.Dialer, localAddr string, relayConn net.Conn) (net.Conn, error) {
-	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		_ = relayConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		return nil, writeEmptyHTTPResponse(relayConn)
+func answerOriginUnavailable(ctx context.Context, relayConn net.Conn) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
-	return localConn, nil
+	_ = relayConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	return writeEmptyHTTPResponse(relayConn)
 }
 
 func relayProxyCopies(localConn, relayConn net.Conn) error {
