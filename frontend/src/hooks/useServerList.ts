@@ -145,33 +145,28 @@ export function useServerList() {
     if (key === "") {
       return;
     }
-    try {
-      const response = await apiClient.post<ReputationVoteResponse>(
-        RELAY_API_PATHS.public.reputationVote,
-        { hostname: key, vote } satisfies ReputationVoteRequest
-      );
-      if (
-        typeof response?.up === "number" &&
-        typeof response?.down === "number" &&
-        typeof response?.total === "number"
-      ) {
-        // The next poll must apply the relay's count even if it matches the old snapshot.
-        lastSnapshot.current = "";
-        setSummaries((current) => ({
-          ...current,
-          [key]: {
-            hostname: response.hostname || key,
-            up: response.up,
-            down: response.down,
-            total: response.total,
-            viewer_vote: response.viewer_vote ?? "",
-            comments: response.comments ?? current[key]?.comments ?? 0,
-          },
-        }));
-      }
-    } catch (error) {
-      console.error("Failed to submit vote", error);
-      throw error;
+    const response = await apiClient.post<ReputationVoteResponse>(
+      RELAY_API_PATHS.public.reputationVote,
+      { hostname: key, vote } satisfies ReputationVoteRequest
+    );
+    if (
+      typeof response?.up === "number" &&
+      typeof response?.down === "number" &&
+      typeof response?.total === "number"
+    ) {
+      // The next poll must apply the relay's count even if it matches the old snapshot.
+      lastSnapshot.current = "";
+      setSummaries((current) => ({
+        ...current,
+        [key]: {
+          hostname: response.hostname || key,
+          up: response.up,
+          down: response.down,
+          total: response.total,
+          viewer_vote: response.viewer_vote ?? "",
+          comments: response.comments ?? current[key]?.comments ?? 0,
+        },
+      }));
     }
   };
 
