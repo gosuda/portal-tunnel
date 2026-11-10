@@ -43,11 +43,9 @@ func TestRelayClosesUnreadControlBodies(t *testing.T) {
 			if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
 				t.Fatal(err)
 			}
-			// Leave almost all of the body unsent. The relay must terminate it
-			// itself rather than wait for the client or the 30-second deadline.
 			body := "{"
 			if request.path == types.PathSDKRegisterChallenge {
-				body = "{]" // Invalid JSON must not block in the decoder's Close.
+				body = "{]"
 			}
 			if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 4096\r\n\r\n%s", request.method, request.path, base.Host, body); err != nil {
 				t.Fatal(err)

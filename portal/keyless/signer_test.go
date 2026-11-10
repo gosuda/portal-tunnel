@@ -28,8 +28,6 @@ import (
 
 const tenantHostname = "tenant.test.example"
 
-// relayCertificate is one certificate the relay can serve: a leaf issued by the
-// test CA, presented with the CA as its chain, like a renewal by the same issuer.
 type relayCertificate struct {
 	leaf *x509.Certificate
 	tls  tls.Certificate
@@ -69,8 +67,6 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	return &testIssuer{cert: cert, key: key, pool: pool}
 }
 
-// issue returns a new certificate for the tenant hostname with a new private
-// key, as every ACME issuance does.
 func (i *testIssuer) issue(t *testing.T, serial int64) relayCertificate {
 	t.Helper()
 	return i.issueFor(t, serial, tenantHostname)
@@ -103,8 +99,6 @@ func (i *testIssuer) issueFor(t *testing.T, serial int64, dnsName string) relayC
 	return relayCertificate{leaf: leaf, tls: tls.Certificate{Certificate: [][]byte{der, i.cert.Raw}, PrivateKey: key}}
 }
 
-// relayStandIn is a relay serving one certificate and signing transcripts with
-// the real Signer for every certificate it still holds a key for.
 type relayStandIn struct {
 	srv      *httptest.Server
 	url      string
@@ -134,8 +128,6 @@ func newRelayStandIn(t *testing.T, first relayCertificate) *relayStandIn {
 		}
 		signer.ServeHTTP(w, r, "lease")
 	}))
-	// httptest's StartTLS installs its own certificate next to GetCertificate,
-	// and a client that sends no server name (an IP literal) would get that one.
 	relay.srv.Listener = tls.NewListener(relay.srv.Listener, &tls.Config{
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			relay.mu.Lock()
@@ -152,8 +144,6 @@ func newRelayStandIn(t *testing.T, first relayCertificate) *relayStandIn {
 	return relay
 }
 
-// renew makes next the served certificate. The relay signs for the replaced
-// one only when retire is false.
 func (r *relayStandIn) renew(next relayCertificate, retire bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -174,9 +164,6 @@ func (r *relayStandIn) newClient(t *testing.T) *Client {
 	return client
 }
 
-// visit runs one visitor handshake through client, trusting the way a browser
-// does: the presented chain must verify and the CertificateVerify signature
-// must match the presented leaf. It returns the leaf the visitor was shown.
 func (r *relayStandIn) visit(t *testing.T, client *Client, roots *x509.CertPool) (*x509.Certificate, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -203,10 +190,6 @@ func (r *relayStandIn) visit(t *testing.T, client *Client, roots *x509.CertPool)
 	return visitor.ConnectionState().PeerCertificates[0], nil
 }
 
-// A renewal gives the relay a new certificate and key. A tenant that registered
-// before it still presents the old chain, and visitors must be served with it
-// until the tenant moves to the new one, while a tenant that registers after it
-// presents the new chain from the start.
 func TestTenantsAcrossARelayCertificateRenewal(t *testing.T) {
 	t.Parallel()
 
@@ -232,7 +215,6 @@ func TestTenantsAcrossARelayCertificateRenewal(t *testing.T) {
 	if leaf, err := relay.visit(t, registeredBefore, issuer.pool); err != nil || !leaf.Equal(renewed.leaf) {
 		t.Fatalf("tenant after RefreshChain: leaf %v, error %v; want the new certificate and no error", leaf, err)
 	}
-	// The MITM self-probe verifies what the tenant presents against this pool.
 	pinned := x509.NewCertPool()
 	pinned.AddCert(renewed.leaf)
 	pinned.AddCert(issuer.cert)
@@ -244,9 +226,6 @@ func TestTenantsAcrossARelayCertificateRenewal(t *testing.T) {
 	}
 }
 
-// Once the relay no longer holds the key of the chain a tenant presents, it
-// must refuse to sign for it, even though it holds the key of the certificate it
-// serves now, and the tenant must pin the served chain on that answer.
 func TestClientRepinsWhenTheRelayHoldsNoKeyForItsChain(t *testing.T) {
 	t.Parallel()
 
@@ -265,8 +244,6 @@ func TestClientRepinsWhenTheRelayHoldsNoKeyForItsChain(t *testing.T) {
 	}
 }
 
-// certificateMessage builds a TLS 1.3 Certificate handshake message from DER
-// certificates, the shape the tenant's t13server puts in a sign request.
 func certificateMessage(entries ...[]byte) []byte {
 	var list cryptobyte.Builder
 	for _, entry := range entries {
@@ -282,10 +259,6 @@ func certificateMessage(entries ...[]byte) []byte {
 	return out.BytesOrPanic()
 }
 
-// The sign endpoint's answers are a wire contract with the tenants: only the
-// relay key id is served, a malformed certificate message is a bad request, a
-// certificate without a key is the refusal tenants re-pin on, and a known
-// certificate is signed for.
 func TestSignerAnswers(t *testing.T) {
 	t.Parallel()
 
@@ -343,13 +316,6 @@ func TestSignerAnswers(t *testing.T) {
 	}
 }
 
-// A renewal can come from another issuer than the pinned chain. The relay still
-// holds the key of the pinned certificate, but its API certificate no longer
-// verifies against the chain the signer trusts, so the handshake that finds out
-// is lost. A client that checks the relay chain on that failure recovers: the
-// next handshake presents the new chain. A client that never refreshes is not
-// expected to recover from this until it is created again, and nothing here
-// asserts that it fails.
 func TestClientRepinsWhenARenewalComesFromAnotherIssuer(t *testing.T) {
 	t.Parallel()
 
@@ -371,9 +337,6 @@ func TestClientRepinsWhenARenewalComesFromAnotherIssuer(t *testing.T) {
 	}
 }
 
-// The handshakes of one burst that fail on the same stale pin must share the
-// check that pinned the new chain, so that a renewal costs the relay one fetch
-// per tenant and not one per failed handshake. A scheduled check is not shared.
 func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	t.Parallel()
 
@@ -406,8 +369,6 @@ func TestStaleChainChecksOfOneBurstShareOneFetch(t *testing.T) {
 	}
 }
 
-// A check of the relay chain that is still running when the client is closed
-// must not pin a chain, because the signer built for it would never be released.
 func TestRefreshChainPinsNothingAfterClose(t *testing.T) {
 	t.Parallel()
 
@@ -430,8 +391,6 @@ func TestRefreshChainPinsNothingAfterClose(t *testing.T) {
 	}
 }
 
-// The chain a tenant pins is the one it presents under its own hostname, so a
-// chain that does not cover it is never pinned, whatever the relay serves.
 func TestRefreshChainKeepsThePinOfAChainThatDoesNotCoverTheHostname(t *testing.T) {
 	t.Parallel()
 

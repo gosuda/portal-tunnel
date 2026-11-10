@@ -19,7 +19,6 @@ export interface UseListReturn<T extends BaseServer> {
   handleSortByChange: (value: SortOption) => void;
   handleTagToggle: (tag: string) => void;
   clearTags: () => void;
-  /** Back to the unfiltered list in the given order. */
   resetFilters: (sortBy?: SortOption) => void;
 }
 
@@ -136,11 +135,6 @@ export function useList<T extends BaseServer>({
           return (a: T, b: T) => (a.tags[0] || "").localeCompare(b.tags[0] || "");
         case "owner":
           return (a: T, b: T) => a.owner.localeCompare(b.owner);
-        case "default":
-          return (a: T, b: T) =>
-            parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
-            a.name.localeCompare(b.name) ||
-            a.id.localeCompare(b.id);
         default:
           return (a: T, b: T) =>
             parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||

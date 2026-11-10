@@ -90,9 +90,6 @@ func DialQUICBackhaul(ctx context.Context, addr string, tlsConfig *tls.Config, a
 	return conn, nil
 }
 
-// dialQUICBackhaulConnection preserves resolver address ordering and races the
-// other address family after the same 300 ms head start as Go's TCP dialer.
-// quic.DialAddr otherwise resolves only one address and prefers IPv4.
 func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls.Config) (*quic.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -106,7 +103,6 @@ func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls
 		return nil, &net.DNSError{Err: "no addresses found", Name: host, IsNotFound: true}
 	}
 	if tlsConfig.ServerName == "" {
-		// Numeric dial targets must still authenticate the requested hostname.
 		tlsConfig.ServerName = host
 	}
 
@@ -128,7 +124,6 @@ func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls
 			attemptCtx := ctx
 			cancel := func() {}
 			if deadline, ok := ctx.Deadline(); ok {
-				// Leave later addresses a share of the caller's remaining budget.
 				attemptCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(addresses)-i))
 			}
 			conn, err := quic.DialAddr(attemptCtx, net.JoinHostPort(address.String(), port), tlsConfig, quicBackhaulConfig())
@@ -194,9 +189,6 @@ func dialQUICBackhaulConnection(ctx context.Context, addr string, tlsConfig *tls
 	}
 }
 
-// backhaulRejectionCode maps a backhaul control rejection reason back to
-// its relay API error code so callers classify rejections with errors.Is
-// against types.APIRequestError like every other relay response.
 func backhaulRejectionCode(errText string) string {
 	switch errText {
 	case types.APIErrorCodeUnauthorized,
@@ -219,7 +211,6 @@ func AcceptQUICBackhaulControl(ctx context.Context, conn *quic.Conn) (*QUICBackh
 
 	deadline, _ := ctx.Deadline()
 	_ = stream.SetDeadline(deadline)
-	// A context cancellation must also interrupt a peer stalled mid-JSON.
 	canceled := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		stream.CancelRead(1)

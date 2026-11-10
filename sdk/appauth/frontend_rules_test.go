@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// The command builder in frontend/src/lib/tunnelCommand.ts repeats the rules
-// below, because the browser cannot call Go. Both languages run the same rows,
-// so a change on one side that the other does not follow fails a test here or in
-// the frontend.
 func loadFrontendFile(t *testing.T, name string, into any) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", "lib", name))

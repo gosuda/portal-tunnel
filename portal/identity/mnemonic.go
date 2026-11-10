@@ -38,13 +38,6 @@ const (
 
 type derivationPath []uint32
 
-var defaultEVMRootDerivationPath = derivationPath{
-	bip32HardenedOffset + 44,
-	bip32HardenedOffset + 60,
-	bip32HardenedOffset,
-	0,
-}
-
 func deriveSecp256k1PrivateKeyFromMnemonic(rawMnemonic, rawDerivationPath string) (string, string, error) {
 	mnemonic := normalizeMnemonic(rawMnemonic)
 	if mnemonic == "" {
@@ -75,9 +68,6 @@ func normalizeMnemonic(raw string) string {
 
 func parseDerivationPath(raw string) (derivationPath, error) {
 	components := strings.Split(raw, "/")
-	if len(components) == 0 {
-		return nil, errEmptyDerivationPath
-	}
 
 	var path derivationPath
 	switch strings.TrimSpace(components[0]) {
@@ -86,7 +76,7 @@ func parseDerivationPath(raw string) (derivationPath, error) {
 	case "m":
 		components = components[1:]
 	default:
-		path = append(path, defaultEVMRootDerivationPath...)
+		path = append(path, derivationPath{bip32HardenedOffset + 44, bip32HardenedOffset + 60, bip32HardenedOffset, 0}...)
 	}
 	if len(components) == 0 {
 		return nil, errEmptyDerivationPath

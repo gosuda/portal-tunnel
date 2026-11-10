@@ -17,16 +17,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal"
 )
 
-// envFileEntry is one assignment read from an env file, kept in file order so
-// the report follows the operator's own layout.
 type envFileEntry struct {
 	Name  string
 	Value string
 }
 
-// prepareAppConfig resolves the same side-effect-free configuration for startup
-// and diagnostics. Runtime construction uses the normalized configuration and
-// the ingress and facilitator settings returned by this pass.
 func prepareAppConfig(cfg *appConfig, issues []cli.EnvIssue) (*policy.Ingress, x402FacilitatorSettings, error) {
 	if err := envIssueError(issues); err != nil {
 		return nil, x402FacilitatorSettings{}, err
@@ -72,7 +67,6 @@ func loadEnvFile(path string) ([]envFileEntry, error) {
 			continue
 		}
 		line = strings.TrimPrefix(line, "export ")
-		// A line that is neither blank, a comment, nor an assignment is invalid.
 		name, value, found := strings.Cut(line, "=")
 		if !found {
 			return nil, fmt.Errorf("%s:%d: not an assignment: %q", path, lineNo, line)
@@ -81,7 +75,6 @@ func loadEnvFile(path string) ([]envFileEntry, error) {
 		if name == "" {
 			return nil, fmt.Errorf("%s:%d: assignment has no name: %q", path, lineNo, line)
 		}
-		// Values read from an env file are not expanded.
 		value = strings.TrimSpace(value)
 		doubleQuoted := len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"'
 		singleQuoted := len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\''
@@ -96,7 +89,6 @@ func loadEnvFile(path string) ([]envFileEntry, error) {
 	return entries, nil
 }
 
-// knownEnvNames indexes every name the relay reads, including flag aliases.
 func knownEnvNames(vars []cli.EnvVar) map[string]cli.EnvVar {
 	index := make(map[string]cli.EnvVar)
 	for _, entry := range vars {
@@ -118,8 +110,6 @@ func secretEnvName(name string) bool {
 	return false
 }
 
-// valueMarker distinguishes a key that something supplied from one running on
-// its default, so a long list can be skimmed for what the operator actually set.
 func valueMarker(entry cli.EnvVar) string {
 	if entry.SetBy == "" {
 		return "--"
@@ -127,9 +117,6 @@ func valueMarker(entry cli.EnvVar) string {
 	return "OK"
 }
 
-// valueSource names where the effective value came from. When an alias supplied
-// it, the alias is named: "I set AWS_REGION, why is the value different?" is
-// answered by seeing that AWS_DEFAULT_REGION was consulted first.
 func valueSource(entry cli.EnvVar, supplied map[string]bool, envFile string) string {
 	if entry.SetBy == "" {
 		return fmt.Sprintf("default (%s)", defaultDisplay(entry.Default))
@@ -157,9 +144,6 @@ func displayValue(name, value string) string {
 
 func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, source string, env *cli.Env) {
 	fmt.Fprintf(w, "Portal relay configuration (%s)\n", source)
-	// Reading a file in isolation applies relay defaults to every key the file
-	// omits. Inspect the environment inside the target process or container when
-	// another launcher supplies additional relay values.
 	if len(entries) > 0 {
 		fmt.Fprint(w, "Keys absent from this file take relay defaults. To inspect values supplied\n"+
 			"by a launcher, run this command in the relay's actual environment.\n")
@@ -171,10 +155,6 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 		supplied[entry.Name] = true
 	}
 
-	// Every relay key is listed with the value the flag actually resolved to,
-	// not the text of whichever line happened to appear in the file. A key that
-	// an alias or a higher-priority name overrode would otherwise read as though
-	// it were in effect, which is the confusion this report exists to remove.
 	fmt.Fprintln(w, "Keys")
 	for _, entry := range env.Vars {
 		fmt.Fprintf(w, "  %-4s %-30s %-24s relay --%s\n",
@@ -182,9 +162,6 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 		fmt.Fprintf(w, "         source: %s\n", valueSource(entry, supplied, source))
 		writeWrapped(w, entry.Usage)
 	}
-	// Keys the file supplies that nothing reads are how deployment drift hides:
-	// the relay runs on defaults while the operator believes their value is in
-	// effect. Surface every unrecognized name instead of dropping it.
 	relay := knownEnvNames(env.Vars)
 	var unknown []envFileEntry
 	for _, entry := range entries {
@@ -219,7 +196,6 @@ func writeConfigReport(w io.Writer, cfg appConfig, entries []envFileEntry, sourc
 	}
 }
 
-// writeWrapped prints an indented, soft-wrapped continuation line.
 func writeWrapped(w io.Writer, text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -244,9 +220,6 @@ func writeWrapped(w io.Writer, text string) {
 	}
 }
 
-// nearestEnvName suggests the closest known key for a typo. Deployment drift
-// usually looks like ADMIN_WALLETS for ADMIN_TOKEN: close enough to look right,
-// far enough that nothing reads it.
 func nearestEnvName(name string, relay map[string]cli.EnvVar) string {
 	candidates := make([]string, 0, len(relay))
 	for candidate := range relay {
@@ -284,8 +257,6 @@ func editDistance(a, b string) int {
 	return previous[len(b)]
 }
 
-// writeEnvReference emits every key the relay reads. It is generated from the
-// flag definitions so it cannot drift from the binary.
 func writeEnvReference(w io.Writer, vars []cli.EnvVar) {
 	fmt.Fprintln(w, "# Generated by `relay-server config --format env`. Do not edit by hand.")
 	fmt.Fprintln(w, "# Every environment key read by the relay binary.")
@@ -302,7 +273,6 @@ func writeEnvReference(w io.Writer, vars []cli.EnvVar) {
 	}
 }
 
-// writeEnvNames lists every key the relay reads, one per line.
 func writeEnvNames(w io.Writer, vars []cli.EnvVar) {
 	var names []string
 	for _, entry := range vars {
@@ -415,9 +385,6 @@ func printConfigUsage(w io.Writer) {
 	)
 }
 
-// envIssueError turns recorded parse failures into a startup error. A value
-// that cannot be parsed is always a mistake, and falling back silently is what
-// let relays run with settings nothing read.
 func envIssueError(issues []cli.EnvIssue) error {
 	if len(issues) == 0 {
 		return nil

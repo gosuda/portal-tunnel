@@ -28,6 +28,7 @@ profile.cov
 
 # env file
 .env
+/deploy/observability/admin-token
 
 # oh-my-claudecode state
 .omc/

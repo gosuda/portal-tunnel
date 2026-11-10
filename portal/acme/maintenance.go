@@ -19,9 +19,6 @@ const (
 	defaultSyncTimeout            = 2 * time.Minute
 )
 
-// dnsRetryBackoffs schedules the early retries while the embedded zone is
-// still waiting for its public address. Once the table is exhausted the
-// regular interval applies again.
 var dnsRetryBackoffs = [...]time.Duration{
 	5 * time.Second,
 	15 * time.Second,
@@ -31,9 +28,6 @@ var dnsRetryBackoffs = [...]time.Duration{
 	5 * time.Minute,
 }
 
-// nextSyncDelay returns the wait before the next DNS sync attempt.
-// consecutiveFailures counts attempts that left the embedded DNS address
-// still pending; zero means synced, so the regular cadence applies.
 func nextSyncDelay(consecutiveFailures int) time.Duration {
 	if consecutiveFailures <= 0 || consecutiveFailures > len(dnsRetryBackoffs) {
 		return defaultDNSRetryInterval
@@ -87,14 +81,8 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		return err
 	}
 
-	// A timer instead of a ticker lets the CA's ARI Retry-After and the expiry
-	// floor set the next renewal check.
 	renewTimer := time.NewTimer(defaultRenewInterval)
 	dnsTicker := time.NewTicker(defaultManagedDNSSyncInterval)
-	// A timer instead of a ticker lets the pending embedded DNS address follow
-	// the fast early retry schedule instead of waiting out the full interval.
-	// EnsureCertificate has usually run before Start, so the zone can already
-	// be pending on its address right after a relay restart.
 	m.commandMu.RLock()
 	consecutiveDNSFailures := 0
 	if m.pendingDNSAddress {
@@ -107,9 +95,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 	defer dnsTicker.Stop()
 	defer retryTimer.Stop()
 
-	// rearmRetryTimer stops, drains, and resets the retry timer. The drain is
-	// required because resetting an already-fired timer would make it fire
-	// immediately on every subsequent loop iteration.
 	rearmRetryTimer := func() {
 		if !retryTimer.Stop() {
 			select {
@@ -119,12 +104,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		}
 		retryTimer.Reset(nextSyncDelay(consecutiveDNSFailures))
 	}
-	// syncDNSAttempt centralizes the bookkeeping shared by the regular ticker
-	// and the pending-address retry path: it tracks consecutive failures for
-	// the early backoff and re-arms retryTimer on every attempt. This way a
-	// pending episode discovered by the ticker engages the fast schedule
-	// immediately instead of waiting out the currently armed interval, and the
-	// operator sees one signal per pending transition rather than per query.
 	syncDNSAttempt := func(ctx context.Context) ([]string, error) {
 		publicIPs, err := m.syncDNS(ctx)
 		m.commandMu.RLock()
@@ -145,9 +124,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		return publicIPs, err
 	}
 
-	// syncRetryTick runs one retry-cycle sync: it fast-retries a pending
-	// embedded DNS address, refreshes public-ip address records, and keeps
-	// ENS DNSSEC and queued commands moving.
 	syncRetryTick := func(syncCtx context.Context) error {
 		m.commandMu.RLock()
 		pendingDNSAddress := m.pendingDNSAddress
@@ -170,16 +146,11 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 			err = fmt.Errorf("detect public ip: %w", err)
 		}
 		err = errors.Join(err, syncChangedAddressRecords(syncCtx, publicIPs))
-		// Embedded signing remains pending: it does not authenticate the
-		// parent chain and must not suppress DNSSEC synchronization.
 		if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
 			err = errors.Join(err, m.syncENSDNSSEC(syncCtx))
 		}
 		return errors.Join(err, flushCommands(syncCtx))
 	}
-	// renewTick runs one certificate renewal check and returns the delay to
-	// arm on renewTimer: the CA's ARI Retry-After or expiry floor when renewal
-	// is deferred, and the regular interval otherwise.
 	renewTick := func(ctx context.Context) time.Duration {
 		if _, _, manual, err := m.manualCertificateOverride(); err != nil || manual {
 			return defaultRenewInterval

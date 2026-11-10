@@ -20,12 +20,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// unreachableRelay keeps started tunnels off the network: they come up with
-// one relay that never connects.
 const unreachableRelay = "https://127.0.0.1:1"
 
-// unreachableIssuer is a loopback OIDC issuer nothing listens on: a started
-// tunnel's provider check fails at once, and nothing leaves the machine.
 const unreachableIssuer = "http://127.0.0.1:1"
 
 func testTunnel(id string) TunnelConfig {
@@ -33,15 +29,11 @@ func testTunnel(id string) TunnelConfig {
 	return TunnelConfig{ID: id, Config: tunnel.Config{TargetAddr: "127.0.0.1:3000", RelayURLs: []string{unreachableRelay}, Discovery: &discovery}}
 }
 
-// testManager builds a manager from a config file written and loaded the way
-// the agent does, so it starts from normalized settings.
 func testManager(t *testing.T, tunnels ...TunnelConfig) (*manager, string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	cfg := Config{Agent: AgentConfig{StateDir: dir}, Tunnels: tunnels}
-	// writeConfigDocument secures an existing file before it rewrites it, and
-	// on Windows a file that is not there yet cannot be secured.
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +146,6 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 			}
 		}
 	}
-	// A tunnel that is not running has not checked its provider.
 	if _, ok := byID["oidc"]["auth_provider_checked"]; ok {
 		t.Fatal("stopped oidc tunnel reports a provider check")
 	}
@@ -169,8 +160,6 @@ func toStrings(value any) []string {
 	return out
 }
 
-// TestRuntimeAuthProviderCheck covers the provider states; the status reports
-// the check for a running OIDC tunnel and for no other tunnel.
 func TestTunnelStatusOIDCProviderCheck(t *testing.T) {
 	siwe := testTunnel("siwe")
 	siwe.Provider = "siwe"
@@ -303,7 +292,6 @@ func TestUpdateTunnelEmptyAuthTurnsSignInOff(t *testing.T) {
 	if auth := saved.AuthConfig; !auth.IsZero() {
 		t.Fatalf("saved auth = %+v", auth)
 	}
-	// Every sign-in field is omitted from the status when it is empty.
 	if data, _ := json.Marshal(status); strings.Contains(string(data), `"auth`) {
 		t.Fatalf("status still reports sign-in: %s", data)
 	}
@@ -367,10 +355,6 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 	}
 }
 
-// The sign-in gate is built when a tunnel starts, so a changed gate restarts
-// the edited tunnel. The other tunnels keep running untouched, with the relays
-// connected to them at runtime, and metadata updates the running tunnel in
-// place.
 func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 	addedRelay, err := utils.NormalizeRelayURL("https://127.0.0.1:2")
 	if err != nil {
@@ -393,8 +377,6 @@ func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 		t.Fatalf("relay was not connected to b: %+v", b.Relays)
 	}
 
-	// The credential provider check passes at once, so only a runtime rebuilt
-	// with the new gate reports that the OIDC provider is unreachable.
 	body := `{"auth":"oidc","auth_allowed_wallets":["alice@example.com"],"auth_oidc_issuer":"` + unreachableIssuer + `","auth_oidc_client_id":"client-123"}`
 	if code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"a", body); code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", code, resp)
@@ -406,9 +388,6 @@ func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 		return tunnelStatus(t, m, "a").AuthProviderError != ""
 	})
 
-	// Metadata, even sent next to unchanged sign-in settings, updates the
-	// running tunnel in place: a relay connected at runtime would not survive
-	// a restart.
 	if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnelsPrefix+"a/relays", `{"relay_url":"`+addedRelay+`"}`); code != http.StatusAccepted {
 		t.Fatalf("connect relay: status = %d, body = %s", code, resp)
 	}
@@ -479,14 +458,11 @@ func TestAddTunnelWithAuth(t *testing.T) {
 	})
 }
 
-// The request goes through the control handler, so the serve key of the API is
-// covered too.
 func TestAddTunnelStaticSite(t *testing.T) {
 	site := t.TempDir()
 	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A Windows path has backslashes, so the site path is JSON-encoded.
 	siteJSON, err := json.Marshal(site)
 	if err != nil {
 		t.Fatal(err)
@@ -499,14 +475,11 @@ func TestAddTunnelStaticSite(t *testing.T) {
 		if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, `{"id":"site","serve":`+string(siteJSON)+`,`+common+`}`); code != http.StatusAccepted {
 			t.Fatalf("status = %d, body = %s", code, resp)
 		}
-		// A static site gets no default target.
 		if saved := savedTunnel(t, path, "site"); saved.Serve != site || saved.TargetAddr != "" {
 			t.Fatalf("saved static tunnel = %+v", saved)
 		}
 	})
 
-	// An explicit target is neither dropped nor overridden by serve: the
-	// request is refused and nothing is written.
 	t.Run("with target", func(t *testing.T) {
 		m, path := testManager(t, testTunnel("existing"))
 		fileBefore, err := os.ReadFile(path)
@@ -523,9 +496,6 @@ func TestAddTunnelStaticSite(t *testing.T) {
 	})
 }
 
-// A tunnel added through the API is saved with what the request set, explicit
-// false included, and without the defaults it left out; the status reports
-// them resolved.
 func TestAddTunnelSavesOnlyWhatWasSent(t *testing.T) {
 	m, path := testManager(t)
 	startManager(t, m)

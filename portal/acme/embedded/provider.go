@@ -60,10 +60,6 @@ type Config struct {
 
 // Provider is an authoritative-only DNS server for the relay zone plus the
 // DNSProvider implementation used by the ACME manager.
-//
-// A and AAAA answers for the apex and every covered name share the relay's
-// last discovered address for each family. TXT records (ACME DNS-01 and ENS
-// gasless) are stored explicitly.
 type Provider struct {
 	baseDomain string
 	zone       string
@@ -85,17 +81,13 @@ type Provider struct {
 	stopOnce  sync.Once
 	stopErr   error
 
-	// started marks a provider created through New, the only caller allowed
-	// to arm the delegated-path self-check: direct constructions (unit tests)
-	// must not launch external resolver lookups as a side effect.
 	started       bool
 	selfCheckIPv4 sync.Once
 	selfCheckIPv6 sync.Once
 }
 
-// New binds the UDP and TCP listeners and starts serving the zone. Binding
-// happens eagerly so DNS-01 TXT records are already served when the first
-// certificate is issued.
+// New binds the UDP and TCP listeners and starts serving the zone before it
+// returns.
 func New(cfg Config) (*Provider, error) {
 	baseDomain := utils.NormalizeBaseDomain(cfg.BaseDomain)
 	if baseDomain == "" {
@@ -261,7 +253,6 @@ func (p *Provider) EnsureAddressRecords(_ context.Context, baseDomain, publicIP 
 		p.bumpSerialLocked()
 	}
 	if p.started {
-		// One recursive resolver round trip per address family and provider.
 		selfCheck.Do(func() {
 			go p.verifyDelegatedPath(ip)
 		})
@@ -269,10 +260,6 @@ func (p *Provider) EnsureAddressRecords(_ context.Context, baseDomain, publicIP 
 	return nil
 }
 
-// verifyDelegatedPath performs the one-shot delegated-path self-check: it
-// resolves a fresh random label through the system resolver and compares the
-// answer with the synthesized address, proving the parent delegation actually
-// reaches this server. It is log-only and never blocks the caller.
 func (p *Provider) verifyDelegatedPath(ip net.IP) {
 	label := make([]byte, 8)
 	if _, err := rand.Read(label); err != nil {
@@ -421,8 +408,6 @@ func (p *Provider) bumpSerialLocked() {
 	}
 }
 
-// listenDNS binds the UDP and TCP listeners. When the address requests an
-// ephemeral port both transports are pinned to the same port.
 func listenDNS(addr string) (net.PacketConn, net.Listener, error) {
 	listenConfig := net.ListenConfig{}
 	host, portStr, err := net.SplitHostPort(addr)

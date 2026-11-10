@@ -24,12 +24,9 @@ var (
 )
 
 const (
-	// handshakeTypeCertificate is the TLS handshake message type of Certificate.
 	handshakeTypeCertificate = 11
 	defaultAllowedSkew       = 30 * time.Second
-	// maxSignRequestBody bounds /v1/sign JSON bodies. The transcript carries
-	// full certificate chains, so the budget is generous but finite.
-	maxSignRequestBody = 512 << 10
+	maxSignRequestBody       = 512 << 10
 )
 
 type Signer struct {
@@ -69,8 +66,6 @@ type (
 	presentedLeafContextKey struct{}
 )
 
-// certificateKeys is the signer key store: it resolves the one key id every
-// tenant asks for to the key of the certificate the request presents.
 type certificateKeys func(leafDER []byte) crypto.Signer
 
 func (keys certificateKeys) Signer(ctx context.Context, keyID string) (crypto.Signer, error) {
@@ -84,9 +79,6 @@ func (keys certificateKeys) Signer(ctx context.Context, keyID string) (crypto.Si
 	return nil, errors.New(types.KeylessUnknownCertificateMessage)
 }
 
-// presentedLeaf returns the leaf certificate (DER) of a TLS 1.3 Certificate
-// handshake message (RFC 8446 section 4.4.2). The signature covers that
-// message, so its leaf is the certificate the visitor verifies it against.
 func presentedLeaf(message []byte) ([]byte, error) {
 	malformed := errors.New("malformed certificate message")
 	var messageType uint8
@@ -118,7 +110,6 @@ func (s *Signer) ServeHTTP(w http.ResponseWriter, r *http.Request, leaseID strin
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxSignRequestBody)
-	// The HTTP server owns body closure; connection deadlines belong to handlers.
 
 	var req signrpc.TranscriptSignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

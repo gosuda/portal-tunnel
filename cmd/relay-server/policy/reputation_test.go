@@ -92,8 +92,6 @@ func TestReputationRotatingSourcesSpendNewVoterBudget(t *testing.T) {
 			firstCookie = cookie
 		}
 	}
-	// Three requests spent 33 of the 40 global tokens (1 + 10 each).
-	// A fourth address in the same /64 can afford a request, but not a voter.
 	fourthSource := netip.MustParseAddr("2001:db8::4")
 	if retry := store.AllowVote(fourthSource, false); retry != 0 {
 		t.Fatalf("ordinary vote request unexpectedly exhausted: %v", retry)
@@ -325,7 +323,6 @@ func TestVoteChangesAreDurableForAppsAndComments(t *testing.T) {
 			if _, _, err := store.Vote(identity, commentID, VoteUp, cookie, source); err != nil {
 				t.Fatal(err)
 			}
-			// A failed replacement must leave both the vote and its viewer state unchanged.
 			if err := os.Remove(store.path); err != nil {
 				t.Fatal(err)
 			}

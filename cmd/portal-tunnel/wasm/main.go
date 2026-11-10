@@ -1,6 +1,5 @@
 //go:build js && wasm
 
-// Command wasm exposes the Portal HTTPS connector to the relay frontend.
 package main
 
 import (

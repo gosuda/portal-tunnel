@@ -36,8 +36,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-// stubOIDCProvider signs in one account, on a loopback http issuer, the one
-// cleartext form an issuer may take.
 type stubOIDCProvider struct {
 	*httptest.Server
 	key *rsa.PrivateKey
@@ -121,8 +119,6 @@ func (p *stubOIDCProvider) serveToken(t *testing.T) http.HandlerFunc {
 	}
 }
 
-// swappableHandler is what an embedder keeps in front of its application, so a
-// redeploy replaces the handler and not the listener.
 type swappableHandler struct{ current atomic.Value }
 
 func (h *swappableHandler) set(handler http.Handler) { h.current.Store(&handler) }
@@ -131,8 +127,6 @@ func (h *swappableHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	(*h.current.Load().(*http.Handler)).ServeHTTP(w, r)
 }
 
-// The whole path of a program that embeds Portal: a real relay, sdk.Expose,
-// appauth.New in front of the program's own handler, and sdk.RunHTTP.
 func TestEmbeddedApplicationAuth(t *testing.T) {
 	provider := startStubOIDCProvider(t)
 	reachedWithoutSession := make(chan string, 8)
@@ -215,7 +209,7 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- sdk.RunHTTP(ctx, exposure, front, "") }()
 	t.Cleanup(func() {
-		_ = exposure.Close() // before cancel: unregister needs the relay
+		_ = exposure.Close()
 		cancel()
 		select {
 		case err := <-runDone:
@@ -241,7 +235,6 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Every request for a relay host goes to the relay; only the issuer is direct.
 	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if addr == strings.TrimPrefix(provider.URL, "http://") {
 			return (&net.Dialer{}).DialContext(ctx, network, addr)
@@ -290,8 +283,6 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 		return websocket.Dial(ctx, "wss://"+public.Host+"/ws", &websocket.DialOptions{HTTPClient: &noRedirect, HTTPHeader: header})
 	}
 
-	// No session: neither HTTP nor a WebSocket reaches the program, however the
-	// request names itself.
 	spoofed := http.Header{
 		types.HeaderPortalUser: {"mallory"},
 		types.HeaderPortalAuth: {"oidc"},
@@ -308,7 +299,6 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 		t.Fatalf("no session: WebSocket answer %+v, error %v", resp, err)
 	}
 
-	// The visitor signs in at the provider and lands on the program.
 	code, body := get(client, "/whoami", spoofed)
 	if code != http.StatusOK {
 		t.Fatalf("after sign-in: status = %d, body %s", code, body)
@@ -324,7 +314,6 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 		t.Fatalf("a spoofed %s reached the program: %v", types.HeaderPortalUser, seen)
 	}
 
-	// A WebSocket with that session passes the gate and the relay.
 	sessionURL := &url.URL{Scheme: "https", Host: public.Host, Path: "/"}
 	var cookie string
 	for _, c := range jar.Cookies(sessionURL) {
@@ -344,8 +333,6 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 	}
 	_ = conn.CloseNow()
 
-	// A redeploy builds a new gate from the same identity. The visitor stays
-	// signed in and never returns to the provider.
 	rebuilt, err := appauth.New(app, id, cfg)
 	if err != nil {
 		t.Fatalf("rebuild gate: %v", err)
@@ -361,10 +348,6 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 	default:
 	}
 }
-
-// A session lasts as long as the tunnel holds its host, on a real relay. Nobody
-// but this identity can hold the address-bound URL, so a session there survives a
-// restart. Another identity may have held an alias in between, so one there does not.
 func TestSessionsFollowTheHostsATunnelHolds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -388,7 +371,6 @@ func TestSessionsFollowTheHostsATunnelHolds(t *testing.T) {
 	t.Cleanup(upstream.Close)
 	identityPath := filepath.Join(t.TempDir(), "identity.json")
 	var id types.Identity
-	// start is one run of the tunnel, wired as portal expose wires it.
 	start := func() (status sdk.RelayStatus, stop func()) {
 		t.Helper()
 		runtime, err := tunnel.Start(ctx, tunnel.Spec{
@@ -426,7 +408,6 @@ func TestSessionsFollowTheHostsATunnelHolds(t *testing.T) {
 		}
 	}
 
-	// Every host is on the relay, and each request names its own in the SNI.
 	client := &http.Client{
 		Timeout:       20 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

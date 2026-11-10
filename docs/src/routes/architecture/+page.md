@@ -272,7 +272,7 @@ A/AAAA records. See [IPv4 and IPv6 configuration](/configuration#ipv4-and-ipv6).
 
 The relay runtime lives in `portal/` (server, route table, transport runtimes, ACME, keyless, auth, discovery, policy).
 The SDK client library lives in `sdk/` (listener, exposure, relay API client, MITM self-probe, transport clients).
-CLI entry points live in `cmd/relay-server` and `cmd/portal-tunnel`; they import `portal/` and `sdk/` respectively but never each other.
+CLI entry points live in `cmd/relay-server` (relay, built on `portal/`) and `cmd/portal-tunnel` (tunnel, built on `sdk/` plus `portal/discovery` and `portal/identity`). The relay also serves the tunnel installer scripts from `cmd/portal-tunnel/installer`.
 Shared wire types, API envelope, error codes, path constants, and transport frame codec live in `types/`.
 
 ## Opt-in Static Cache

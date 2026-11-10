@@ -10,7 +10,6 @@ func TestWeightedAdmissionIsolatesSourcesAndRefills(t *testing.T) {
 	limiter := NewSourceLimiter(10, 20, 600, 200)
 	now := time.Now()
 	limiter.clock = func() time.Time { return now }
-	// Three complete registrations behind one NAT fit the startup burst.
 	for range 3 {
 		for _, cost := range []int{1, 5} {
 			if retry, _ := limiter.Allow(netip.MustParseAddr("192.0.2.1"), cost); retry != 0 {
@@ -86,9 +85,6 @@ func TestSourceLimiterUsesOneUnknownSourceIdentity(t *testing.T) {
 	}
 }
 
-// Failed pre-auth attempts bill exactly the endpoint weight, and a rejected
-// attempt pays nothing, so premature retries never deepen the debt and the
-// returned retry window is exact.
 func TestPreAuthRejectionChargesNoFailurePenalty(t *testing.T) {
 	limiter := NewSourceLimiter(10, 20, 600, 200)
 	now := time.Now()

@@ -26,10 +26,6 @@ import (
 
 const marker = "portal-e2e-ok"
 
-// relayHandler composes the relay's protocol route table the way
-// cmd/relay-server does: portal handlers under their SDK paths wrapped with
-// relay admission and ingress resolution. The zero dependencies here mean no
-// proxy trust, the default pre-auth budget, and automatic approval.
 func relayHandler(server *portal.Server, fallback http.Handler) http.Handler {
 	return policy.Mux(server, fallback, nil, nil, nil, policy.DefaultPreAuthConfig())
 }
@@ -188,10 +184,6 @@ func (h *harness) get(publicURL string) string {
 	return body
 }
 
-// tenantGet performs a single tenant round trip against one relay: it
-// dials the relay SNI listener directly and verifies TLS against the
-// relay certificate current at call time. Membership tests reuse it for
-// relays outside the single-relay harness.
 func tenantGet(sniAddr, certPath, publicURL string) (string, bool) {
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
@@ -225,9 +217,6 @@ func tenantGet(sniAddr, certPath, publicURL string) (string, bool) {
 	return string(body), true
 }
 
-// tryGet performs a single tenant round trip against the relay
-// certificate current at call time and reports whether it succeeded.
-// Recovery tests poll it while the exposure re-registers.
 func (h *harness) tryGet(publicURL string) (string, bool) {
 	return tenantGet(h.sniAddr, h.certificate, publicURL)
 }
@@ -237,14 +226,6 @@ var (
 	harnessPorts   = map[int]struct{}{}
 )
 
-// harnessPort allocates an explicit listener port outside the kernel's
-// ephemeral range. The relay config needs concrete ports before startup — the
-// lease registry issues reverse endpoints from the configured port — so the
-// harness cannot bind :0 and read the result back, and probing an ephemeral
-// port and rebinding it races every concurrent bind(":0") in parallel test
-// binaries. Only an explicit bind can take a port outside the ephemeral range,
-// and nothing else binds there, so the released probe address stays free until
-// the relay binds it.
 func harnessPort(t *testing.T, host string) int {
 	t.Helper()
 	harnessPortsMu.Lock()
@@ -272,8 +253,6 @@ func harnessPort(t *testing.T, host string) int {
 	return 0
 }
 
-// ephemeralPortRange reports the kernel's automatic port allocation range,
-// assuming the common default when it cannot be read.
 func ephemeralPortRange() (lo, hi int) {
 	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
 	if err != nil {

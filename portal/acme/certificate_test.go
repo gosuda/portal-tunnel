@@ -58,8 +58,6 @@ func TestCertificateUsable(t *testing.T) {
 		{"valid and covering", domains, now.Add(-day), now.Add(day), true},
 		{"expired a second ago", domains, now.Add(-90 * day), now.Add(-time.Second), false},
 		{"expires this instant", domains, now.Add(-90 * day), now, false},
-		// A host clock that runs behind sees a fresh certificate as not valid
-		// yet; reissuing would not change that, so it is still served.
 		{"not valid yet on this clock", domains, now.Add(time.Minute), now.Add(90 * day), true},
 		{"valid but another domain", []string{"other.example", "*.other.example"}, now.Add(-day), now.Add(day), false},
 	} {
@@ -107,10 +105,6 @@ func TestLocalDevelopmentCertificateReusable(t *testing.T) {
 	}
 }
 
-// Switching from CA A to CA B and back to A must not serve the certificate A
-// issued earlier once it has expired: each directory keeps its own file, and
-// the stored one is reused only while it has not expired and covers the relay
-// domains.
 func TestReusableCertificateIsPerCAAndUnexpired(t *testing.T) {
 	t.Parallel()
 
@@ -168,8 +162,6 @@ func TestEvaluateRenewal(t *testing.T) {
 			NotAfter:       now.Add(remaining),
 		}
 	}
-	// Windows lie entirely in the past or entirely beyond the next check, so
-	// the random time ShouldRenewAt picks inside them cannot change the result.
 	pastWindow := &legoacme.Window{Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)}
 	farWindow := &legoacme.Window{Start: now.Add(72 * time.Hour), End: now.Add(73 * time.Hour)}
 	soonWindow := &legoacme.Window{Start: now.Add(2 * time.Hour), End: now.Add(3 * time.Hour)}
@@ -247,10 +239,6 @@ func TestNormalizeCADirURL(t *testing.T) {
 	}
 }
 
-// The files of a CA are named after the normalized URL, so two spellings of one
-// directory must normalize alike, or changing only the spelling would register
-// a new account and issue a new certificate. The path is case-sensitive and a
-// trailing slash is a different resource, so both stay.
 func TestNormalizeCADirURLIsCanonical(t *testing.T) {
 	t.Parallel()
 
@@ -273,9 +261,6 @@ func TestNormalizeCADirURLIsCanonical(t *testing.T) {
 	}
 }
 
-// An account registration is only valid at the CA that created it, so switching
-// the directory production -> staging -> production must neither reuse another
-// CA's registration nor lose the original one.
 func TestRegistrationFilePathIsScopedToCADirectory(t *testing.T) {
 	t.Parallel()
 
@@ -330,9 +315,6 @@ func TestCertificateFilePathsAreScopedToCADirectory(t *testing.T) {
 	}
 }
 
-// The certificate in use is the one the configured CA issued. One issued under
-// another CA stays on disk, unused, and is picked up again when that CA is
-// configured again.
 func TestTLSFilesSelectOnlyTheConfiguredCAsCertificate(t *testing.T) {
 	t.Parallel()
 
@@ -371,8 +353,6 @@ func TestTLSFilesSelectOnlyTheConfiguredCAsCertificate(t *testing.T) {
 	}
 }
 
-// Renewal follows the configured CA's certificate too: an expired staging
-// certificate is replaced even while a valid production one sits beside it.
 func TestShouldRenewReadsTheConfiguredCAsCertificate(t *testing.T) {
 	t.Parallel()
 
@@ -394,8 +374,6 @@ func TestShouldRenewReadsTheConfiguredCAsCertificate(t *testing.T) {
 	}
 }
 
-// A local development certificate involves no CA, so a configured directory
-// must not change where it is written or read.
 func TestLocalDevelopmentCertificateIgnoresTheConfiguredCA(t *testing.T) {
 	t.Parallel()
 
@@ -414,9 +392,6 @@ func TestLocalDevelopmentCertificateIgnoresTheConfiguredCA(t *testing.T) {
 	}
 }
 
-// Accounts are registered without External Account Binding, which some CAs
-// require, so a directory that demands it is refused up front with a clear
-// error instead of failing inside the registration exchange.
 func TestNewClientRefusesDirectoriesRequiringExternalAccountBinding(t *testing.T) {
 	directory := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		base := "https://" + r.Host
@@ -430,8 +405,6 @@ func TestNewClientRefusesDirectoriesRequiringExternalAccountBinding(t *testing.T
 		})
 	}))
 	t.Cleanup(directory.Close)
-	// lego trusts the CAs named by LEGO_CA_CERTIFICATES, which is how a private
-	// CA is trusted in production too.
 	trusted := filepath.Join(t.TempDir(), "directory.pem")
 	if err := os.WriteFile(trusted, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: directory.Certificate().Raw}), 0o600); err != nil {
 		t.Fatal(err)

@@ -1,19 +1,8 @@
-/**
- * Classifies what a user pasted into the quick-start form so the generated
- * command matches their intent:
- *
- * - `url`  — an `http(s)://` link: expose the host/port it points at.
- * - `file` — a `file://` URL, a Windows path, or an absolute POSIX path: serve
- *            the local static site with `portal expose --serve <path>`.
- * - `port` — a bare port, `host:port`, or anything else: current behavior.
- */
 export type ShareKind = "url" | "file" | "port";
 
 export interface ShareInput {
   kind: ShareKind;
-  /** Positional `portal expose <target>` value for `url` / `port` kinds. */
   target: string;
-  /** Local filesystem path passed to `--serve` for the `file` kind. */
   path: string;
 }
 
@@ -59,7 +48,6 @@ function fileURLToPath(raw: string): string {
   try {
     const parsed = new URL(raw);
     let path = decodeURIComponent(parsed.pathname);
-    // file:///C:/dir/main.html -> /C:/dir/main.html -> C:/dir/main.html
     if (/^\/[A-Za-z]:[\\/]/.test(path)) {
       path = path.slice(1);
     }

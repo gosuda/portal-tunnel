@@ -35,24 +35,16 @@ const (
 	emailTestPassword = "smtp-secret"
 )
 
-// smtpTestServer is a minimal SMTP server on a loopback address. It accepts a
-// mail only after AUTH PLAIN with its username and password, when it has them,
-// and hands each accepted mail to messages. The fields after messages change how
-// it answers, and are set before the first connection.
 type smtpTestServer struct {
-	addr     string
-	username string
-	password string
-	messages chan smtpTestMessage
-	// rcptReply and dataReply, when set, refuse the recipient or the mail.
-	rcptReply string
-	dataReply string
-	// dropAtQuit closes the connection instead of answering QUIT.
+	addr       string
+	username   string
+	password   string
+	messages   chan smtpTestMessage
+	rcptReply  string
+	dataReply  string
 	dropAtQuit bool
-	// helloReply, when set, refuses EHLO and HELO.
 	helloReply string
-	// startTLS, when set, is offered as STARTTLS with this certificate.
-	startTLS *tls.Config
+	startTLS   *tls.Config
 }
 
 type smtpTestMessage struct {
@@ -169,7 +161,6 @@ func (s *smtpTestServer) next(t *testing.T) smtpTestMessage {
 	}
 }
 
-// expectNoMore fails when another mail arrives shortly.
 func (s *smtpTestServer) expectNoMore(t *testing.T) {
 	t.Helper()
 	select {
@@ -211,7 +202,6 @@ func postEmailJSON(handler http.Handler, host, path string, body any) *httptest.
 	return rec
 }
 
-// emailLinkToken reads the token from the login link in a mail.
 func emailLinkToken(t *testing.T, message smtpTestMessage) string {
 	t.Helper()
 	const marker = "#email_token="
@@ -223,9 +213,6 @@ func emailLinkToken(t *testing.T, message smtpTestMessage) string {
 	return strings.TrimSpace(token)
 }
 
-// An allowed address receives one mail from the configured sender through the
-// signed-in SMTP server, and its link creates the session every provider
-// creates, once.
 func TestEmailLoginLinkCreatesSessionOnce(t *testing.T) {
 	t.Parallel()
 
@@ -294,9 +281,6 @@ func TestEmailLoginLinkCreatesSessionOnce(t *testing.T) {
 	}
 }
 
-// The answer to a link request must not tell who may sign in: an address that
-// is not allowed, an allowed one, and an allowed one that a limit refuses all
-// get the same status, headers and body, and only the allowed one is mailed.
 func TestEmailRequestAnswersAlikeForEveryAddress(t *testing.T) {
 	t.Parallel()
 
@@ -330,8 +314,6 @@ func TestEmailRequestAnswersAlikeForEveryAddress(t *testing.T) {
 	server.expectNoMore(t)
 }
 
-// The sender is configuration only, and no header of the mail can be given a
-// line break by the visitor.
 func TestEmailRequestRefusesHeaderInjection(t *testing.T) {
 	t.Parallel()
 
@@ -386,9 +368,6 @@ func TestNormalizeVisitorEmail(t *testing.T) {
 	}
 }
 
-// A request names its own Host, so a link is mailed only for a host the tunnel
-// is reachable at: a link for another host would hand the token to whoever
-// answers there.
 func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 	t.Parallel()
 
@@ -399,7 +378,6 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 		t.Fatalf("status = %d; want 421", rec.Code)
 	}
 
-	// The default port names the same host.
 	rec = postEmailJSON(gate, emailTestHost+":443", types.PathApplicationAuthEmailRequest, applicationAuthEmailRequest{Email: "alice@example.com"})
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d; want 202", rec.Code)
@@ -408,7 +386,6 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 		t.Fatalf("link does not use the canonical host:\n%s", message.data)
 	}
 
-	// While the application is reachable nowhere, no host qualifies.
 	offline := emailTestConfig(server.addr, "alice@example.com")
 	offline.PublicHosts = func() []PublicHost { return nil }
 	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), offline)
@@ -421,8 +398,6 @@ func TestEmailRequestRefusesHostThatIsNotPublic(t *testing.T) {
 	server.expectNoMore(t)
 }
 
-// A gate that could never mail a link fails where the embedder sees it, not at
-// the first visitor, who is told only that a link may be on its way.
 func TestEmailGateRequiresPublicHosts(t *testing.T) {
 	t.Parallel()
 
@@ -431,8 +406,6 @@ func TestEmailGateRequiresPublicHosts(t *testing.T) {
 	}
 }
 
-// A mail client makes a link of any URL in the text, so the login link has to be
-// the only one a visitor can tap.
 func TestEmailMailHoldsOneLink(t *testing.T) {
 	t.Parallel()
 
@@ -449,7 +422,6 @@ func TestEmailMailHoldsOneLink(t *testing.T) {
 	}
 }
 
-// A link works once, for its host, within emailLinkTTL.
 func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 	t.Parallel()
 
@@ -481,9 +453,6 @@ func TestEmailLinkIsSingleUseAndExpires(t *testing.T) {
 	}
 }
 
-// One address gets one link per minute and five per hour. The addresses that
-// only an @domain entry allows share fifty links per hour, and a flood of them
-// does not lock out an exactly listed address.
 func TestEmailSendLimits(t *testing.T) {
 	t.Parallel()
 
@@ -532,8 +501,6 @@ func TestEmailSendLimits(t *testing.T) {
 	}
 }
 
-// A send dropped because every send slot is busy spends no limit and leaves
-// no link, so the visitor's retry can still get one.
 func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
 	t.Parallel()
 
@@ -557,9 +524,6 @@ func TestEmailSendDroppedForBusySlotsSpendsNoLimit(t *testing.T) {
 	}
 }
 
-// A send takes its slot only after the limits pass. A request that waits for
-// them holds none, so a flood of requests the limits refuse cannot crowd out a
-// real send.
 func TestEmailRefusedSendsLeaveTheSlotsFree(t *testing.T) {
 	t.Parallel()
 
@@ -579,9 +543,6 @@ func TestEmailRefusedSendsLeaveTheSlotsFree(t *testing.T) {
 	}
 }
 
-// The gate tells an exactly listed address from one that only an @domain entry
-// allows, so a flood that spends the domain budget leaves the listed address its
-// link.
 func TestEmailDomainBudgetSparesAListedAddress(t *testing.T) {
 	t.Parallel()
 
@@ -602,8 +563,6 @@ func TestEmailDomainBudgetSparesAListedAddress(t *testing.T) {
 	}
 }
 
-// A mail server may route on these characters, so the allowlist cannot vouch
-// for where such an address ends up, and it never reaches the server.
 func TestEmailRequestRefusesARoutedAddress(t *testing.T) {
 	t.Parallel()
 
@@ -617,8 +576,6 @@ func TestEmailRequestRefusesARoutedAddress(t *testing.T) {
 	server.expectNoMore(t)
 }
 
-// Another site cannot ask for a mail or spend a link from a visitor's browser,
-// and the attempt leaves the link usable.
 func TestEmailEndpointsRefuseAnotherOrigin(t *testing.T) {
 	t.Parallel()
 
@@ -648,7 +605,6 @@ func TestEmailEndpointsRefuseAnotherOrigin(t *testing.T) {
 	}
 }
 
-// A link only ever returns a visitor to a path of this application.
 func TestEmailLinkReturnsOnlyToLocalPaths(t *testing.T) {
 	t.Parallel()
 
@@ -668,9 +624,6 @@ func TestEmailLinkReturnsOnlyToLocalPaths(t *testing.T) {
 	}
 }
 
-// A link mailed for an alias stops working when the alias leaves the tunnel, and
-// stays dead when the alias comes back: the next owner of the name reads the link
-// of whoever opens it, and must not be able to replay it here.
 func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 	t.Parallel()
 
@@ -704,9 +657,6 @@ func TestEmailLinkIsRefusedAtAHostThatIsNoLongerPublic(t *testing.T) {
 	}
 }
 
-// The login page posts the path in its URL back, so the gate leaves out a deep
-// link too long for the request body. Otherwise the visitor would be told that a
-// good address is invalid.
 func TestLoginRedirectDropsAPathTooLongToPostBack(t *testing.T) {
 	t.Parallel()
 
@@ -727,9 +677,6 @@ func TestLoginRedirectDropsAPathTooLongToPostBack(t *testing.T) {
 	}
 }
 
-// A session is worth no more than the link it came from: when its alias leaves
-// the tunnel, the next owner of the name gets the cookie of whoever opens it, and
-// must not be able to replay it here, even after the alias returns.
 func TestEmailSessionEndsWithItsPublicHost(t *testing.T) {
 	t.Parallel()
 
@@ -781,8 +728,6 @@ func newEmailTestAuthenticator(t *testing.T, addr string) *emailAuthenticator {
 	return newEmailAuthenticator(settings)
 }
 
-// A server's reply about the recipient can quote the address. The send log must
-// not hold it, so an error keeps only the code.
 func TestEmailDeliverKeepsTheRecipientOutOfItsError(t *testing.T) {
 	t.Parallel()
 
@@ -799,8 +744,6 @@ func TestEmailDeliverKeepsTheRecipientOutOfItsError(t *testing.T) {
 	}
 }
 
-// The server has the mail once it accepts DATA, so a connection lost at QUIT is
-// not a failed send.
 func TestEmailDeliverSurvivesAFailedQuit(t *testing.T) {
 	t.Parallel()
 
@@ -812,8 +755,6 @@ func TestEmailDeliverSurvivesAFailedQuit(t *testing.T) {
 	server.next(t)
 }
 
-// validateSMTPAddr accepts a port by its number, so the transport follows the
-// number too: a client that waits for a plaintext greeting on a TLS port times out.
 func TestEmailPortNumberPicksTheTransport(t *testing.T) {
 	t.Parallel()
 
@@ -829,8 +770,6 @@ func TestEmailPortNumberPicksTheTransport(t *testing.T) {
 	}
 }
 
-// The startup check is the operator's main signal, so a server that signs in and
-// then drops the connection at QUIT must not read as an unusable one.
 func TestEmailCheckSurvivesAFailedQuit(t *testing.T) {
 	t.Parallel()
 
@@ -841,8 +780,6 @@ func TestEmailCheckSurvivesAFailedQuit(t *testing.T) {
 	}
 }
 
-// A server that refuses EHLO has told us nothing about STARTTLS, and the advice
-// for a server without it would send the operator the wrong way.
 func TestEmailCheckReportsARefusedHello(t *testing.T) {
 	t.Parallel()
 
@@ -856,9 +793,6 @@ func TestEmailCheckReportsARefusedHello(t *testing.T) {
 	}
 }
 
-// Both TLS transports verify the server. The test cannot show a successful
-// session, because the code takes no root certificate, but it shows that a
-// certificate nobody vouches for ends the session before the password is sent.
 func TestEmailRefusesAnUntrustedCertificate(t *testing.T) {
 	t.Parallel()
 
@@ -882,8 +816,6 @@ func TestEmailRefusesAnUntrustedCertificate(t *testing.T) {
 	}
 }
 
-// Sessions check the allowlist on every request, so an entry removed before a
-// restart no longer admits its sessions.
 func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 	t.Parallel()
 
@@ -912,8 +844,6 @@ func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 		}
 	}
 
-	// A session is bound to the mail account that mailed its link, so a new
-	// SMTP server, username or sender ends it.
 	for name, change := range map[string]func(*Config){
 		"server":   func(c *Config) { c.SMTPAddr = "127.0.0.1:587" },
 		"username": func(c *Config) { c.SMTPUsername = "other" },
@@ -932,8 +862,6 @@ func TestEmailSessionFollowsTheAllowlist(t *testing.T) {
 	}
 }
 
-// The provider fails closed: it refuses to start without an allowlist, an SMTP
-// server or a sender, and refuses settings it cannot use.
 func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 	t.Parallel()
 
@@ -983,10 +911,6 @@ func TestResolveEmailApplicationAuthConfig(t *testing.T) {
 	}
 }
 
-// One list has two names. auth_email_list is the list of every provider that
-// names a visitor by email, and released oidc and saml configs hold it under
-// auth_allowed_wallets. A config that sets both, or that gives the list to a
-// provider that cannot read it, is refused rather than read one way.
 func TestAllowlistKeys(t *testing.T) {
 	t.Parallel()
 
@@ -1023,8 +947,6 @@ func TestAllowlistKeys(t *testing.T) {
 	}
 }
 
-// The startup check signs in to the SMTP server without sending, so a wrong
-// password shows before any visitor asks for a link.
 func TestCheckEmailProviderSignsInWithoutSending(t *testing.T) {
 	t.Parallel()
 
@@ -1045,9 +967,6 @@ func TestCheckEmailProviderSignsInWithoutSending(t *testing.T) {
 	server.expectNoMore(t)
 }
 
-// Only localhost, 127.0.0.1 and ::1, the names net/smtp sends a password to
-// without TLS, may be reached in plaintext: any other server must offer
-// STARTTLS before the password is sent.
 func TestEmailRefusesPlaintextToARemoteServer(t *testing.T) {
 	t.Parallel()
 
@@ -1058,7 +977,6 @@ func TestEmailRefusesPlaintextToARemoteServer(t *testing.T) {
 			emailSMTPUsername: emailTestUsername,
 			emailSMTPPassword: emailTestPassword,
 		})
-		// The server listens on 127.0.0.1, but is named as another host.
 		e.smtpHost = name
 		if err := e.check(context.Background()); !errors.Is(err, errEmailSMTPOffersNoSTARTTLS) {
 			t.Fatalf("check as %s = %v; want a STARTTLS refusal", name, err)
@@ -1084,7 +1002,6 @@ func TestEmailPrincipalIsTheAddress(t *testing.T) {
 	}
 }
 
-// logLines hands each line the global logger writes to a channel.
 type logLines chan string
 
 func (l logLines) Write(line []byte) (int, error) {
@@ -1092,9 +1009,6 @@ func (l logLines) Write(line []byte) (int, error) {
 	return len(line), nil
 }
 
-// The one place the gate logs is a mail that was not sent, with the SMTP error. A
-// server that echoes what it was sent must not put the password in the log. Not
-// parallel: it replaces the global logger.
 func TestEmailFailureLogsNoSecret(t *testing.T) {
 	const secret = "smtp-password-that-must-stay-out-of-the-log"
 	lines := make(logLines, 8)

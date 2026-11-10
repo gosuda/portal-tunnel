@@ -160,8 +160,6 @@ func TestMOLSPressureSwapsTopRelayOnly(t *testing.T) {
 		t.Fatalf("len(rankRelayPool()) = %d, want 2", len(base))
 	}
 
-	// Inflate tail latency on whichever relay MOLS ranked first; the peer
-	// keeps a uniform distribution so its pressure stays zero.
 	top := base[0]
 	for i := range pool {
 		if pool[i].Descriptor.APIHTTPSAddr == top {

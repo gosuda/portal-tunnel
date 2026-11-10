@@ -14,8 +14,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal"
 )
 
-// startQUICRelay boots a relay whose QUIC backhaul listener shares the SNI
-// address and registers shutdown on t.Cleanup.
 func startQUICRelay(t *testing.T, ctx context.Context) (*portal.Server, string) {
 	t.Helper()
 	port := harnessPort(t, "127.0.0.1")
@@ -42,8 +40,6 @@ func startQUICRelay(t *testing.T, ctx context.Context) (*portal.Server, string) 
 	return relay, addr
 }
 
-// dialQUICFrom dials the relay from a specific loopback source address so the
-// listener observes distinct pending-auth sources.
 func dialQUICFrom(t *testing.T, ctx context.Context, addr, sourceIP string) *quic.Conn {
 	t.Helper()
 	server, err := net.ResolveUDPAddr("udp4", addr)
@@ -65,11 +61,6 @@ func dialQUICFrom(t *testing.T, ctx context.Context, addr, sourceIP string) *qui
 	return peer
 }
 
-// TestQUICPendingAuthenticationBoundAndShutdown keeps the global 64 pending
-// slots occupied by 16 sources at the per-source cap of 4. A 65th connection
-// from a fresh source must be rejected while every admitted one stays open,
-// and shutdown must close the rest. Neither a silent peer nor a partially
-// written credential may escape the same pending budget.
 func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -90,7 +81,6 @@ func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
 			}
 		}
 	}
-	// A connection beyond the global pending-auth capacity is closed.
 	extra := dialQUICFrom(t, ctx, addr, "127.0.0.17")
 	select {
 	case <-extra.Context().Done():
@@ -119,17 +109,11 @@ func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
 	}
 }
 
-// TestQUICPendingAuthPerSourceBoundAndTimeoutRelease verifies the per-source
-// pending-auth cap and the short authentication timeout: one source can hold
-// only its own cap while other sources keep being admitted, the timeout
-// releases held slots without server restart, and a released source can
-// reconnect immediately.
 func TestQUICPendingAuthPerSourceBoundAndTimeoutRelease(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	_, addr := startQUICRelay(t, ctx)
 
-	// Four silent connections exhaust one source's pending-auth budget.
 	var held []*quic.Conn
 	for i := 0; i < 4; i++ {
 		held = append(held, dialQUICFrom(t, ctx, addr, "127.0.0.1"))
@@ -140,14 +124,12 @@ func TestQUICPendingAuthPerSourceBoundAndTimeoutRelease(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("connection beyond per-source pending-auth capacity remained open")
 	}
-	// The cap is per source: a different source is still admitted.
 	other := dialQUICFrom(t, ctx, addr, "127.0.0.2")
 	select {
 	case <-other.Context().Done():
 		t.Fatalf("another source was rejected under its own cap: %v", context.Cause(other.Context()))
 	case <-time.After(500 * time.Millisecond):
 	}
-	// The authentication timeout releases the held slots.
 	for i, peer := range held {
 		select {
 		case <-peer.Context().Done():
@@ -155,7 +137,6 @@ func TestQUICPendingAuthPerSourceBoundAndTimeoutRelease(t *testing.T) {
 			t.Fatalf("authentication timeout left held connection %d open", i)
 		}
 	}
-	// A released source can immediately reacquire a slot.
 	reacquired := dialQUICFrom(t, ctx, addr, "127.0.0.1")
 	select {
 	case <-reacquired.Context().Done():

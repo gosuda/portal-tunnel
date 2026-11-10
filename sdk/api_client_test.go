@@ -171,15 +171,14 @@ func TestReverseTCPDialerChecksResolvedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The hostname case verifies enforcement after DNS resolution, not just
-	// rejection of literal IP addresses before dialing.
+
 	for _, address := range []string{socket.Addr().String(), net.JoinHostPort("localhost", port)} {
 		if conn, err := reverseTCPDialer(true).DialContext(ctx, "tcp", address); err == nil {
 			_ = conn.Close()
 			t.Fatalf("alternate gateway dial reached loopback address %q", address)
 		}
 	}
-	// Explicitly configured direct relays retain local development support.
+
 	conn, err := reverseTCPDialer(false).DialContext(ctx, "tcp", socket.Addr().String())
 	if err != nil {
 		t.Fatalf("direct relay dial: %v", err)
@@ -332,9 +331,6 @@ func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
 	}
 }
 
-// A renewal gives the relay a new certificate, and the relay signs for the
-// replaced one only until it expires: a tenant that never reconnects has to
-// move to the new chain, which lease renewal checks at most once an hour.
 func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 	const tenantHostname = "tenant.test.example"
 	selfSigned := func(serial int64) (tls.Certificate, *x509.CertPool) {
@@ -431,7 +427,6 @@ func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 		t.Fatal("renewLease() an hour after the last check left the tenant on the replaced relay certificate")
 	}
 
-	// That check starts the next hour.
 	serving.Store(&later)
 	renew()
 	if !tenantTLS.RelayCertPool().Equal(renewedPool) {
@@ -439,9 +434,6 @@ func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
 	}
 }
 
-// A relay asks a lease to register again when its SDK cannot re-pin the relay
-// chain and a renewal left that chain behind; this SDK re-pins by itself and
-// says so on every renewal.
 func TestRenewLeaseSaysItRepinsTheRelayChain(t *testing.T) {
 	requests := make(chan types.RenewRequest, 1)
 	expiresAt := time.Now().UTC().Add(time.Minute)
@@ -467,14 +459,12 @@ func TestRenewLeaseSaysItRepinsTheRelayChain(t *testing.T) {
 		lease: utils.NewSnapshot(listenerSnapshot{accessToken: "access-token", expiresAt: expiresAt}),
 	}
 
-	_ = listener.renewLease(context.Background()) // only the request matters here
+	_ = listener.renewLease(context.Background())
 	if req := <-requests; !req.RepinsChain {
 		t.Fatal("renew request does not say the SDK re-pins the relay chain")
 	}
 }
 
-// That request is answered with lease_not_found, which every SDK, also the
-// ones that predate RepinsChain, takes as a reason to register again.
 func TestRenewLeaseRegistersAgainWhenTheRelayAnswersLeaseNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, "lease not found")

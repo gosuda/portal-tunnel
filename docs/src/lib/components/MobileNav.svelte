@@ -10,13 +10,11 @@
 </script>
 
 {#if open}
-	<!-- Backdrop -->
 	<div class="fixed inset-0 z-40 bg-black/50 lg:hidden" role="presentation">
 		<button class="absolute inset-0 cursor-default" onclick={close} aria-label="Close navigation"
 		></button>
 	</div>
 
-	<!-- Drawer -->
 	<div
 		class="fixed inset-y-0 left-0 z-50 w-72 overflow-y-auto border-r border-border bg-background p-6 lg:hidden"
 	>

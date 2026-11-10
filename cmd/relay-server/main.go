@@ -58,16 +58,11 @@ type appConfig struct {
 	AdminToken        string
 	PprofEnabled      bool
 	PprofListenAddr   string
-	// Relay-owned x402 facilitator surface: portal.Server is x402-blind, so
-	// this application resolves the flags and mounts the payment endpoints.
-	X402Enabled bool
-	X402Testnet bool
-	X402PayTo   string
+	X402Enabled       bool
+	X402Testnet       bool
+	X402PayTo         string
 }
 
-// resolveAppConfig registers every flag and resolves it against the
-// supplied environment. The config subcommand reuses it so that inspecting a
-// deployment and running it read the same definitions.
 func resolveAppConfig(args []string, environ []string) (appConfig, *cli.Env, error) {
 	env := cli.NewEnv(environ)
 
@@ -174,8 +169,6 @@ func runServeCommand(args []string) error {
 }
 
 func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402Settings x402FacilitatorSettings) error {
-	// This application always serves /sdk/domain by composing facilitator metadata
-	// onto server.DomainReport(), whether payments are enabled or not.
 	cfg.Relay.ApplicationOwnsDomainReport = true
 	server, err := portal.NewServer(cfg.Relay)
 	if err != nil {
@@ -192,8 +185,6 @@ func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402
 	if err != nil {
 		return fmt.Errorf("create relay api: %w", err)
 	}
-	// Any admin write on an auto relay saves that mode, and a saved mode wins.
-	// Only this direction warns, because it leaves a private relay open.
 	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && policies.Snapshot().Mode() == policy.ModeAuto {
 		log.Warn().Str("policy_path", policyPath).Msg("approval mode manual is ignored: policy.json saves auto, so every lease is approved; set the mode with the admin API")
 	}
@@ -202,8 +193,6 @@ func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402
 	if err := mountRelayRoutes(x402Settings, server, appRoutes); err != nil {
 		return err
 	}
-	// The default relay owns the Admin, x402 and frontend control routes.
-	// Embedders' application fallback handlers retain their own body limits.
 	base := policy.ControlBodyHandler(appRoutes)
 	handler := policy.Mux(server, base, ingress,
 		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
@@ -245,20 +234,12 @@ func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402
 	return serveErr
 }
 
-// x402FacilitatorSettings is the resolved relay-owned x402 facilitator
-// configuration. portal.Server knows nothing about payments: this application
-// validates the flags and mounts the facilitator itself.
 type x402FacilitatorSettings struct {
 	Enabled bool
 	Testnet bool
 	PayTo   string
 }
 
-// resolveX402Facilitator resolves the relay-owned x402 flags. An enabled
-// facilitator without a payment recipient would advertise payments nothing
-// can settle, so it fails resolution instead of booting unusable. The
-// recipient must normalize to a valid Sui address: it is published verbatim
-// in the /sdk/domain facilitator metadata.
 func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
 	if !cfg.X402Enabled {
 		return x402FacilitatorSettings{}, nil
@@ -270,14 +251,11 @@ func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
 	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: payTo}, nil
 }
 
-// Relay-owned x402 control-plane mount point and its supported listing path.
 const (
 	pathX402Facilitator = "/api/x402"
 	x402SupportedPath   = pathX402Facilitator + "/supported"
 )
 
-// x402FacilitatorInfo is the application-local facilitator metadata composed
-// onto the domain report.
 type x402FacilitatorInfo struct {
 	Enabled      bool   `json:"enabled"`
 	URL          string `json:"url,omitempty"`
@@ -287,20 +265,11 @@ type x402FacilitatorInfo struct {
 	PayTo        string `json:"pay_to,omitempty"`
 }
 
-// domainResponse is the relay's /sdk/domain payload: the x402-blind core report
-// extended with application-local facilitator metadata. The x402 key stays on
-// the wire (zero value marshals as {"enabled":false}) so disabled deployments
-// keep today's shape.
 type domainResponse struct {
 	types.DomainResponse
 	X402 x402FacilitatorInfo `json:"x402"`
 }
 
-// mountRelayRoutes adds the relay-owned x402 facilitator to the application
-// route table when payments are enabled; the facilitator is served at
-// /api/x402. The application always serves /sdk/domain (the relay hands the
-// path over via ServerConfig.ApplicationOwnsDomainReport) by composing the
-// facilitator metadata onto server.DomainReport().
 func mountRelayRoutes(settings x402FacilitatorSettings, server *portal.Server, mux *http.ServeMux) error {
 	network := "sui:mainnet"
 	if settings.Testnet {
@@ -308,9 +277,6 @@ func mountRelayRoutes(settings x402FacilitatorSettings, server *portal.Server, m
 	}
 
 	if settings.Enabled {
-		// Portal payments settle only Sui USDC (docs/src/routes/self-hosting),
-		// so the facilitator allowlist is pinned to the network's USDC asset;
-		// upstream default options would allowlist every gasless stablecoin.
 		asset, ok := suischeme.GetGaslessStablecoinType(network, "USDC")
 		if !ok {
 			return fmt.Errorf("x402 USDC is not registered on %s", network)

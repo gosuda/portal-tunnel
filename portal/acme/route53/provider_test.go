@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// Operators paste hosted zone IDs in the "/hostedzone/Z..." form shown by the
-// AWS console; the configured override must keep accepting that form.
 func TestFindHostedZoneIDExplicitOverride(t *testing.T) {
 	t.Parallel()
 

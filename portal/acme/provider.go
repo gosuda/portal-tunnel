@@ -76,8 +76,6 @@ func newDNSProvider(providerType string, cfg Config) (dnsProvider, error) {
 	}
 }
 
-// syncDNS returns discovered addresses even if base-record updates fail, so
-// tracked-record maintenance can reuse it without repeating discovery.
 func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil, nil
@@ -86,16 +84,12 @@ func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Manual certificates bypass external address-record management, but the embedded
-	// authoritative zone still needs its address before it can serve the relay.
 	if manual && m.dns.Name() != TypeEmbedded {
 		return nil, nil
 	}
 	publicIPs, err := utils.ResolvePublicIPs(ctx)
 	if err != nil {
 		if manual && m.dns.Name() == TypeEmbedded && ctx.Err() == nil {
-			// The embedded zone can serve without address records. Keep the usable
-			// certificate and let the existing short retry ticker initialize it.
 			m.commandMu.Lock()
 			m.pendingDNSAddress = true
 			m.commandMu.Unlock()

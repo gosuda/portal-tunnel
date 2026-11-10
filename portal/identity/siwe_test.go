@@ -24,8 +24,6 @@ func TestSIWEMessagePreservesURLParseErrors(t *testing.T) {
 }
 
 func TestSIWEMessageFormat(t *testing.T) {
-	// EIP-4361's ABNF defines the literal field order and LF separators:
-	// https://eips.ethereum.org/EIPS/eip-4361#message-format
 	now := time.Date(2026, 9, 12, 12, 0, 0, 123456789, time.UTC)
 	message := SIWEMessage{
 		Domain: "localhost:8443", Address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
@@ -78,10 +76,6 @@ func TestSIWEMessageRejectsInvalidFields(t *testing.T) {
 }
 
 func TestEthereumPersonalMessageRecoveryVectors(t *testing.T) {
-	// Independent signatures from Spruce's SIWE interoperability vectors:
-	// https://github.com/spruceid/siwe/blob/911f6f2c73ef24deac73fec2f6b84930721d2fb4/test/verification_positive.json
-	// Keep the signed bytes literal, including fractional seconds. Recovery does
-	// not parse or rewrite the message, or depend on Portal's signing function.
 	for _, test := range []struct {
 		name, message, signature, address string
 	}{

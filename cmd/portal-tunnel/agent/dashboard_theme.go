@@ -12,40 +12,30 @@ import (
 // DefaultDashboardTheme is the default of the --theme flags.
 const DefaultDashboardTheme = "amber"
 
-// agentDashboardPalette lists ANSI-256 color indices. lipgloss downgrades them
-// to the 16 ANSI colors on terminals that cannot show 256.
 type agentDashboardPalette struct {
-	text    string // body text and active frames
-	bright  string // live state, typed input, titles
-	dim     string // secondary text and idle state
-	rule    string // inactive frames and dividers
-	pending string // connecting and starting
-	failed  string // errors
-	onText  string // text drawn on a text-colored fill, such as the selection
+	text    string
+	bright  string
+	dim     string
+	rule    string
+	pending string
+	failed  string
+	onText  string
 }
 
 var agentDashboardPalettes = map[string]agentDashboardPalette{
-	// CRT amber: one hue, told apart by brightness.
 	"amber": {text: "214", bright: "220", dim: "136", rule: "94", pending: "214", failed: "202", onText: "16"},
-	// Phosphor green with amber warnings.
 	"green": {text: "77", bright: "120", dim: "65", rule: "28", pending: "214", failed: "202", onText: "16"},
 }
 
-// agentDashboardTerminal is what the terminal environment allows.
 type agentDashboardTerminal struct {
-	unicode bool // box-drawing and arrow characters are safe to print
+	unicode bool
 }
 
-// detectAgentDashboardTerminal decides from TERM and the locale whether the
-// frames can use box-drawing characters. Color is left to lipgloss, whose
-// renderer drops every style when NO_COLOR is set or CLICOLOR is 0.
 func detectAgentDashboardTerminal() agentDashboardTerminal {
 	term := os.Getenv("TERM")
 	return agentDashboardTerminal{unicode: term != "dumb" && term != "linux" && localeIsUTF8()}
 }
 
-// localeIsUTF8 follows the POSIX precedence: the first of LC_ALL, LC_CTYPE and
-// LANG that is set decides, and an unset locale does not say UTF-8.
 func localeIsUTF8() bool {
 	for _, name := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
 		if value := strings.ToLower(os.Getenv(name)); value != "" {
@@ -61,16 +51,15 @@ type agentDashboardGlyphs struct {
 
 	ledLive, ledIdle, ledFailed, ledConnecting string
 
-	selected, unselected                      string // row markers
+	selected, unselected                      string
 	buttonOpen, buttonClose                   string
 	buttonOffOpen, buttonOffClose             string
 	promptFocused, promptBlurred              string
-	mask                                      string // stands for each typed character of a hidden secret
-	activeOpen, activeClose                   string // around the title of the active frame
-	arrowUp, arrowDown, arrowLeft, arrowRight string // key names in the key bar
+	mask                                      string
+	activeOpen, activeClose                   string
+	arrowUp, arrowDown, arrowLeft, arrowRight string
 }
 
-// agentDashboardTheme holds every color and glyph the dashboard draws with.
 type agentDashboardTheme struct {
 	glyph agentDashboardGlyphs
 
@@ -86,7 +75,6 @@ func ValidateDashboardTheme(name string) error {
 	return nil
 }
 
-// newAgentDashboardTheme builds the theme for a name ValidateDashboardTheme accepted.
 func newAgentDashboardTheme(name string, term agentDashboardTerminal) agentDashboardTheme {
 	palette := agentDashboardPalettes[name]
 	theme := agentDashboardTheme{glyph: agentDashboardGlyphSet(term.unicode)}
@@ -123,7 +111,6 @@ func agentDashboardGlyphSet(unicode bool) agentDashboardGlyphs {
 	return glyphs
 }
 
-// newInput returns a text input drawn with the theme.
 func (th *agentDashboardTheme) newInput(placeholder string) textinput.Model {
 	input := textinput.New()
 	input.CharLimit = 512
@@ -136,8 +123,6 @@ func (th *agentDashboardTheme) newInput(placeholder string) textinput.Model {
 	return input
 }
 
-// newSecretInput returns a text input that shows one mask glyph for each typed
-// character until its echo mode is switched to textinput.EchoNormal.
 func (th *agentDashboardTheme) newSecretInput() textinput.Model {
 	input := th.newInput("")
 	input.EchoMode = textinput.EchoPassword

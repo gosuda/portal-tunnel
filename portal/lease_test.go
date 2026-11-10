@@ -31,7 +31,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// signLeaseRequest builds the /v1/sign-shaped request the token gate reads.
 func signLeaseRequest(t *testing.T, token string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, "https://example.com"+types.PathV1Sign, nil)
@@ -58,8 +57,6 @@ func newTestRegistry(t *testing.T, udpEnabled, tcpPortEnabled bool) *leaseRegist
 		t.Fatalf("newLeaseRegistry() error = %v", err)
 	}
 	registry.setTransportPolicy(udpEnabled, 0, tcpPortEnabled, 0)
-	// Registered leases bind UDP and raw-TCP relays; releasing them keeps
-	// repeated runs in one process free of port collisions.
 	t.Cleanup(func() { registry.CloseAll() })
 	return registry
 }
@@ -297,7 +294,6 @@ func TestLeaseRegistryUnnamedReplacementAndNamedCoexistence(t *testing.T) {
 		t.Fatalf("first unnamed Register() error = %v", err)
 	}
 
-	// Re-registering the same unnamed identity replaces the previous one.
 	secondUnnamedRecord, secondUnnamedResp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: unnamedIdentity,
 	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
@@ -311,7 +307,6 @@ func TestLeaseRegistryUnnamedReplacementAndNamedCoexistence(t *testing.T) {
 		t.Fatalf("PublicLeases() length = %d, want 1 after unnamed replacement", len(leases))
 	}
 
-	// Registering a named service under the same address creates a distinct identity that coexists.
 	namedIdentity := unnamedIdentity
 	namedIdentity.Name = "myapp"
 	_, namedResp, err := registry.Register(types.RegisterChallengeRequest{
@@ -479,8 +474,6 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 	}
 	identityKey := record.ServiceKey()
 
-	// The relay pushes the fail-closed result before registration so a new
-	// lease cannot appear in public state before its access decision.
 	if leases := registry.PublicLeases(time.Now()); len(leases) != 0 {
 		t.Fatalf("PublicLeases() length = %d, want 0 while not routable", len(leases))
 	}
@@ -513,7 +506,7 @@ func TestRefusalNamesTheAccessDecision(t *testing.T) {
 		{types.LeasePending, errLeaseRejected},
 		{types.LeaseDenied, errLeaseDenied},
 		{types.LeaseRoutable, nil},
-		{"", errLeaseRejected}, // an unknown decision fails closed
+		{"", errLeaseRejected},
 	} {
 		registry.setIdentityAccess(key, tc.access, uint64(revision+1))
 		if _, err := registry.admitLeaseByToken(lease.AccessToken, false); !errors.Is(err, tc.want) {
@@ -541,7 +534,6 @@ func TestRoutingDecisionControlsIdleReverseStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A suspension is not a decision: a failed re-registration keeps the stream.
 	registry.suspendIdentity(key)
 	if record.reverse.ReadyCount() != 1 {
 		t.Fatal("suspending the identity dropped its idle stream")
@@ -569,7 +561,6 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 	registry.unapprovedPerSource = 2
 	source := netip.MustParseAddr("203.0.113.20")
 	other := netip.MustParseAddr("203.0.113.21")
-	// ask is the relay's challenge step once the access decision is applied.
 	ask := func(leaseIdentity types.Identity, from netip.Addr) (types.RegisterChallengeResponse, error) {
 		t.Helper()
 		challenge, err := registry.issueRegisterChallenge(types.RegisterChallengeRequest{Identity: leaseIdentity}, "example.com", "https://example.com"+types.PathSDKRegister, from)
@@ -606,11 +597,10 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 	}
 	first, firstLease := register("first", source, types.LeasePending, 1)
 	second, _ := register("second", source, types.LeaseDenied, 2)
-	register("approved", source, types.LeaseRoutable, 3) // an approved lease neither counts nor waits
+	register("approved", source, types.LeaseRoutable, 3)
 
 	newcomer := newTestLeaseIdentity(t, "third")
 	registry.setIdentityAccess(newcomer.ServiceKey(), types.LeasePending, 4)
-	// More refusals than the pending cap: ask fails the test if one kept its slot.
 	for range defaultRegisterChallengeOutstandingPerIP + 1 {
 		if _, err := ask(newcomer, source); !errors.Is(err, errUnapprovedLeaseLimit) {
 			t.Fatalf("third unapproved lease = %v", err)
@@ -623,7 +613,6 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 		t.Fatalf("another source was refused: %v", err)
 	}
 
-	// A lease stays on the budget of the source that registered it.
 	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: firstLease.AccessToken, TTL: 60}, other, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -650,8 +639,6 @@ func TestUnapprovedLeaseLimitBoundsOneSource(t *testing.T) {
 	}
 }
 
-// Challenges not used yet count, so a burst cannot run past the budget by
-// asking for them all before the first lease lands.
 func TestUnapprovedLeaseLimitCountsPendingChallenges(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	registry.unapprovedPerSource = 2
@@ -679,7 +666,6 @@ func TestUnapprovedLeaseLimitCountsPendingChallenges(t *testing.T) {
 		t.Fatalf("another source's challenges counted: %v", err)
 	}
 
-	// An identity holds one slot however many challenges it has asked for.
 	registry.unapprovedPerSource = 3
 	again := newTestLeaseIdentity(t, "burst-twice")
 	registry.setIdentityAccess(again.ServiceKey(), types.LeasePending, 5)
@@ -706,8 +692,6 @@ func TestAccessRevisionRejectsInFlightAllow(t *testing.T) {
 	resume := make(chan struct{})
 	applied := make(chan bool, 1)
 	go func() {
-		// An old registration has already read revision 1's allow but has
-		// not delivered it. Force it to arrive after the denial completes.
 		close(loaded)
 		<-resume
 		applied <- registry.setIdentityAccess(key, types.LeaseRoutable, 1)
@@ -844,8 +828,6 @@ func TestMissingLeaseRecordReportsLeaseNotFound(t *testing.T) {
 		}
 		return registry
 	}
-	// The same relay identity in a fresh registry simulates a relay restart:
-	// tokens stay verifiable while the in-memory lease records are gone.
 	before, restarted := newRegistry(), newRegistry()
 
 	_, resp, err := before.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "restart")}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
@@ -1256,11 +1238,6 @@ func TestLeaseConcurrentRenewAndBridgeAdmission(t *testing.T) {
 	workers.Wait()
 }
 
-// An SDK that pins the relay chain once (one that does not set RepinsChain)
-// trusts its /v1/sign connection to that chain only. When the relay serves a
-// certificate that chain does not verify, renewing the lease would only keep a
-// tenant alive that fails every handshake, so the relay answers lease_not_found
-// and the SDK registers again; nothing else is ever asked to.
 func TestRenewAsksOnlyLeasesLeftBehindByTheRelayCertificateToRegisterAgain(t *testing.T) {
 	t.Parallel()
 
@@ -1303,8 +1280,6 @@ func TestRenewAsksOnlyLeasesLeftBehindByTheRelayCertificateToRegisterAgain(t *te
 			if !errors.Is(err, errLeaseNotFound) || !record.ExpiresAt.Equal(registered.ExpiresAt) {
 				t.Fatalf("Renew() = %v, expiry %v; want lease_not_found and the lease left to expire at %v", err, record.ExpiresAt, registered.ExpiresAt)
 			}
-			// Registering again records the certificate served now, so the same
-			// change does not ask this lease a second time.
 			_, again, err := registry.Register(types.RegisterChallengeRequest{Identity: tenant}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, test.current)
 			if err != nil {
 				t.Fatalf("Register() again error = %v", err)
@@ -1316,10 +1291,6 @@ func TestRenewAsksOnlyLeasesLeftBehindByTheRelayCertificateToRegisterAgain(t *te
 	}
 }
 
-// The verdict rests on the chain the SDK pinned, not on a later chain that
-// merely verified against it. A bundle that carries a root the pinned chain
-// lacks (a cross-signed one) verifies against the pinned chain, but trusting it
-// as a root would also accept what the pinned chain does not.
 func TestRenewJudgesAgainstTheChainTheLeaseRegisteredUnder(t *testing.T) {
 	t.Parallel()
 
@@ -1356,7 +1327,6 @@ func newTestRelayIntermediate(t *testing.T, name string) testRelayIntermediate {
 	return newTestRelayCA(t, name, nil)
 }
 
-// subordinate returns a CA named name that i issued.
 func (i testRelayIntermediate) subordinate(t *testing.T, name string) testRelayIntermediate {
 	t.Helper()
 	return newTestRelayCA(t, name, &i)
@@ -1392,8 +1362,6 @@ func newTestRelayCA(t *testing.T, name string, issuer *testRelayIntermediate) te
 	return testRelayIntermediate{cert: cert, key: key}
 }
 
-// issue returns relay material for host, served as the leaf followed by this
-// intermediate and then the extra certificates, as an ACME bundle is.
 func (i testRelayIntermediate) issue(t *testing.T, host string, extra ...*x509.Certificate) *acme.TLSMaterial {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -1435,7 +1403,6 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 	id := newTestLeaseIdentity(t, "started-at")
 	clientStartedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
 
-	// 1. Initial registration with explicit StartedAt sets FirstSeenAt to StartedAt
 	record1, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:  id,
 		StartedAt: clientStartedAt,
@@ -1452,7 +1419,6 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 		t.Fatalf("PublicLeases() first_seen_at = %v, want %v", leases[0].FirstSeenAt, clientStartedAt)
 	}
 
-	// 2. Re-registration without StartedAt preserves existing record's FirstSeenAt
 	record2, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: id,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
@@ -1463,8 +1429,6 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 		t.Fatalf("FirstSeenAt after reconnect without started_at = %v, want %v", record2.FirstSeenAt, clientStartedAt)
 	}
 
-	// 3. A live replacement keeps relay-observed continuity past the 7-day
-	// claim bound, whether or not the client sends started_at.
 	observedAt := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
 	registry.mu.Lock()
 	record2.FirstSeenAt = observedAt
@@ -1482,8 +1446,6 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 		}
 	}
 
-	// An expired record still in the registry is not live continuity, so a
-	// client without started_at starts over at registration time.
 	registry.mu.Lock()
 	for _, existing := range registry.records {
 		if existing != nil && existing.ServiceKey() == id.ServiceKey() {
@@ -1502,7 +1464,6 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 		t.Fatalf("FirstSeenAt after expired replacement = %v, want no earlier than %v", expiredRecord.FirstSeenAt, beforeExpired)
 	}
 
-	// 4. StartedAt in the future is clamped to token issuance time
 	futureID := newTestLeaseIdentity(t, "future-started")
 	futureStartedAt := time.Now().UTC().Add(10 * time.Minute)
 	beforeReg := time.Now().UTC().Truncate(time.Second)
@@ -1518,7 +1479,6 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 		t.Fatalf("FirstSeenAt for future StartedAt was %v, want clamped between %v and %v", record4.FirstSeenAt, beforeReg, afterReg)
 	}
 
-	// 5. StartedAt older than maxClaimedStartedAge is bounded, so a client cannot claim unlimited uptime
 	oldID := newTestLeaseIdentity(t, "ancient-started")
 	record5, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:  oldID,
@@ -1530,5 +1490,40 @@ func TestRegisterPreservesStartedAtAndFirstSeenAt(t *testing.T) {
 	floor := time.Now().UTC().Add(-maxClaimedStartedAge - time.Minute)
 	if record5.FirstSeenAt.Before(floor) {
 		t.Fatalf("FirstSeenAt for ancient StartedAt = %v, want no earlier than %v", record5.FirstSeenAt, floor)
+	}
+}
+
+func TestLookupRejectsHostnameNoLeaseHolds(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "lookup-guard"),
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if _, ok := registry.Lookup("no-lease-holds-this-hostname-xyz"); ok {
+		t.Fatal("Lookup(unheld hostname) = true, want false")
+	}
+}
+
+func TestPublicLeasesOmitsHiddenLease(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t, false, false)
+	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "hidden-lease"),
+		Metadata: types.LeaseMetadata{Hide: true},
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "shown-lease"),
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	leases := registry.PublicLeases(time.Now())
+	if len(leases) != 1 {
+		t.Fatalf("PublicLeases() length = %d, want 1 with the hidden lease omitted", len(leases))
 	}
 }

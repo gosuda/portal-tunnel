@@ -350,7 +350,6 @@ describe("tunnelCommand sign-in", () => {
     expect(runLine(buildTunnelCommand({ ...base, os: "windows", auth }))).toContain(
       "--auth credential --auth-allow 'O''Brien' --auth-allow 'O’’Brien' --auth-allow '‘‘a‚‚ b‛‛'"
     );
-    // A POSIX shell gives the typographic quotes no meaning.
     expect(runLine(buildTunnelCommand({ ...base, auth }))).toContain(
       `--auth credential --auth-allow 'O'"'"'Brien' --auth-allow 'O’Brien' --auth-allow '‘a‚ b‛'`
     );
@@ -415,7 +414,6 @@ describe("tunnelCommand sign-in", () => {
 
     expect(kind("credential", "a".repeat(256))).toBe(true);
     expect(kind("credential", "a".repeat(257))).toBe(false);
-    // 100 Korean characters are 300 bytes.
     expect(kind("credential", "가".repeat(100))).toBe(false);
     expect(kind("credential", "가".repeat(85))).toBe(true);
     expect(kind("oidc", `${"a".repeat(250)}@example.com`)).toBe(false);
@@ -439,7 +437,6 @@ describe("tunnelCommand sign-in", () => {
       "Alice",
       "bob",
     ]);
-    // Link names and sub: ids may contain spaces, as the tunnel allows; only wallets split on them.
     expect(addAuthAllow("credential", [], "alice smith, bob")).toEqual([
       "alice smith",
       "bob",
@@ -457,7 +454,6 @@ describe("tunnelCommand sign-in", () => {
   });
 
   it("does not let lowercasing turn a lookalike address into a valid one", () => {
-    // U+212A KELVIN SIGN lowercases to "k"; the tunnel refuses the original.
     const typed = "\u212Aelvin@example.com";
     const [entry] = addAuthAllow("oidc", [], typed);
 
@@ -477,7 +473,6 @@ describe("tunnelCommand sign-in", () => {
       validateTunnelAuth(auth).map((issue) => issue.field);
 
     expect(blocking(oidc)).toEqual(["allow", "issuer", "clientId"]);
-    // No Name is needed: the address-bound URL Portal prints works too.
     expect(blocking(ready)).toEqual([]);
     expect(
       blocking({ ...ready, allow: ["alice"], oidcIssuer: "http://login.example.com" })
@@ -537,7 +532,6 @@ describe("tunnelCommand sign-in", () => {
       "https://my-app.portal.example.com/_portal/auth/callback",
       "https://my-app.relay.example.org/_portal/auth/callback",
     ]);
-    // The browser's Host keeps a non-default port, so the redirect must too.
     expect(
       buildAuthRedirectURLs(
         ["https://relay.example.net:8443", "http://other.example.net:443"],
@@ -562,7 +556,6 @@ describe("tunnelCommand sign-in", () => {
       expires: "720h",
       os: "unix" as const,
     };
-    // The browser sends no :443 in the Host, so the link must not carry it.
     expect(buildAuthIssueCommand(invite)).toBe(
       "portal auth issue my-app.portal.example.com --subject alice --expires 720h"
     );
@@ -588,9 +581,6 @@ describe("tunnelCommand sign-in", () => {
   });
 });
 
-// The builder repeats rules of the Go gateway, because the browser cannot call
-// it. sdk/appauth/frontend_rules_test.go runs the same rows
-// against the Go functions, so a rule changed on one side alone fails a test.
 describe("rules shared with the Go gateway", () => {
   const methods = new Set(["credential", "siwe", "oidc", "saml", "email"]);
 

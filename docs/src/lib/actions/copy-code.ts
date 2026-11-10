@@ -1,9 +1,3 @@
-/**
- * Svelte action that adds a copy button to all <pre> blocks inside an element.
- * Wraps each <pre> in a container div so the button stays fixed even when
- * the code scrolls horizontally.
- * Usage: <article use:copyCode={pathname}>
- */
 export function copyCode(node: HTMLElement) {
 	const wrappers: HTMLDivElement[] = [];
 
@@ -12,10 +6,8 @@ export function copyCode(node: HTMLElement) {
 
 		const pres = node.querySelectorAll('pre');
 		for (const pre of pres) {
-			// Skip if already wrapped
 			if (pre.parentElement?.hasAttribute('data-copy-wrapper')) continue;
 
-			// Wrap pre in a relative container
 			const wrapper = document.createElement('div');
 			wrapper.setAttribute('data-copy-wrapper', '');
 			wrapper.style.position = 'relative';

@@ -14,8 +14,6 @@ var (
 	errBaseDomainIsRequired = errors.New("base domain is required")
 )
 
-// RecordName validates a fully qualified record name and returns it
-// normalized.
 func RecordName(raw string) (string, error) {
 	name := utils.NormalizeHostname(raw)
 	if name == "" {
@@ -24,7 +22,6 @@ func RecordName(raw string) (string, error) {
 	return name, nil
 }
 
-// BaseDomain validates a zone base domain and returns it normalized.
 func BaseDomain(raw string) (string, error) {
 	name := utils.NormalizeBaseDomain(raw)
 	if name == "" {
@@ -33,32 +30,28 @@ func BaseDomain(raw string) (string, error) {
 	return name, nil
 }
 
-// AddressRecordInputs validates an address-record upsert and returns the
-// normalized record name, A or AAAA record type, and canonical IP address.
-func AddressRecordInputs(name, publicIP string) (string, string, string, error) {
-	name, err := RecordName(name)
+func AddressRecordInputs(name, publicIP string) (recordName, recordType, canonicalIP string, err error) {
+	recordName, err = RecordName(name)
 	if err != nil {
 		return "", "", "", err
 	}
-	recordType, publicIP, err := address(publicIP)
+	recordType, canonicalIP, err = address(publicIP)
 	if err != nil {
 		return "", "", "", err
 	}
-	return name, recordType, publicIP, nil
+	return recordName, recordType, canonicalIP, nil
 }
 
-// AddressRecordsInputs validates an apex and wildcard address-record upsert
-// and returns the normalized base domain, record type, and canonical IP address.
-func AddressRecordsInputs(baseDomain, publicIP string) (string, string, string, error) {
-	baseDomain, err := BaseDomain(baseDomain)
+func AddressRecordsInputs(baseDomain, publicIP string) (normalizedBaseDomain, recordType, canonicalIP string, err error) {
+	normalizedBaseDomain, err = BaseDomain(baseDomain)
 	if err != nil {
 		return "", "", "", err
 	}
-	recordType, publicIP, err := address(publicIP)
+	recordType, canonicalIP, err = address(publicIP)
 	if err != nil {
 		return "", "", "", err
 	}
-	return baseDomain, recordType, publicIP, nil
+	return normalizedBaseDomain, recordType, canonicalIP, nil
 }
 
 func address(raw string) (recordType, canonicalIP string, err error) {
@@ -73,8 +66,6 @@ func address(raw string) (recordType, canonicalIP string, err error) {
 	return recordType, canonicalIP, nil
 }
 
-// TXTInputs validates a TXT upsert's record name and value, returning both
-// normalized.
 func TXTInputs(name, value string) (string, string, error) {
 	name, err := RecordName(name)
 	if err != nil {
@@ -87,8 +78,6 @@ func TXTInputs(name, value string) (string, string, error) {
 	return name, value, nil
 }
 
-// TXTPrefixInputs validates a TXT deletion's record name and match prefix,
-// returning both normalized.
 func TXTPrefixInputs(name, matchPrefix string) (string, string, error) {
 	name, err := RecordName(name)
 	if err != nil {
@@ -101,13 +90,10 @@ func TXTPrefixInputs(name, matchPrefix string) (string, string, error) {
 	return name, matchPrefix, nil
 }
 
-// ApexWildcard lists the apex and wildcard record names published for a base
-// domain.
 func ApexWildcard(baseDomain string) []string {
 	return []string{baseDomain, "*." + baseDomain}
 }
 
-// required trims raw and reports an empty input as "<label> is required".
 func required(raw, label string) (string, error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -116,8 +102,6 @@ func required(raw, label string) (string, error) {
 	return value, nil
 }
 
-// RelativeName converts a fully qualified record name into the form expected
-// by DNS provider APIs while preserving provider-specific error messages.
 func RelativeName(provider, fqdn, zone string) (string, error) {
 	fqdn = utils.NormalizeHostname(fqdn)
 	zone = utils.NormalizeBaseDomain(zone)
@@ -137,8 +121,6 @@ func RelativeName(provider, fqdn, zone string) (string, error) {
 	return strings.TrimSuffix(fqdn, suffix), nil
 }
 
-// NameMatches accepts the relative, apex, and fully qualified record-name
-// forms returned by DNS provider APIs for the same record.
 func NameMatches(recordName, expected, fqdn, zone string) bool {
 	recordName = utils.NormalizeHostname(recordName)
 	expected = strings.TrimSpace(strings.ToLower(expected))
@@ -155,7 +137,6 @@ func NameMatches(recordName, expected, fqdn, zone string) bool {
 	return recordName == fqdn
 }
 
-// TXTContent normalizes the quoted TXT values returned by DNS provider APIs.
 func TXTContent(raw string) string {
 	unquoted, err := strconv.Unquote(strings.TrimSpace(raw))
 	if err == nil {

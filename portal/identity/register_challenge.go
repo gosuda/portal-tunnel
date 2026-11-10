@@ -38,8 +38,6 @@ type RegisterChallenge struct {
 }
 
 func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, now time.Time, ttl time.Duration) (*RegisterChallenge, error) {
-	// Host-derived fields are retained in the SIWE message and are not covered
-	// by the HTTP JSON body limit.
 	if len(domain) > 1024 || len(uri) > 4096 {
 		return nil, errRegisterChallengeDomainOrURIExceeds
 	}
@@ -101,8 +99,6 @@ func ValidateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, re
 		return ErrInvalidRegisterSIWEChallenge
 	}
 
-	// Portal's formatter has twelve lines. Extract only the two relay-selected
-	// values; regenerate all other fields from trusted client context.
 	lines := strings.Split(challenge.SIWEMessage, "\n")
 	if len(lines) != 12 {
 		return ErrInvalidRegisterSIWEChallenge
@@ -144,9 +140,6 @@ func ValidateRegisterSIWEChallenge(challenge types.RegisterChallengeResponse, re
 	return nil
 }
 
-// invalidRegisterRelayURL reports whether the relay URL is missing or shaped
-// in a way that cannot be trusted for challenge binding: no host, embedded
-// credentials, or a non-HTTP scheme.
 func invalidRegisterRelayURL(relayURL *url.URL) bool {
 	if relayURL == nil || relayURL.Hostname() == "" {
 		return true

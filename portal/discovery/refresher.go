@@ -40,8 +40,6 @@ func NewRefresher(relaySet *RelaySet) *Refresher {
 		utils.WithHTTPTimeout(defaultRequestTimeout),
 		utils.WithHTTPCheckRedirect(rejectDiscoveryRedirect),
 	)
-	// Untrusted descriptors must never use a proxy that can resolve or dial
-	// their hostname on our behalf. Resolve and pin only public IPs ourselves.
 	publicTransport := client.Transport.(*http.Transport).Clone()
 	publicTransport.Proxy = nil
 	publicTransport.DialContext = dialPublicRelay
@@ -101,9 +99,6 @@ func (r *Refresher) announceSelf(ctx context.Context, descriptor types.RelayDesc
 	})
 }
 
-// sortRefreshCandidates orders relays so that the most important sources are
-// refreshed first under concurrency limits: bootstrap, then discovered
-// healthy relays, and finally recovery/backoff candidates.
 func sortRefreshCandidates(states []relayState) []relayState {
 	slices.SortFunc(states, func(a, b relayState) int {
 		if a.Bootstrap != b.Bootstrap {
@@ -115,19 +110,7 @@ func sortRefreshCandidates(states []relayState) []relayState {
 		if a.discoveryFailures != b.discoveryFailures {
 			return a.discoveryFailures - b.discoveryFailures
 		}
-		if !a.nextDiscoveryRefreshAt.Equal(b.nextDiscoveryRefreshAt) {
-			if a.nextDiscoveryRefreshAt.IsZero() {
-				return -1
-			}
-			if b.nextDiscoveryRefreshAt.IsZero() {
-				return 1
-			}
-			if a.nextDiscoveryRefreshAt.Before(b.nextDiscoveryRefreshAt) {
-				return -1
-			}
-			return 1
-		}
-		return 0
+		return a.nextDiscoveryRefreshAt.Compare(b.nextDiscoveryRefreshAt)
 	})
 	return states
 }
@@ -148,34 +131,22 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error {
 	relayURL := state.Descriptor.APIHTTPSAddr
 
-	recoveryFailures := defaultRecoveryFailures
-	if state.Bootstrap {
-		recoveryFailures = 0
-	}
-
 	baseURL, err := url.Parse(relayURL)
 	if err != nil {
-		if recoveryFailures > 0 {
-			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
-		}
+		r.logDiscoveryFailure(state, err)
 		return nil
 	}
 	client := r.httpClient
 	if !state.Bootstrap {
 		if err := requirePublicRelayURL(relayURL); err != nil {
-			if recoveryFailures > 0 {
-				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
-			}
+			r.logDiscoveryFailure(state, err)
 			return nil
 		}
 		client = r.publicHTTPClient
 	} else if utils.IsLocalRelayHost(baseURL.Hostname()) {
-		// Local TLS trust is only permitted for explicitly configured peers.
 		_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
 		if err != nil {
-			if recoveryFailures > 0 {
-				r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
-			}
+			r.logDiscoveryFailure(state, err)
 			return nil
 		}
 		localClient.CheckRedirect = rejectDiscoveryRedirect
@@ -189,24 +160,17 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if recoveryFailures > 0 {
-			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
-		}
+		r.logDiscoveryFailure(state, err)
 		return nil
 	}
 	measuredAt := time.Now().UTC()
 
 	if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relayURL, resp, measuredAt); err != nil {
 		if errors.Is(err, ErrProtocolMismatch) {
-			// The relay answered; protocol incompatibility is visibility
-			// metadata, not a health failure. Keep polling it without
-			// accumulating discovery failures or pool bans.
 			log.Debug().Err(err).Str("relay", relayURL).Msg("discovery protocol mismatch; relay kept visible as incompatible")
 			return nil
 		}
-		if recoveryFailures > 0 {
-			r.logDiscoveryFailure(relayURL, relayURL, recoveryFailures, err)
-		}
+		r.logDiscoveryFailure(state, err)
 		return nil
 	}
 	r.relaySet.RecordDiscoveryRTT(relayURL, time.Since(startedAt), measuredAt)
@@ -240,15 +204,19 @@ func parallel[T any](items []T, limit int, fn func(T) error) error {
 	}
 }
 
-func (r *Refresher) logDiscoveryFailure(targetRelayURL, sourceURL string, recoveryFailures int, err error) {
-	backedOff, backoffReason, failureCount := r.relaySet.RecordDiscoveryFailure(targetRelayURL, recoveryFailures)
+func (r *Refresher) logDiscoveryFailure(state relayState, err error) {
+	if state.Bootstrap {
+		return
+	}
+	relayURL := state.Descriptor.APIHTTPSAddr
+	backedOff, backoffReason, failureCount := r.relaySet.RecordDiscoveryFailure(relayURL, defaultRecoveryFailures)
 	if !backedOff {
 		return
 	}
 
 	event := log.Debug().
 		Err(err).
-		Str("relay", sourceURL).
+		Str("relay", relayURL).
 		Bool("backed_off", true).
 		Str("reason", backoffReason)
 	if failureCount > 0 {
@@ -257,7 +225,7 @@ func (r *Refresher) logDiscoveryFailure(targetRelayURL, sourceURL string, recove
 	if backoffReason == "unhealthy" {
 		log.Warn().
 			Err(err).
-			Str("relay", sourceURL).
+			Str("relay", relayURL).
 			Bool("backed_off", true).
 			Str("reason", backoffReason).
 			Int("discovery_failures", failureCount).

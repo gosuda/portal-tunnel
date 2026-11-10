@@ -54,14 +54,11 @@ func (c *Manager) Serve(w http.ResponseWriter, req *http.Request, host string) b
 func (c *Manager) discard(site *cachedSite) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// A failed reader of an older snapshot cannot invalidate its replacement.
 	if c.entries[site.host] == site {
 		c.retireLocked(site)
 	}
 }
 
-// siteReader observes failures after headers have been written: the response
-// cannot fall back at that point, but the next probe must request a new upload.
 type siteReader struct {
 	*os.File
 	failed         bool

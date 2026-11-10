@@ -22,9 +22,6 @@ func mustSigningIdentity(t *testing.T) types.Identity {
 	return signingIdentity
 }
 
-// A directly contacted relay can advertise many colluding identities and
-// misleading metadata about a healthy peer. Those claims neither verify the
-// advertised URLs nor revoke or rewrite the healthy peer's local observation.
 func TestColludingGossipCannotReplaceLocalRelayEvidence(t *testing.T) {
 	set := NewRelaySet(nil)
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -33,7 +30,7 @@ func TestColludingGossipCannotReplaceLocalRelayEvidence(t *testing.T) {
 	mustApplyAuthoritative(t, set, healthyDescriptor)
 	reporterDescriptor := mustSignedDescriptor(t, mustSigningIdentity(t), reporter, now)
 	forged := healthyDescriptor
-	forged.SupportsTCP = !forged.SupportsTCP // No signature authorizes this change.
+	forged.SupportsTCP = !forged.SupportsTCP
 	for i := range 4 {
 		colluder := mustSignedDescriptor(t, mustSigningIdentity(t), fmt.Sprintf("https://colluder-%d.example", i), now)
 		_, err := set.ApplyRelayDiscoveryResponse(reporter, types.DiscoveryResponse{
@@ -159,12 +156,10 @@ func TestDescriptorConflictGuardAllowsRetransmissionAndFreshUpdates(t *testing.T
 	original := mustSignedDescriptor(t, signer, relayURL, now)
 	mustApplyAuthoritative(t, set, original)
 	set.RecordDiscoveryFailure(relayURL, 1)
-	// An identical cached statement remains a valid recovery observation.
 	mustApplyAuthoritative(t, set, original)
 	if !routesTo(t, set, relayURL) {
 		t.Fatal("identical retransmission did not recover eligibility")
 	}
-	// One operator may legitimately publish different URLs at the same time.
 	other := mustSignedDescriptor(t, signer, "https://other.example", now)
 	if err := set.InsertCandidate(other, now); err != nil {
 		t.Fatalf("same-time descriptor for another URL: %v", err)
@@ -318,8 +313,6 @@ func TestInsertCandidateCapsFloodPerSigningIdentity(t *testing.T) {
 	if err := set.InsertCandidate(mustSignedDescriptor(t, legit, "https://legit.example", now), now); err != nil {
 		t.Fatalf("legit insert error = %v", err)
 	}
-	// Flood the pool the way the reported abuse does: one signing identity
-	// announcing MaxAnnouncedRelays distinct URLs with fresh IssuedAt.
 	for i := range MaxAnnouncedRelays {
 		at := now.Add(time.Duration(i) * time.Second)
 		url := fmt.Sprintf("https://attacker-%04d.example", i)
@@ -385,8 +378,6 @@ func TestInsertCandidateHiddenUntilDirectProbe(t *testing.T) {
 			t.Fatal("candidate relay must stay out of Descriptors() until directly probed")
 		}
 	}
-	// The real promotion path: the refresher polls the relay itself and
-	// ApplyRelayDiscoveryResponse verifies the target's own descriptor.
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		GeneratedAt:     now,
@@ -483,8 +474,6 @@ func TestApplyRelayDiscoveryResponsePromotesOnlyTarget(t *testing.T) {
 		t.Fatalf("Descriptors() = %v, want only the directly probed source", visible)
 	}
 
-	// A relay mentioned by the probed source only becomes visible through
-	// its own direct probe.
 	launderedURL := "https://laundered-0.example"
 	launderedDescriptor := relays[1]
 	if _, err := set.ApplyRelayDiscoveryResponse(launderedURL, types.DiscoveryResponse{
@@ -592,8 +581,6 @@ func TestTrustDoesNotTransferAcrossIdentityTakeover(t *testing.T) {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	// The verified descriptor expires, which opens the URL slot to a
-	// cross-identity takeover.
 	later := now.Add(DiscoveryDescriptorTTL + time.Minute)
 	if err := set.InsertCandidate(mustSignedDescriptor(t, attacker, relayURL, later), later); err != nil {
 		t.Fatalf("InsertCandidate() error = %v", err)
@@ -638,7 +625,6 @@ func TestBootstrapCandidateDescriptorStaysHidden(t *testing.T) {
 		t.Fatalf("filterCandidatePool() = %v, want the squatted bootstrap excluded", pool)
 	}
 
-	// URL-only bootstrap entries remain eligible as a public relay fallback.
 	urlOnly := newRelayState("https://bootstrap-fallback.example")
 	urlOnly.Bootstrap = true
 	if pool := filterCandidatePool([]relayState{urlOnly}, routeState{}, now); len(pool) != 1 {

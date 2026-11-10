@@ -21,13 +21,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal"
 )
 
-// The machine-readable relay lifecycle contract is the structured log
-// stream (issue #596): this test builds the real portal binary, runs
-// `portal expose --log-format json` as a subprocess the way an external
-// integration launches it, and consumes its stdout. A ready record names
-// the relay and the tenant-ready canonical URL; relay deselection and
-// retraction are covered by the SDK unit tests driving the authoritative
-// status paths.
 func TestPortalExposeJSONRelayLifecycleLogs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the portal binary")
@@ -75,8 +68,6 @@ func TestPortalExposeJSONRelayLifecycleLogs(t *testing.T) {
 	go drainLifecycleStderr(stderr)
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
-		// Drain stdout before Wait closes the pipe. This also joins the
-		// reader, so malformed trailing lines cannot escape the test.
 		for range records {
 		}
 		_ = cmd.Wait()
@@ -97,8 +88,6 @@ func TestPortalExposeJSONRelayLifecycleLogs(t *testing.T) {
 		t.Fatalf("ready record = %v, want no alias for an address-only identity", ready)
 	}
 
-	// Closing the relay drops its reverse sessions. The CLI must report
-	// readiness loss before the relay returns with the same identity.
 	relayCancel()
 	stopJSONRelay(t, relayMembership.sniAddr)
 	connecting := waitLifecycleRecord(t, records, func(record map[string]any) bool {
@@ -125,9 +114,6 @@ func TestPortalExposeJSONRelayLifecycleLogs(t *testing.T) {
 	}
 }
 
-// stopJSONRelay polls until the relay's SNI listener port is free, so
-// the restart reusing the same state dir and coordinates cannot race
-// the shutdown.
 func stopJSONRelay(t *testing.T, sniAddr string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -144,8 +130,6 @@ func stopJSONRelay(t *testing.T, sniAddr string) {
 	}
 }
 
-// restartJSONRelay boots one real relay on the already-probed member
-// coordinates so the CLI re-registration reconnects to the same origin.
 func restartJSONRelay(t *testing.T, ctx context.Context, stateDir, sniAddr string, sniPort int) *portal.Server {
 	t.Helper()
 	relay, err := portal.NewServer(portal.ServerConfig{
@@ -184,8 +168,6 @@ func readLifecycleRecords(t *testing.T, stdout io.Reader, records chan<- map[str
 func drainLifecycleStderr(stderr io.Reader) {
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
-		// Consumer-facing stderr messages stay human-readable; this test
-		// only requires stdout parseability.
 	}
 }
 
@@ -208,8 +190,6 @@ func waitLifecycleRecord(t *testing.T, records <-chan map[string]any, match func
 	}
 }
 
-// repoRoot locates the module root from the test binary's working
-// directory: the e2e package dir or the repo root, whichever applies.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	for _, candidate := range []string{"..", "."} {

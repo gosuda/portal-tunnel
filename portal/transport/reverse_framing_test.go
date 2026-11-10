@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -51,6 +52,40 @@ func TestReadStartRejectsMalformedFraming(t *testing.T) {
 		if err := client.SetDeadline(time.Now()); err == nil {
 			t.Fatal("invalid framing left the connection open")
 		}
+	}
+}
+
+func TestReadStartRequiresFullTLSBinding(t *testing.T) {
+	relay, client := net.Pipe()
+	go func() {
+		_, _ = relay.Write([]byte{types.ReverseMarkerTLSStart})
+		_, _ = relay.Write(bytes.Repeat([]byte{0x61}, types.TLSBindingSize-1))
+		_ = relay.Close()
+	}()
+	if _, err := ReadStart(context.Background(), client, time.Second); err == nil {
+		t.Fatal("short TLS binding accepted")
+	}
+	if err := client.SetDeadline(time.Now()); err == nil {
+		t.Fatal("short TLS binding left the connection open")
+	}
+}
+
+func TestReadStartPreservesBytesAfterBinding(t *testing.T) {
+	relay, client := net.Pipe()
+	defer relay.Close()
+	defer client.Close()
+	binding := bytes.Repeat([]byte{0x62}, types.TLSBindingSize)
+	go func() {
+		_, _ = relay.Write(append([]byte{types.ReverseMarkerTLSStart}, append(binding, []byte("payload")...)...))
+	}()
+	got, err := ReadStart(context.Background(), client, time.Second)
+	if err != nil || !bytes.Equal(got, binding) {
+		t.Fatalf("binding = %x, %v", got, err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	var trailing [7]byte
+	if _, err := io.ReadFull(client, trailing[:]); err != nil || string(trailing[:]) != "payload" {
+		t.Fatalf("trailing = %q, %v", trailing, err)
 	}
 }
 

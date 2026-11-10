@@ -43,13 +43,11 @@
 <SearchModal bind:open={searchOpen} />
 
 <div class="min-h-screen">
-	<!-- Header — relay-style with glassmorphism for docs -->
 	<header
 		class="sticky top-0 z-30 w-full bg-background/95 py-5 backdrop-blur"
 	>
 		<div class="flex w-full items-center gap-4 px-6 py-2 sm:px-8 lg:px-10">
 			{#if !isLandingPage}
-			<!-- Mobile menu button (doc pages only) -->
 			<button
 				class="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden dark:text-gray-400 dark:hover:bg-white/8"
 				onclick={() => (mobileNavOpen = true)}
@@ -66,7 +64,6 @@
 			</button>
 			{/if}
 
-			<!-- Logo -->
 			<a href="{base}/" class="flex items-center gap-2">
 				<div class="flex h-10 w-10 shrink-0 items-center justify-center">
 					<svg
@@ -92,7 +89,6 @@
 
 			<div class="flex-1"></div>
 
-			<!-- Nav links (hidden on mobile, visible xl) -->
 			<nav class="hidden items-center gap-6 text-base font-semibold text-gray-500 xl:flex dark:text-gray-400">
 				<a href="{base}/features" class="transition-colors {$page.url.pathname.includes('/features') ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
 					Features
@@ -105,7 +101,6 @@
 				</a>
 			</nav>
 
-			<!-- GitHub icon button -->
 			<a
 				href="https://github.com/gosuda/portal-tunnel"
 				target="_blank"
@@ -129,7 +124,6 @@
 	{/if}
 
 	{#if isLandingPage}
-	<!-- Landing page: max-width container with side borders -->
 	<div class="mx-auto flex w-full max-w-6xl flex-1 flex-col border-x border-border/80">
 		<main class="px-4 pt-6 pb-8 sm:px-6 sm:pb-10 md:px-8">
 			{@render children()}
@@ -152,7 +146,6 @@
 		</div>
 	</footer>
 	{:else}
-	<!-- Doc pages: sidebars + prose -->
 	<div class="mx-auto max-w-[90rem] lg:flex">
 		<aside class="hidden w-64 shrink-0 border-r border-border lg:block">
 			<div class="sticky top-[var(--header-h)] h-[calc(100vh-var(--header-h))] overflow-y-auto p-6">

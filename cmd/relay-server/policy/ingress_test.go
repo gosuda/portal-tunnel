@@ -57,6 +57,7 @@ func TestClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 		want    string
 	}{
 		{name: "explicit IPv4 proxy", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "198.51.100.1", want: "198.51.100.1"},
+		{name: "forwarded chain takes leftmost", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "198.51.100.1, 198.51.100.9", want: "198.51.100.1"},
 		{name: "private sibling", enabled: true, cidrs: "172.31.240.2/32", peer: "172.31.240.3", xff: "198.51.100.1", xri: "198.51.100.2", want: "172.31.240.3"},
 		{name: "headers disabled", cidrs: "172.31.240.2/32", peer: "172.31.240.2", xff: "198.51.100.1", xri: "198.51.100.2", want: "172.31.240.2"},
 		{name: "explicit IPv6 proxy", enabled: true, cidrs: "172.31.240.2/32,fd00::2/128", peer: "fd00::2", xff: "2001:db8::1", want: "2001:db8::1"},
@@ -82,9 +83,6 @@ func TestClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
 	}
 }
 
-// The relay's ingress rejects an unparseable CIDR list with the same parse the
-// config report reports, so a deployment cannot call a list valid that startup
-// rejects.
 func TestNewIngressRejectsInvalidCIDRs(t *testing.T) {
 	if _, err := NewIngress(false, "192.0.2.0/24,not-a-cidr", ""); err == nil {
 		t.Fatal("NewIngress() error = nil, want error for invalid trusted proxy CIDR")
@@ -107,9 +105,6 @@ func TestNewIngressRejectsInvalidCIDRs(t *testing.T) {
 	}
 }
 
-// Tunnel sources match the address pre-auth resolves, so an IPv4 peer reached
-// over a dual-stack socket and a client behind a trusted proxy match their
-// IPv4 and forwarded networks.
 func TestTunnelSourceMatchesResolvedAddress(t *testing.T) {
 	open, err := NewIngress(false, "", "")
 	if err != nil {
@@ -159,7 +154,6 @@ func TestClientIPRevokesRemovedProxy(t *testing.T) {
 	if got := ingress.ClientIP(req); got != "198.51.100.1" {
 		t.Fatalf("client IP before removing proxy = %q, want forwarded address", got)
 	}
-	// Reconfiguring the relay without that proxy revokes its trust.
 	ingress, err = NewIngress(true, "", "")
 	if err != nil {
 		t.Fatal(err)

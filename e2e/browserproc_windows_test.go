@@ -9,14 +9,8 @@ import (
 
 var errBrowserJobObjectNotArmed = errors.New("browser job object was not armed")
 
-// browserSysProcAttr starts the browser with default Windows process
-// attributes; the process tree is owned by the kill-on-close job object.
 func browserSysProcAttr() *syscall.SysProcAttr { return nil }
 
-// browserTree owns the browser process tree teardown. The browser is placed
-// in a kill-on-close job object: browser launchers hand off to a real browser
-// process and exit, so the tree cannot be reached through the original parent
-// at cleanup time. Closing the job handle ends every process that joined it.
 type browserTree struct {
 	job  uintptr
 	done bool
@@ -49,8 +43,6 @@ func newBrowserTree(cmd *exec.Cmd) *browserTree {
 	}
 	return tree
 }
-
-// kill ends every process in the browser tree; it is safe to call twice.
 func (b *browserTree) kill() error {
 	if b == nil || b.done {
 		return nil
@@ -59,7 +51,6 @@ func (b *browserTree) kill() error {
 	if b.job == 0 {
 		return errBrowserJobObjectNotArmed
 	}
-	// Kill-on-job-close ends the tree even after a launcher handoff.
 	procCloseHandle.Call(b.job)
 	b.job = 0
 	return nil

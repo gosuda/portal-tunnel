@@ -13,21 +13,15 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// Config is one tunnel as its user describes it. The flags of portal expose, a
-// [[tunnels]] entry of the agent config and an Agent API request all become a
-// Config, and Spec is the one way from a Config to the runtime. A Config holds
-// what was set and nothing else: a nil or zero value stands for the default,
-// which Spec fills in, so an agent config written from it repeats no default.
-// The TOML keys are those of the agent config. The metadata, auth and payment
-// components bring their own keys, so a setting added to a component needs no
-// change here.
+// Config is one tunnel as its user describes it: the flags of portal expose,
+// a [[tunnels]] entry of the agent config, or an Agent API request. A Config
+// holds what was set and nothing else; nil and zero values stand for defaults
+// that Spec fills in. The TOML keys are those of the agent config.
 type Config struct {
-	// Identity.
 	Name         string `toml:"name,omitempty"`
 	IdentityPath string `toml:"identity_path,omitempty"`
 	IdentityJSON string `toml:"identity_json,omitempty"`
 
-	// Transport: what the tunnel exposes.
 	TargetAddr          string      `toml:"target,omitempty"`
 	Serve               string      `toml:"serve,omitempty"`
 	HTTPRoutes          []HTTPRoute `toml:"http_routes,omitempty"`
@@ -51,9 +45,7 @@ type Config struct {
 	gateway.X402Config
 }
 
-// AuthConfig is the application auth component of a tunnel. It has a name of its
-// own because agent types embed both this component and Config, and two embedded
-// fields called Config would shadow each other without a word.
+// AuthConfig is the application auth component of a tunnel.
 type AuthConfig = appauth.Config
 
 // ParseHTTPRoute parses one PATH=UPSTREAM [METHOD[,METHOD...]:AMOUNT] entry.

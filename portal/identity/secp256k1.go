@@ -37,12 +37,8 @@ var (
 )
 
 const (
-	// compactSecp256k1SignatureSize is the byte length of a compact
-	// recoverable secp256k1 ECDSA signature.
 	compactSecp256k1SignatureSize = 65
-	// rawSecp256k1SignatureSize is the byte length of the JOSE ES256K
-	// signature form, r || s with no recovery header.
-	rawSecp256k1SignatureSize = 64
+	rawSecp256k1SignatureSize     = 64
 )
 
 // ErrSecp256k1SignatureInvalid marks a well-formed signature that does not
@@ -162,8 +158,6 @@ func signEthereumPersonalMessage(message, privateKeyHex string) (string, error) 
 	return "0x" + hex.EncodeToString(signature), nil
 }
 
-// ethereumPersonalMessageHash is the shared EIP-191 personal-sign digest for
-// both signing and recovery. The prefix counts UTF-8 bytes, not characters.
 func ethereumPersonalMessageHash(message string) []byte {
 	hasher := sha3.NewLegacyKeccak256()
 	_, _ = fmt.Fprintf(hasher, "\x19Ethereum Signed Message:\n%d", len(message))
@@ -180,8 +174,6 @@ func recoverEthereumPersonalMessage(message, signature string) (string, error) {
 	if err != nil {
 		return "", ErrSecp256k1SignatureInvalid
 	}
-	// Ethereum signatures are r || s || v. Accept the personal_sign recovery
-	// values 27/28 and their normalized 0/1 forms, not transaction chain IDs.
 	v := raw[64]
 	switch v {
 	case 0, 1:

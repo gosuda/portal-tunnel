@@ -46,7 +46,6 @@ func TestDefaultIdentityBPSConfiguration(t *testing.T) {
 	}
 }
 
-// writeEnvFile writes lines to a temporary env file and returns its path.
 func writeEnvFile(t *testing.T, lines ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.env")
@@ -57,8 +56,6 @@ func writeEnvFile(t *testing.T, lines ...string) string {
 	return path
 }
 
-// resolveWithEnvFile uses the file values as the entire input environment and
-// returns the resulting configuration.
 func resolveWithEnvFile(t *testing.T, path string) appConfig {
 	t.Helper()
 	entries, err := loadEnvFile(path)
@@ -88,8 +85,6 @@ func TestHTTPRedirectEnvironment(t *testing.T) {
 	}
 }
 
-// A variable absent from the env file must not leak in from the surrounding
-// shell, or the report would describe a mixed environment.
 func TestEnvFileIsolationIgnoresInheritedValue(t *testing.T) {
 	t.Setenv("DISCOVERY", "true")
 
@@ -100,8 +95,6 @@ func TestEnvFileIsolationIgnoresInheritedValue(t *testing.T) {
 	}
 }
 
-// A higher-priority alias in the shell must not beat a value the file supplies
-// through a lower-priority name.
 func TestEnvFileIsolationBeatsHigherPriorityAlias(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-east-1")
 
@@ -124,7 +117,6 @@ func TestConfigResolutionDoesNotChangeEnvironment(t *testing.T) {
 	}
 }
 
-// A line that is neither blank, a comment, nor an assignment is invalid input.
 func TestLoadEnvFileRejectsMalformedLines(t *testing.T) {
 	for name, line := range map[string]string{
 		"missing separator": "DISCOVERY true",
@@ -144,9 +136,6 @@ func TestLoadEnvFileRejectsMalformedLines(t *testing.T) {
 	}
 }
 
-// A key the env file supplies that nothing reads must be surfaced with a
-// closest-match suggestion, not silently dropped: that silence is how a typo
-// runs the relay on defaults while the operator believes their value is set.
 func TestConfigReportSurfacesUnknownEnvFileKeys(t *testing.T) {
 	path := writeEnvFile(t, "PORTAL_URL=https://relay.example.com", "DISCOVRY=true")
 	entries, err := loadEnvFile(path)
@@ -192,5 +181,15 @@ func TestPreparedConfigRetainsPortalDefaults(t *testing.T) {
 	}
 	if cfg.Relay.SNIPort != 8443 || cfg.Relay.SNIListenAddr != ":8443" || cfg.Relay.ACME.KeyDir != cfg.Relay.StateDir {
 		t.Fatalf("normalized defaults were discarded: %+v", cfg.Relay)
+	}
+}
+
+func TestLoadEnvFileDoesNotExpandValues(t *testing.T) {
+	entries, err := loadEnvFile(writeEnvFile(t, "PORTAL_URL=https://example.com/$HOST_PREFIX/path"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Value != "https://example.com/$HOST_PREFIX/path" {
+		t.Fatalf("env value expanded: %+v", entries)
 	}
 }

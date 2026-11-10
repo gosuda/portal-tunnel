@@ -77,7 +77,6 @@ func (api *RelayAPI) serveFrontend(w http.ResponseWriter, r *http.Request) {
 	assetPath = cmp.Or(assetPath, "index.html")
 	asset, err := api.loadFrontendAsset(assetPath)
 	if err != nil {
-		// Missing static assets 404; only client-route-looking paths fall back.
 		if assetPath == "index.html" || mime.TypeByExtension(path.Ext(assetPath)) != "" {
 			http.NotFound(w, r)
 			return

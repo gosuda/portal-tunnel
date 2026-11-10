@@ -1,4 +1,3 @@
-// Package cli owns command dispatch, argument parsing, help, and environment resolution.
 package cli
 
 import (
@@ -13,37 +12,22 @@ import (
 
 type IntEnvParser func(string, int) int
 
-// EnvVar records one environment variable that backs a flag, together with the
-// flag's own documentation. Flag definitions already carry the name, default,
-// and usage text, so registering them here lets `relay-server config`, the
-// startup feature report, and the generated .env.example all read from the flag
-// definitions instead of a second hand-maintained list.
 type EnvVar struct {
 	Name    string
 	Aliases []string
 	Flag    string
 	Usage   string
 	Default string
-	// Value is what the flag actually resolved to. Reporting the raw text of an
-	// env file instead would show a value that a higher-priority name overrode,
-	// or an alias that was never consulted, as though it were in effect.
-	Value string
-	// SetBy is the environment variable that supplied the value, or empty when
-	// the default was used. It answers "I set that, why did nothing change?".
-	SetBy string
+	Value   string
+	SetBy   string
 }
 
-// EnvIssue is a value that was present but unusable. Without recording these,
-// the resolve helpers below silently fall back and a typo is indistinguishable
-// from an intentional default.
 type EnvIssue struct {
 	Name    string
 	Value   string
 	Problem string
 }
 
-// Env captures one command's input environment and its resolution diagnostics.
-// Separate commands and config reports never share mutable environment state.
 type Env struct {
 	values map[string]string
 	Vars   []EnvVar
@@ -133,8 +117,6 @@ func (e *Env) resolveIntEnv(fallback int, parse IntEnvParser, envNames ...string
 		if raw == "" {
 			continue
 		}
-		// Parse first so a non-numeric value is reported as such instead of
-		// being flattened into the parser's fallback.
 		number, err := strconv.Atoi(raw)
 		if err != nil {
 			e.Issues = append(e.Issues, EnvIssue{Name: envName, Value: raw, Problem: "not an integer"})
