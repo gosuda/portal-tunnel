@@ -6,21 +6,20 @@ root. It follows the authenticated metrics route implemented in #708. The base
 
 ## Start metrics and dashboards
 
-Set `ADMIN_TOKEN` in the root `.env` as described in the deployment guide. Copy
-the same token into a local file for Prometheus. The file is ignored by Git:
+Set `ADMIN_TOKEN` in the root `.env` as described in the deployment guide, and
+export the same value in the shell before starting Compose. The Prometheus
+secret reads the exported value and is mounted for its `nobody` user only:
 
 ```sh
-umask 077
 : "${ADMIN_TOKEN:?Export the relay ADMIN_TOKEN first}"
-printf '%s' "$ADMIN_TOKEN" > deploy/observability/admin-token
 export GRAFANA_ADMIN_PASSWORD='choose-a-strong-password'
 docker compose -f docker-compose.yml -f deploy/observability/compose.yml \
   --profile observability up -d
 ```
 
-`ADMIN_TOKEN` in the shell command must equal the value passed to the relay by
-Compose. If it is only in `.env`, export that value in the shell before writing
-the token file. Never commit the token file.
+The secret requires `ADMIN_TOKEN` in the shell environment; a value present
+only in `.env` is not enough. Compose also passes the exported value to the
+relay, so both services use the same token.
 
 Prometheus shares the relay's network namespace and scrapes
 `https://localhost:443/api/admin/metrics` with that bearer token. The relay

@@ -7,7 +7,9 @@ services:
       - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     secrets:
-      - portal_admin_token
+      - source: portal_admin_token
+        uid: "65534" # Prometheus runs as nobody.
+        mode: 0o400
     depends_on:
       portal:
         condition: service_started
@@ -31,7 +33,7 @@ services:
 
 secrets:
   portal_admin_token:
-    file: ./deploy/observability/admin-token
+    environment: ADMIN_TOKEN
 
 volumes:
   prometheus-data:
