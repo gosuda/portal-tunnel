@@ -10,9 +10,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal"
 )
 
-// relayMetrics belongs to this executable. The relay supplies only its
-// aggregate snapshot; registration, HTTP instrumentation, and exposition stay
-// here. A private registry also keeps repeated in-process servers independent.
 type relayMetrics struct {
 	handler  http.Handler
 	requests *prometheus.CounterVec

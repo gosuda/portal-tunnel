@@ -94,8 +94,6 @@ func TestPolicyCommitsCompoundDecisionsAtomically(t *testing.T) {
 	if !before.UDP.Enabled || before.TCPPort.MaxLeases != 3 || before.IdentityBPS[key] != 100 {
 		t.Fatal("editing candidate transport or bandwidth settings changed committed policy")
 	}
-	// A registration arriving between the two edits must still see the
-	// committed ban, even though the proposed state temporarily permits it.
 	observed := make(chan bool, 1)
 	go func() { observed <- access.Snapshot().Access(key) == types.LeaseRoutable }()
 	if <-observed {
@@ -160,7 +158,6 @@ func TestAccessUnnamedIdentityKeyDecisions(t *testing.T) {
 	if !access.EffectiveApproval(unnamedKey) || access.Access(unnamedKey) != types.LeaseRoutable {
 		t.Fatal("unnamed key not approved")
 	}
-	// Named key under the same address is distinct and not automatically approved.
 	if access.EffectiveApproval(namedKey) || access.Access(namedKey) == types.LeaseRoutable {
 		t.Fatal("named key should be distinct from unnamed key")
 	}

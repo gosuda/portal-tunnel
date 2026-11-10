@@ -18,9 +18,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
-// startOIDCRuntime starts a tunnel protected by OIDC at issuer. Its only relay
-// is unreachable, which is enough to assemble the gateway and run the
-// provider check.
 func startOIDCRuntime(t *testing.T, issuer string) *Runtime {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -45,9 +42,6 @@ func startOIDCRuntime(t *testing.T, issuer string) *Runtime {
 	return runtime
 }
 
-// newOIDCIssuer serves a minimal OIDC provider once release is closed, and
-// closes the returned channel when the first request arrives. An unhealthy
-// provider answers every request with a server error.
 func newOIDCIssuer(t *testing.T, release <-chan struct{}, healthy bool) (*httptest.Server, <-chan struct{}) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

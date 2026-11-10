@@ -29,8 +29,6 @@ var staticFiles embed.FS
 
 const paidPhotoPath = "/paid/photo"
 
-// x402ClientPath and x402PreparePath are this app's shared payment
-// endpoints; the values match the agent gateway's contract.
 const (
 	x402ClientPath  = "/x402/client.js"
 	x402PreparePath = "/x402/prepare"
@@ -38,8 +36,6 @@ const (
 
 const usdcAssetSymbol = "USDC"
 
-// defaultMaxTimeoutSeconds mirrors the gate and preparer defaults so the
-// contract the page echoes matches the one clients receive.
 const defaultMaxTimeoutSeconds = 60
 
 var (
@@ -123,10 +119,6 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
 		},
 	}
-	// The facilitator allowlist is pinned to this contract's asset; its
-	// default would accept every gasless stablecoin on the network. The
-	// facilitator and preparer live as long as the process: newHandler has
-	// no closer to hand them to.
 	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, firstNonEmpty(cfg.Endpoints), "", suifacilitator.SuiFacilitatorOptions{
 		GaslessStablecoinTypes: []string{asset},
 	})
@@ -137,9 +129,6 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 		Requirements: requirements,
 		Facilitator:  facilitator,
 		Resource: &facilitatortypes.ResourceInfo{
-			// The gate stamps this configured prefix into every 402
-			// challenge; it never sees the per-request absolute URL that
-			// the prepare response can advertise.
 			URL:         paidPhotoPath,
 			Description: cfg.Metadata.Description,
 			MimeType:    "text/html",
@@ -173,7 +162,6 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 	return mux, nil
 }
 
-// suiNetwork resolves the CAIP-2 network for the configured stage.
 func suiNetwork(testnet bool) string {
 	if testnet {
 		return "sui:testnet"
@@ -218,8 +206,6 @@ func (h *paymentHandler) renderPaidPhoto(w http.ResponseWriter, r *http.Request)
 func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 	description := strings.TrimSpace(h.metadata.Description)
 	description = cmp.Or(description, "Connect a Sui wallet, settle USDC with x402, and reveal the protected image.")
-	// A formatting failure leaves the atomic string on the page rather than
-	// hiding the contract the payment is settled against.
 	amount := h.amount
 	if formatted, err := suischeme.FormatStablecoinAtomicAmount(h.network, usdcAssetSymbol, h.amount); err == nil {
 		amount = formatted

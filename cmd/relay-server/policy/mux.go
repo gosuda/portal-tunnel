@@ -16,28 +16,19 @@ import (
 
 const accessPublishAttempts = 8
 
-// Mux composes the relay's protocol route table: portal handlers mounted
-// under their SDK paths and wrapped with ingress client-IP resolution and
-// weighted pre-auth admission. Everything else falls through to the caller's
-// handler (admin API, x402, application routes). A nil ingress resolves the
-// socket peer and lets every source run tunnels, a nil admission disables
-// pre-auth budgeting, and a nil access keeps every identity routable; the relay
-// binary always supplies real ones.
+// Mux composes the relay's protocol route table over portal handlers with
+// ingress client-IP resolution and weighted pre-auth admission; other paths
+// fall through to the fallback handler. Nil ingress, admission, or access
+// disable their layer.
 func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *SourceLimiter, access *Store, preAuth PreAuthConfig) http.Handler {
 	if ingress == nil {
 		ingress = &Ingress{}
 	}
 	if fallback == nil {
-		// No application handler: the relay answers its own root and 404s
-		// everything else, matching the standalone Serve(ctx, nil) shape.
 		root := http.NewServeMux()
 		root.HandleFunc("/{$}", s.HandleRoot)
 		fallback = ControlBodyHandler(root)
 	}
-	// A newer committed snapshot may reach Portal while this request is
-	// paused. Retry a bounded number of times when Portal rejects the older
-	// revision; stale values are never applied, and no relay lock is held
-	// across the Portal call.
 	publishAccess := func(key types.ServiceIdentityKey) bool {
 		if !key.Valid() {
 			return true
@@ -54,15 +45,13 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 		return false
 	}
 
-	// admit spends the weighted pre-auth budget before any decoding or
-	// signature work, preserving the source -> global ordering established
-	// for anonymous protocol requests.
 	type sourceHandler func(http.ResponseWriter, *http.Request, netip.Addr)
 	admit := func(cost int, next sourceHandler) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			source := ingress.SourceAddr(r)
 			if admission != nil {
-				if retry, _ := admission.Allow(source, cost); retry > 0 {
+				retry, _ := admission.Allow(source, cost)
+				if retry > 0 {
 					WriteRetryAfter(w, retry, "pre-auth request budget exhausted")
 					return
 				}
@@ -83,9 +72,6 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 			next(w, r, ingress.SourceAddr(r))
 		}
 	}
-	// tunnelSource refuses registration and renewal from outside the networks
-	// the operator lets run tunnels. It runs before admit, so a refused source
-	// cannot drain the global budget that allowed tunnels share.
 	tunnelSource := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			source := ingress.SourceAddr(r)
@@ -173,8 +159,6 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	})
 	guarded := ControlBodyHandler(control)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// ServeMux may redirect before invoking the fallback. Protect that
-		// short response here, preserving trailing slashes and escaped paths.
 		escapedPath := r.URL.EscapedPath()
 		cleanPath := path.Clean(escapedPath)
 		if strings.HasSuffix(escapedPath, "/") && cleanPath != "/" {
@@ -191,7 +175,6 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 				return
 			}
 		}
-		// CORS preflight is answered here, before the fallback is called.
 		if requestPath == types.PathHealthz || r.Method == http.MethodOptions {
 			guarded.ServeHTTP(w, r)
 			return

@@ -213,8 +213,6 @@ func printUsage(w io.Writer) {
 	)
 }
 
-// resolvePaymentIdentity parses an inline identity or existing file. It
-// generates and persists an identity only when neither source exists.
 func resolvePaymentIdentity(cfg paymentConfig) (types.Identity, error) {
 	if raw := strings.TrimSpace(cfg.identityJSON); raw != "" {
 		return identity.Parse([]byte(raw))

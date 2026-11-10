@@ -38,9 +38,6 @@ func NewIngress(trustProxyHeaders bool, rawTrustedProxyCIDRs, rawTunnelSourceCID
 	return &Ingress{trustProxyHeaders: trustProxyHeaders, trustedProxyCIDRs: trustedProxyCIDRs, tunnelSourceCIDRs: tunnelSourceCIDRs}, nil
 }
 
-// allowsTunnelFrom reports whether source may register or renew a tunnel. With
-// a list set, a source that could not be resolved is refused. An IPv6 zone is
-// dropped first, because a prefix never contains a zoned address.
 func (i *Ingress) allowsTunnelFrom(source netip.Addr) bool {
 	if i == nil || len(i.tunnelSourceCIDRs) == 0 {
 		return true
@@ -56,11 +53,8 @@ func (i *Ingress) SourceAddr(req *http.Request) netip.Addr {
 	}
 	if i != nil && i.trustProxyHeaders && isTrustedProxyRemoteAddr(req.RemoteAddr, i.trustedProxyCIDRs) {
 		if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
-			if before, _, ok := strings.Cut(xff, ","); ok {
-				if ip := parseSourceAddr(before); ip.IsValid() {
-					return ip
-				}
-			} else if ip := parseSourceAddr(xff); ip.IsValid() {
+			before, _, _ := strings.Cut(xff, ",")
+			if ip := parseSourceAddr(before); ip.IsValid() {
 				return ip
 			}
 		}

@@ -16,8 +16,7 @@ const (
 	ModeManual Mode = "manual"
 )
 
-// ParseMode owns approval mode validation. An empty value is invalid, so a
-// caller that allows a missing mode has to skip parsing on purpose.
+// ParseMode validates an approval mode. Empty and unknown values are rejected.
 func ParseMode(raw string) (Mode, error) {
 	mode := Mode(strings.TrimSpace(raw))
 	if mode != ModeAuto && mode != ModeManual {
@@ -26,14 +25,13 @@ func ParseMode(raw string) (Mode, error) {
 	return mode, nil
 }
 
-// Store owns committed relay operator policy. A transaction edits a detached
-// Snapshot, persists it, then commits the complete state with a new revision.
+// Store owns committed relay operator policy. Transactions edit a detached
+// Snapshot that Commit installs with a new revision.
 type Store struct {
 	state *utils.Snapshot[State]
 }
 
-// State is a detached operator policy. Editing it never changes the live
-// relay policy; Commit installs the whole state once persistence has succeeded.
+// State is a detached operator policy: editing it never changes live policy.
 type State struct {
 	revision    uint64
 	mode        Mode
@@ -65,10 +63,7 @@ func (a *Store) Snapshot() State {
 	return a.state.Load()
 }
 
-// Commit installs a durably saved candidate as one immutable revision. The
-// relay serializes transactions from Snapshot through persistence and Commit.
-// Revisions belong to this running relay; both Store and Portal start fresh
-// on restart, so policy.json needs no revision field or schema migration.
+// Commit installs a durably saved candidate as one immutable revision.
 func (a *Store) Commit(next State) State {
 	return a.state.Update(func(previous State) State {
 		next.revision = previous.revision + 1
@@ -163,7 +158,6 @@ func (s State) DeniedKeys() []types.ServiceIdentityKey {
 	return out
 }
 
-// SetDecisions keeps denied keys from also counting as approved.
 func (s *State) SetDecisions(approvedKeys, deniedKeys []types.ServiceIdentityKey) {
 	s.approved = make(map[types.ServiceIdentityKey]struct{}, len(approvedKeys))
 	for _, key := range approvedKeys {

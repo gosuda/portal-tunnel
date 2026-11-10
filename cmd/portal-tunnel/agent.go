@@ -60,9 +60,6 @@ func runAgentRunCommand(args []string) error {
 		printAgentRunUsage(os.Stderr)
 		return err
 	}
-	// Only an interactive --foreground run opens the dashboard, and it opens
-	// after the agent has started, so a bad theme is refused before anything
-	// starts and never stops a headless run.
 	if foreground && !serviceMode && agentCLIInteractive() {
 		if err := validateDashboardTheme(fs, theme); err != nil {
 			return err
@@ -322,9 +319,6 @@ func runAgentDashboardCommand(args []string) error {
 	return agent.RunDashboard(configPath, stateDir, theme, false)
 }
 
-// validateDashboardTheme refuses an unknown --theme value and names where it
-// came from: the flag when it was given, otherwise PORTAL_TUI_THEME, because
-// the flag's own default is a valid theme.
 func validateDashboardTheme(fs *flag.FlagSet, theme string) error {
 	err := agent.ValidateDashboardTheme(theme)
 	if err == nil {

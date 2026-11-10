@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// An unknown dashboard theme is refused before the dashboard takes over the terminal, and the
-// error names where it came from: --theme or PORTAL_TUI_THEME.
 func TestAgentDashboardRefusesUnknownTheme(t *testing.T) {
 	stateDir := t.TempDir()
 	tests := []struct {
@@ -40,8 +38,6 @@ func TestAgentDashboardRefusesUnknownTheme(t *testing.T) {
 	}
 }
 
-// Without a terminal `agent run --foreground` runs the agent headless and opens no dashboard,
-// so an unknown theme must not stop it. The config is missing, so the run stops there instead.
 func TestAgentRunForegroundWithoutTerminalIgnoresTheTheme(t *testing.T) {
 	if agentCLIInteractive() {
 		t.Skip("stdin and stdout are a terminal, so the run would open the dashboard")

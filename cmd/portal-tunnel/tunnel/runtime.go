@@ -37,9 +37,7 @@ var (
 	errCasperPaymentsRequireAnAsset            = errors.New("casper payments require an asset")
 )
 
-// Spec is the resolved description of one tunnel that the runtime is built
-// from. Config.Spec makes it from what the user set; runtime assembly starts
-// at this boundary.
+// Spec is the resolved description of one tunnel that the runtime is built from.
 type Spec struct {
 	Identity  IdentitySpec
 	Relays    RelaySpec
@@ -79,8 +77,7 @@ type HTTPConfig struct {
 	Payment gateway.X402Config
 	Cache   *CacheConfig
 	// StripRequestHeaders lists client request headers removed before
-	// forwarding to every routed HTTP upstream. It requires at least one
-	// upstream route: static-only exposures forward nothing.
+	// forwarding to every routed HTTP upstream.
 	StripRequestHeaders []string
 }
 
@@ -174,13 +171,11 @@ func (spec Spec) Validate() error {
 
 // Runtime owns the assembled Portal tunnel and its low-level exposure.
 type Runtime struct {
-	Identity  types.Identity
-	Exposure  *sdk.Exposure
-	handler   http.Handler
-	target    string
-	udpTarget string
-	// authProvider stays nil until the startup check of the application auth
-	// provider finishes.
+	Identity     types.Identity
+	Exposure     *sdk.Exposure
+	handler      http.Handler
+	target       string
+	udpTarget    string
 	authProvider atomic.Pointer[authProviderCheck]
 }
 
@@ -266,8 +261,6 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	}
 	runtime.handler = handler
 	if spec.HTTP.Auth != nil {
-		// Only a warning: the provider may come back, and every login retries it.
-		// A tunnel stopped during the check cancels it, which is not an outage.
 		go func() {
 			err := appauth.Check(ctx, *spec.HTTP.Auth)
 			if ctx.Err() != nil {
@@ -282,15 +275,6 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	return runtime, nil
 }
 
-// publicHosts lists the hosts the tunnel holds now: the canonical URL of each
-// relay, which only this identity can hold, and the alias its lease holds. The SDK
-// clears an alias as soon as the lease may be gone, because the relay may then give
-// the name to another identity, so the alias itself is the signal. The relay state
-// is not: every visitor connection takes an idle reverse session, so a relay
-// reports connecting while it serves a burst of requests on that alias. A lease
-// refresh clears both URLs until the lease is back, so a request on a connection
-// that outlives the lease is refused in that moment, and the alias comes back as a
-// new hold.
 func (runtime *Runtime) publicHosts() []appauth.PublicHost {
 	var hosts []appauth.PublicHost
 	for _, relay := range runtime.Exposure.Relays() {
@@ -301,8 +285,6 @@ func (runtime *Runtime) publicHosts() []appauth.PublicHost {
 
 // AuthProviderCheck reports whether the startup check of the application auth
 // provider has finished and, if it failed, why the provider is not usable.
-// Only the oidc, saml and email providers depend on anything outside the
-// tunnel; the check passes at once for the others.
 func (runtime *Runtime) AuthProviderCheck() (checked bool, err error) {
 	if check := runtime.authProvider.Load(); check != nil {
 		return true, check.err

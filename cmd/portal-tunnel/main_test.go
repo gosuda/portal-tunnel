@@ -8,8 +8,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
-// exposeSpec follows portal expose from its arguments to the tunnel spec, the
-// way runExposeCommand does before it starts the tunnel.
 func exposeSpec(t *testing.T, args ...string) (tunnel.Spec, error) {
 	t.Helper()
 	var cfg tunnel.Config
@@ -30,9 +28,6 @@ func setOIDCEnv(t *testing.T) {
 	t.Setenv("AUTH_OIDC_CLIENT_SECRET", "client-secret")
 }
 
-// AUTH_OIDC_* may be exported for a single service, so they must neither turn
-// application auth on for every other portal expose nor make another provider
-// fail validation.
 func TestExposeIgnoresOIDCEnvWithoutAuthOIDC(t *testing.T) {
 	setOIDCEnv(t)
 
@@ -67,8 +62,6 @@ func TestExposeAuthOIDCReadsEnv(t *testing.T) {
 	}
 }
 
-// A flag typed on the command line is deliberate: without --auth oidc it must
-// still be refused instead of starting a tunnel the operator believes is protected.
 func TestExposeRefusesExplicitOIDCFlagWithoutAuthOIDC(t *testing.T) {
 	for _, args := range [][]string{
 		{"--auth-oidc-issuer", "https://issuer.example.com", "3000"},
@@ -80,8 +73,6 @@ func TestExposeRefusesExplicitOIDCFlagWithoutAuthOIDC(t *testing.T) {
 	}
 }
 
-// AUTH_SAML_* follow the AUTH_OIDC_* rule: they count only with --auth saml,
-// and a typed --auth-saml-* flag without it is refused.
 func TestExposeAuthSAMLEnv(t *testing.T) {
 	t.Setenv("AUTH_SAML_METADATA_URL", "https://idp.example/metadata")
 	t.Setenv("AUTH_SAML_ENTITY_ID", "urn:portal:app")
@@ -112,8 +103,6 @@ func TestExposeAuthSAMLEnv(t *testing.T) {
 	}
 }
 
-// AUTH_SMTP_* follow the same rule, and --auth email refuses to start without
-// an allowlist, an SMTP server or a sender.
 func TestExposeAuthEmailEnv(t *testing.T) {
 	t.Setenv("AUTH_SMTP_ADDR", "smtp.example:587")
 	t.Setenv("AUTH_SMTP_USERNAME", "portal")
@@ -151,9 +140,6 @@ func TestExposeAuthEmailEnv(t *testing.T) {
 
 const identityProofEnv = "test-proof-0123456789"
 
-// AUTH_IDENTITY_PROOF may be exported for one service, so without
-// --auth-identity-headers it must neither turn application auth on for every
-// other portal expose nor make a protected one fail validation.
 func TestExposeIgnoresIdentityProofEnvWithoutIdentityHeaders(t *testing.T) {
 	t.Setenv("AUTH_IDENTITY_PROOF", identityProofEnv)
 
@@ -184,8 +170,6 @@ func TestExposeIdentityProofReadsEnvWithIdentityHeaders(t *testing.T) {
 	}
 }
 
-// A flag typed on the command line is deliberate: without --auth-identity-headers
-// it must be refused instead of starting a tunnel that sends no proof.
 func TestExposeRefusesExplicitIdentityProofWithoutIdentityHeaders(t *testing.T) {
 	for _, args := range [][]string{
 		{"--auth", "siwe", "--auth-identity-proof", identityProofEnv, "3000"},

@@ -8,10 +8,9 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// ControlBodyHandler bounds HTTP/1 control-body reads and closes the connection
-// after every request with a body. Cache POST/PUT handlers own their deadlines;
-// this handler still terminates unread bodies after their early rejections.
-// Apply it only to owned control routes, not arbitrary application uploads.
+// ControlBodyHandler bounds control-body reads and closes the connection
+// after requests with bodies. Apply it only to owned control routes, not
+// to application uploads.
 func ControlBodyHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor != 1 || r.Body == nil || r.Body == http.NoBody {
@@ -20,8 +19,6 @@ func ControlBodyHandler(next http.Handler) http.Handler {
 		}
 		controller := http.NewResponseController(w)
 		w.Header().Set("Connection", "close")
-		// net/http may drain the original body after the handler returns.
-		// Expire reads first, even when the handler rejected before decoding.
 		defer func() { _ = controller.SetReadDeadline(time.Now()) }()
 		if err := controller.EnableFullDuplex(); err != nil {
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, "full-duplex request handling unavailable")
@@ -34,8 +31,6 @@ func ControlBodyHandler(next http.Handler) http.Handler {
 				return
 			}
 		}
-		// Reverse carriers upgrade bodyless GET requests. Reject an HTTP body
-		// before hijacking so cleanup cannot expire a live reverse connection.
 		if r.URL.Path == types.PathSDKConnect && r.Method == http.MethodGet {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "reverse connect must not include a request body")
 			return
