@@ -44,7 +44,6 @@ const (
 	defaultLeaseBridgeLimit                  = 128
 )
 
-// requestedLeaseTTL checks seconds before conversion to avoid duration overflow.
 func requestedLeaseTTL(seconds int) (time.Duration, error) {
 	if seconds <= 0 {
 		return defaultLeaseTTL, nil
@@ -68,25 +67,16 @@ type leaseRegistry struct {
 	tcpPorts       portPool
 	bindings       *keyless.BindingRegistry
 
-	// blocked holds the relay-pushed access results for identities the relay
-	// does not route. Presence is the decision; the timestamp bounds stale
-	// entries for identities whose registration never completed.
-	blocked map[types.ServiceIdentityKey]blockedIdentity
-	// Access revisions describe complete relay snapshots, so the newest
-	// observed revision fences older publications for every identity. Keep
-	// this watermark when idle blocked entries expire to prevent stale replay.
+	blocked        map[types.ServiceIdentityKey]blockedIdentity
 	accessRevision uint64
 
 	udpEnabled, tcpPortEnabled bool
 	udpMaxLeases, tcpMaxLeases int
-	// unapprovedPerSource bounds the leases one source can hold without being
-	// routable. Zero disables the bound.
-	unapprovedPerSource int
+	unapprovedPerSource        int
 
 	mu sync.RWMutex
 }
 
-// blockedIdentity keeps the answer a refused reverse connect gets.
 type blockedIdentity struct {
 	pushedAt time.Time
 	refusal  *apiError
@@ -122,7 +112,6 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 	}, nil
 }
 
-// setTransportPolicy publishes both transport policies under one registry lock.
 func (r *leaseRegistry) setTransportPolicy(udpEnabled bool, udpMaxLeases int, tcpEnabled bool, tcpMaxLeases int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -144,11 +133,6 @@ func (r *leaseRegistry) tcpPortPolicy() (bool, int) {
 	return r.tcpPortEnabled, r.tcpMaxLeases
 }
 
-// setIdentityAccess applies the relay-pushed access result for one
-// identity. A non-routable identity also loses its cached content
-// immediately: cached sites must never outlive the relay's decision to route
-// their owner. It loses its idle reverse streams too, so the SDK stops
-// reporting ready and learns the decision from its next reverse connect.
 func (r *leaseRegistry) setIdentityAccess(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64) bool {
 	if r == nil || !key.Valid() {
 		return true
@@ -172,17 +156,12 @@ func (r *leaseRegistry) setIdentityAccess(key types.ServiceIdentityKey, access t
 		}
 	}
 	r.mu.Unlock()
-	// A TLS close can wait on its peer, so it must not hold the registry lock.
 	for _, closeStreams := range closeIdle {
 		closeStreams()
 	}
 	return true
 }
 
-// suspendIdentity keeps registration fail-closed without inventing a relay
-// revision. Only a publication at the current or a newer revision can reopen it.
-// It leaves idle reverse streams alone: the suspension is not a decision, and a
-// failed re-registration must not cost the live lease its streams.
 func (r *leaseRegistry) suspendIdentity(key types.ServiceIdentityKey) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -213,8 +192,6 @@ func (r *leaseRegistry) applyIdentityAccessLocked(key types.ServiceIdentityKey, 
 		}
 	}
 	if !routable {
-		// DetachOwner only changes cache metadata. Keep revocation ordered
-		// with access publication so an older deny cannot detach newer content.
 		r.cache.DetachOwner(key)
 	}
 }
@@ -228,14 +205,11 @@ func (r *leaseRegistry) isRoutable(key types.ServiceIdentityKey) bool {
 	return r.isRoutableLocked(key)
 }
 
-// isRoutableLocked reads the pushed access result; the caller must hold r.mu.
 func (r *leaseRegistry) isRoutableLocked(key types.ServiceIdentityKey) bool {
 	_, blocked := r.blocked[key]
 	return !blocked
 }
 
-// admitBridge counts pending acquisition and active traffic together. Mutable
-// lease facts stay under the registry lock; lock order is registry then record.
 func (r *leaseRegistry) admitBridge(ctx context.Context, record *leaseRecord, inbound net.Conn) (*leaseBridge, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -262,11 +236,6 @@ func (r *leaseRegistry) admitBridge(ctx context.Context, record *leaseRecord, in
 	return bridge, nil
 }
 
-// activateBridge repeats admission after waiting and takes ownership before
-// any activation bytes are written. Lease closure interrupts framing by closing
-// the endpoints. A routing deny cancels this reservation; the framing helper
-// may still use its own five-second write limit before the worker exits. The
-// canceled context prevents application data from being copied afterward.
 func (r *leaseRegistry) activateBridge(record *leaseRecord, bridge *leaseBridge, reverse net.Conn) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -281,7 +250,6 @@ func (r *leaseRegistry) activateBridge(record *leaseRecord, bridge *leaseBridge,
 	if _, exists := record.bridges[bridge]; !exists || record.closed || bridge.ctx.Err() != nil {
 		return net.ErrClosed
 	}
-	// A retrying caller has already closed the previous failed framing stream.
 	bridge.reverse = reverse
 	return nil
 }
@@ -316,6 +284,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	defer r.mu.RUnlock()
 
 	now := time.Now()
+	var wildcard *leaseRecord
 	for _, record := range r.records {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
 			continue
@@ -324,17 +293,13 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 			if hostname == host {
 				return record, true
 			}
-		}
-	}
-	for _, record := range r.records {
-		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
-			continue
-		}
-		for _, hostname := range record.hostnames() {
-			if hostname != host && utils.HostnameMatchesPattern(hostname, host) {
-				return record, true
+			if wildcard == nil && utils.HostnameMatchesPattern(hostname, host) {
+				wildcard = record
 			}
 		}
+	}
+	if wildcard != nil {
+		return wildcard, true
 	}
 	return nil, false
 }
@@ -359,9 +324,7 @@ func (r *leaseRegistry) recordByLease(key types.ServiceIdentityKey, leaseID stri
 	return record
 }
 
-// recordForVerifiedLease distinguishes a missing lease from a stale credential.
-// The caller must already have verified the credential and must hold r.mu.
-func (r *leaseRegistry) recordForVerifiedLease(key types.ServiceIdentityKey, leaseID string, now time.Time) (*leaseRecord, error) {
+func (r *leaseRegistry) recordForVerifiedLeaseLocked(key types.ServiceIdentityKey, leaseID string, now time.Time) (*leaseRecord, error) {
 	record := r.recordByKey(key, now)
 	if record == nil {
 		return nil, errLeaseNotFound
@@ -372,16 +335,6 @@ func (r *leaseRegistry) recordForVerifiedLease(key types.ServiceIdentityKey, lea
 	return record, nil
 }
 
-// refuseChallengeOverBudget treats unapproved leases as a resource to bound, not
-// as an intent to judge: they hold aliases, ports and capacity, so one source
-// gets a fixed budget of them, and a challenge counts until it is used. A
-// routable identity is never refused, and an unknown source fails open.
-// Concurrent registrations can overshoot the limit by the few that pass between
-// a challenge being used and its lease being recorded.
-//
-// A refusal takes back the challenge just issued for key, so the client waits
-// holding nothing: no challenge to expire and no slot of the pending cap, which
-// the same source's approved identities also need.
 func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, challengeID string, source netip.Addr) error {
 	now := time.Now().UTC()
 	r.mu.Lock()
@@ -421,8 +374,6 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 	return errUnapprovedLeaseLimit
 }
 
-// Register admits a lease. served is the relay certificate served now, whose
-// chain the tenant is about to pin (nil when unknown).
 func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, types.RegisterResponse{}, errFeatureUnavailable
@@ -466,9 +417,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
-	// first_seen_at is relay-observed lease continuity. The client-reported
-	// started_at is only a bounded hint for a lease the relay has not seen yet;
-	// a live replacement below keeps the earlier observed value.
 	firstSeenAt := issuedAt
 	if !req.StartedAt.IsZero() && req.StartedAt.Before(issuedAt) {
 		firstSeenAt = req.StartedAt.UTC()
@@ -588,7 +536,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 			i--
 		}
 	}
-	r.cache.Register(record.cacheLease(), req)
+	r.cache.Register(record.cacheLeaseLocked(), req)
 	if replacedIndex >= 0 {
 		if !replaced.isExpired(now) && !replaced.FirstSeenAt.IsZero() && replaced.FirstSeenAt.Before(record.FirstSeenAt) {
 			record.FirstSeenAt = replaced.FirstSeenAt
@@ -675,7 +623,7 @@ func (r *leaseRegistry) admitReverseCapability(token string) (*leaseRecord, erro
 func (r *leaseRegistry) admitLeaseIdentity(key types.ServiceIdentityKey, leaseID string, now time.Time, requireDatagram bool) (*leaseRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	record, err := r.recordForVerifiedLease(key, leaseID, now)
+	record, err := r.recordForVerifiedLeaseLocked(key, leaseID, now)
 	if err != nil {
 		return nil, err
 	}
@@ -696,9 +644,6 @@ type reverseEndpointInput struct {
 	useOverlay    bool
 }
 
-// Renew extends a lease. current is the relay certificate served now: a lease
-// whose SDK cannot re-pin and whose pinned chain no longer verifies it is asked
-// to register again instead (see stalePin).
 func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, current *acme.TLSMaterial) (types.RenewResponse, reverseEndpointInput, error) {
 	if r == nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, errFeatureUnavailable
@@ -718,12 +663,12 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 	leaseKey := claims.Identity.ServiceKey()
 	reportedIP := utils.SanitizeReportedIP(req.ReportedIP)
 	r.mu.Lock()
-	record, err := r.recordForVerifiedLease(leaseKey, claims.LeaseID, time.Time{})
+	record, err := r.recordForVerifiedLeaseLocked(leaseKey, claims.LeaseID, time.Time{})
 	if err != nil {
 		r.mu.Unlock()
 		return types.RenewResponse{}, reverseEndpointInput{}, err
 	}
-	if !req.RepinsChain && r.stalePin(record, current) {
+	if !req.RepinsChain && r.stalePinLocked(record, current) {
 		r.mu.Unlock()
 		return types.RenewResponse{}, reverseEndpointInput{}, errLeaseNotFound
 	}
@@ -739,7 +684,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 		record.ReportedIP = reportedIP
 	}
 	record.Metadata = req.Metadata.Copy()
-	r.cache.Renew(record.cacheLease())
+	r.cache.Renew(record.cacheLeaseLocked())
 	recordIdentity := record.Identity
 	leaseID := record.id
 	useOverlay := record.Overlay
@@ -762,21 +707,7 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 	}, reverseInput, nil
 }
 
-// stalePin reports whether the tenant of record, on an SDK that pins the relay
-// chain once, can no longer reach /v1/sign: its signer connection trusts the
-// chain it pinned, and the relay now serves a certificate that chain does not
-// verify (a renewal by another intermediate). Such a tenant fails every
-// handshake until it registers again, which lease_not_found makes it do; the
-// new record then pins the current chain, so each change asks each lease at
-// most once. The verdict always rests on the chain the lease registered under,
-// the one the SDK pinned: verifying against a chain that itself only verified
-// (one that carries a cross-signed root, say) would accept what the pin does
-// not. A chain that verifies is remembered, so the check runs once per lease and
-// change. The tenant pins its chain just after registering, so a renewal in
-// between can make the record older than the pin; that costs at most one
-// needless re-registration and needs no other source for the chain. The caller
-// holds r.mu.
-func (r *leaseRegistry) stalePin(record *leaseRecord, current *acme.TLSMaterial) bool {
+func (r *leaseRegistry) stalePinLocked(record *leaseRecord, current *acme.TLSMaterial) bool {
 	if record.pinnedChain == nil || current == nil || bytes.Equal(record.pinnedChain, current.CertPEM) || bytes.Equal(record.verifiedChain, current.CertPEM) {
 		return false
 	}
@@ -817,7 +748,7 @@ func (r *leaseRegistry) issueReverseEndpoint(input reverseEndpointInput, self ty
 		}
 	}
 	r.mu.RLock()
-	_, activeErr := r.recordForVerifiedLease(input.leaseIdentity.ServiceKey(), input.leaseID, time.Now().UTC())
+	_, activeErr := r.recordForVerifiedLeaseLocked(input.leaseIdentity.ServiceKey(), input.leaseID, time.Now().UTC())
 	r.mu.RUnlock()
 	if activeErr != nil {
 		if r.overlay != nil {
@@ -838,7 +769,7 @@ func (r *leaseRegistry) resolveReverseEndpoint(req types.ReverseEndpointRequest)
 		return reverseEndpointInput{}, errUnauthorized
 	}
 	r.mu.RLock()
-	record, err := r.recordForVerifiedLease(claims.Identity.ServiceKey(), claims.LeaseID, now)
+	record, err := r.recordForVerifiedLeaseLocked(claims.Identity.ServiceKey(), claims.LeaseID, now)
 	if err != nil {
 		r.mu.RUnlock()
 		return reverseEndpointInput{}, err
@@ -910,15 +841,17 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	globalPending := 0
 	for i := 0; i < len(r.records); {
 		record := r.records[i]
-		if record != nil && record.registerChallenge != nil {
-			if record.isExpired(now) {
-				r.deleteRecord(i)
-				continue
-			}
-			globalPending++
-			if record.sourceAddr == sourceAddr {
-				pending++
-			}
+		if record == nil || record.registerChallenge == nil {
+			i++
+			continue
+		}
+		if record.isExpired(now) {
+			r.deleteRecord(i)
+			continue
+		}
+		globalPending++
+		if record.sourceAddr == sourceAddr {
+			pending++
 		}
 		i++
 	}
@@ -938,9 +871,6 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	}, nil
 }
 
-// consumeVerifiedRegisterChallenge takes one verified challenge and the source
-// that asked for it. The lease belongs to that source, because the unapproved
-// budget is checked there: registering from a second address must not escape it.
 func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*identity.RegisterChallenge, netip.Addr, error) {
 	challengeID := strings.TrimSpace(req.ChallengeID)
 	if challengeID == "" {
@@ -970,9 +900,6 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 	return nil, netip.Addr{}, identity.ErrRegisterChallengeNotFound
 }
 
-// verifySigningAccessTokenLease authenticates the access-token header of a
-// /v1/sign request and returns the live, routable lease it belongs to. The
-// returned leaseID is the only identity a transcript signature may bind to.
 func (r *leaseRegistry) verifySigningAccessTokenLease(req *http.Request) (string, bool) {
 	now := time.Now().UTC()
 	claims, err := identity.VerifyLeaseAccessToken(req.Header.Get(types.HeaderAccessToken), r.tokenAuthority.Identity().PublicKey, r.tokenIssuer, now)
@@ -983,7 +910,7 @@ func (r *leaseRegistry) verifySigningAccessTokenLease(req *http.Request) (string
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	record, err := r.recordForVerifiedLease(claims.Identity.ServiceKey(), claims.LeaseID, now)
+	record, err := r.recordForVerifiedLeaseLocked(claims.Identity.ServiceKey(), claims.LeaseID, now)
 	if err != nil {
 		return "", false
 	}
@@ -1026,10 +953,6 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 		}
 		i++
 	}
-	// Drop stale pushed access results for identities with no lease: their
-	// registration never completed or the lease is gone, and the next
-	// registration re-pushes the relay's current decision first. Fresh
-	// entries survive so an in-flight registration cannot lose its decision.
 	for key, blocked := range r.blocked {
 		if now.Sub(blocked.pushedAt) <= defaultRegisterChallengeTTL {
 			continue
@@ -1058,18 +981,19 @@ func (r *leaseRegistry) PublicLeases(now time.Time) []types.Lease {
 		if record.Metadata.Hide {
 			continue
 		}
-		if record.reverse != nil {
-			identityKey := record.ServiceKey()
-			if !r.isRoutableLocked(identityKey) {
-				continue
-			}
-			since := time.Duration(0)
-			if !record.LastSeenAt.IsZero() {
-				since = max(now.Sub(record.LastSeenAt), 0)
-			}
-			if record.reverse.ReadyCount() == 0 && since >= 3*time.Minute {
-				continue
-			}
+		if record.reverse == nil {
+			leases = append(leases, r.publicLease(record))
+			continue
+		}
+		if !r.isRoutableLocked(record.ServiceKey()) {
+			continue
+		}
+		since := time.Duration(0)
+		if !record.LastSeenAt.IsZero() {
+			since = max(now.Sub(record.LastSeenAt), 0)
+		}
+		if record.reverse.ReadyCount() == 0 && since >= 3*time.Minute {
+			continue
 		}
 		leases = append(leases, r.publicLease(record))
 	}
@@ -1119,7 +1043,7 @@ func (r *leaseRegistry) stats(now time.Time) (activeLeases, activeUDPFlows int64
 
 func (r *leaseRegistry) deleteRecord(i int) {
 	if record := r.records[i]; record != nil {
-		r.cache.Detach(record.cacheLease())
+		r.cache.Detach(record.cacheLeaseLocked())
 	}
 	if record := r.records[i]; record != nil && r.overlay != nil {
 		r.overlay.ForgetLease(record.id)
@@ -1155,9 +1079,6 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 	return lease
 }
 
-// closeRecord releases sockets before making their ports available for reuse.
-// Resource shutdown never holds the registry lock. The reservation owner check
-// makes repeated cleanup harmless even after a port has been reassigned.
 func (r *leaseRegistry) closeRecord(record *leaseRecord) {
 	if record == nil {
 		return
@@ -1173,8 +1094,6 @@ func (r *leaseRegistry) closeRecord(record *leaseRecord) {
 	}
 }
 
-// rollbackRecord closes a registration that was never accepted, returning fresh
-// ports immediately and restoring any unexpired reservation it reclaimed.
 func (r *leaseRegistry) rollbackRecord(record *leaseRecord) {
 	if record == nil {
 		return
@@ -1204,8 +1123,6 @@ type portAllocation struct {
 
 // portPool is registry-owned reservation metadata; all access holds leaseRegistry.mu.
 type portPool struct {
-	// Free ports are reused in queue order so a failed bind does not keep
-	// selecting the same port while other candidates remain available.
 	available []int
 	inUse     map[int]portAllocation
 	reserved  map[types.ServiceIdentityKey]portReservation
@@ -1253,10 +1170,6 @@ func (a *portPool) allocate(record *leaseRecord) (int, error) {
 	return port, nil
 }
 
-// rollback restores an existing reservation without extending its lifetime.
-// Fresh allocations go to the back of the queue so bind failures do not starve
-// registrations while other ports are available.
-// Match the current owner so late cleanup cannot free a reassigned port.
 func (a *portPool) rollback(port int, record *leaseRecord) {
 	allocation, ok := a.inUse[port]
 	if !ok || allocation.record != record {
