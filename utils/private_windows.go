@@ -120,6 +120,11 @@ func secureWindowsPath(path string, directory bool) error {
 	return err
 }
 
+const (
+	localSystemSID           = "S-1-5-18"
+	builtinAdministratorsSID = "S-1-5-32-544"
+)
+
 func privateWindowsDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, *windows.SID, error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -131,7 +136,7 @@ func privateWindowsDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, *wi
 		return nil, nil, errCurrentWindowsIdentityHasNoSid
 	}
 	principals := []string{"SY", "BA"}
-	if sid != "S-1-5-18" && sid != "S-1-5-32-544" {
+	if sid != localSystemSID && sid != builtinAdministratorsSID {
 		principals = append(principals, sid)
 	}
 	flags := ""
@@ -160,9 +165,9 @@ func verifyWindowsPath(path string, currentUser *windows.SID, directory bool) (*
 		return nil, fmt.Errorf("private path %q has no security descriptor", path)
 	}
 	allowed := map[string]bool{
-		currentUser.String(): true,
-		"S-1-5-18":           true,
-		"S-1-5-32-544":       true,
+		currentUser.String():     true,
+		localSystemSID:           true,
+		builtinAdministratorsSID: true,
 	}
 	owner, _, err := actual.Owner()
 	if err != nil {
