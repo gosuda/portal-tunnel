@@ -307,3 +307,20 @@ func TestSAMLPrincipalCarriesTheVouchedEmail(t *testing.T) {
 		})
 	}
 }
+
+func TestParseSAMLMetadataSelectsRedirectBinding(t *testing.T) {
+	t.Parallel()
+
+	idp := newSAMLTestIdP(t)
+	parsed, err := parseSAMLMetadata([]byte(idp.metadata))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.ssoURL != idp.server.URL+"/sso" {
+		t.Fatalf("ssoURL = %q; want the HTTP-Redirect service at %q", parsed.ssoURL, idp.server.URL+"/sso")
+	}
+	postOnly := strings.Replace(idp.metadata, ` Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"`, ``, 1)
+	if _, err := parseSAMLMetadata([]byte(postOnly)); !errors.Is(err, errSAMLMetadataNoRedirectSSO) {
+		t.Fatalf("metadata without a redirect binding: error = %v; want %v", err, errSAMLMetadataNoRedirectSSO)
+	}
+}
