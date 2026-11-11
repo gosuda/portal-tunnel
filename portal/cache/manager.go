@@ -64,16 +64,8 @@ func New(cfg Config, dir string) (*Manager, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	children, err := os.ReadDir(dir)
-	if err != nil {
+	if err := clearStaleCacheDirs(dir); err != nil {
 		return nil, err
-	}
-	for _, child := range children {
-		if child.IsDir() && strings.HasPrefix(child.Name(), "portal-cache-") {
-			if err := os.RemoveAll(filepath.Join(dir, child.Name())); err != nil {
-				return nil, err
-			}
-		}
 	}
 	exposureBytes := min(64<<20, max(1, cfg.MaxBytes/4))
 	return &Manager{
@@ -83,6 +75,21 @@ func New(cfg Config, dir string) (*Manager, error) {
 		uploads: make(map[types.ServiceIdentityKey]struct{}),
 		checks:  make(chan struct{}, 2),
 	}, nil
+}
+
+func clearStaleCacheDirs(dir string) error {
+	children, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		if child.IsDir() && strings.HasPrefix(child.Name(), "portal-cache-") {
+			if err := os.RemoveAll(filepath.Join(dir, child.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Manager) retireLocked(site *cachedSite) {
@@ -324,19 +331,7 @@ func (c *Manager) reserve(size int64) error {
 			c.mu.Unlock()
 			return nil
 		}
-		var oldest *cachedSite
-		for _, site := range c.entries {
-			if site.readers != 0 {
-				continue
-			}
-			if oldest == nil {
-				oldest = site
-				continue
-			}
-			if site.usedAt.Before(oldest.usedAt) || (site.usedAt.Equal(oldest.usedAt) && site.host < oldest.host) {
-				oldest = site
-			}
-		}
+		oldest := c.oldestEvictableLocked()
 		if oldest == nil {
 			c.mu.Unlock()
 			return errRelayCacheIsFull
@@ -345,6 +340,23 @@ func (c *Manager) reserve(size int64) error {
 		c.mu.Unlock()
 		c.collect(time.Now())
 	}
+}
+
+func (c *Manager) oldestEvictableLocked() *cachedSite {
+	var oldest *cachedSite
+	for _, site := range c.entries {
+		if site.readers != 0 {
+			continue
+		}
+		if oldest == nil {
+			oldest = site
+			continue
+		}
+		if site.usedAt.Before(oldest.usedAt) || (site.usedAt.Equal(oldest.usedAt) && site.host < oldest.host) {
+			oldest = site
+		}
+	}
+	return oldest
 }
 
 // Has is an ingress routing hint; it does not pin disk content.

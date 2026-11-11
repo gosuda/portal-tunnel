@@ -51,38 +51,69 @@ func TestPublicURLForLeaseUsesRelayAuthority(t *testing.T) {
 
 func TestAliasSinceDatesTheCurrentHold(t *testing.T) {
 	const relayURL, public, alias = "https://relay.example", "https://long.relay.example", "https://short.relay.example"
+	fixture := newAliasSinceHoldFixture(t, relayURL, public, alias)
+	checkAliasSinceHoldInitial(t, fixture)
+	checkAliasSinceHoldBurst(t, fixture)
+	checkAliasSinceHoldLoss(t, fixture)
+	checkAliasSinceHoldReacquire(t, fixture)
+}
+
+type aliasSinceHoldFixture struct {
+	exposure  *Exposure
+	relayURL  string
+	publicURL string
+	aliasURL  string
+	first     time.Time
+}
+
+func newAliasSinceHoldFixture(t *testing.T, relayURL, publicURL, aliasURL string) *aliasSinceHoldFixture {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 	exposure := &Exposure{
 		cancel:         cancel,
 		done:           ctx.Done(),
 		accepted:       make(chan net.Conn, 1),
 		relayListeners: make(map[string]*listener),
 	}
-	status := func() RelayStatus { return exposure.statuses[relayURL] }
+	return &aliasSinceHoldFixture{exposure: exposure, relayURL: relayURL, publicURL: publicURL, aliasURL: aliasURL}
+}
 
-	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: public, aliasURL: alias}, nil)
-	first := status().AliasSince
+func checkAliasSinceHoldInitial(t *testing.T, fixture *aliasSinceHoldFixture) {
+	t.Helper()
+	fixture.exposure.applyRelayStatus(fixture.relayURL, listenerStatus{state: RelayReady, publicURL: fixture.publicURL, aliasURL: fixture.aliasURL}, nil)
+	first := fixture.exposure.statuses[fixture.relayURL].AliasSince
 	if first.IsZero() {
 		t.Fatal("a held alias has no date")
 	}
-	// Start with an older hold so reacquisition need not fall on a different
-	// clock tick, which is not guaranteed on Windows.
-	held := status()
-	held.AliasSince = first.Add(-time.Hour)
-	exposure.statuses[relayURL] = held
-	first = held.AliasSince
-	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting, publicURL: public, aliasURL: alias}, nil)
-	if got := status().AliasSince; !got.Equal(first) {
-		t.Fatalf("a burst moved the date from %v to %v", first, got)
+	fixture.first = first
+}
+
+func checkAliasSinceHoldBurst(t *testing.T, fixture *aliasSinceHoldFixture) {
+	t.Helper()
+	held := fixture.exposure.statuses[fixture.relayURL]
+	held.AliasSince = fixture.first.Add(-time.Hour)
+	fixture.exposure.statuses[fixture.relayURL] = held
+	fixture.first = held.AliasSince
+	fixture.exposure.applyRelayStatus(fixture.relayURL, listenerStatus{state: RelayConnecting, publicURL: fixture.publicURL, aliasURL: fixture.aliasURL}, nil)
+	if got := fixture.exposure.statuses[fixture.relayURL].AliasSince; !got.Equal(fixture.first) {
+		t.Fatalf("a burst moved the date from %v to %v", fixture.first, got)
 	}
-	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting}, nil)
-	if got := status(); got.AliasURL != "" || !got.AliasSince.IsZero() {
+}
+
+func checkAliasSinceHoldLoss(t *testing.T, fixture *aliasSinceHoldFixture) {
+	t.Helper()
+	fixture.exposure.applyRelayStatus(fixture.relayURL, listenerStatus{state: RelayConnecting}, nil)
+	if got := fixture.exposure.statuses[fixture.relayURL]; got.AliasURL != "" || !got.AliasSince.IsZero() {
 		t.Fatalf("a lost alias kept %q since %v", got.AliasURL, got.AliasSince)
 	}
-	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: public, aliasURL: alias}, nil)
-	if got := status().AliasSince; got.IsZero() || got.Equal(first) {
-		t.Fatalf("an alias that came back has date %v, the old hold's was %v", got, first)
+}
+
+func checkAliasSinceHoldReacquire(t *testing.T, fixture *aliasSinceHoldFixture) {
+	t.Helper()
+	fixture.exposure.applyRelayStatus(fixture.relayURL, listenerStatus{state: RelayReady, publicURL: fixture.publicURL, aliasURL: fixture.aliasURL}, nil)
+	if got := fixture.exposure.statuses[fixture.relayURL].AliasSince; got.IsZero() || got.Equal(fixture.first) {
+		t.Fatalf("an alias that came back has date %v, the old hold's was %v", got, fixture.first)
 	}
 }
 
@@ -122,7 +153,8 @@ func TestRelayApprovalReadsTheRefusalCode(t *testing.T) {
 	}
 }
 
-func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
+func newRefusalListener(t *testing.T) (*listener, func() listenerStatus, func()) {
+	t.Helper()
 	relayURL, err := url.Parse("https://relay.example")
 	if err != nil {
 		t.Fatal(err)
@@ -136,8 +168,6 @@ func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
 			tcpAddr:     "demo.relay.example:40000",
 		}),
 	}
-	pending := &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}
-	denied := &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}
 	update := func() listenerStatus {
 		t.Helper()
 		select {
@@ -156,38 +186,78 @@ func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
 		default:
 		}
 	}
+	return l, update, quiet
+}
 
-	l.reportRefusal(pending)
-	if got := update(); got.state != RelayConnecting || got.approval != RelayApprovalPending || got.publicURL != "" || got.tcpAddr != "" {
+func TestListenerReportsARefusalUntilAStreamOpens(t *testing.T) {
+	fixture := newListenerRefusalFixture(t)
+	checkListenerRefusalWaiting(t, fixture)
+	checkListenerRefusalDenied(t, fixture)
+	checkListenerRefusalReady(t, fixture)
+	checkListenerRefusalReconnecting(t, fixture)
+}
+
+type listenerRefusalFixture struct {
+	l       *listener
+	update  func() listenerStatus
+	quiet   func()
+	pending *types.APIRequestError
+	denied  *types.APIRequestError
+}
+
+func newListenerRefusalFixture(t *testing.T) *listenerRefusalFixture {
+	t.Helper()
+	l, update, quiet := newRefusalListener(t)
+	return &listenerRefusalFixture{
+		l:       l,
+		update:  update,
+		quiet:   quiet,
+		pending: &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected},
+		denied:  &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied},
+	}
+}
+
+func checkListenerRefusalWaiting(t *testing.T, fixture *listenerRefusalFixture) {
+	t.Helper()
+	fixture.l.reportRefusal(fixture.pending)
+	if got := fixture.update(); got.state != RelayConnecting || got.approval != RelayApprovalPending || got.publicURL != "" || got.tcpAddr != "" {
 		t.Fatalf("waiting status = %+v", got)
 	}
-	l.reportRefusal(pending)
-	quiet()
-	l.reportRefusal(denied)
-	if got := update(); got.approval != RelayApprovalRefused {
+}
+
+func checkListenerRefusalDenied(t *testing.T, fixture *listenerRefusalFixture) {
+	t.Helper()
+	fixture.l.reportRefusal(fixture.pending)
+	fixture.quiet()
+	fixture.l.reportRefusal(fixture.denied)
+	if got := fixture.update(); got.approval != RelayApprovalRefused {
 		t.Fatalf("denied status = %+v", got)
 	}
+}
 
-	l.reportStreamReady()
-	if got := update(); got.state != RelayReady || got.approval != "" || got.publicURL == "" {
+func checkListenerRefusalReady(t *testing.T, fixture *listenerRefusalFixture) {
+	t.Helper()
+	fixture.l.reportStreamReady()
+	if got := fixture.update(); got.state != RelayReady || got.approval != "" || got.publicURL == "" {
 		t.Fatalf("ready status = %+v", got)
 	}
+	fixture.l.reportRefusal(fixture.pending)
+	fixture.quiet()
+}
 
-	l.reportRefusal(pending)
-	quiet()
-
-	l.reportStreamClosed()
-	if got := update(); got.state != RelayConnecting || got.approval != "" {
+func checkListenerRefusalReconnecting(t *testing.T, fixture *listenerRefusalFixture) {
+	t.Helper()
+	fixture.l.reportStreamClosed()
+	if got := fixture.update(); got.state != RelayConnecting || got.approval != "" {
 		t.Fatalf("reconnecting status = %+v", got)
 	}
-	l.reportRefusal(pending)
-	if got := update(); got.approval != RelayApprovalPending {
+	fixture.l.reportRefusal(fixture.pending)
+	if got := fixture.update(); got.approval != RelayApprovalPending {
 		t.Fatalf("revoked status = %+v", got)
 	}
-
-	l.clearLease("")
-	l.reportRefusal(pending)
-	quiet()
+	fixture.l.clearLease("")
+	fixture.l.reportRefusal(fixture.pending)
+	fixture.quiet()
 }
 
 func TestApprovalKeepsARelayOutOfTheActiveSet(t *testing.T) {
@@ -239,6 +309,18 @@ func TestRelaySetChangeKeepsTheStatus(t *testing.T) {
 }
 
 func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
+	fixture := newExposureMetadataFixture()
+	checkExposureMetadataCopyIsolated(t, fixture)
+	checkExposureMetadataPropagates(t, fixture)
+	checkMetadataRejectsOversize(t, fixture)
+}
+
+type exposureMetadataFixture struct {
+	exposure *Exposure
+	ln       *listener
+}
+
+func newExposureMetadataFixture() *exposureMetadataFixture {
 	ln := &listener{
 		metadata: types.LeaseMetadata{Tags: []string{"initial"}},
 	}
@@ -246,21 +328,34 @@ func TestExposureMetadataCopiesDoNotShareMutableState(t *testing.T) {
 		metadata:       types.LeaseMetadata{Tags: []string{"initial"}},
 		relayListeners: map[string]*listener{"https://relay.example": ln},
 	}
-	metadata := exposure.metadata.Copy()
+	return &exposureMetadataFixture{exposure: exposure, ln: ln}
+}
+
+func checkExposureMetadataCopyIsolated(t *testing.T, fixture *exposureMetadataFixture) {
+	t.Helper()
+	metadata := fixture.exposure.metadata.Copy()
 	metadata.Tags[0] = "mutated"
-	if got := exposure.metadata.Tags[0]; got != "initial" {
+	if got := fixture.exposure.metadata.Tags[0]; got != "initial" {
 		t.Fatalf("Metadata.Tags[0] = %q, want initial", got)
 	}
-	if err := exposure.UpdateMetadata(types.LeaseMetadata{Tags: []string{"updated"}}); err != nil {
+}
+
+func checkExposureMetadataPropagates(t *testing.T, fixture *exposureMetadataFixture) {
+	t.Helper()
+	if err := fixture.exposure.UpdateMetadata(types.LeaseMetadata{Tags: []string{"updated"}}); err != nil {
 		t.Fatalf("UpdateMetadata() error = %v", err)
 	}
-	if got := ln.metadataSnapshot().Tags[0]; got != "updated" {
+	if got := fixture.ln.metadataSnapshot().Tags[0]; got != "updated" {
 		t.Fatalf("listener Metadata.Tags[0] = %q, want updated", got)
 	}
-	if err := exposure.UpdateMetadata(types.LeaseMetadata{Description: strings.Repeat("a", 4097)}); err == nil {
+}
+
+func checkMetadataRejectsOversize(t *testing.T, fixture *exposureMetadataFixture) {
+	t.Helper()
+	if err := fixture.exposure.UpdateMetadata(types.LeaseMetadata{Description: strings.Repeat("a", 4097)}); err == nil {
 		t.Fatal("UpdateMetadata() accepted oversized metadata")
 	}
-	if exposure.metadata.Description != "" || exposure.metadata.Tags[0] != "updated" || ln.metadataSnapshot().Tags[0] != "updated" {
+	if fixture.exposure.metadata.Description != "" || fixture.exposure.metadata.Tags[0] != "updated" || fixture.ln.metadataSnapshot().Tags[0] != "updated" {
 		t.Fatal("rejected metadata update changed exposure or listener metadata")
 	}
 }

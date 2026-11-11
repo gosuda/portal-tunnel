@@ -154,42 +154,66 @@ func (a *clientHelloAccumulator) clone() clientHelloAccumulator {
 	return clone
 }
 
+func (a *clientHelloAccumulator) takeRecord() ([]byte, bool, error) {
+	if a.pending[0] != tlsHandshakeContentType {
+		return nil, false, errClientHelloContainsNonHandshakeTLS
+	}
+	recordLen := int(a.pending[3])<<8 | int(a.pending[4])
+	if recordLen == 0 || recordLen > maxTLSRecordPayload {
+		return nil, false, errClientHelloTLSRecordHasInvalid
+	}
+	if len(a.pending) < tlsRecordHeaderLen+recordLen {
+		return nil, false, nil
+	}
+	body := a.pending[tlsRecordHeaderLen : tlsRecordHeaderLen+recordLen]
+	a.pending = a.pending[tlsRecordHeaderLen+recordLen:]
+	return body, true, nil
+}
+
+func (a *clientHelloAccumulator) appendHelloPrefix(body []byte) ([]byte, error) {
+	need := min(4-len(a.hello), len(body))
+	a.hello = append(a.hello, body[:need]...)
+	body = body[need:]
+	if len(a.hello) != 4 {
+		return body, nil
+	}
+	if a.hello[0] != clientHelloType {
+		return nil, errFirstTLSHandshakeMessageNotClient
+	}
+	messageLen := int(a.hello[1])<<16 | int(a.hello[2])<<8 | int(a.hello[3])
+	a.expected = 4 + messageLen
+	if messageLen == 0 || a.expected > maxClientHelloSize {
+		return nil, errClientHelloHandshakeHasInvalidLength
+	}
+	return body, nil
+}
+
+func (a *clientHelloAccumulator) consumeHelloBody(body []byte) ([]byte, bool, error) {
+	if a.expected == 0 && len(a.hello) < 4 {
+		var err error
+		if body, err = a.appendHelloPrefix(body); err != nil {
+			return nil, false, err
+		}
+	}
+	if a.expected > 0 {
+		need := min(a.expected-len(a.hello), len(body))
+		a.hello = append(a.hello, body[:need]...)
+		if len(a.hello) == a.expected {
+			return append([]byte(nil), a.hello...), true, nil
+		}
+	}
+	return nil, false, nil
+}
+
 func (a *clientHelloAccumulator) add(p []byte) ([]byte, bool, error) {
 	a.pending = append(a.pending, p...)
 	for len(a.pending) >= tlsRecordHeaderLen {
-		if a.pending[0] != tlsHandshakeContentType {
-			return nil, false, errClientHelloContainsNonHandshakeTLS
+		body, ok, err := a.takeRecord()
+		if err != nil || !ok {
+			return nil, false, err
 		}
-		recordLen := int(a.pending[3])<<8 | int(a.pending[4])
-		if recordLen == 0 || recordLen > maxTLSRecordPayload {
-			return nil, false, errClientHelloTLSRecordHasInvalid
-		}
-		if len(a.pending) < tlsRecordHeaderLen+recordLen {
-			return nil, false, nil
-		}
-		body := a.pending[tlsRecordHeaderLen : tlsRecordHeaderLen+recordLen]
-		a.pending = a.pending[tlsRecordHeaderLen+recordLen:]
-		if a.expected == 0 && len(a.hello) < 4 {
-			need := min(4-len(a.hello), len(body))
-			a.hello = append(a.hello, body[:need]...)
-			body = body[need:]
-			if len(a.hello) == 4 {
-				if a.hello[0] != clientHelloType {
-					return nil, false, errFirstTLSHandshakeMessageNotClient
-				}
-				messageLen := int(a.hello[1])<<16 | int(a.hello[2])<<8 | int(a.hello[3])
-				a.expected = 4 + messageLen
-				if messageLen == 0 || a.expected > maxClientHelloSize {
-					return nil, false, errClientHelloHandshakeHasInvalidLength
-				}
-			}
-		}
-		if a.expected > 0 {
-			need := min(a.expected-len(a.hello), len(body))
-			a.hello = append(a.hello, body[:need]...)
-			if len(a.hello) == a.expected {
-				return append([]byte(nil), a.hello...), true, nil
-			}
+		if done, complete, err := a.consumeHelloBody(body); err != nil || complete {
+			return done, complete, err
 		}
 	}
 	if len(a.pending) > maxTLSRecordPayload+tlsRecordHeaderLen {

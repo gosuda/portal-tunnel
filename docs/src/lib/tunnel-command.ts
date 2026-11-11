@@ -7,7 +7,7 @@ export function buildTunnelCommand(
 	share: ShareInput,
 	name: string,
 	os: TunnelCommandOS
-) {
+): { install: string; run: string } {
 	const target = share.kind === 'file' ? share.path : share.target || '3000';
 	const normalizedName = normalizeExposeName(name);
 	const args = share.kind === 'file' ? ['--serve', target] : [target];

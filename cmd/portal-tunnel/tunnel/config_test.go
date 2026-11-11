@@ -175,80 +175,76 @@ func TestConfigSpecHTTPMode(t *testing.T) {
 	}
 }
 
-func TestConfigSpecResolvesComponents(t *testing.T) {
+func TestConfigSpecResolvesOIDC(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", "")
-	for _, tc := range []struct {
-		name  string
-		input func() Config
-		check func(t *testing.T, spec Spec)
-	}{
-		{
-			name: "oidc",
-			input: func() Config {
-				cfg := Config{TargetAddr: " localhost:3000 "}
-				cfg.Provider, cfg.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
-				cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
-				return cfg
-			},
-			check: func(t *testing.T, spec Spec) {
-				want := appauth.Config{
-					Provider:   appauth.ProviderOIDC,
-					Allow:      []string{"bob@example.com"},
-					OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
-				}
-				if spec.Transport.Target != "localhost:3000" || !reflect.DeepEqual(*spec.HTTP.Auth, want) {
-					t.Fatalf("target = %q, auth = %+v", spec.Transport.Target, *spec.HTTP.Auth)
-				}
-			},
-		},
-		{
-			name: "saml",
-			input: func() Config {
-				cfg := Config{TargetAddr: "localhost:3000"}
-				cfg.Provider, cfg.Allow, cfg.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
-				cfg.SAMLMetadataURL, cfg.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
-				return cfg
-			},
-			check: func(t *testing.T, spec Spec) {
-				want := appauth.Config{
-					Provider:        appauth.ProviderSAML,
-					Allow:           []string{"@example.com", "sub:G-7f3a"},
-					IdentityHeaders: true,
-					SAMLConfig:      appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLSubjectAttribute: "email"},
-				}
-				if !reflect.DeepEqual(*spec.HTTP.Auth, want) {
-					t.Fatalf("auth = %+v", *spec.HTTP.Auth)
-				}
-			},
-		},
-		{
-			name: "x402",
-			input: func() Config {
-				cfg := Config{HTTPRoutes: []HTTPRoute{{Prefix: " /paid ", Upstream: "127.0.0.1:3001", Methods: []string{"get", "GET", " post "}, Amount: " 0.01 "}}}
-				cfg.PayTo, cfg.Network, cfg.Endpoints = " 0x1234 ", " SUI:TESTNET ", []string{" https://rpc.example ", ""}
-				cfg.FacilitatorToken = " token "
-				return cfg
-			},
-			check: func(t *testing.T, spec Spec) {
-				wantRoutes := []HTTPRoute{{Prefix: "/paid", Upstream: "127.0.0.1:3001", Methods: []string{"GET", "POST"}, Amount: "0.01"}}
-				wantPayment := gateway.X402Config{PayTo: "0x1234", Network: "sui:testnet", Endpoints: []string{"https://rpc.example"}, FacilitatorToken: "token"}
-				if !reflect.DeepEqual(spec.HTTP.Routes, wantRoutes) || !reflect.DeepEqual(spec.HTTP.Payment, wantPayment) || spec.HTTP.Auth != nil {
-					t.Fatalf("routes = %+v, payment = %+v, auth = %+v", spec.HTTP.Routes, spec.HTTP.Payment, spec.HTTP.Auth)
-				}
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := tc.input()
-			spec, err := cfg.Spec()
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.check(t, spec)
-			if !reflect.DeepEqual(cfg, tc.input()) {
-				t.Fatalf("Spec changed the config it resolved: %+v", cfg)
-			}
-		})
+	cfg := Config{TargetAddr: " localhost:3000 "}
+	cfg.Provider, cfg.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
+	cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := appauth.Config{
+		Provider:   appauth.ProviderOIDC,
+		Allow:      []string{"bob@example.com"},
+		OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
+	}
+	if spec.Transport.Target != "localhost:3000" || !reflect.DeepEqual(*spec.HTTP.Auth, want) {
+		t.Fatalf("target = %q, auth = %+v", spec.Transport.Target, *spec.HTTP.Auth)
+	}
+	fresh := Config{TargetAddr: " localhost:3000 "}
+	fresh.Provider, fresh.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
+	fresh.OIDCIssuerURL, fresh.OIDCClientID, fresh.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
+	if !reflect.DeepEqual(cfg, fresh) {
+		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
+	}
+}
+
+func TestConfigSpecResolvesSAML(t *testing.T) {
+	t.Setenv("CSPR_CLOUD_API_KEY", "")
+	cfg := Config{TargetAddr: "localhost:3000"}
+	cfg.Provider, cfg.Allow, cfg.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
+	cfg.SAMLMetadataURL, cfg.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := appauth.Config{
+		Provider:        appauth.ProviderSAML,
+		Allow:           []string{"@example.com", "sub:G-7f3a"},
+		IdentityHeaders: true,
+		SAMLConfig:      appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLSubjectAttribute: "email"},
+	}
+	if !reflect.DeepEqual(*spec.HTTP.Auth, want) {
+		t.Fatalf("auth = %+v", *spec.HTTP.Auth)
+	}
+	fresh := Config{TargetAddr: "localhost:3000"}
+	fresh.Provider, fresh.Allow, fresh.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
+	fresh.SAMLMetadataURL, fresh.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
+	if !reflect.DeepEqual(cfg, fresh) {
+		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
+	}
+}
+
+func TestConfigSpecResolvesX402(t *testing.T) {
+	t.Setenv("CSPR_CLOUD_API_KEY", "")
+	cfg := Config{HTTPRoutes: []HTTPRoute{{Prefix: " /paid ", Upstream: "127.0.0.1:3001", Methods: []string{"get", "GET", " post "}, Amount: " 0.01 "}}}
+	cfg.PayTo, cfg.Network, cfg.Endpoints = " 0x1234 ", " SUI:TESTNET ", []string{" https://rpc.example ", ""}
+	cfg.FacilitatorToken = " token "
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoutes := []HTTPRoute{{Prefix: "/paid", Upstream: "127.0.0.1:3001", Methods: []string{"GET", "POST"}, Amount: "0.01"}}
+	wantPayment := gateway.X402Config{PayTo: "0x1234", Network: "sui:testnet", Endpoints: []string{"https://rpc.example"}, FacilitatorToken: "token"}
+	if !reflect.DeepEqual(spec.HTTP.Routes, wantRoutes) || !reflect.DeepEqual(spec.HTTP.Payment, wantPayment) || spec.HTTP.Auth != nil {
+		t.Fatalf("routes = %+v, payment = %+v, auth = %+v", spec.HTTP.Routes, spec.HTTP.Payment, spec.HTTP.Auth)
+	}
+	fresh := Config{HTTPRoutes: []HTTPRoute{{Prefix: " /paid ", Upstream: "127.0.0.1:3001", Methods: []string{"get", "GET", " post "}, Amount: " 0.01 "}}}
+	fresh.PayTo, fresh.Network, fresh.Endpoints = " 0x1234 ", " SUI:TESTNET ", []string{" https://rpc.example ", ""}
+	fresh.FacilitatorToken = " token "
+	if !reflect.DeepEqual(cfg, fresh) {
+		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
 	}
 }
 

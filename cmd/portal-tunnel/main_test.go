@@ -103,22 +103,20 @@ func TestExposeAuthSAMLEnv(t *testing.T) {
 	}
 }
 
-func TestExposeAuthEmailEnv(t *testing.T) {
-	t.Setenv("AUTH_SMTP_ADDR", "smtp.example:587")
-	t.Setenv("AUTH_SMTP_USERNAME", "portal")
-	t.Setenv("AUTH_SMTP_PASSWORD", "smtp-secret")
-	t.Setenv("AUTH_SMTP_FROM", "login@example.com")
-
-	for _, args := range [][]string{{"3000"}, {"--auth", "siwe", "3000"}} {
-		spec, err := exposeSpec(t, args...)
-		if err != nil {
-			t.Errorf("portal expose %v: %v", args, err)
-			continue
-		}
-		if spec.HTTP != nil && spec.HTTP.Auth != nil && spec.HTTP.Auth.EmailConfig != (appauth.EmailConfig{}) {
-			t.Errorf("portal expose %v carried AUTH_SMTP_* into the auth settings", args)
-		}
+func verifyEmailIgnoresSMTP(t *testing.T, args []string) {
+	t.Helper()
+	spec, err := exposeSpec(t, args...)
+	if err != nil {
+		t.Errorf("portal expose %v: %v", args, err)
+		return
 	}
+	if spec.HTTP != nil && spec.HTTP.Auth != nil && spec.HTTP.Auth.EmailConfig != (appauth.EmailConfig{}) {
+		t.Errorf("portal expose %v carried AUTH_SMTP_* into the auth settings", args)
+	}
+}
+
+func verifyEmailTakesSMTP(t *testing.T) {
+	t.Helper()
 	spec, err := exposeSpec(t, "--auth", "email", "--auth-email-list", "alice@example.com", "3000")
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +125,10 @@ func TestExposeAuthEmailEnv(t *testing.T) {
 	if spec.HTTP.Auth.EmailConfig != want {
 		t.Fatal("--auth email did not take the AUTH_SMTP_* values")
 	}
+}
+
+func verifyEmailRequiresAllowlist(t *testing.T) {
+	t.Helper()
 	if _, err := exposeSpec(t, "--auth", "siwe", "--auth-smtp-from", "login@example.com", "3000"); err == nil {
 		t.Error("portal expose started with --auth-smtp-from but without --auth email")
 	}
@@ -136,6 +138,19 @@ func TestExposeAuthEmailEnv(t *testing.T) {
 	if _, err := exposeSpec(t, "--auth", "email", "--auth-email-list", "alice@example.com", "--auth-smtp-addr", " ", "3000"); err == nil {
 		t.Error("portal expose --auth email started without an SMTP server")
 	}
+}
+
+func TestExposeAuthEmailEnv(t *testing.T) {
+	t.Setenv("AUTH_SMTP_ADDR", "smtp.example:587")
+	t.Setenv("AUTH_SMTP_USERNAME", "portal")
+	t.Setenv("AUTH_SMTP_PASSWORD", "smtp-secret")
+	t.Setenv("AUTH_SMTP_FROM", "login@example.com")
+
+	for _, args := range [][]string{{"3000"}, {"--auth", "siwe", "3000"}} {
+		verifyEmailIgnoresSMTP(t, args)
+	}
+	verifyEmailTakesSMTP(t)
+	verifyEmailRequiresAllowlist(t)
 }
 
 const identityProofEnv = "test-proof-0123456789"

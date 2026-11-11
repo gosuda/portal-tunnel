@@ -20,34 +20,29 @@ func TestStaticServeConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	for _, input := range []string{"./dist", "./dist/main.html", filepath.Join(dir, "absolute-site")} {
 		t.Run(input, func(t *testing.T) {
-			path := filepath.Join(dir, "config.toml")
-			data := fmt.Sprintf("[[tunnels]]\nid = \"site\"\nserve = %q\n", " "+input+" ")
-			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := LoadExistingConfig(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := input
-			if !filepath.IsAbs(want) {
-				want = filepath.Join(dir, want)
-			}
-			if got := cfg.Tunnels[0].Serve; got != want {
-				t.Fatalf("serve = %q, want %q", got, want)
-			}
-			cfg.Tunnels[0].Description = "updated metadata"
-			if err := writeConfigDocument(path, 0o600, cfg); err != nil {
-				t.Fatal(err)
-			}
-			reloaded, err := LoadExistingConfig(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := reloaded.Tunnels[0].Serve; got != want {
-				t.Fatalf("saved serve = %q, want %q", got, want)
-			}
+			checkStaticServeRoundTrip(t, dir, input)
 		})
+	}
+}
+
+func checkStaticServeRoundTrip(t *testing.T, dir, input string) {
+	t.Helper()
+	path := filepath.Join(dir, "config.toml")
+	data := fmt.Sprintf("[[tunnels]]\nid = \"site\"\nserve = %q\n", " "+input+" ")
+	writeConfigFixture(t, path, data)
+	cfg := loadConfigFixture(t, path)
+	want := input
+	if !filepath.IsAbs(want) {
+		want = filepath.Join(dir, want)
+	}
+	if got := cfg.Tunnels[0].Serve; got != want {
+		t.Fatalf("serve = %q, want %q", got, want)
+	}
+	cfg.Tunnels[0].Description = "updated metadata"
+	saveConfigFixture(t, path, 0o600, cfg)
+	reloaded := loadConfigFixture(t, path)
+	if got := reloaded.Tunnels[0].Serve; got != want {
+		t.Fatalf("saved serve = %q, want %q", got, want)
 	}
 }
 
@@ -143,13 +138,8 @@ udp_addr = "127.0.0.1:19133"
 
 func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte(tunnelsDocument), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadExistingConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFixture(t, path, tunnelsDocument)
+	loaded := loadConfigFixture(t, path)
 
 	keys := tunnelConfigKeys(reflect.TypeOf(TunnelConfig{}))
 	for _, key := range keys {
@@ -158,22 +148,14 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 		}
 	}
 
-	if err := writeConfigDocument(path, 0o600, loaded); err != nil {
-		t.Fatal(err)
-	}
-	saved, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	saveConfigFixture(t, path, 0o600, loaded)
+	saved := readConfigFixture(t, path)
 	for _, key := range keys {
 		if !strings.Contains(string(saved), "\n"+key+" =") && !strings.Contains(string(saved), "\n[[tunnels."+key+"]]") {
 			t.Errorf("saved config does not keep %q:\n%s", key, saved)
 		}
 	}
-	reloaded, err := LoadExistingConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reloaded := loadConfigFixture(t, path)
 	if len(reloaded.Tunnels) != len(loaded.Tunnels) {
 		t.Fatalf("saved %d tunnels, reloaded %d", len(loaded.Tunnels), len(reloaded.Tunnels))
 	}
@@ -182,12 +164,42 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 			t.Errorf("tunnel %q changed by a save:\n before: %+v\n after:  %+v", loaded.Tunnels[i].ID, loaded.Tunnels[i], reloaded.Tunnels[i])
 		}
 	}
-	if err := writeConfigDocument(path, 0o600, reloaded); err != nil {
-		t.Fatal(err)
-	}
+	saveConfigFixture(t, path, 0o600, reloaded)
 	if again, err := os.ReadFile(path); err != nil || !bytes.Equal(again, saved) {
 		t.Fatalf("a second save wrote another document (err %v):\n%s", err, again)
 	}
+}
+
+func writeConfigFixture(t *testing.T, path, document string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func loadConfigFixture(t *testing.T, path string) Config {
+	t.Helper()
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func saveConfigFixture(t *testing.T, path string, mode os.FileMode, cfg Config) {
+	t.Helper()
+	if err := writeConfigDocument(path, mode, cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readConfigFixture(t *testing.T, path string) []byte {
+	t.Helper()
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return saved
 }
 
 func TestExistingConfigKeysFillComponents(t *testing.T) {
@@ -252,20 +264,10 @@ discovery = true
 ban_mitm = false
 max_active_relays = 3
 `
-	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadExistingConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
-		t.Fatal(err)
-	}
-	saved, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFixture(t, path, document)
+	cfg := loadConfigFixture(t, path)
+	saveConfigFixture(t, path, 0o600, cfg)
+	saved := readConfigFixture(t, path)
 	web, explicit, ok := strings.Cut(string(saved), "id = 'explicit'")
 	if !ok {
 		t.Fatalf("saved config:\n%s", saved)
@@ -312,24 +314,25 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 		{"no secret", 0o644, plain, 0o644},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, nil, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Chmod(path, tt.before); err != nil {
-				t.Fatal(err)
-			}
-			if err := writeConfigDocument(path, tt.before, Config{Tunnels: []TunnelConfig{plain, tt.tunnel}}); err != nil {
-				t.Fatal(err)
-			}
-			info, err := os.Stat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := info.Mode().Perm(); got != tt.want {
-				t.Fatalf("mode after the save = %o; want %o", got, tt.want)
-			}
+			checkSecretFileMode(t, tt.before, plain, tt.tunnel, tt.want)
 		})
+	}
+}
+
+func checkSecretFileMode(t *testing.T, before os.FileMode, plain, tunnel TunnelConfig, want os.FileMode) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeConfigFixture(t, path, "")
+	if err := os.Chmod(path, before); err != nil {
+		t.Fatal(err)
+	}
+	saveConfigFixture(t, path, before, Config{Tunnels: []TunnelConfig{plain, tunnel}})
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode after the save = %o; want %o", got, want)
 	}
 }
 

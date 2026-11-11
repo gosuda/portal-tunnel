@@ -56,103 +56,110 @@ func requireRcode(t *testing.T, resp *dns.Msg, rcode int) {
 	}
 }
 
-func TestASynthesisFollowsCurrentPublicIP(t *testing.T) {
-	p := newTestProvider(t, nil)
-	ctx := context.Background()
-
-	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
-		t.Fatalf("ensure a records: %v", err)
+func checkSynthesizedARecord(t *testing.T, p *Provider, name string) {
+	t.Helper()
+	resp := exchange(t, p, "tcp", dns.TypeA, name)
+	requireRcode(t, resp, dns.RcodeSuccess)
+	if !resp.Authoritative {
+		t.Fatalf("%s: response is not authoritative", name)
 	}
-	for _, name := range []string{testZone, "tunnel." + testZone, "deep.a.b." + testZone} {
-		resp := exchange(t, p, "tcp", dns.TypeA, name)
-		requireRcode(t, resp, dns.RcodeSuccess)
-		if !resp.Authoritative {
-			t.Fatalf("%s: response is not authoritative", name)
-		}
-		if resp.RecursionAvailable {
-			t.Fatalf("%s: recursion must not be advertised", name)
-		}
-		if len(resp.Answer) != 1 {
-			t.Fatalf("%s: got %d answers, want 1", name, len(resp.Answer))
-		}
-		a, ok := resp.Answer[0].(*dns.A)
-		if !ok {
-			t.Fatalf("%s: got %T answer, want A", name, resp.Answer[0])
-		}
-		if !a.A.Equal(net.ParseIP("203.0.113.10")) {
-			t.Fatalf("%s: got %s, want 203.0.113.10", name, a.A)
-		}
-		if a.Hdr.Ttl != recordTTL {
-			t.Fatalf("%s: got ttl %d, want %d", name, a.Hdr.Ttl, recordTTL)
-		}
+	if resp.RecursionAvailable {
+		t.Fatalf("%s: recursion must not be advertised", name)
 	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("%s: got %d answers, want 1", name, len(resp.Answer))
+	}
+	a, ok := resp.Answer[0].(*dns.A)
+	if !ok {
+		t.Fatalf("%s: got %T answer, want A", name, resp.Answer[0])
+	}
+	if !a.A.Equal(net.ParseIP("203.0.113.10")) {
+		t.Fatalf("%s: got %s, want 203.0.113.10", name, a.A)
+	}
+	if a.Hdr.Ttl != recordTTL {
+		t.Fatalf("%s: got ttl %d, want %d", name, a.Hdr.Ttl, recordTTL)
+	}
+}
 
-	if err := p.EnsureAddressRecord(ctx, "tunnel."+testZone, "198.51.100.7"); err != nil {
+func checkSynthesizedARollover(t *testing.T, p *Provider) {
+	t.Helper()
+	if err := p.EnsureAddressRecord(t.Context(), "tunnel."+testZone, "198.51.100.7"); err != nil {
 		t.Fatalf("ensure a record: %v", err)
 	}
-	if err := p.EnsureAddressRecords(ctx, testZone, "198.51.100.99"); err != nil {
+	if err := p.EnsureAddressRecords(t.Context(), testZone, "198.51.100.99"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
-	resp := exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
-	a := resp.Answer[0].(*dns.A)
-	if !a.A.Equal(net.ParseIP("198.51.100.99")) {
-		t.Fatalf("stale explicit answer %s after ip change, want 198.51.100.99", a.A)
+	updated := exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
+	updatedA := updated.Answer[0].(*dns.A)
+	if !updatedA.A.Equal(net.ParseIP("198.51.100.99")) {
+		t.Fatalf("stale explicit answer %s after ip change, want 198.51.100.99", updatedA.A)
 	}
-	if err := p.DeleteAddressRecords(ctx, "tunnel."+testZone); err != nil {
+	if err := p.DeleteAddressRecords(t.Context(), "tunnel."+testZone); err != nil {
 		t.Fatalf("delete a record: %v", err)
 	}
-	resp = exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
-	if len(resp.Answer) != 1 {
+	afterDelete := exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
+	if len(afterDelete.Answer) != 1 {
 		t.Fatalf("delete removed synthesized answer")
 	}
 }
 
-func TestAddressSynthesisPreservesOtherFamily(t *testing.T) {
+func TestASynthesisFollowsCurrentPublicIP(t *testing.T) {
 	p := newTestProvider(t, nil)
-	ctx := context.Background()
-	var ipv4, ipv6 string
-	for _, publicIP := range []string{"2001:db8::10", "203.0.113.10", "2001:db8::20", "203.0.113.20"} {
-		if err := p.EnsureAddressRecords(ctx, testZone, publicIP); err != nil {
-			t.Fatal(err)
+	if err := p.EnsureAddressRecords(t.Context(), testZone, "203.0.113.10"); err != nil {
+		t.Fatalf("ensure a records: %v", err)
+	}
+	for _, name := range []string{testZone, "tunnel." + testZone, "deep.a.b." + testZone} {
+		checkSynthesizedARecord(t, p, name)
+	}
+	checkSynthesizedARollover(t, p)
+}
+
+func checkPreservedFamilyRecord(t *testing.T, p *Provider, tc struct {
+	typ uint16
+	ip  string
+}, name, publicIP string) {
+	t.Helper()
+	response := exchange(t, p, "tcp", tc.typ, name)
+	requireRcode(t, response, dns.RcodeSuccess)
+	if tc.ip == "" {
+		if len(response.Answer) != 0 {
+			t.Fatalf("%s %s before publication returned %v", name, dns.TypeToString[tc.typ], response.Answer)
 		}
-		if net.ParseIP(publicIP).To4() != nil {
-			ipv4 = publicIP
-		} else {
-			ipv6 = publicIP
-		}
-		for _, tc := range []struct {
-			typ uint16
-			ip  string
-		}{{dns.TypeA, ipv4}, {dns.TypeAAAA, ipv6}} {
-			for _, name := range []string{testZone, "tunnel." + testZone, "deep.child." + testZone} {
-				response := exchange(t, p, "tcp", tc.typ, name)
-				requireRcode(t, response, dns.RcodeSuccess)
-				if tc.ip == "" {
-					if len(response.Answer) != 0 {
-						t.Fatalf("%s %s before publication returned %v", name, dns.TypeToString[tc.typ], response.Answer)
-					}
-					continue
-				}
-				if len(response.Answer) != 1 {
-					t.Fatalf("%s %s after updating %s: %v", name, dns.TypeToString[tc.typ], publicIP, response.Answer)
-				}
-				var got net.IP
-				switch record := response.Answer[0].(type) {
-				case *dns.A:
-					got = record.A
-				case *dns.AAAA:
-					got = record.AAAA
-				}
-				if response.Answer[0].Header().Rrtype != tc.typ || !got.Equal(net.ParseIP(tc.ip)) {
-					t.Fatalf("%s %s after updating %s = %v, want %s", name, dns.TypeToString[tc.typ], publicIP, response.Answer, tc.ip)
-				}
-			}
+		return
+	}
+	if len(response.Answer) != 1 {
+		t.Fatalf("%s %s after updating %s: %v", name, dns.TypeToString[tc.typ], publicIP, response.Answer)
+	}
+	var got net.IP
+	switch record := response.Answer[0].(type) {
+	case *dns.A:
+		got = record.A
+	case *dns.AAAA:
+		got = record.AAAA
+	}
+	if response.Answer[0].Header().Rrtype != tc.typ || !got.Equal(net.ParseIP(tc.ip)) {
+		t.Fatalf("%s %s after updating %s = %v, want %s", name, dns.TypeToString[tc.typ], publicIP, response.Answer, tc.ip)
+	}
+}
+
+func checkPreservedFamilyBatch(t *testing.T, p *Provider, publicIP, ipv4, ipv6 string) {
+	t.Helper()
+	for _, tc := range []struct {
+		typ uint16
+		ip  string
+	}{{dns.TypeA, ipv4}, {dns.TypeAAAA, ipv6}} {
+		for _, name := range []string{testZone, "tunnel." + testZone, "deep.child." + testZone} {
+			checkPreservedFamilyRecord(t, p, tc, name, publicIP)
 		}
 	}
-	if err := p.EnsureAddressRecord(ctx, "tunnel."+testZone, "2001:db8::99"); err != nil {
+}
+
+func checkPreservedFamilyFinal(t *testing.T, p *Provider, ipv6 string) {
+	t.Helper()
+	if err := p.EnsureAddressRecord(t.Context(), "tunnel."+testZone, "2001:db8::99"); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.DeleteAddressRecords(ctx, "tunnel."+testZone); err != nil {
+	if err := p.DeleteAddressRecords(t.Context(), "tunnel."+testZone); err != nil {
 		t.Fatal(err)
 	}
 	response := exchange(t, p, "tcp", dns.TypeAAAA, "tunnel."+testZone)
@@ -162,6 +169,23 @@ func TestAddressSynthesisPreservesOtherFamily(t *testing.T) {
 	if record, ok := response.Answer[0].(*dns.AAAA); !ok || !record.AAAA.Equal(net.ParseIP(ipv6)) {
 		t.Fatalf("explicit mutation changed synthesized AAAA: %v", response.Answer)
 	}
+}
+
+func TestAddressSynthesisPreservesOtherFamily(t *testing.T) {
+	p := newTestProvider(t, nil)
+	var ipv4, ipv6 string
+	for _, publicIP := range []string{"2001:db8::10", "203.0.113.10", "2001:db8::20", "203.0.113.20"} {
+		if err := p.EnsureAddressRecords(t.Context(), testZone, publicIP); err != nil {
+			t.Fatal(err)
+		}
+		if net.ParseIP(publicIP).To4() != nil {
+			ipv4 = publicIP
+		} else {
+			ipv6 = publicIP
+		}
+		checkPreservedFamilyBatch(t, p, publicIP, ipv4, ipv6)
+	}
+	checkPreservedFamilyFinal(t, p, ipv6)
 }
 
 func TestAWithoutPublicIPIsNodata(t *testing.T) {
@@ -193,7 +217,7 @@ func TestAWithoutPublicIPRefusesMissingNames(t *testing.T) {
 		}
 	}
 
-	if err := p.EnsureAddressRecords(context.Background(), testZone, "203.0.113.10"); err != nil {
+	if err := p.EnsureAddressRecords(t.Context(), testZone, "203.0.113.10"); err != nil {
 		t.Fatalf("ensure a records: %v", err)
 	}
 	resp := exchange(t, p, "tcp", dns.TypeA, "tunnel."+testZone)
@@ -203,21 +227,21 @@ func TestAWithoutPublicIPRefusesMissingNames(t *testing.T) {
 	}
 }
 
-func TestTXTRecordLifecycle(t *testing.T) {
-	p := newTestProvider(t, nil)
-	ctx := context.Background()
-	name := "tunnel." + testZone
-
-	if err := p.EnsureTXTRecord(ctx, name, "ENS1 0x238a8f792dfa6033814b18618ad4100654aeef01 0xabc"); err != nil {
+func seedTXTRecordSet(t *testing.T, p *Provider, name string) {
+	t.Helper()
+	if err := p.EnsureTXTRecord(t.Context(), name, "ENS1 0x238a8f792dfa6033814b18618ad4100654aeef01 0xabc"); err != nil {
 		t.Fatalf("ensure txt: %v", err)
 	}
-	if err := p.EnsureTXTRecord(ctx, name, "dns-01-value"); err != nil {
+	if err := p.EnsureTXTRecord(t.Context(), name, "dns-01-value"); err != nil {
 		t.Fatalf("ensure txt: %v", err)
 	}
-	if err := p.EnsureTXTRecord(ctx, name, "dns-01-value"); err != nil {
+	if err := p.EnsureTXTRecord(t.Context(), name, "dns-01-value"); err != nil {
 		t.Fatalf("ensure duplicate txt: %v", err)
 	}
+}
 
+func checkBothTXTRecords(t *testing.T, p *Provider, name string) {
+	t.Helper()
 	resp := exchange(t, p, "tcp", dns.TypeTXT, name)
 	requireRcode(t, resp, dns.RcodeSuccess)
 	if len(resp.Answer) != 2 {
@@ -234,17 +258,28 @@ func TestTXTRecordLifecycle(t *testing.T) {
 	if !seen["ENS1 0x238a8f792dfa6033814b18618ad4100654aeef01 0xabc"] || !seen["dns-01-value"] {
 		t.Fatalf("missing txt values: %v", seen)
 	}
+}
 
-	if err := p.DeleteTXTRecords(ctx, name, "ENS1 "); err != nil {
+func checkRemainingTXTRecord(t *testing.T, p *Provider, name string) {
+	t.Helper()
+	if err := p.DeleteTXTRecords(t.Context(), name, "ENS1 "); err != nil {
 		t.Fatalf("delete txt records: %v", err)
 	}
-	resp = exchange(t, p, "tcp", dns.TypeTXT, name)
+	resp := exchange(t, p, "tcp", dns.TypeTXT, name)
 	if len(resp.Answer) != 1 {
 		t.Fatalf("got %d txt answers after prefix delete, want 1", len(resp.Answer))
 	}
 	if got := strings.Join(resp.Answer[0].(*dns.TXT).Txt, ""); got != "dns-01-value" {
 		t.Fatalf("kept wrong txt value %q", got)
 	}
+}
+
+func TestTXTRecordLifecycle(t *testing.T) {
+	p := newTestProvider(t, nil)
+	name := "tunnel." + testZone
+	seedTXTRecordSet(t, p, name)
+	checkBothTXTRecords(t, p, name)
+	checkRemainingTXTRecord(t, p, name)
 }
 
 func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
@@ -278,6 +313,147 @@ func TestDNS01ChallengePresentAndCleanup(t *testing.T) {
 	requireRcode(t, resp, dns.RcodeRefused)
 	if len(resp.Answer) != 0 {
 		t.Fatalf("txt survived cleanup")
+	}
+}
+
+func checkApexNSGlue(t *testing.T, p *Provider) {
+	t.Helper()
+	nsResp := exchange(t, p, "tcp", dns.TypeNS, testZone)
+	requireRcode(t, nsResp, dns.RcodeSuccess)
+	if len(nsResp.Answer) != 1 {
+		t.Fatalf("got %d ns answers, want 1", len(nsResp.Answer))
+	}
+	ns, ok := nsResp.Answer[0].(*dns.NS)
+	if !ok || ns.Ns != "ns."+testZone+"." {
+		t.Fatalf("got %v, want ns.%s.", nsResp.Answer[0], testZone)
+	}
+	if len(nsResp.Extra) != 1 {
+		t.Fatalf("got %d additional records, want in-bailiwick glue A", len(nsResp.Extra))
+	}
+	if glue, ok := nsResp.Extra[0].(*dns.A); !ok || !glue.A.Equal(net.ParseIP("203.0.113.10")) {
+		t.Fatalf("got %v glue, want A 203.0.113.10", nsResp.Extra[0])
+	}
+}
+
+func queryApexSOASerial(t *testing.T, p *Provider) uint32 {
+	t.Helper()
+	soaResp := exchange(t, p, "tcp", dns.TypeSOA, testZone)
+	soa, ok := soaResp.Answer[0].(*dns.SOA)
+	if !ok {
+		t.Fatalf("got %T answer, want SOA", soaResp.Answer[0])
+	}
+	if soa.Ns != "ns."+testZone+"." || soa.Mbox != "hostmaster."+testZone+"." {
+		t.Fatalf("got soa ns %q mbox %q", soa.Ns, soa.Mbox)
+	}
+	if soa.Minttl != recordTTL {
+		t.Fatalf("got soa minttl %d, want %d", soa.Minttl, recordTTL)
+	}
+	return soa.Serial
+}
+
+func checkAdvancedSOASerial(t *testing.T, p *Provider, before uint32) {
+	t.Helper()
+	if err := p.EnsureTXTRecord(t.Context(), testZone, "value"); err != nil {
+		t.Fatalf("ensure txt: %v", err)
+	}
+	after := exchange(t, p, "tcp", dns.TypeSOA, testZone).Answer[0].(*dns.SOA).Serial
+	if after <= before {
+		t.Fatalf("soa serial did not advance: %d -> %d", before, after)
+	}
+}
+
+func TestApexMetadata(t *testing.T) {
+	p := newTestProvider(t, nil)
+	if err := p.EnsureAddressRecords(t.Context(), testZone, "203.0.113.10"); err != nil {
+		t.Fatalf("ensure a records: %v", err)
+	}
+	checkApexNSGlue(t, p)
+	before := queryApexSOASerial(t, p)
+	checkAdvancedSOASerial(t, p, before)
+}
+
+func TestQueryBoundaries(t *testing.T) {
+	p := newTestProvider(t, nil)
+	if err := p.EnsureAddressRecords(t.Context(), testZone, "203.0.113.10"); err != nil {
+		t.Fatalf("ensure a records: %v", err)
+	}
+
+	if resp := exchange(t, p, "tcp", dns.TypeA, "example.com."); resp.Rcode != dns.RcodeRefused {
+		t.Fatalf("outside-zone query rcode %s, want REFUSED", dns.RcodeToString[resp.Rcode])
+	}
+	if resp := exchange(t, p, "tcp", dns.TypeAAAA, testZone); resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 0 {
+		t.Fatalf("aaaa must be NODATA, got rcode %s with %d answers", dns.RcodeToString[resp.Rcode], len(resp.Answer))
+	}
+	if resp := exchange(t, p, "tcp", dns.TypeNS, "child."+testZone); resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 0 {
+		t.Fatalf("non-apex ns must be NODATA")
+	}
+
+	anyResp := new(dns.Msg)
+	anyResp.SetQuestion(dns.Fqdn(testZone), dns.TypeANY)
+	client := &dns.Client{Net: "tcp"}
+	resp, _, err := client.Exchange(anyResp, p.Addr())
+	if err != nil {
+		t.Fatalf("exchange ANY: %v", err)
+	}
+	if resp.Rcode != dns.RcodeNotImplemented {
+		t.Fatalf("ANY rcode %s, want NOTIMP", dns.RcodeToString[resp.Rcode])
+	}
+}
+
+func checkBadVersionOPTOnly(t *testing.T, p *Provider, network string) {
+	t.Helper()
+	for _, do := range []bool{false, true} {
+		query := new(dns.Msg)
+		query.SetQuestion(dns.Fqdn(testZone), dns.TypeNS)
+		query.SetEdns0(1232, do)
+		query.IsEdns0().SetVersion(1)
+		response, _, err := (&dns.Client{Net: network}).Exchange(query, p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireRcode(t, response, dns.RcodeBadVers)
+		if len(response.Answer) != 0 || len(response.Ns) != 0 || len(response.Extra) != 1 || response.Truncated {
+			t.Fatalf("%s DO=%t: BADVERS must contain only OPT: %v", network, do, response)
+		}
+		opt := response.IsEdns0()
+		if opt == nil || opt.Version() != 0 || opt.ExtendedRcode() != dns.RcodeBadVers || opt.Do() != do {
+			t.Fatalf("%s DO=%t: invalid BADVERS OPT: %v", network, do, opt)
+		}
+	}
+}
+
+func TestUnsupportedEDNSVersionContainsOnlyOPT(t *testing.T) {
+	p := newTestProvider(t, nil)
+	if err := p.EnsureAddressRecords(t.Context(), testZone, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range []string{"tcp", "udp"} {
+		checkBadVersionOPTOnly(t, p, network)
+	}
+}
+
+func TestUDPExchangeWithEDNS(t *testing.T) {
+	p := newTestProvider(t, nil)
+	if err := p.EnsureAddressRecords(t.Context(), testZone, "203.0.113.10"); err != nil {
+		t.Fatalf("ensure a records: %v", err)
+	}
+	resp := exchange(t, p, "udp", dns.TypeA, "tunnel."+testZone)
+	requireRcode(t, resp, dns.RcodeSuccess)
+	if len(resp.Answer) != 1 {
+		t.Fatalf("udp got %d answers, want 1", len(resp.Answer))
+	}
+	if resp.IsEdns0() == nil {
+		t.Fatalf("edns query did not get an edns response")
+	}
+}
+
+func TestMutationsOutsideZoneRejected(t *testing.T) {
+	p := newTestProvider(t, nil)
+	if err := p.EnsureTXTRecord(t.Context(), "other.example.com", "value"); err == nil {
+		t.Fatalf("outside-zone txt accepted")
+	}
+	if err := p.EnsureAddressRecords(t.Context(), "other.example.com", "203.0.113.10"); err == nil {
+		t.Fatalf("outside-zone base domain accepted")
 	}
 }
 
@@ -318,133 +494,5 @@ func TestDNS01CleanupPreservesExistingTXT(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestApexMetadata(t *testing.T) {
-	p := newTestProvider(t, nil)
-	ctx := context.Background()
-	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
-		t.Fatalf("ensure a records: %v", err)
-	}
-
-	nsResp := exchange(t, p, "tcp", dns.TypeNS, testZone)
-	requireRcode(t, nsResp, dns.RcodeSuccess)
-	if len(nsResp.Answer) != 1 {
-		t.Fatalf("got %d ns answers, want 1", len(nsResp.Answer))
-	}
-	ns, ok := nsResp.Answer[0].(*dns.NS)
-	if !ok || ns.Ns != "ns."+testZone+"." {
-		t.Fatalf("got %v, want ns.%s.", nsResp.Answer[0], testZone)
-	}
-	if len(nsResp.Extra) != 1 {
-		t.Fatalf("got %d additional records, want in-bailiwick glue A", len(nsResp.Extra))
-	}
-	if glue, ok := nsResp.Extra[0].(*dns.A); !ok || !glue.A.Equal(net.ParseIP("203.0.113.10")) {
-		t.Fatalf("got %v glue, want A 203.0.113.10", nsResp.Extra[0])
-	}
-
-	soaResp := exchange(t, p, "tcp", dns.TypeSOA, testZone)
-	soa, ok := soaResp.Answer[0].(*dns.SOA)
-	if !ok {
-		t.Fatalf("got %T answer, want SOA", soaResp.Answer[0])
-	}
-	if soa.Ns != "ns."+testZone+"." || soa.Mbox != "hostmaster."+testZone+"." {
-		t.Fatalf("got soa ns %q mbox %q", soa.Ns, soa.Mbox)
-	}
-	if soa.Minttl != recordTTL {
-		t.Fatalf("got soa minttl %d, want %d", soa.Minttl, recordTTL)
-	}
-
-	before := soa.Serial
-	if err := p.EnsureTXTRecord(ctx, testZone, "value"); err != nil {
-		t.Fatalf("ensure txt: %v", err)
-	}
-	after := exchange(t, p, "tcp", dns.TypeSOA, testZone).Answer[0].(*dns.SOA).Serial
-	if after <= before {
-		t.Fatalf("soa serial did not advance: %d -> %d", before, after)
-	}
-}
-
-func TestQueryBoundaries(t *testing.T) {
-	p := newTestProvider(t, nil)
-	ctx := context.Background()
-	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
-		t.Fatalf("ensure a records: %v", err)
-	}
-
-	if resp := exchange(t, p, "tcp", dns.TypeA, "example.com."); resp.Rcode != dns.RcodeRefused {
-		t.Fatalf("outside-zone query rcode %s, want REFUSED", dns.RcodeToString[resp.Rcode])
-	}
-	if resp := exchange(t, p, "tcp", dns.TypeAAAA, testZone); resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 0 {
-		t.Fatalf("aaaa must be NODATA, got rcode %s with %d answers", dns.RcodeToString[resp.Rcode], len(resp.Answer))
-	}
-	if resp := exchange(t, p, "tcp", dns.TypeNS, "child."+testZone); resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 0 {
-		t.Fatalf("non-apex ns must be NODATA")
-	}
-
-	anyResp := new(dns.Msg)
-	anyResp.SetQuestion(dns.Fqdn(testZone), dns.TypeANY)
-	client := &dns.Client{Net: "tcp"}
-	resp, _, err := client.Exchange(anyResp, p.Addr())
-	if err != nil {
-		t.Fatalf("exchange ANY: %v", err)
-	}
-	if resp.Rcode != dns.RcodeNotImplemented {
-		t.Fatalf("ANY rcode %s, want NOTIMP", dns.RcodeToString[resp.Rcode])
-	}
-}
-
-func TestUnsupportedEDNSVersionContainsOnlyOPT(t *testing.T) {
-	p := newTestProvider(t, nil)
-	if err := p.EnsureAddressRecords(context.Background(), testZone, "203.0.113.10"); err != nil {
-		t.Fatal(err)
-	}
-	for _, network := range []string{"tcp", "udp"} {
-		for _, do := range []bool{false, true} {
-			query := new(dns.Msg)
-			query.SetQuestion(dns.Fqdn(testZone), dns.TypeNS)
-			query.SetEdns0(1232, do)
-			query.IsEdns0().SetVersion(1)
-			response, _, err := (&dns.Client{Net: network}).Exchange(query, p.Addr())
-			if err != nil {
-				t.Fatal(err)
-			}
-			requireRcode(t, response, dns.RcodeBadVers)
-			if len(response.Answer) != 0 || len(response.Ns) != 0 || len(response.Extra) != 1 || response.Truncated {
-				t.Fatalf("%s DO=%t: BADVERS must contain only OPT: %v", network, do, response)
-			}
-			opt := response.IsEdns0()
-			if opt == nil || opt.Version() != 0 || opt.ExtendedRcode() != dns.RcodeBadVers || opt.Do() != do {
-				t.Fatalf("%s DO=%t: invalid BADVERS OPT: %v", network, do, opt)
-			}
-		}
-	}
-}
-
-func TestUDPExchangeWithEDNS(t *testing.T) {
-	p := newTestProvider(t, nil)
-	ctx := context.Background()
-	if err := p.EnsureAddressRecords(ctx, testZone, "203.0.113.10"); err != nil {
-		t.Fatalf("ensure a records: %v", err)
-	}
-	resp := exchange(t, p, "udp", dns.TypeA, "tunnel."+testZone)
-	requireRcode(t, resp, dns.RcodeSuccess)
-	if len(resp.Answer) != 1 {
-		t.Fatalf("udp got %d answers, want 1", len(resp.Answer))
-	}
-	if resp.IsEdns0() == nil {
-		t.Fatalf("edns query did not get an edns response")
-	}
-}
-
-func TestMutationsOutsideZoneRejected(t *testing.T) {
-	p := newTestProvider(t, nil)
-	ctx := context.Background()
-	if err := p.EnsureTXTRecord(ctx, "other.example.com", "value"); err == nil {
-		t.Fatalf("outside-zone txt accepted")
-	}
-	if err := p.EnsureAddressRecords(ctx, "other.example.com", "203.0.113.10"); err == nil {
-		t.Fatalf("outside-zone base domain accepted")
 	}
 }

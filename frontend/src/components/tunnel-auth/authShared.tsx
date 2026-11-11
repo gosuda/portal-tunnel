@@ -1,4 +1,4 @@
-import { useId, type KeyboardEvent, type ReactNode } from "react";
+import { useId, type JSX, type KeyboardEvent, type ReactNode } from "react";
 import {
   Building2,
   Check,
@@ -123,7 +123,7 @@ export function useRadioGroup<Id extends string>(
   ids: readonly Id[],
   value: Id,
   onChange: (id: Id) => void
-) {
+): { onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void; option: (id: Id) => RadioOptionProps } {
   const groupId = useId();
   const optionId = (id: Id) => `${groupId}-${id}`;
   const select = (id: Id) => {
@@ -163,7 +163,7 @@ export function MethodCard({
 }: {
   method: MethodChoice;
   radio: RadioOptionProps;
-}) {
+}): JSX.Element {
   const Icon = method.icon;
   const selected = radio["aria-checked"];
   return (
@@ -191,7 +191,7 @@ export function MethodCard({
   );
 }
 
-export function Badge({ children }: { children: ReactNode }) {
+export function Badge({ children }: { children: ReactNode }): JSX.Element {
   return (
     <span
       className="rounded bg-secondary px-1.5 py-px text-[10px] font-semibold uppercase text-secondary-foreground dark:bg-primary/14 dark:text-primary"
@@ -207,7 +207,7 @@ export function FieldIssues({
 }: {
   issues: TunnelAuthIssue[];
   field: TunnelAuthField;
-}) {
+}): JSX.Element[] {
   return issues
     .filter((issue) => issue.field === field)
     .map((issue) => (
@@ -223,7 +223,7 @@ export function CopyLine({
 }: {
   value: string;
   label: string;
-}) {
+}): JSX.Element {
   const { copiedKey, copy } = useCopy();
   const copied = copiedKey !== null;
 
@@ -281,7 +281,7 @@ export function TextField({
   inputMode?: "url";
   readOnly?: boolean;
   children?: ReactNode;
-}) {
+}): JSX.Element {
   const id = useId();
   return (
     <div className="space-y-1.5">
@@ -326,7 +326,7 @@ export function SecretPrompt({
   shortNoun: string;
   copyLabel: string;
   os: TunnelCommandOS;
-}) {
+}): JSX.Element {
   return (
     <div className="space-y-1.5">
       <p className={s.label}>{title}</p>
@@ -354,7 +354,7 @@ export function RegisterNote({
   name: string;
   discovery: boolean;
   children: ReactNode;
-}) {
+}): JSX.Element {
   return (
     <p className={s.help}>
       {listed

@@ -1,7 +1,6 @@
 package tunnel
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -107,6 +106,85 @@ type CacheConfig struct {
 	TTL time.Duration
 }
 
+func validateHTTPCoupling(spec Spec) error {
+	target := strings.TrimSpace(spec.Transport.Target)
+	httpConfig := spec.HTTP
+	if spec.Transport.TCP || spec.Transport.UDP != nil {
+		return errHTTPTunnelCannotCombinedTCPOr
+	}
+	if strings.TrimSpace(httpConfig.Serve) != "" {
+		if target != "" || len(httpConfig.Routes) > 0 {
+			return errStaticServingCannotCombinedTargetOr
+		}
+	} else if target == "" && len(httpConfig.Routes) == 0 {
+		return errHTTPTunnelRequiresTargetRouteOr
+	}
+	if target != "" && len(httpConfig.Routes) > 0 {
+		return errHTTPTunnelCannotCombineTargetAnd
+	}
+	return nil
+}
+
+func validateHTTPCache(spec Spec) error {
+	httpConfig := spec.HTTP
+	if httpConfig.Cache == nil {
+		return nil
+	}
+	if strings.TrimSpace(httpConfig.Serve) == "" {
+		return errRelayCacheRequiresStaticSite
+	}
+	if spec.Relays.BanMITM {
+		return errRelayCachePermitsTLSTerminationAnd
+	}
+	if httpConfig.Auth != nil {
+		return errApplicationAuthCannotCombinedRelayCache
+	}
+	return nil
+}
+
+func validateHTTPRoutes(config *HTTPConfig) error {
+	for _, route := range config.Routes {
+		prefix := strings.TrimSpace(route.Prefix)
+		if prefix == "" || strings.TrimSpace(route.Upstream) == "" {
+			return errHTTPRoutesRequirePrefixAndUpstream
+		}
+		if !strings.HasPrefix(prefix, "/") {
+			return fmt.Errorf("HTTP route %q prefix must start with /", prefix)
+		}
+		if strings.TrimSpace(route.Amount) != "" && strings.TrimSpace(config.Payment.PayTo) == "" {
+			return fmt.Errorf("HTTP route %q payment amount requires a payment recipient", prefix)
+		}
+		if strings.TrimSpace(route.Amount) == "" && len(route.Methods) > 0 {
+			return fmt.Errorf("HTTP route %q methods require a payment amount", prefix)
+		}
+	}
+	return nil
+}
+
+func validateStripRequestHeaders(spec Spec) error {
+	httpConfig := spec.HTTP
+	if len(httpConfig.StripRequestHeaders) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(httpConfig.Serve) != "" {
+		return errStripRequestHeadersCannotCombinedStatic
+	}
+	target := strings.TrimSpace(spec.Transport.Target)
+	hasHTTPUpstream := len(httpConfig.Routes) > 0 || strings.TrimSpace(target) != "" || httpConfig.Auth != nil
+	if !hasHTTPUpstream {
+		return errStripRequestHeadersRequireHTTPUpstream
+	}
+	for _, h := range httpConfig.StripRequestHeaders {
+		if strings.EqualFold(strings.TrimSpace(h), "Host") {
+			return errStripRequestHeaderHostNotSupported
+		}
+		if strings.EqualFold(strings.TrimSpace(h), "X-Forwarded-Proto") {
+			return errStripRequestHeaderXForwardedProto
+		}
+	}
+	return nil
+}
+
 func (spec Spec) Validate() error {
 	if spec.CertificateMonitor != nil {
 		if spec.Transport.TCP || (spec.HTTP != nil && spec.HTTP.Cache != nil) {
@@ -147,68 +225,22 @@ func (spec Spec) Validate() error {
 		}
 		return nil
 	}
-
-	httpConfig := spec.HTTP
-	if spec.Transport.TCP || spec.Transport.UDP != nil {
-		return errHTTPTunnelCannotCombinedTCPOr
+	if err := validateHTTPCoupling(spec); err != nil {
+		return err
 	}
-	if strings.TrimSpace(httpConfig.Serve) != "" {
-		if target != "" || len(httpConfig.Routes) > 0 {
-			return errStaticServingCannotCombinedTargetOr
-		}
-	} else if target == "" && len(httpConfig.Routes) == 0 {
-		return errHTTPTunnelRequiresTargetRouteOr
+	if err := validateHTTPCache(spec); err != nil {
+		return err
 	}
-	if target != "" && len(httpConfig.Routes) > 0 {
-		return errHTTPTunnelCannotCombineTargetAnd
+	if err := validateHTTPRoutes(spec.HTTP); err != nil {
+		return err
 	}
-	if httpConfig.Cache != nil {
-		if strings.TrimSpace(httpConfig.Serve) == "" {
-			return errRelayCacheRequiresStaticSite
-		}
-		if spec.Relays.BanMITM {
-			return errRelayCachePermitsTLSTerminationAnd
-		}
-		if httpConfig.Auth != nil {
-			return errApplicationAuthCannotCombinedRelayCache
-		}
+	if err := validateStripRequestHeaders(spec); err != nil {
+		return err
 	}
-	for _, route := range httpConfig.Routes {
-		prefix := strings.TrimSpace(route.Prefix)
-		if prefix == "" || strings.TrimSpace(route.Upstream) == "" {
-			return errHTTPRoutesRequirePrefixAndUpstream
-		}
-		if !strings.HasPrefix(prefix, "/") {
-			return fmt.Errorf("HTTP route %q prefix must start with /", prefix)
-		}
-		if strings.TrimSpace(route.Amount) != "" && strings.TrimSpace(httpConfig.Payment.PayTo) == "" {
-			return fmt.Errorf("HTTP route %q payment amount requires a payment recipient", prefix)
-		}
-		if strings.TrimSpace(route.Amount) == "" && len(route.Methods) > 0 {
-			return fmt.Errorf("HTTP route %q methods require a payment amount", prefix)
-		}
-	}
-	if len(httpConfig.StripRequestHeaders) > 0 {
-		if strings.TrimSpace(httpConfig.Serve) != "" {
-			return errStripRequestHeadersCannotCombinedStatic
-		}
-		hasHTTPUpstream := len(httpConfig.Routes) > 0 || strings.TrimSpace(target) != "" || httpConfig.Auth != nil
-		if !hasHTTPUpstream {
-			return errStripRequestHeadersRequireHTTPUpstream
-		}
-		for _, h := range httpConfig.StripRequestHeaders {
-			if strings.EqualFold(strings.TrimSpace(h), "Host") {
-				return errStripRequestHeaderHostNotSupported
-			}
-			if strings.EqualFold(strings.TrimSpace(h), "X-Forwarded-Proto") {
-				return errStripRequestHeaderXForwardedProto
-			}
-		}
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(httpConfig.Payment.Network)), "casper:") && strings.TrimSpace(httpConfig.Payment.Asset) == "" {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(spec.HTTP.Payment.Network)), "casper:") && strings.TrimSpace(spec.HTTP.Payment.Asset) == "" {
 		return errCasperPaymentsRequireAnAsset
 	}
-	if auth := httpConfig.Auth; auth != nil {
+	if auth := spec.HTTP.Auth; auth != nil {
 		if err := appauth.Validate(*auth); err != nil {
 			return err
 		}
@@ -228,39 +260,31 @@ type Runtime struct {
 
 type authProviderCheck struct{ err error }
 
-func Start(ctx context.Context, spec Spec) (*Runtime, error) {
-	if err := spec.Validate(); err != nil {
-		return nil, err
-	}
-
+func buildExposedRoutes(spec Spec) ([]gateway.ExposedHTTPRoute, error) {
 	routes := make([]gateway.ExposedHTTPRoute, 0)
-	if spec.HTTP != nil {
-		if serve := strings.TrimSpace(spec.HTTP.Serve); serve != "" {
-			root, index, err := utils.ResolveStaticSite(serve)
-			if err != nil {
-				return nil, fmt.Errorf("resolve static site %q: %w", serve, err)
-			}
-			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", StaticRoot: root, StaticIndex: index})
-		}
-		for _, route := range spec.HTTP.Routes {
-			routes = append(routes, gateway.ExposedHTTPRoute{
-				Prefix: route.Prefix, Upstream: route.Upstream,
-				Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
-			})
-		}
-		if len(routes) == 0 {
-			routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: spec.Transport.Target})
-		}
+	if spec.HTTP == nil {
+		return routes, nil
 	}
+	if serve := strings.TrimSpace(spec.HTTP.Serve); serve != "" {
+		root, index, err := utils.ResolveStaticSite(serve)
+		if err != nil {
+			return nil, fmt.Errorf("resolve static site %q: %w", serve, err)
+		}
+		routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", StaticRoot: root, StaticIndex: index})
+	}
+	for _, route := range spec.HTTP.Routes {
+		routes = append(routes, gateway.ExposedHTTPRoute{
+			Prefix: route.Prefix, Upstream: route.Upstream,
+			Methods: append([]string(nil), route.Methods...), Amount: route.Amount,
+		})
+	}
+	if len(routes) == 0 {
+		routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", Upstream: spec.Transport.Target})
+	}
+	return routes, nil
+}
 
-	listenerIdentity, err := identity.LoadOrCreate(spec.Identity.Name, spec.Identity.Path, spec.Identity.JSON)
-	if err != nil {
-		return nil, fmt.Errorf("resolve identity: %w", err)
-	}
-	explicitRelayURLs, err := utils.NormalizeRelayURLs(spec.Relays.URLs...)
-	if err != nil {
-		return nil, err
-	}
+func buildExposureOptions(spec Spec) []sdk.Option {
 	opts := []sdk.Option{
 		sdk.WithMITMProtection(spec.Relays.BanMITM),
 		sdk.WithTLSCertificate(spec.TLSCert, spec.TLSKey),
@@ -287,19 +311,10 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 	if spec.HTTP != nil && spec.HTTP.Cache != nil {
 		opts = append(opts, sdk.WithStaticRelayCache(spec.HTTP.Serve, spec.HTTP.Cache.TTL))
 	}
+	return opts
+}
 
-	exposure, err := sdk.Expose(ctx, listenerIdentity, explicitRelayURLs, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start relays: %w", err)
-	}
-	runtime := &Runtime{Identity: listenerIdentity, Exposure: exposure, target: spec.Transport.Target}
-	if spec.Transport.UDP != nil {
-		runtime.udpTarget = cmp.Or(spec.Transport.UDP.Target, spec.Transport.Target)
-	}
-	if spec.HTTP == nil {
-		return runtime, nil
-	}
-
+func composeTunnelHandler(spec Spec, runtime *Runtime, listenerIdentity types.Identity, routes []gateway.ExposedHTTPRoute) (http.Handler, error) {
 	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
 	if err == nil && spec.HTTP.Auth != nil {
 		auth := *spec.HTTP.Auth
@@ -310,22 +325,71 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 		handler, err = gateway.NewStripRequestHeaders(handler, spec.HTTP.StripRequestHeaders)
 	}
 	if err != nil {
-		_ = exposure.Close()
+		_ = runtime.Exposure.Close()
 		return nil, err
 	}
-	runtime.handler = handler
-	if spec.HTTP.Auth != nil {
-		go func() {
-			err := appauth.Check(ctx, *spec.HTTP.Auth)
-			if ctx.Err() != nil {
-				return
-			}
-			runtime.authProvider.Store(&authProviderCheck{err: err})
-			if err != nil {
-				log.Warn().Err(err).Str("address", runtime.Identity.Address).Msg("application auth provider is not usable; visitors cannot sign in until it is")
-			}
-		}()
+	return handler, nil
+}
+
+func resolveStartRuntimeIdentityRelays(spec Spec) (types.Identity, []string, error) {
+	listenerIdentity, err := identity.LoadOrCreate(spec.Identity.Name, spec.Identity.Path, spec.Identity.JSON)
+	if err != nil {
+		return types.Identity{}, nil, fmt.Errorf("resolve identity: %w", err)
 	}
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(spec.Relays.URLs...)
+	if err != nil {
+		return types.Identity{}, nil, err
+	}
+	return listenerIdentity, explicitRelayURLs, nil
+}
+
+func establishStartRuntime(ctx context.Context, spec Spec) (*Runtime, types.Identity, []gateway.ExposedHTTPRoute, error) {
+	if err := spec.Validate(); err != nil {
+		return nil, types.Identity{}, nil, err
+	}
+	routes, err := buildExposedRoutes(spec)
+	if err != nil {
+		return nil, types.Identity{}, nil, err
+	}
+	listenerIdentity, explicitRelayURLs, err := resolveStartRuntimeIdentityRelays(spec)
+	if err != nil {
+		return nil, types.Identity{}, nil, err
+	}
+	runtime, err := exposeTunnelRuntime(ctx, spec, listenerIdentity, explicitRelayURLs)
+	if err != nil {
+		return nil, types.Identity{}, nil, err
+	}
+	return runtime, listenerIdentity, routes, nil
+}
+
+func monitorStartRuntimeAuth(ctx context.Context, spec Spec, runtime *Runtime) {
+	if spec.HTTP.Auth == nil {
+		return
+	}
+	go func() {
+		err := appauth.Check(ctx, *spec.HTTP.Auth)
+		if ctx.Err() != nil {
+			return
+		}
+		runtime.authProvider.Store(&authProviderCheck{err: err})
+		if err != nil {
+			log.Warn().Err(err).Str("address", runtime.Identity.Address).Msg("application auth provider is not usable; visitors cannot sign in until it is")
+		}
+	}()
+}
+
+func Start(ctx context.Context, spec Spec) (*Runtime, error) {
+	runtime, listenerIdentity, routes, err := establishStartRuntime(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	if spec.HTTP == nil {
+		return runtime, nil
+	}
+	if runtime.handler, err = composeTunnelHandler(spec, runtime, listenerIdentity, routes); err != nil {
+		return nil, err
+	}
+	monitorStartRuntimeAuth(ctx, spec, runtime)
 	return runtime, nil
 }
 

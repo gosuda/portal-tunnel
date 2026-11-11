@@ -69,10 +69,6 @@ func launchdPlistPath(name string) (string, string, error) {
 
 func launchdPlist(def Definition) string {
 	args := append([]string{def.Executable}, def.Args...)
-	var argXML strings.Builder
-	for _, arg := range args {
-		argXML.WriteString("\n    <string>" + xmlEscape(arg) + "</string>")
-	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -90,7 +86,15 @@ func launchdPlist(def Definition) string {
   <true/>
 </dict>
 </plist>
-`, xmlEscape(def.Name), argXML.String(), xmlEscape(def.WorkingDir))
+`, xmlEscape(def.Name), launchdArgsXML(args), xmlEscape(def.WorkingDir))
+}
+
+func launchdArgsXML(args []string) string {
+	var argXML strings.Builder
+	for _, arg := range args {
+		argXML.WriteString("\n    <string>" + xmlEscape(arg) + "</string>")
+	}
+	return argXML.String()
 }
 
 func xmlEscape(value string) string {

@@ -3,7 +3,8 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { Mock } from "vitest";
 import { describe, expect, it, vi } from "vitest";
 import type { ReputationSummary } from "@/types/api";
-import { createConstellationData, ServerCard } from "./ServerCard";
+import { ServerCard } from "./ServerCard";
+import { createConstellationData } from "./constellation";
 
 const TCP = "minecraft.relay.example.com:50000";
 const UDP = "minecraft.relay.example.com:50001";

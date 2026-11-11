@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { useState } from "react";
 import {
   Select,
@@ -28,7 +29,7 @@ export const FloatingActionBar = ({
   onApprove,
   onDeny,
   onBan,
-}: FloatingActionBarProps) => {
+}: FloatingActionBarProps): JSX.Element => {
   const [selectedAction, setSelectedAction] = useState<BulkAction>("approve");
 
   const handleExecute = () => {

@@ -80,16 +80,7 @@ type exposeFlags struct {
 	logFormat   string
 }
 
-func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
-	env := cli.NewEnv(os.Environ())
-	fs.BoolVar(&cfg.TLSAuto, "tls-auto", false, "Obtain and renew tunnel-owned certificates through the relay; Keyless bootstrap is allowed unless --tls-require-local")
-	fs.StringVar(&cfg.TLSStateDir, "tls-state-dir", "", "Persistent certificate/key directory for --tls-auto (default identity path plus .tls; required with --identity-json)")
-	fs.BoolVar(&cfg.TLSRequireLocal, "tls-require-local", false, "Require a local certificate before accepting traffic; never fall back to relay signing")
-	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "Tenant certificate chain PEM file; requires --tls-key and never falls back to relay signing")
-	fs.StringVar(&cfg.TLSKey, "tls-key", "", "Tenant private key PEM file; requires --tls-cert")
-	fs.StringVar(&cfg.TLSMonitorStateDir, "tls-monitor-state-dir", "", "Enable evaluation-only certificate monitoring and persist evidence here; sends hostname queries to public DNS and CertSpotter")
-	fs.StringVar(&cfg.TLSMonitorBaseline, "tls-monitor-baseline", "", "Operator-managed CAA/SPKI baseline JSON file; requires --tls-monitor-state-dir")
-	fs.StringVar(&cfg.TLSMonitorDNSResolver, "tls-monitor-dns-resolver", "", "Independent DNS resolver IP:port (default 1.1.1.1:53); requires --tls-monitor-state-dir")
+func registerIdentityAuthFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags, env *cli.Env) {
 	fs.StringVar(&flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	fs.BoolVar(&flags.discovery, "discovery", true, "Include bootstrap relays and discover additional relays")
 	env.Bool(fs, &cfg.Overlay, "overlay", false, "Prefer IVNP overlay transport when available", "OVERLAY_ENABLED")
@@ -118,6 +109,9 @@ func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlag
 	env.String(fs, &cfg.SMTPUsername, "auth-smtp-username", "", "Optional SMTP username for --auth email; requires --auth-smtp-password", "AUTH_SMTP_USERNAME")
 	env.String(fs, &cfg.SMTPPassword, "auth-smtp-password", "", "SMTP password for --auth email. Pass it by environment variable, not on the command line, because process lists show arguments", "AUTH_SMTP_PASSWORD")
 	env.String(fs, &cfg.SMTPFrom, "auth-smtp-from", "", "Fixed sender address of the login links of --auth email, such as \"Portal <login@example.com>\"", "AUTH_SMTP_FROM")
+}
+
+func registerPaymentTransportFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags, env *cli.Env) {
 	fs.StringVar(&cfg.PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	fs.BoolVar(&cfg.Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
 	fs.StringVar(&cfg.Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, casper:casper-test, and nano:mainnet")
@@ -135,6 +129,20 @@ func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlag
 	env.Int(fs, &cfg.MaxActiveRelays, "max-active-relays", discovery.DefaultMaxActiveRelays, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	fs.StringVar(&flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
 	fs.StringVar(&flags.logFormat, "log-format", "text", "Log output format: text (default human-readable console) or json (one structured JSON log record per line on stdout; integrations filter relay lifecycle records by event=relay_status)")
+}
+
+func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
+	fs.BoolVar(&cfg.TLSAuto, "tls-auto", false, "Obtain and renew tunnel-owned certificates through the relay; Keyless bootstrap is allowed unless --tls-require-local")
+	fs.StringVar(&cfg.TLSStateDir, "tls-state-dir", "", "Persistent certificate/key directory for --tls-auto (default identity path plus .tls; required with --identity-json)")
+	fs.BoolVar(&cfg.TLSRequireLocal, "tls-require-local", false, "Require a local certificate before accepting traffic; never fall back to relay signing")
+	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "Tenant certificate chain PEM file; requires --tls-key and never falls back to relay signing")
+	fs.StringVar(&cfg.TLSKey, "tls-key", "", "Tenant private key PEM file; requires --tls-cert")
+	fs.StringVar(&cfg.TLSMonitorStateDir, "tls-monitor-state-dir", "", "Enable evaluation-only certificate monitoring and persist evidence here; sends hostname queries to public DNS and CertSpotter")
+	fs.StringVar(&cfg.TLSMonitorBaseline, "tls-monitor-baseline", "", "Operator-managed CAA/SPKI baseline JSON file; requires --tls-monitor-state-dir")
+	fs.StringVar(&cfg.TLSMonitorDNSResolver, "tls-monitor-dns-resolver", "", "Independent DNS resolver IP:port (default 1.1.1.1:53); requires --tls-monitor-state-dir")
+	env := cli.NewEnv(os.Environ())
+	registerIdentityAuthFlags(fs, cfg, flags, env)
+	registerPaymentTransportFlags(fs, cfg, flags, env)
 }
 
 func runExposeCommand(args []string) error {
@@ -173,21 +181,7 @@ func runExposeCommand(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
-	if flags.metricsAddr != "" {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		srv := &http.Server{
-			Addr:              flags.metricsAddr,
-			Handler:           mux,
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		go func() {
-			log.Info().Str("metrics_addr", flags.metricsAddr).Msg("metrics server listening")
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Error().Err(err).Msg("metrics server error")
-			}
-		}()
-	}
+	startRunExposeCommandMetrics(flags.metricsAddr)
 
 	runtime, err := tunnel.Start(ctx, spec)
 	if err != nil {
@@ -195,6 +189,25 @@ func runExposeCommand(args []string) error {
 	}
 	defer runtime.Close()
 	return runtime.Run(ctx)
+}
+
+func startRunExposeCommandMetrics(metricsAddr string) {
+	if metricsAddr == "" {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	srv := &http.Server{
+		Addr:              metricsAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		log.Info().Str("metrics_addr", metricsAddr).Msg("metrics server listening")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("metrics server error")
+		}
+	}()
 }
 
 func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags exposeFlags) (tunnel.Spec, error) {
@@ -257,19 +270,12 @@ func runAuthCommand(args []string) error {
 	fs.DurationVar(&expires, "expires", 30*24*time.Hour, "Credential lifetime")
 	env.String(fs, &identityPath, "identity-path", "identity.json", "Existing tunnel identity json file path", "IDENTITY_PATH")
 	env.String(fs, &identityJSON, "identity-json", "", "Existing tunnel identity json payload", "IDENTITY_JSON")
-	if err := cli.ParseFlagSet(fs, args[1:], printAuthUsage); err != nil {
+	host, err := parseRunAuthCommandHost(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
-	}
-	host, err := cli.OptionalSingleArg(fs.Args(), "tunnel")
-	if err != nil || host == "" {
-		printAuthUsage(os.Stderr)
-		if err != nil {
-			return err
-		}
-		return errTunnelIsRequired
 	}
 	if strings.TrimSpace(subject) == "" {
 		return errSubjectIsRequired
@@ -281,16 +287,39 @@ func runAuthCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load tunnel identity: %w", err)
 	}
-	credential, err := appauth.IssueCredential(tunnelIdentity, host, subject, time.Now().UTC().Add(expires))
-	if err != nil {
-		return err
-	}
-	redeemURL, err := appauth.CredentialRedeemURL(host, credential)
+	credential, redeemURL, err := issueRunAuthCommandCredential(tunnelIdentity, host, subject, expires)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "Credential: %s\nRedeem URL: %s\n", credential, redeemURL)
 	return nil
+}
+
+func parseRunAuthCommandHost(fs *flag.FlagSet, args []string) (string, error) {
+	if err := cli.ParseFlagSet(fs, args[1:], printAuthUsage); err != nil {
+		return "", err
+	}
+	host, err := cli.OptionalSingleArg(fs.Args(), "tunnel")
+	if err != nil || host == "" {
+		printAuthUsage(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		return "", errTunnelIsRequired
+	}
+	return host, nil
+}
+
+func issueRunAuthCommandCredential(tunnelIdentity types.Identity, host, subject string, expires time.Duration) (string, string, error) {
+	credential, err := appauth.IssueCredential(tunnelIdentity, host, subject, time.Now().UTC().Add(expires))
+	if err != nil {
+		return "", "", err
+	}
+	redeemURL, err := appauth.CredentialRedeemURL(host, credential)
+	if err != nil {
+		return "", "", err
+	}
+	return credential, redeemURL, nil
 }
 
 func runUpdateCommand(args []string) error {

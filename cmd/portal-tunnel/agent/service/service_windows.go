@@ -30,26 +30,16 @@ func Install(ctx context.Context, def Definition) error {
 	s, err := m.OpenService(def.Name)
 	if err == nil {
 		defer s.Close()
-		existing, cfgErr := s.Config()
-		if cfgErr != nil {
-			return cfgErr
-		}
-		cfg = existing
-		cfg.StartType = mgr.StartAutomatic
-		cfg.ErrorControl = mgr.ErrorNormal
-		cfg.DisplayName = def.DisplayName
-		cfg.Description = def.Description
-		cfg.DelayedAutoStart = true
-		cfg.BinaryPathName = windowsCommandLine(def)
-		if err := s.UpdateConfig(cfg); err != nil {
-			return err
-		}
-		return configureWindowsRecovery(s)
+		return refreshWindowsService(s, def)
 	}
 	if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 		return err
 	}
-	s, err = m.CreateService(def.Name, def.Executable, cfg, def.Args...)
+	return installWindowsService(ctx, m, def, cfg)
+}
+
+func installWindowsService(ctx context.Context, m *mgr.Mgr, def Definition, cfg mgr.Config) error {
+	s, err := m.CreateService(def.Name, def.Executable, cfg, def.Args...)
 	if err != nil {
 		return err
 	}
@@ -58,6 +48,24 @@ func Install(ctx context.Context, def Definition) error {
 		return err
 	}
 	return ctx.Err()
+}
+
+func refreshWindowsService(s *mgr.Service, def Definition) error {
+	existing, cfgErr := s.Config()
+	if cfgErr != nil {
+		return cfgErr
+	}
+	cfg := existing
+	cfg.StartType = mgr.StartAutomatic
+	cfg.ErrorControl = mgr.ErrorNormal
+	cfg.DisplayName = def.DisplayName
+	cfg.Description = def.Description
+	cfg.DelayedAutoStart = true
+	cfg.BinaryPathName = windowsCommandLine(def)
+	if err := s.UpdateConfig(cfg); err != nil {
+		return err
+	}
+	return configureWindowsRecovery(s)
 }
 
 func Start(ctx context.Context, name string) error {

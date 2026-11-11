@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export function useCopy(resetMs = 2000) {
+export function useCopy(resetMs: number = 2000): { copiedKey: string | null; copy: (text: string, key?: string) => Promise<void> } {
   const [copied, setCopied] = useState<{ key: string } | null>(null);
 
   useEffect(() => {

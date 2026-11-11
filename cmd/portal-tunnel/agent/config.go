@@ -104,19 +104,26 @@ func readConfigDocument(absPath string) (Config, os.FileMode, error) {
 	if err != nil {
 		return Config{}, 0, err
 	}
-
-	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, 0, err
-	}
-	cfg.sourcePath = absPath
-	if err := cfg.normalize(absPath); err != nil {
-		return Config{}, 0, err
-	}
-	if err := cfg.Validate(); err != nil {
+	cfg, err := parseConfigDocument(data, absPath)
+	if err != nil {
 		return Config{}, 0, err
 	}
 	return cfg, info.Mode().Perm(), nil
+}
+
+func parseConfigDocument(data []byte, absPath string) (Config, error) {
+	var cfg Config
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, err
+	}
+	cfg.sourcePath = absPath
+	if err := cfg.normalize(absPath); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
 }
 
 func writeConfigDocument(path string, mode os.FileMode, cfg Config) error {
@@ -145,15 +152,11 @@ func (cfg TunnelConfig) holdsSecret() bool {
 }
 
 func (cfg *Config) normalize(configPath string) error {
-	configDir := "."
+	var configDir string
 	if absConfig, err := filepath.Abs(strings.TrimSpace(configPath)); err == nil {
 		configDir = filepath.Dir(absConfig)
-	}
-	resolvePath := func(path string) string {
-		if path != "" && !filepath.IsAbs(path) {
-			return filepath.Join(configDir, path)
-		}
-		return path
+	} else {
+		configDir = "."
 	}
 
 	cfg.Agent.StateDir = strings.TrimSpace(cfg.Agent.StateDir)
@@ -163,7 +166,7 @@ func (cfg *Config) normalize(configPath string) error {
 	if cfg.Agent.StateDir == "" {
 		cfg.Agent.StateDir = service.DefaultDataDir()
 	} else {
-		cfg.Agent.StateDir = resolvePath(cfg.Agent.StateDir)
+		cfg.Agent.StateDir = resolveAgentPath(configDir, cfg.Agent.StateDir)
 	}
 	cfg.Agent.ControlAddr = cmp.Or(cfg.Agent.ControlAddr, DefaultControlAddr)
 	cfg.Agent.ServiceName = cmp.Or(cfg.Agent.ServiceName, DefaultServiceName)
@@ -172,26 +175,34 @@ func (cfg *Config) normalize(configPath string) error {
 		t := &cfg.Tunnels[i]
 		t.ID = cmp.Or(strings.TrimSpace(t.ID), strings.TrimSpace(t.Name), fmt.Sprintf("tunnel-%d", i+1))
 		if err := t.Normalize(); err != nil {
-			return fmt.Errorf("tunnel %q: %w", t.ID, err)
+			return fmt.Errorf("normalize tunnel %q: %w", t.ID, err)
 		}
-		t.Serve = resolvePath(t.Serve)
-		t.SAMLMetadataFile = resolvePath(t.SAMLMetadataFile)
-		t.TLSCert = resolvePath(t.TLSCert)
-		t.TLSKey = resolvePath(t.TLSKey)
-		t.TLSStateDir = resolvePath(t.TLSStateDir)
-		t.TLSMonitorStateDir = resolvePath(t.TLSMonitorStateDir)
-		t.TLSMonitorBaseline = resolvePath(t.TLSMonitorBaseline)
+		t.Serve = resolveAgentPath(configDir, t.Serve)
+		t.SAMLMetadataFile = resolveAgentPath(configDir, t.SAMLMetadataFile)
+		t.TLSCert = resolveAgentPath(configDir, t.TLSCert)
+		t.TLSKey = resolveAgentPath(configDir, t.TLSKey)
+		t.TLSStateDir = resolveAgentPath(configDir, t.TLSStateDir)
+		t.TLSMonitorStateDir = resolveAgentPath(configDir, t.TLSMonitorStateDir)
+		t.TLSMonitorBaseline = resolveAgentPath(configDir, t.TLSMonitorBaseline)
+		if t.IdentityPath != "" {
+			t.IdentityPath = resolveAgentPath(configDir, t.IdentityPath)
+		}
 		if t.IdentityPath == "" {
 			if len(cfg.Tunnels) <= 1 {
 				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, defaultIdentityFilename)
 			} else {
 				t.IdentityPath = filepath.Join(cfg.Agent.StateDir, t.ID, defaultIdentityFilename)
 			}
-		} else {
-			t.IdentityPath = resolvePath(t.IdentityPath)
 		}
 	}
 	return nil
+}
+
+func resolveAgentPath(configDir, path string) string {
+	if path != "" && !filepath.IsAbs(path) {
+		return filepath.Join(configDir, path)
+	}
+	return path
 }
 
 func (cfg Config) Validate() error {
@@ -222,7 +233,7 @@ func (cfg TunnelConfig) Validate() error {
 		return err
 	}
 	if _, err := cfg.Spec(); err != nil {
-		return fmt.Errorf("tunnel %q: %w", cfg.ID, err)
+		return fmt.Errorf("validate tunnel %q: %w", cfg.ID, err)
 	}
 	return nil
 }

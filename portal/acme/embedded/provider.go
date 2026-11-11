@@ -8,19 +8,14 @@ import (
 	"cmp"
 	"context"
 	"crypto"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/go-acme/lego/v4/challenge"
-	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
 
@@ -101,7 +96,6 @@ func New(cfg Config) (*Provider, error) {
 	}
 	listenAddr := strings.TrimSpace(cfg.ListenAddr)
 	listenAddr = cmp.Or(listenAddr, defaultListenAddr)
-
 	p := &Provider{
 		baseDomain: baseDomain,
 		zone:       dns.Fqdn(baseDomain),
@@ -109,23 +103,35 @@ func New(cfg Config) (*Provider, error) {
 		txt:        make(map[string][]string),
 		ready:      make(chan struct{}),
 	}
-
-	var err error
-	p.key, p.signer, err = loadSigningKey(cfg.KeyPath, p.zone)
-	if err != nil {
-		return nil, fmt.Errorf("initialize embedded dnssec: %w", err)
+	if err := p.initializeNewProviderSigning(cfg.KeyPath); err != nil {
+		return nil, err
 	}
-	p.bumpSerialLocked()
-	if _, err := p.signedZone(time.Now()); err != nil {
-		return nil, fmt.Errorf("sign embedded dns zone: %w", err)
-	}
-
 	packetConn, listener, err := listenDNS(listenAddr)
 	if err != nil {
 		return nil, err
 	}
-	p.listenAddr = listener.Addr().String()
+	if err := p.serveNewProviderListeners(packetConn, listener, cfg.KeyPath); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
 
+func (p *Provider) initializeNewProviderSigning(keyPath string) error {
+	key, signer, err := loadSigningKey(keyPath, p.zone)
+	if err != nil {
+		return fmt.Errorf("initialize embedded dnssec: %w", err)
+	}
+	p.key = key
+	p.signer = signer
+	p.bumpSerialLocked()
+	if _, err := p.signedZone(time.Now()); err != nil {
+		return fmt.Errorf("sign embedded dns zone: %w", err)
+	}
+	return nil
+}
+
+func (p *Provider) serveNewProviderListeners(packetConn net.PacketConn, listener net.Listener, keyPath string) error {
+	p.listenAddr = listener.Addr().String()
 	var startMu sync.Mutex
 	startedCount := 0
 	notifyStarted := func() {
@@ -140,23 +146,21 @@ func New(cfg Config) (*Provider, error) {
 	p.tcpServer = &dns.Server{Listener: listener, Handler: p, NotifyStartedFunc: notifyStarted}
 	go func() { _ = p.udpServer.ActivateAndServe() }()
 	go func() { _ = p.tcpServer.ActivateAndServe() }()
-
 	select {
 	case <-p.ready:
 	case <-time.After(listenStartTimeout):
 		_ = p.Stop()
-		return nil, fmt.Errorf("embedded dns listeners on %s did not start within %s", p.listenAddr, listenStartTimeout)
+		return fmt.Errorf("embedded dns listeners on %s did not start within %s", p.listenAddr, listenStartTimeout)
 	}
 	p.started = true
-
 	_, ds, message, _ := p.EnsureDNSSEC(context.Background(), p.baseDomain)
-	log.Info().Str("ds_record", ds).Str("key_path", cfg.KeyPath).Msg(message)
+	log.Info().Str("ds_record", ds).Str("key_path", keyPath).Msg(message)
 	log.Info().
 		Str("listen_addr", p.listenAddr).
 		Str("zone", p.zone).
 		Str("nameserver", p.nsName).
 		Msg("embedded authoritative dns server started")
-	return p, nil
+	return nil
 }
 
 // Stop shuts down the authoritative listeners. It is safe to call multiple
@@ -186,50 +190,6 @@ func (p *Provider) Stop() error {
 func (p *Provider) Addr() string { return p.listenAddr }
 
 func (p *Provider) Name() string { return "embedded" }
-
-func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
-	if p == nil {
-		return nil, errEmbeddedDNSProviderIsNil
-	}
-	return dnsrecord.NewChallengeProvider(ctx, dns01.DefaultPropagationTimeout, dns01.DefaultPollingInterval, p.presentTXT), nil
-}
-
-func (p *Provider) presentTXT(ctx context.Context, fqdn, value string) (dnsrecord.Cleanup, error) {
-	name, err := p.zoneHostname(fqdn)
-	if err != nil {
-		return nil, err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if slices.Contains(p.txt[name], value) {
-		return nil, nil
-	}
-	p.txt[name] = append(p.txt[name], value)
-	p.bumpSerialLocked()
-	return func(ctx context.Context) error {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		values := p.txt[name]
-		idx := slices.Index(values, value)
-		if idx < 0 {
-			return nil
-		}
-		values = slices.Delete(values, idx, idx+1)
-		if len(values) == 0 {
-			delete(p.txt, name)
-		} else {
-			p.txt[name] = values
-		}
-		p.bumpSerialLocked()
-		return nil
-	}, nil
-}
 
 // EnsureAddressRecords updates the supplied address family for the zone apex
 // and every covered name. The other family's address remains unchanged.
@@ -266,42 +226,6 @@ func (p *Provider) EnsureAddressRecords(_ context.Context, baseDomain, publicIP 
 		})
 	}
 	return nil
-}
-
-func (p *Provider) verifyDelegatedPath(ip net.IP) {
-	label := make([]byte, 8)
-	if _, err := rand.Read(label); err != nil {
-		log.Warn().Err(err).Msg("dns self-check random label")
-		return
-	}
-	name := hex.EncodeToString(label) + "." + p.zone
-	ctx, cancel := context.WithTimeout(context.Background(), selfCheckTimeout)
-	defer cancel()
-	started := time.Now()
-	network := "ip4"
-	if ip.To4() == nil {
-		network = "ip6"
-	}
-	addrs, err := net.DefaultResolver.LookupIP(ctx, network, name)
-	elapsed := time.Since(started)
-	if err != nil {
-		log.Warn().Err(err).Str("name", name).Dur("elapsed", elapsed).Msg("dns self-check failed")
-		return
-	}
-	if slices.ContainsFunc(addrs, func(addr net.IP) bool { return addr.Equal(ip) }) {
-		log.Info().Str("name", name).Str("resolved", ip.String()).Dur("elapsed", elapsed).Msg("dns self-check passed")
-		return
-	}
-	resolved := make([]string, 0, len(addrs))
-	for _, addr := range addrs {
-		resolved = append(resolved, addr.String())
-	}
-	log.Warn().
-		Str("name", name).
-		Str("resolved", strings.Join(resolved, ",")).
-		Str("expected", ip.String()).
-		Dur("elapsed", elapsed).
-		Msg("dns self-check resolved a different address")
 }
 
 // EnsureAddressRecord is a no-op: address answers are synthesized zone-wide
@@ -414,40 +338,4 @@ func (p *Provider) bumpSerialLocked() {
 	} else {
 		p.serial++
 	}
-}
-
-func listenDNS(addr string) (net.PacketConn, net.Listener, error) {
-	listenConfig := net.ListenConfig{}
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse embedded dns listen address %q: %w", addr, err)
-	}
-	if portStr != "0" {
-		packetConn, err := listenConfig.ListenPacket(context.Background(), "udp", addr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("listen embedded dns udp %s: %w", addr, err)
-		}
-		listener, err := listenConfig.Listen(context.Background(), "tcp", addr)
-		if err != nil {
-			_ = packetConn.Close()
-			return nil, nil, fmt.Errorf("listen embedded dns tcp %s: %w", addr, err)
-		}
-		return packetConn, listener, nil
-	}
-
-	var lastErr error
-	for range 5 {
-		packetConn, err := listenConfig.ListenPacket(context.Background(), "udp", addr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("listen embedded dns udp %s: %w", addr, err)
-		}
-		port := packetConn.LocalAddr().(*net.UDPAddr).Port
-		listener, err := listenConfig.Listen(context.Background(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
-		if err == nil {
-			return packetConn, listener, nil
-		}
-		lastErr = err
-		_ = packetConn.Close()
-	}
-	return nil, nil, fmt.Errorf("listen embedded dns tcp companion port: %w", lastErr)
 }

@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,9 +51,8 @@ func newHarness(t *testing.T, opts ...sdk.Option) *harness {
 	return newHarnessWithName(t, "e2e", "127.0.0.1", "", opts...)
 }
 
-func newHarnessWithName(t *testing.T, name, host, attack string, opts ...sdk.Option) *harness {
+func listenOriginService(t *testing.T, host string) (*httptest.Server, *url.URL) {
 	t.Helper()
-
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
 		if host == "::1" {
@@ -71,8 +72,11 @@ func newHarnessWithName(t *testing.T, name, host, attack string, opts ...sdk.Opt
 		service.Close()
 		t.Fatalf("parse local service URL: %v", err)
 	}
+	return service, target
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
+func bootHarnessRelay(t *testing.T, ctx context.Context, host, attack string, h *harness) (*portal.Server, string, int, string, *mitmIngress) {
+	t.Helper()
 	sniPort := harnessPort(t, host)
 	stateDir := t.TempDir()
 	sniAddr := net.JoinHostPort(host, strconv.Itoa(sniPort))
@@ -80,61 +84,83 @@ func newHarnessWithName(t *testing.T, name, host, attack string, opts ...sdk.Opt
 	if attack != "" {
 		ingressAddr = net.JoinHostPort(host, strconv.Itoa(harnessPort(t, host)))
 	}
-	relayURL := "https://" + sniAddr
 	relay, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:          relayURL,
 		TenantCertificates: true,
+		PortalURL:          "https://" + sniAddr,
 		StateDir:           stateDir,
 		SNIListenAddr:      ingressAddr,
 		SNIPort:            sniPort,
 	})
 	if err != nil {
-		cancel()
-		service.Close()
+		h.cancel()
+		h.service.Close()
 		t.Fatalf("create relay: %v", err)
 	}
 	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
-		cancel()
-		service.Close()
+		h.cancel()
+		h.service.Close()
 		t.Fatalf("start relay: %v", err)
 	}
 	var ingress *mitmIngress
 	if attack != "" {
 		ingress = startMITMIngress(t, ctx, sniAddr, ingressAddr, stateDir, attack)
 	}
+	return relay, sniAddr, sniPort, stateDir, ingress
+}
 
+func exposeHarnessService(t *testing.T, ctx context.Context, h *harness, relayURL, name string, opts ...sdk.Option) {
+	t.Helper()
 	clientIdentity, err := identity.Generate(name)
 	if err != nil {
-		cancel()
-		_ = relay.Shutdown(context.Background())
-		_ = relay.Wait()
-		service.Close()
+		h.cancel()
+		_ = h.server.Shutdown(context.Background())
+		_ = h.server.Wait()
+		h.service.Close()
 		t.Fatalf("generate client identity: %v", err)
 	}
 	exposure, err := sdk.Expose(ctx, clientIdentity, []string{relayURL}, opts...)
 	if err != nil {
-		cancel()
-		_ = relay.Shutdown(context.Background())
-		_ = relay.Wait()
-		service.Close()
+		h.cancel()
+		_ = h.server.Shutdown(context.Background())
+		_ = h.server.Wait()
+		h.service.Close()
 		t.Fatalf("expose local service: %v", err)
 	}
+	h.exposure = exposure
+}
 
-	h := &harness{
-		t:           t,
-		cancel:      cancel,
-		server:      relay,
-		exposure:    exposure,
-		service:     service,
-		sniAddr:     sniAddr,
-		certificate: filepath.Join(stateDir, "fullchain.pem"),
-		sniPort:     sniPort,
-		stateDir:    stateDir,
-		proxyDone:   make(chan error, 1),
-		mitm:        ingress,
+func buildPortalTunnelBinary(t *testing.T) string {
+	t.Helper()
+	portalBin := filepath.Join(t.TempDir(), "portal")
+	if runtime.GOOS == "windows" {
+		portalBin += ".exe"
 	}
+	build := exec.Command("go", "build", "-o", portalBin, "./cmd/portal-tunnel")
+	build.Dir = repoRoot(t)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build portal binary: %v\n%s", err, out)
+	}
+	return portalBin
+}
+
+func newHarnessWithName(t *testing.T, name, host, attack string, opts ...sdk.Option) *harness {
+	t.Helper()
+	service, target := listenOriginService(t, host)
+	h := &harness{t: t, service: service}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	relay, sniAddr, sniPort, stateDir, ingress := bootHarnessRelay(t, ctx, host, attack, h)
+	h.server = relay
+	h.sniAddr = sniAddr
+	h.sniPort = sniPort
+	h.stateDir = stateDir
+	h.certificate = filepath.Join(stateDir, "fullchain.pem")
+	h.mitm = ingress
+	h.proxyDone = make(chan error, 1)
+	relayURL := "https://" + sniAddr
+	exposeHarnessService(t, ctx, h, relayURL, name, opts...)
 	go func() {
-		h.proxyDone <- sdk.Proxy(ctx, exposure, target.Host)
+		h.proxyDone <- sdk.Proxy(ctx, h.exposure, target.Host)
 	}()
 	t.Cleanup(h.close)
 	return h
@@ -185,14 +211,14 @@ func (h *harness) get(publicURL string) string {
 	return body
 }
 
-func tenantGet(sniAddr, certPath, publicURL string) (string, bool) {
+func tenantTLSClient(sniAddr, certPath string) (*http.Client, *http.Transport, bool) {
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
-		return "", false
+		return nil, nil, false
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(certPEM) {
-		return "", false
+		return nil, nil, false
 	}
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
@@ -201,8 +227,15 @@ func tenantGet(sniAddr, certPath, publicURL string) (string, bool) {
 		},
 		ForceAttemptHTTP2: false,
 	}
+	return &http.Client{Transport: transport, Timeout: 10 * time.Second}, transport, true
+}
+
+func tenantGet(sniAddr, certPath, publicURL string) (string, bool) {
+	client, transport, ok := tenantTLSClient(sniAddr, certPath)
+	if !ok {
+		return "", false
+	}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	resp, err := client.Get(publicURL + "/marker")
 	if err != nil {
 		return "", false

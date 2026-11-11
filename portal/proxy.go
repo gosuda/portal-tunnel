@@ -31,21 +31,9 @@ func (p *proxy) bridge(ctx context.Context, left, right net.Conn, identityKey ty
 	defer left.Close()
 	defer right.Close()
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel, waitBridgeCancel := p.bridgeCancelSetup(ctx, left, right)
 	defer cancel()
-	closed := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		defer close(closed)
-		_ = left.SetDeadline(time.Now())
-		_ = right.SetDeadline(time.Now())
-		_ = left.Close()
-		_ = right.Close()
-	})
-	defer func() {
-		if !stop() {
-			<-closed
-		}
-	}()
+	defer waitBridgeCancel()
 	var group errgroup.Group
 	group.Go(func() error {
 		err := p.copy(ctx, right, left, identityKey, bpsManager)
@@ -64,6 +52,23 @@ func (p *proxy) bridge(ctx context.Context, left, right net.Conn, identityKey ty
 		return err
 	})
 	_ = group.Wait()
+}
+
+func (p *proxy) bridgeCancelSetup(ctx context.Context, left, right net.Conn) (context.Context, context.CancelFunc, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(closed)
+		_ = left.SetDeadline(time.Now())
+		_ = right.SetDeadline(time.Now())
+		_ = left.Close()
+		_ = right.Close()
+	})
+	return ctx, cancel, func() {
+		if !stop() {
+			<-closed
+		}
+	}
 }
 
 func (p *proxy) activeConnectionCount() int64 {
@@ -102,24 +107,8 @@ func (p *proxy) copy(ctx context.Context, dst, src net.Conn, identityKey types.S
 	for {
 		nr, readErr := src.Read(buf)
 		if nr > 0 {
-			data := buf[:nr]
-			for len(data) > 0 {
-				chunkSize, err := bpsManager.ThrottleIdentityBPS(ctx, identityKey, len(data))
-				if err != nil {
-					return err
-				}
-
-				n, err := dst.Write(data[:chunkSize])
-				if n > 0 {
-					p.tcpBytes.Add(int64(n))
-					data = data[n:]
-				}
-				if err != nil {
-					return err
-				}
-				if n == 0 {
-					return io.ErrShortWrite
-				}
+			if err := p.copyProxyDrain(ctx, dst, identityKey, bpsManager, buf[:nr]); err != nil {
+				return err
 			}
 		}
 		if readErr != nil {
@@ -129,6 +118,36 @@ func (p *proxy) copy(ctx context.Context, dst, src net.Conn, identityKey types.S
 			return readErr
 		}
 	}
+}
+
+func (p *proxy) copyProxyDrain(ctx context.Context, dst net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager, data []byte) error {
+	for len(data) > 0 {
+		var err error
+		data, err = p.copyProxyWriteChunk(ctx, dst, identityKey, bpsManager, data)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *proxy) copyProxyWriteChunk(ctx context.Context, dst net.Conn, identityKey types.ServiceIdentityKey, bpsManager *BPSManager, data []byte) ([]byte, error) {
+	chunkSize, err := bpsManager.ThrottleIdentityBPS(ctx, identityKey, len(data))
+	if err != nil {
+		return data, err
+	}
+	n, err := dst.Write(data[:chunkSize])
+	if n > 0 {
+		p.tcpBytes.Add(int64(n))
+		data = data[n:]
+	}
+	if err != nil {
+		return data, err
+	}
+	if n == 0 {
+		return data, io.ErrShortWrite
+	}
+	return data, nil
 }
 
 func closeWrite(conn net.Conn) {

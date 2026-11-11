@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const browserSmokePage = `<!doctype html>
@@ -87,6 +88,151 @@ func TestPackagedBrowserWASM(t *testing.T) {
 	}
 }
 
+func registerSmokeResultHandlers(mux *http.ServeMux, result chan browserSmokeResult) {
+	mux.HandleFunc("POST /browser-ready", func(w http.ResponseWriter, r *http.Request) {
+		var ready struct {
+			PublicURL string `json:"publicURL"`
+			AliasURL  string `json:"aliasURL"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&ready); err != nil {
+			result <- browserSmokeResult{err: fmt.Errorf("decode browser ready state: %w", err)}
+			return
+		}
+		result <- browserSmokeResult{publicURL: ready.PublicURL, aliasURL: ready.AliasURL}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /browser-error", func(w http.ResponseWriter, r *http.Request) {
+		var message bytes.Buffer
+		_, _ = message.ReadFrom(http.MaxBytesReader(w, r.Body, 64<<10))
+		result <- browserSmokeResult{err: fmt.Errorf("browser connector failed: %s", message.String())}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func serveBrowserSmoke(t *testing.T, wasmPath, wasmExecPath string, result chan browserSmokeResult) *http.ServeMux {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /browser-smoke", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(browserSmokePage))
+	})
+	mux.HandleFunc("GET /wasm_exec.js", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, wasmExecPath)
+	})
+	mux.HandleFunc("GET /portal-js-wasm.wasm", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/wasm")
+		http.ServeFile(w, r, wasmPath)
+	})
+	registerSmokeResultHandlers(mux, result)
+	return mux
+}
+
+func startSmokeRelay(t *testing.T, ctx context.Context, relayURL, stateDir string, port int, mux *http.ServeMux) *portal.Server {
+	t.Helper()
+	relay, err := portal.NewServer(portal.ServerConfig{
+		PortalURL:     relayURL,
+		StateDir:      stateDir,
+		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(port),
+		SNIPort:       port,
+	})
+	if err != nil {
+		t.Fatalf("create relay: %v", err)
+	}
+	if err := relay.Start(ctx, relayHandler(relay, mux)); err != nil {
+		t.Fatalf("start relay: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = relay.Shutdown(shutdownCtx)
+		_ = relay.Wait()
+	})
+	return relay
+}
+
+func launchSmokeBrowser(t *testing.T, ctx context.Context, browser, pageURL string, logFile *os.File) (<-chan struct{}, *error) {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, browser,
+		"--headless",
+		"--disable-gpu",
+		"--ignore-certificate-errors",
+		"--no-sandbox",
+		"--user-data-dir="+filepath.Join(t.TempDir(), "chrome"),
+		pageURL,
+	)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = browserSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start browser: %v", err)
+	}
+	tree := newBrowserTree(cmd)
+	browserDone := make(chan struct{})
+	browserErr := new(error)
+	go func() {
+		*browserErr = cmd.Wait()
+		close(browserDone)
+	}()
+	t.Cleanup(func() { waitBrowserExit(t, browserDone, tree) })
+	return browserDone, browserErr
+}
+
+func awaitBrowserReady(t *testing.T, ctx context.Context, result chan browserSmokeResult, browserDone <-chan struct{}, browserErr *error, browserLog string) browserSmokeResult {
+	t.Helper()
+	var ready browserSmokeResult
+	waitBrowser := browserDone
+waitReady:
+	for {
+		select {
+		case ready = <-result:
+			break waitReady
+		case <-waitBrowser:
+			if *browserErr != nil {
+				t.Fatalf("browser launcher exited with error before connector became ready: %v; browser log=%s", *browserErr, readBrowserLog(browserLog))
+			}
+			waitBrowser = nil
+		case <-ctx.Done():
+			t.Fatalf("browser connector did not become ready: %v; browser log=%s", ctx.Err(), readBrowserLog(browserLog))
+		}
+	}
+	if ready.err != nil {
+		t.Fatal(ready.err)
+	}
+	if ready.publicURL == "" {
+		t.Fatal("browser connector returned an empty public URL")
+	}
+	if strings.Contains(ready.publicURL, "undefined") {
+		t.Fatalf("browser connector public URL = %q contains 'undefined'", ready.publicURL)
+	}
+	return ready
+}
+
+func assertSmokeLeaseRegistered(t *testing.T, relay *portal.Server, name string, ready browserSmokeResult) []types.Lease {
+	t.Helper()
+	leases := relay.PublicLeases()
+	if len(leases) != 1 {
+		t.Fatalf("relay public leases = %d, want 1", len(leases))
+	}
+	if name == "" && leases[0].Hostname != "" {
+		t.Fatalf("lease hostname = %q, want empty for unnamed browser lease", leases[0].Hostname)
+	}
+	if name != "" && leases[0].Hostname == "" {
+		t.Fatal("named browser lease did not receive an alias")
+	}
+	if !strings.Contains(ready.publicURL, leases[0].CanonicalHostname) {
+		t.Fatalf("browser connector public URL = %q, want canonical hostname %q", ready.publicURL, leases[0].CanonicalHostname)
+	}
+	return leases
+}
+
+func assertSmokeAlias(t *testing.T, publicURL, aliasURL, canonical, hostname string) {
+	t.Helper()
+	wantAlias := strings.Replace(publicURL, canonical, hostname, 1)
+	if aliasURL != wantAlias {
+		t.Fatalf("connector alias URL = %q, want %q", aliasURL, wantAlias)
+	}
+}
+
 func testPackagedBrowserWASM(t *testing.T, name string) {
 	t.Helper()
 	wasmPath := filepath.Join("..", "cmd", "relay-server", "dist", "tunnel", "portal-js-wasm.wasm")
@@ -106,127 +252,22 @@ func testPackagedBrowserWASM(t *testing.T, name string) {
 	stateDir := t.TempDir()
 	relayURL := "https://127.0.0.1:" + strconv.Itoa(port)
 	result := make(chan browserSmokeResult, 1)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /browser-smoke", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(browserSmokePage))
-	})
-	mux.HandleFunc("GET /wasm_exec.js", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, wasmExecPath)
-	})
-	mux.HandleFunc("GET /portal-js-wasm.wasm", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/wasm")
-		http.ServeFile(w, r, wasmPath)
-	})
-	mux.HandleFunc("POST /browser-ready", func(w http.ResponseWriter, r *http.Request) {
-		var ready struct {
-			PublicURL string `json:"publicURL"`
-			AliasURL  string `json:"aliasURL"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&ready); err != nil {
-			result <- browserSmokeResult{err: fmt.Errorf("decode browser ready state: %w", err)}
-			return
-		}
-		result <- browserSmokeResult{publicURL: ready.PublicURL, aliasURL: ready.AliasURL}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("POST /browser-error", func(w http.ResponseWriter, r *http.Request) {
-		var message bytes.Buffer
-		_, _ = message.ReadFrom(http.MaxBytesReader(w, r.Body, 64<<10))
-		result <- browserSmokeResult{err: fmt.Errorf("browser connector failed: %s", message.String())}
-		w.WriteHeader(http.StatusNoContent)
-	})
+	mux := serveBrowserSmoke(t, wasmPath, wasmExecPath, result)
+	relay := startSmokeRelay(t, ctx, relayURL, stateDir, port, mux)
 
-	relay, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     relayURL,
-		StateDir:      stateDir,
-		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(port),
-		SNIPort:       port,
-	})
-	if err != nil {
-		t.Fatalf("create relay: %v", err)
-	}
-	if err := relay.Start(ctx, relayHandler(relay, mux)); err != nil {
-		t.Fatalf("start relay: %v", err)
-	}
-	t.Cleanup(func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		_ = relay.Shutdown(shutdownCtx)
-		_ = relay.Wait()
-	})
-
-	browserLog := filepath.Join(t.TempDir(), "browser.log")
-	logFile, err := os.Create(browserLog)
+	logFile, err := os.Create(filepath.Join(t.TempDir(), "browser.log"))
 	if err != nil {
 		t.Fatalf("create browser log: %v", err)
 	}
 	t.Cleanup(func() { _ = logFile.Close() })
-	cmd := exec.CommandContext(ctx, browser,
-		"--headless",
-		"--disable-gpu",
-		"--ignore-certificate-errors",
-		"--no-sandbox",
-		"--user-data-dir="+filepath.Join(t.TempDir(), "chrome"),
-		relayURL+"/browser-smoke?name="+name,
-	)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = browserSysProcAttr()
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start browser: %v", err)
-	}
-	tree := newBrowserTree(cmd)
-	browserDone := make(chan struct{})
-	var browserErr error
-	go func() {
-		browserErr = cmd.Wait()
-		close(browserDone)
-	}()
-	t.Cleanup(func() { waitBrowserExit(t, browserDone, tree) })
+	browserDone, browserErr := launchSmokeBrowser(t, ctx, browser, relayURL+"/browser-smoke?name="+name, logFile)
 
-	var ready browserSmokeResult
-	waitBrowser := browserDone
-waitReady:
-	for {
-		select {
-		case ready = <-result:
-			break waitReady
-		case <-waitBrowser:
-			if browserErr != nil {
-				t.Fatalf("browser launcher exited with error before connector became ready: %v; browser log=%s", browserErr, readBrowserLog(browserLog))
-			}
-			waitBrowser = nil
-		case <-ctx.Done():
-			t.Fatalf("browser connector did not become ready: %v; browser log=%s", ctx.Err(), readBrowserLog(browserLog))
-		}
-	}
-	if ready.err != nil {
-		t.Fatal(ready.err)
-	}
-	if ready.publicURL == "" {
-		t.Fatal("browser connector returned an empty public URL")
-	}
-	if strings.Contains(ready.publicURL, "undefined") {
-		t.Fatalf("browser connector public URL = %q contains 'undefined'", ready.publicURL)
-	}
+	ready := awaitBrowserReady(t, ctx, result, browserDone, browserErr, logFile.Name())
+	leases := assertSmokeLeaseRegistered(t, relay, name, ready)
 
-	leases := relay.PublicLeases()
-	if len(leases) != 1 {
-		t.Fatalf("relay public leases = %d, want 1", len(leases))
-	}
-	if name == "" && leases[0].Hostname != "" {
-		t.Fatalf("lease hostname = %q, want empty for unnamed browser lease", leases[0].Hostname)
-	}
-	if name != "" && leases[0].Hostname == "" {
-		t.Fatal("named browser lease did not receive an alias")
-	}
-	if !strings.Contains(ready.publicURL, leases[0].CanonicalHostname) {
-		t.Fatalf("browser connector public URL = %q, want canonical hostname %q", ready.publicURL, leases[0].CanonicalHostname)
-	}
-
+	sniAddr := "127.0.0.1:" + strconv.Itoa(port)
 	certificate := filepath.Join(stateDir, "fullchain.pem")
-	body, ok := tenantGet("127.0.0.1:"+strconv.Itoa(port), certificate, ready.publicURL)
+	body, ok := tenantGet(sniAddr, certificate, ready.publicURL)
 	if !ok || body != "portal-browser-smoke-ok" {
 		t.Fatalf("browser tunnel response = %q, ok=%v, want packaged handler response", body, ok)
 	}
@@ -236,11 +277,8 @@ waitReady:
 		}
 		return
 	}
-	wantAlias := strings.Replace(ready.publicURL, leases[0].CanonicalHostname, leases[0].Hostname, 1)
-	if ready.aliasURL != wantAlias {
-		t.Fatalf("connector alias URL = %q, want %q", ready.aliasURL, wantAlias)
-	}
-	body, ok = tenantGet("127.0.0.1:"+strconv.Itoa(port), certificate, ready.aliasURL)
+	assertSmokeAlias(t, ready.publicURL, ready.aliasURL, leases[0].CanonicalHostname, leases[0].Hostname)
+	body, ok = tenantGet(sniAddr, certificate, ready.aliasURL)
 	if !ok || body != "portal-browser-smoke-ok" {
 		t.Fatalf("browser alias response = %q, ok=%v, want packaged handler response", body, ok)
 	}

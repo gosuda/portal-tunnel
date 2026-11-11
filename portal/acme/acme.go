@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/lego"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -76,17 +77,34 @@ type Manager struct {
 }
 
 func NewManager(cfg Config) (*Manager, error) {
+	baseCfg, err := newManagerBaseConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	baseCfg = newManagerTrimProviderTokens(baseCfg)
+	trimmed, err := newManagerENSGaslessAddress(baseCfg)
+	if err != nil {
+		return nil, err
+	}
+	return buildManagerFromConfig(trimmed)
+}
+
+func newManagerBaseConfig(cfg Config) (Config, error) {
 	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
 	caDirURL, err := NormalizeCADirURL(cfg.CADirURL)
 	if err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	cfg.CADirURL = caDirURL
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
 	if cfg.DNSProvider == "" {
 		cfg.DNSProvider = TypeEmbedded
 	}
+	return cfg, nil
+}
+
+func newManagerTrimProviderTokens(cfg Config) Config {
 	cfg.ENSGaslessAddress = strings.TrimSpace(cfg.ENSGaslessAddress)
 	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
 	cfg.GCPProjectID = strings.TrimSpace(cfg.GCPProjectID)
@@ -100,17 +118,25 @@ func NewManager(cfg Config) (*Manager, error) {
 	cfg.AWSKMSKeyARN = strings.TrimSpace(cfg.AWSKMSKeyARN)
 	cfg.VultrAPIKey = strings.TrimSpace(cfg.VultrAPIKey)
 	cfg.NjallaToken = strings.TrimSpace(cfg.NjallaToken)
-	if cfg.ENSGaslessEnabled {
-		if cfg.ENSGaslessAddress == "" {
-			return nil, errEnsGaslessAddressRequiredWhenEns
-		}
-		address, err := identity.NormalizeEVMAddress(cfg.ENSGaslessAddress)
-		if err != nil {
-			return nil, fmt.Errorf("normalize ens gasless address: %w", err)
-		}
-		cfg.ENSGaslessAddress = address
-	}
+	return cfg
+}
 
+func newManagerENSGaslessAddress(cfg Config) (Config, error) {
+	if !cfg.ENSGaslessEnabled {
+		return cfg, nil
+	}
+	if cfg.ENSGaslessAddress == "" {
+		return Config{}, errEnsGaslessAddressRequiredWhenEns
+	}
+	address, err := identity.NormalizeEVMAddress(cfg.ENSGaslessAddress)
+	if err != nil {
+		return Config{}, fmt.Errorf("normalize ens gasless address: %w", err)
+	}
+	cfg.ENSGaslessAddress = address
+	return cfg, nil
+}
+
+func buildManagerFromConfig(cfg Config) (*Manager, error) {
 	if cfg.KeyDir == "" {
 		return nil, errACMEKeyDirectoryIsRequired
 	}
@@ -125,7 +151,6 @@ func NewManager(cfg Config) (*Manager, error) {
 			material:  utils.NewSnapshot(servedMaterial{}),
 		}, nil
 	}
-
 	manager := &Manager{
 		cfg:         cfg,
 		stopCh:      make(chan struct{}),
@@ -133,13 +158,11 @@ func NewManager(cfg Config) (*Manager, error) {
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 		material:    utils.NewSnapshot(servedMaterial{}),
 	}
-
 	acmeDNS, err := newDNSProvider(cfg.DNSProvider, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create acme dns provider: %w", err)
 	}
 	manager.dns = acmeDNS
-
 	return manager, nil
 }
 
@@ -147,7 +170,6 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if m == nil {
 		return "", "", errACMEManagerIsNil
 	}
-
 	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
 			return "", "", err
@@ -160,6 +182,10 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if err := m.syncENSGasless(ctx); err != nil {
 		return "", "", err
 	}
+	return m.ensureCertificateAfterENS(ctx)
+}
+
+func (m *Manager) ensureCertificateAfterENS(ctx context.Context) (string, string, error) {
 	certFile, keyFile, manual, err := m.manualCertificateOverride()
 	if err != nil {
 		return "", "", err
@@ -170,11 +196,9 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if manual {
 		return certFile, keyFile, nil
 	}
-
 	if certFile, keyFile, ok := m.reusableCertificate(time.Now()); ok {
 		return certFile, keyFile, nil
 	}
-
 	if err := m.provision(ctx, ""); err != nil {
 		return "", "", err
 	}
@@ -273,22 +297,30 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 	defer m.issuanceMu.Unlock()
 	certFile, keyFile := m.certificateFiles()
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
-	domains := certificateDomains(m.cfg.BaseDomain)
+	if err := provisionEnsureParentDirs(keyFile, certFile, accountKeyFile); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("acme provisioning canceled: %w", err)
+	}
+	client, err := m.newClient(ctx)
+	if err != nil {
+		return err
+	}
+	return m.provisionWithClient(ctx, client, replacesCertID)
+}
 
+func provisionEnsureParentDirs(keyFile, certFile, accountKeyFile string) error {
 	for _, path := range []string{keyFile, certFile, accountKeyFile} {
 		if err := utils.EnsureParentDir(path); err != nil {
 			return err
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("acme provisioning canceled: %w", err)
-	}
+	return nil
+}
 
-	client, err := m.newClient(ctx)
-	if err != nil {
-		return err
-	}
-
+func (m *Manager) provisionWithClient(ctx context.Context, client *lego.Client, replacesCertID string) error {
+	domains := certificateDomains(m.cfg.BaseDomain)
 	obtained, err := client.Certificate.Obtain(certificate.ObtainRequest{
 		Domains:        domains,
 		Bundle:         true,
@@ -297,18 +329,22 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 	if err != nil {
 		return fmt.Errorf("obtain certificate: %w", err)
 	}
-	if len(obtained.Certificate) == 0 || len(obtained.PrivateKey) == 0 {
+	certFile, keyFile := m.certificateFiles()
+	return m.provisionPersistObtained(certFile, keyFile, obtained.Certificate, obtained.PrivateKey)
+}
+
+func (m *Manager) provisionPersistObtained(certFile, keyFile string, certPEM, keyPEM []byte) error {
+	if len(certPEM) == 0 || len(keyPEM) == 0 {
 		return errACMEObtainResponseMissingCertificateOr
 	}
-
-	material, err := newTLSMaterial(obtained.Certificate, obtained.PrivateKey)
+	material, err := newTLSMaterial(certPEM, keyPEM)
 	if err != nil {
 		return err
 	}
-	if err := utils.WriteFileAtomic(certFile, obtained.Certificate, 0o644); err != nil {
+	if err := utils.WriteFileAtomic(certFile, certPEM, 0o644); err != nil {
 		return fmt.Errorf("write certificate chain: %w", err)
 	}
-	if err := utils.WriteFileAtomic(keyFile, obtained.PrivateKey, 0o600); err != nil {
+	if err := utils.WriteFileAtomic(keyFile, keyPEM, 0o600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
 	m.serve(material)

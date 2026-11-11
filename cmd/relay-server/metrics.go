@@ -16,9 +16,7 @@ type relayMetrics struct {
 	duration *prometheus.HistogramVec
 }
 
-func newRelayMetrics(server *portal.Server) *relayMetrics {
-	registry := prometheus.NewRegistry()
-	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+func registerRelayGauges(registry *prometheus.Registry, server *portal.Server) {
 	registry.MustRegister(
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "portal_relay_active_leases",
@@ -37,6 +35,9 @@ func newRelayMetrics(server *portal.Server) *relayMetrics {
 			Help: "Cumulative successful HTTP/SNI and raw TCP stream bytes written in both directions, excluding UDP; resets with the Server instance.",
 		}, func() float64 { return float64(server.Stats().ForwardedBytes) }),
 	)
+}
+
+func newRelayHTTPVectors() (*prometheus.CounterVec, *prometheus.HistogramVec) {
 	requests := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "portal_relay_http_requests_total",
 		Help: "HTTP requests handled by the relay, by normalized method and response status.",
@@ -46,6 +47,14 @@ func newRelayMetrics(server *portal.Server) *relayMetrics {
 		Help:    "HTTP request handling duration in seconds, by response status.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"code"})
+	return requests, duration
+}
+
+func newRelayMetrics(server *portal.Server) *relayMetrics {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	registerRelayGauges(registry, server)
+	requests, duration := newRelayHTTPVectors()
 	registry.MustRegister(requests, duration)
 	return &relayMetrics{
 		handler:  promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),

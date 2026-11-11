@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -89,20 +88,15 @@ type pinnedChain struct {
 // NewClient loads local material when configured, otherwise pins the relay chain.
 // Local file errors fail closed; they never select relay-backed signing.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
-	normalizedRelayURL, err := utils.NormalizeRelayURL(config.RelayURL)
+	normalizedRelayURL, serverName, err := resolveRelayEndpoint(config.RelayURL)
 	if err != nil {
 		return nil, err
 	}
+	return buildTenantClient(ctx, config, normalizedRelayURL, serverName)
+}
 
-	parsed, err := url.Parse(normalizedRelayURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse relay url: %w", err)
-	}
-	serverName := parsed.Hostname()
-	if serverName == "" {
-		return nil, errRelayHostnameIsRequired
-	}
-
+func buildTenantClient(ctx context.Context, config ClientConfig, normalizedRelayURL, serverName string) (*Client, error) {
+	var err error
 	hostname := strings.TrimSpace(config.Hostname)
 	if hostname == "" {
 		return nil, errKeylessHostnameIsRequired
@@ -389,25 +383,6 @@ func (c *Client) Close() error {
 		}
 	})
 	return c.closeErr
-}
-
-func relayChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
-	chainPEM, err := utils.FetchEndpointCertificateChain(ctx, endpoint, serverName)
-	if err != nil {
-		return nil, fmt.Errorf("fetch signer certificate chain: %w", err)
-	}
-	if len(chainPEM) == 0 {
-		return nil, errKeylessCertificateChainIsRequired
-	}
-	return chainPEM, nil
-}
-
-func verifyCertificateHostname(certPEM []byte, hostname string) error {
-	leaf, err := utils.ParseCertificatePEM(certPEM)
-	if err != nil {
-		return err
-	}
-	return leaf.VerifyHostname(hostname)
 }
 
 // loadPin keeps provisioning separate from the shared tenant handshake engine.

@@ -12,17 +12,44 @@ import (
 )
 
 func TestWalletLoginReplayReusesSession(t *testing.T) {
+	auth := newOpenWalletAuthenticator(t)
+	domain := "127.0.0.1:4018"
+	now := time.Now().UTC()
+	address, login := testSignedWalletLogin(t, auth, domain, now)
+	var first string
+	for i := 0; i < 128; i++ {
+		token, got, err := auth.login(login, domain, now.Add(time.Duration(i)*time.Millisecond))
+		if err != nil {
+			t.Fatalf("login %d: %v", i, err)
+		}
+		if got != address {
+			t.Fatalf("address = %s, want %s", got, address)
+		}
+		if i == 0 {
+			first = token
+		} else if token != first {
+			t.Fatalf("login %d allocated a new token", i)
+		}
+	}
+	checkReplaySessionKept(t, auth, first, now)
+}
+
+func newOpenWalletAuthenticator(t *testing.T) *walletAuthenticator {
+	t.Helper()
 	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return auth
+}
+
+func testSignedWalletLogin(t *testing.T, auth *walletAuthenticator, domain string, now time.Time) (string, types.WalletAuthLoginRequest) {
+	t.Helper()
 	resolved, err := identity.ResolveSecp256k1Identity(strings.Repeat("0", 63) + "3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	wallet := identity.NewLocalAuthority(resolved)
-	domain := "127.0.0.1:4018"
-	now := time.Now().UTC()
 	challenge, err := auth.issueChallenge(
 		types.WalletAuthChallengeRequest{Address: wallet.Identity().Address},
 		domain, "http://"+domain+types.PathAgentAuthLogin, now,
@@ -39,21 +66,11 @@ func TestWalletLoginReplayReusesSession(t *testing.T) {
 		SIWEMessage:   challenge.SIWEMessage,
 		SIWESignature: signature,
 	}
-	var first string
-	for i := 0; i < 128; i++ {
-		token, address, err := auth.login(login, domain, now.Add(time.Duration(i)*time.Millisecond))
-		if err != nil {
-			t.Fatalf("login %d: %v", i, err)
-		}
-		if address != wallet.Identity().Address {
-			t.Fatalf("address = %s, want %s", address, wallet.Identity().Address)
-		}
-		if i == 0 {
-			first = token
-		} else if token != first {
-			t.Fatalf("login %d allocated a new token", i)
-		}
-	}
+	return wallet.Identity().Address, login
+}
+
+func checkReplaySessionKept(t *testing.T, auth *walletAuthenticator, first string, now time.Time) {
+	t.Helper()
 	if got := len(auth.sessions); got != 1 {
 		t.Fatalf("sessions after replay = %d, want 1", got)
 	}
@@ -63,11 +80,22 @@ func TestWalletLoginReplayReusesSession(t *testing.T) {
 }
 
 func TestWalletSessionsStayGloballyBounded(t *testing.T) {
-	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := newOpenWalletAuthenticator(t)
 	now := time.Now().UTC()
+	first, last := fillWalletSessions(t, auth, now)
+	if _, ok := auth.validateSession(first); ok {
+		t.Fatal("oldest session was not evicted")
+	}
+	if _, ok := auth.validateSession(last); !ok {
+		t.Fatal("newest session should still be valid")
+	}
+	if len(auth.sessions) != maxWalletAuthSessions {
+		t.Fatalf("sessions = %d, want %d", len(auth.sessions), maxWalletAuthSessions)
+	}
+}
+
+func fillWalletSessions(t *testing.T, auth *walletAuthenticator, now time.Time) (string, string) {
+	t.Helper()
 	var first, last string
 	for i := 0; i < 4*maxWalletAuthSessions; i++ {
 		address := fmt.Sprintf("0x%040x", i+1)
@@ -80,24 +108,18 @@ func TestWalletSessionsStayGloballyBounded(t *testing.T) {
 			t.Fatalf("sessions exceeded %d entries", maxWalletAuthSessions)
 		}
 	}
-	if _, ok := auth.validateSession(first); ok {
-		t.Fatal("oldest session was not evicted")
-	}
-	if _, ok := auth.validateSession(last); !ok {
-		t.Fatal("newest session should still be valid")
-	}
-	if len(auth.sessions) != maxWalletAuthSessions {
-		t.Fatalf("sessions = %d, want %d", len(auth.sessions), maxWalletAuthSessions)
-	}
+	return first, last
 }
-
 func TestWalletSessionExpiryAndLogout(t *testing.T) {
-	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := newOpenWalletAuthenticator(t)
 	address := "0x0000000000000000000000000000000000000001"
 	now := time.Now().UTC()
+	current := checkWalletSessionExpiry(t, auth, address, now)
+	checkWalletSessionLogout(t, auth, address, current, now)
+}
+
+func checkWalletSessionExpiry(t *testing.T, auth *walletAuthenticator, address string, now time.Time) string {
+	t.Helper()
 	expired := auth.sessionForVerifiedWallet(address, now.Add(-defaultWalletAuthSessionTTL-time.Minute))
 	current := auth.sessionForVerifiedWallet(address, now)
 	if expired == current {
@@ -109,6 +131,11 @@ func TestWalletSessionExpiryAndLogout(t *testing.T) {
 	if got := len(auth.sessions); got != 1 {
 		t.Fatalf("sessions = %d after expiry, want 1", got)
 	}
+	return current
+}
+
+func checkWalletSessionLogout(t *testing.T, auth *walletAuthenticator, address, current string, now time.Time) {
+	t.Helper()
 	auth.deleteSession(current)
 	if _, ok := auth.validateSession(current); ok {
 		t.Fatal("deleted session remained valid")
@@ -123,10 +150,7 @@ func TestWalletSessionExpiryAndLogout(t *testing.T) {
 }
 
 func TestWalletSessionConcurrentReplay(t *testing.T) {
-	auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := newOpenWalletAuthenticator(t)
 	const count = 64
 	tokens := make(chan string, count)
 	var wg sync.WaitGroup
@@ -156,31 +180,33 @@ func TestWalletSessionConcurrentReplay(t *testing.T) {
 func TestWalletSessionUsesFreeCapacityBeforeEviction(t *testing.T) {
 	for _, reason := range []string{"logout", "expiry"} {
 		t.Run(reason, func(t *testing.T) {
-			auth, err := newWalletAuthenticator(walletAuthConfig{AllowAnyAddress: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			now := time.Now().UTC()
-			first := auth.sessionForVerifiedWallet("0x0000000000000000000000000000000000000001", now)
-			for i := 1; i < maxWalletAuthSessions; i++ {
-				token := auth.sessionForVerifiedWallet(fmt.Sprintf("0x%040x", i+1), now.Add(-time.Minute))
-				if reason == "logout" {
-					auth.deleteSession(token)
-				}
-			}
-			if reason == "expiry" {
-				now = now.Add(defaultWalletAuthSessionTTL - time.Second)
-			}
-			current := auth.sessionForVerifiedWallet(fmt.Sprintf("0x%040x", maxWalletAuthSessions+1), now)
-			if _, ok := auth.validateSession(first); !ok {
-				t.Fatal("live session evicted despite free capacity")
-			}
-			if _, ok := auth.validateSession(current); !ok {
-				t.Fatal("new session is not valid")
-			}
-			if len(auth.sessions) != 2 {
-				t.Fatalf("sessions after %s = %d, want 2", reason, len(auth.sessions))
-			}
+			checkWalletSessionFreeCapacity(t, reason)
 		})
+	}
+}
+
+func checkWalletSessionFreeCapacity(t *testing.T, reason string) {
+	t.Helper()
+	auth := newOpenWalletAuthenticator(t)
+	now := time.Now().UTC()
+	first := auth.sessionForVerifiedWallet("0x0000000000000000000000000000000000000001", now)
+	for i := 1; i < maxWalletAuthSessions; i++ {
+		token := auth.sessionForVerifiedWallet(fmt.Sprintf("0x%040x", i+1), now.Add(-time.Minute))
+		if reason == "logout" {
+			auth.deleteSession(token)
+		}
+	}
+	if reason == "expiry" {
+		now = now.Add(defaultWalletAuthSessionTTL - time.Second)
+	}
+	current := auth.sessionForVerifiedWallet(fmt.Sprintf("0x%040x", maxWalletAuthSessions+1), now)
+	if _, ok := auth.validateSession(first); !ok {
+		t.Fatal("live session evicted despite free capacity")
+	}
+	if _, ok := auth.validateSession(current); !ok {
+		t.Fatal("new session is not valid")
+	}
+	if len(auth.sessions) != 2 {
+		t.Fatalf("sessions after %s = %d, want 2", reason, len(auth.sessions))
 	}
 }

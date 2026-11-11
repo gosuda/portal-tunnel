@@ -137,29 +137,54 @@ func (m agentDashboardModel) addTunnelRequest() (AgentTunnelRequest, error) {
 	if agentTunnelID(name) == "" {
 		return AgentTunnelRequest{}, fmt.Errorf("tunnel name is required")
 	}
+	target, routes, err := m.addTunnelTarget()
+	if err != nil {
+		return AgentTunnelRequest{}, err
+	}
+	x402, err := m.addTunnelX402Config(routes)
+	if err != nil {
+		return AgentTunnelRequest{}, err
+	}
+	discovery, maxRelays, err := m.addTunnelRunSettings()
+	if err != nil {
+		return AgentTunnelRequest{}, err
+	}
+	return AgentTunnelRequest{
+		Name:            name,
+		TargetAddr:      target,
+		HTTPRoutes:      routes,
+		RelayURLs:       utils.SplitCSV(m.addRelays.Value()),
+		Discovery:       &discovery,
+		MaxActiveRelays: maxRelays,
+		X402Config:      x402,
+	}, nil
+}
 
+func (m agentDashboardModel) addTunnelTarget() (string, []tunnel.HTTPRoute, error) {
 	targetInput := strings.TrimSpace(m.addTarget.Value())
 	routesInput := strings.TrimSpace(m.addHTTPRoutes.Value())
 	if targetInput != "" && routesInput != "" {
-		return AgentTunnelRequest{}, fmt.Errorf("target cannot be combined with routes")
+		return "", nil, fmt.Errorf("target cannot be combined with routes")
 	}
 	if targetInput == "" && routesInput == "" {
-		return AgentTunnelRequest{}, fmt.Errorf("target or routes is required")
+		return "", nil, fmt.Errorf("target or routes is required")
 	}
-
 	var target string
 	if targetInput != "" {
 		var err error
 		target, err = utils.NormalizeLoopbackTarget(targetInput)
 		if err != nil || target == "" {
-			return AgentTunnelRequest{}, fmt.Errorf("invalid target %q", targetInput)
+			return "", nil, fmt.Errorf("invalid target %q", targetInput)
 		}
 	}
-
 	routes, err := agentDashboardParseAddHTTPRoutes(routesInput)
 	if err != nil {
-		return AgentTunnelRequest{}, err
+		return "", nil, err
 	}
+	return target, routes, nil
+}
+
+func (m agentDashboardModel) addTunnelX402Config(routes []tunnel.HTTPRoute) (gateway.X402Config, error) {
 	payTo := strings.TrimSpace(m.addX402PayTo.Value())
 	hasPaidRoute := false
 	for _, route := range routes {
@@ -169,56 +194,49 @@ func (m agentDashboardModel) addTunnelRequest() (AgentTunnelRequest, error) {
 		}
 	}
 	if hasPaidRoute && payTo == "" {
-		return AgentTunnelRequest{}, fmt.Errorf("paid routes require X402 Pay To")
+		return gateway.X402Config{}, fmt.Errorf("paid routes require X402 Pay To")
 	}
 	if len(routes) == 0 && payTo != "" {
-		return AgentTunnelRequest{}, fmt.Errorf("X402 Pay To requires routes")
+		return gateway.X402Config{}, fmt.Errorf("X402 Pay To requires routes")
 	}
 	x402TestnetRaw := strings.TrimSpace(m.addX402Testnet.Value())
 	x402TestnetRaw = cmp.Or(x402TestnetRaw, "false")
 	x402Testnet, err := strconv.ParseBool(x402TestnetRaw)
 	if err != nil {
-		return AgentTunnelRequest{}, fmt.Errorf("X402 Testnet must be true or false")
+		return gateway.X402Config{}, fmt.Errorf("X402 Testnet must be true or false")
 	}
 	if x402Testnet && !hasPaidRoute {
-		return AgentTunnelRequest{}, fmt.Errorf("X402 Testnet requires paid routes")
+		return gateway.X402Config{}, fmt.Errorf("X402 Testnet requires paid routes")
 	}
 	x402Network := strings.ToLower(strings.TrimSpace(m.addX402Network.Value()))
 	x402Asset := strings.TrimSpace(m.addX402Asset.Value())
 	x402Endpoints := utils.SplitCSV(m.addX402Endpoints.Value())
 	if x402Network != "" && !hasPaidRoute {
-		return AgentTunnelRequest{}, fmt.Errorf("X402 Network requires paid routes")
+		return gateway.X402Config{}, fmt.Errorf("X402 Network requires paid routes")
 	}
 	if strings.HasPrefix(x402Network, "casper:") && x402Asset == "" {
-		return AgentTunnelRequest{}, fmt.Errorf("casper payments require X402 Asset")
+		return gateway.X402Config{}, fmt.Errorf("casper payments require X402 Asset")
 	}
+	return gateway.X402Config{
+		PayTo: payTo, Testnet: x402Testnet, Network: x402Network,
+		Asset: x402Asset, Endpoints: x402Endpoints,
+	}, nil
+}
 
+func (m agentDashboardModel) addTunnelRunSettings() (bool, int, error) {
 	discoveryRaw := strings.TrimSpace(m.addDiscovery.Value())
 	discoveryRaw = cmp.Or(discoveryRaw, "true")
 	discovery, err := strconv.ParseBool(discoveryRaw)
 	if err != nil {
-		return AgentTunnelRequest{}, fmt.Errorf("discovery must be true or false")
+		return false, 0, fmt.Errorf("discovery must be true or false")
 	}
-
 	maxRelaysRaw := strings.TrimSpace(m.addMaxRelays.Value())
 	maxRelaysRaw = cmp.Or(maxRelaysRaw, "3")
 	maxRelays, err := strconv.Atoi(maxRelaysRaw)
 	if err != nil || maxRelays <= 0 {
-		return AgentTunnelRequest{}, fmt.Errorf("max relays must be a positive integer")
+		return false, 0, fmt.Errorf("max relays must be a positive integer")
 	}
-
-	return AgentTunnelRequest{
-		Name:            name,
-		TargetAddr:      target,
-		HTTPRoutes:      routes,
-		RelayURLs:       utils.SplitCSV(m.addRelays.Value()),
-		Discovery:       &discovery,
-		MaxActiveRelays: maxRelays,
-		X402Config: gateway.X402Config{
-			PayTo: payTo, Testnet: x402Testnet, Network: x402Network,
-			Asset: x402Asset, Endpoints: x402Endpoints,
-		},
-	}, nil
+	return discovery, maxRelays, nil
 }
 
 func agentDashboardParseAddHTTPRoutes(value string) ([]tunnel.HTTPRoute, error) {
@@ -236,7 +254,7 @@ func agentDashboardParseAddHTTPRoutes(value string) ([]tunnel.HTTPRoute, error) 
 		}
 		route, err := tunnel.ParseHTTPRoute(segment)
 		if err != nil {
-			return nil, fmt.Errorf("route %q: %w", segment, err)
+			return nil, fmt.Errorf("invalid http route %q: %w", segment, err)
 		}
 		if _, ok := seen[route.Prefix]; ok {
 			return nil, fmt.Errorf("duplicate route path %q", route.Prefix)

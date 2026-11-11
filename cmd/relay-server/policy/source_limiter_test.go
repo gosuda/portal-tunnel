@@ -89,11 +89,28 @@ func TestPreAuthRejectionChargesNoFailurePenalty(t *testing.T) {
 	limiter := NewSourceLimiter(10, 20, 600, 200)
 	now := time.Now()
 	limiter.clock = func() time.Time { return now }
+	admitSourceLimiterPreAuthAttempts(t, limiter)
+	guidance := rejectExhaustedSource(t, limiter)
+	if guidance != 6*time.Second {
+		t.Fatalf("retry guidance = %v, want 6s for cost 1 at 10/min", guidance)
+	}
+	now = now.Add(guidance)
+	if retry, layer := limiter.Allow(netip.MustParseAddr("192.0.2.1"), 1); retry != 0 || layer != "" {
+		t.Fatalf("post-retry admission = %v %q, want admitted", retry, layer)
+	}
+}
+
+func admitSourceLimiterPreAuthAttempts(t *testing.T, limiter *SourceLimiter) {
+	t.Helper()
 	for range 4 {
 		if retry, layer := limiter.Allow(netip.MustParseAddr("192.0.2.1"), 5); retry != 0 || layer != "" {
 			t.Fatalf("register-weighted attempt rejected: %v %q", retry, layer)
 		}
 	}
+}
+
+func rejectExhaustedSource(t *testing.T, limiter *SourceLimiter) time.Duration {
+	t.Helper()
 	var guidance time.Duration
 	for range 3 {
 		retry, layer := limiter.Allow(netip.MustParseAddr("192.0.2.1"), 1)
@@ -106,11 +123,5 @@ func TestPreAuthRejectionChargesNoFailurePenalty(t *testing.T) {
 			t.Fatalf("rejected attempt changed retry guidance to %v, want stable %v", retry, guidance)
 		}
 	}
-	if guidance != 6*time.Second {
-		t.Fatalf("retry guidance = %v, want 6s for cost 1 at 10/min", guidance)
-	}
-	now = now.Add(guidance)
-	if retry, layer := limiter.Allow(netip.MustParseAddr("192.0.2.1"), 1); retry != 0 || layer != "" {
-		t.Fatalf("post-retry admission = %v %q, want admitted", retry, layer)
-	}
+	return guidance
 }

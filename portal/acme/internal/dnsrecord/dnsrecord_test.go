@@ -2,6 +2,55 @@ package dnsrecord
 
 import "testing"
 
+func checkRelativeNameError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("RelativeName() error = %v, want %q", err, wantErr)
+	}
+}
+
+func checkRecordNameError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("RecordName() error = %v, want %q", err, wantErr)
+	}
+}
+
+func checkBaseDomainError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("BaseDomain() error = %v, want %q", err, wantErr)
+	}
+}
+
+func checkAddressRecordInputsError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("AddressRecordInputs() error = %v, want %q", err, wantErr)
+	}
+}
+
+func checkAddressRecordsInputsError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("AddressRecordsInputs() error = %v, want %q", err, wantErr)
+	}
+}
+
+func checkTXTInputsError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("TXTInputs() error = %v, want %q", err, wantErr)
+	}
+}
+
+func checkTXTPrefixInputsError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("TXTPrefixInputs() error = %v, want %q", err, wantErr)
+	}
+}
+
 func TestRelativeName(t *testing.T) {
 	t.Parallel()
 
@@ -32,9 +81,7 @@ func TestRelativeName(t *testing.T) {
 
 			got, err := RelativeName(tc.provider, tc.fqdn, tc.zone)
 			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("RelativeName() error = %v, want %q", err, tc.wantErr)
-				}
+				checkRelativeNameError(t, err, tc.wantErr)
 				return
 			}
 			if err != nil {
@@ -96,9 +143,7 @@ func TestRecordName(t *testing.T) {
 
 			got, err := RecordName(tc.raw)
 			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("RecordName() error = %v, want %q", err, tc.wantErr)
-				}
+				checkRecordNameError(t, err, tc.wantErr)
 				return
 			}
 			if err != nil {
@@ -130,9 +175,7 @@ func TestBaseDomain(t *testing.T) {
 
 			got, err := BaseDomain(tc.raw)
 			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("BaseDomain() error = %v, want %q", err, tc.wantErr)
-				}
+				checkBaseDomainError(t, err, tc.wantErr)
 				return
 			}
 			if err != nil {
@@ -173,9 +216,7 @@ func TestAddressRecordInputs(t *testing.T) {
 
 			name, recordType, ip, err := AddressRecordInputs(tc.recordName, tc.publicIP)
 			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("AddressRecordInputs() error = %v, want %q", err, tc.wantErr)
-				}
+				checkAddressRecordInputsError(t, err, tc.wantErr)
 				return
 			}
 			if err != nil {
@@ -214,9 +255,7 @@ func TestAddressRecordsInputs(t *testing.T) {
 
 			domain, recordType, ip, err := AddressRecordsInputs(tc.baseDomain, tc.publicIP)
 			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("AddressRecordsInputs() error = %v, want %q", err, tc.wantErr)
-				}
+				checkAddressRecordsInputsError(t, err, tc.wantErr)
 				return
 			}
 			if err != nil {
@@ -251,9 +290,7 @@ func TestTXTInputs(t *testing.T) {
 
 			gotName, gotValue, err := TXTInputs(tc.recordName, tc.value)
 			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("TXTInputs() error = %v, want %q", err, tc.wantErr)
-				}
+				checkTXTInputsError(t, err, tc.wantErr)
 				return
 			}
 			if err != nil {
@@ -288,9 +325,7 @@ func TestTXTPrefixInputs(t *testing.T) {
 
 			gotName, gotPrefix, err := TXTPrefixInputs(tc.recordName, tc.matchPrefix)
 			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("TXTPrefixInputs() error = %v, want %q", err, tc.wantErr)
-				}
+				checkTXTPrefixInputsError(t, err, tc.wantErr)
 				return
 			}
 			if err != nil {
