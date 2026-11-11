@@ -122,12 +122,14 @@ func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Ser
 	}
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.TLS == nil {
-				if state, ok := r.Context().Value(httpTLSStateKey{}).(tls.ConnectionState); ok && state.HandshakeComplete {
-					r.TLS = &state
+			strictAuthority := r.TLS != nil
+			if state, ok := r.Context().Value(httpTLSStateKey{}).(httpTLSState); ok {
+				strictAuthority = state.local
+				if r.TLS == nil && state.connection.HandshakeComplete {
+					r.TLS = &state.connection
 				}
 			}
-			if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostWithoutPort(r.Host) != utils.NormalizeHostname(r.TLS.ServerName) {
+			if strictAuthority && r.TLS.ServerName != "" && utils.NormalizeHostWithoutPort(r.Host) != utils.NormalizeHostname(r.TLS.ServerName) {
 				http.Error(w, "authority does not match TLS server name", http.StatusMisdirectedRequest)
 				return
 			}
@@ -139,10 +141,20 @@ func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Ser
 		ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
 		IdleTimeout:       defaultHTTPIdleTimeout,
 		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
-			if conn, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
-				return context.WithValue(ctx, httpTLSStateKey{}, conn.ConnectionState())
+			for {
+				switch wrapped := conn.(type) {
+				case *exposureConn:
+					conn = wrapped.Conn
+				case *bufferedConn:
+					conn = wrapped.Conn
+				default:
+					if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+						_, local := conn.(*tls.Conn)
+						return context.WithValue(ctx, httpTLSStateKey{}, httpTLSState{connection: stateful.ConnectionState(), local: local})
+					}
+					return ctx
+				}
 			}
-			return ctx
 		},
 	}
 	// Configure the actual HTTP/2 server, not just ALPN. Native TLS connections
@@ -152,6 +164,14 @@ func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Ser
 }
 
 type httpTLSStateKey struct{}
+
+// Local TLS uses native crypto/tls connections. Keyless connections retain the
+// legacy authority policy: a canonical SNI may carry its friendly alias Host,
+// with application handlers still responsible for their allowed-host checks.
+type httpTLSState struct {
+	connection tls.ConnectionState
+	local      bool
+}
 type httpTLSListener struct{ net.Listener }
 
 func (l httpTLSListener) Accept() (net.Conn, error) {

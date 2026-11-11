@@ -443,6 +443,10 @@ func requestEmailLink(t *testing.T, ctx context.Context, client *http.Client, pu
 		return 0
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Logf("email request at %s: %d %s", host, resp.StatusCode, body)
+	}
 	return resp.StatusCode
 }
 
@@ -494,12 +498,24 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	sniAddr, port := bootMailRelay(t, ctx)
-	publicURL, aliasURL := exposeMailTunnel(t, ctx, cancel, sniAddr, strings.TrimPrefix(upstream.URL, "http://"), catcher)
+	sniAddr, _ := bootMailRelay(t, ctx)
+	publicURL, _ := exposeMailTunnel(t, ctx, cancel, sniAddr, strings.TrimPrefix(upstream.URL, "http://"), catcher)
 
 	page := startBrowserPage(t, browser)
 	link := driveBrowserSignin(t, page, publicURL, catcher)
 	confirmSigninLink(t, page, link)
+}
+
+// Host authorization is an HTTP contract, not a browser-specific behavior.
+// Run this independently so platforms without a browser exercise it too.
+func TestEmailSignInLegacyAliasAuthority(t *testing.T) {
+	catcher := startMailCatcher(t)
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(upstream.Close)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	sniAddr, port := bootMailRelay(t, ctx)
+	publicURL, aliasURL := exposeMailTunnel(t, ctx, cancel, sniAddr, strings.TrimPrefix(upstream.URL, "http://"), catcher)
 
 	canonical, err := url.Parse(publicURL)
 	if err != nil {
