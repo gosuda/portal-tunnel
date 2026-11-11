@@ -30,6 +30,7 @@ func runServeCommand(args []string) error {
 		Str("release_version", types.ReleaseVersion).
 		Str("state_dir", cfg.Relay.StateDir).
 		Int("sni_port", cfg.Relay.SNIPort).
+		Str("tunnel_source_cidrs", cfg.TunnelSourceCIDRs).
 		Msg("starting relay server")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
