@@ -29,10 +29,7 @@ func TestLeaseCloseRejectsRawTCPStillStarting(t *testing.T) {
 	registry := &leaseRegistry{records: []*leaseRecord{record}}
 	inbound, client := net.Pipe()
 	defer client.Close()
-	bridge, err := registry.admitBridge(t.Context(), record, inbound)
-	if err != nil {
-		t.Fatal(err)
-	}
+	bridge := admitClosingLeaseBridge(t, registry, record, inbound)
 	defer record.releaseBridge(bridge)
 	reverse, peer := net.Pipe()
 	defer peer.Close()
@@ -41,12 +38,31 @@ func TestLeaseCloseRejectsRawTCPStillStarting(t *testing.T) {
 		t.Fatal(err)
 	}
 	record.Close()
+	checkClosedLeaseDropsEndpoints(t, client, peer)
+	checkClosedLeaseBlocksReactivate(t, registry, record, bridge, reverse)
+}
+
+func admitClosingLeaseBridge(t *testing.T, registry *leaseRegistry, record *leaseRecord, inbound net.Conn) *leaseBridge {
+	t.Helper()
+	bridge, err := registry.admitBridge(t.Context(), record, inbound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bridge
+}
+
+func checkClosedLeaseDropsEndpoints(t *testing.T, client, peer net.Conn) {
+	t.Helper()
 	for _, conn := range []net.Conn{client, peer} {
 		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 		if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 			t.Fatalf("closed lease retained endpoint: %v", err)
 		}
 	}
+}
+
+func checkClosedLeaseBlocksReactivate(t *testing.T, registry *leaseRegistry, record *leaseRecord, bridge *leaseBridge, reverse net.Conn) {
+	t.Helper()
 	if err := registry.activateBridge(record, bridge, reverse); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("closed lease activated bridge: %v", err)
 	}

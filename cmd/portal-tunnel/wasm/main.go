@@ -51,14 +51,8 @@ func (c *browserConnector) start(_ js.Value, args []js.Value) any {
 			return nil, errRelayURLIsRequired
 		}
 
-		id, err := identity.Generate(name)
+		ctx, cancel, exposure, err := exposeStartBrowserConnector(name, relayURL)
 		if err != nil {
-			return nil, fmt.Errorf("generate browser identity: %w", err)
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		exposure, err := sdk.Expose(ctx, id, []string{relayURL})
-		if err != nil {
-			cancel()
 			return nil, err
 		}
 
@@ -74,29 +68,46 @@ func (c *browserConnector) start(_ js.Value, args []js.Value) any {
 		if previousExposure != nil {
 			_ = previousExposure.Close()
 		}
-
-		handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = w.Write([]byte(body))
-		})
-		go func() {
-			_ = sdk.RunHTTP(ctx, exposure, handler, "")
-		}()
-
-		ready, err := exposure.WaitReady(ctx)
-		if err != nil {
-			c.clear(exposure)
-			return nil, err
-		}
-		if len(ready) == 0 || ready[0].PublicURL == "" {
-			c.clear(exposure)
-			return nil, errRelayDidNotReturnPublicURL
-		}
-		return map[string]any{
-			"publicURL": ready[0].PublicURL,
-			"aliasURL":  ready[0].AliasURL,
-		}, nil
+		return awaitStartBrowserConnectorReady(ctx, c, exposure, body)
 	})
+}
+
+func exposeStartBrowserConnector(name, relayURL string) (context.Context, context.CancelFunc, *sdk.Exposure, error) {
+	id, err := identity.Generate(name)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("generate browser identity: %w", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	exposure, err := sdk.Expose(ctx, id, []string{relayURL})
+	if err != nil {
+		cancel()
+		return nil, nil, nil, err
+	}
+	return ctx, cancel, exposure, nil
+}
+
+func awaitStartBrowserConnectorReady(ctx context.Context, c *browserConnector, exposure *sdk.Exposure, body string) (map[string]any, error) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(body))
+	})
+	go func() {
+		_ = sdk.RunHTTP(ctx, exposure, handler, "")
+	}()
+
+	ready, err := exposure.WaitReady(ctx)
+	if err != nil {
+		c.clear(exposure)
+		return nil, err
+	}
+	if len(ready) == 0 || ready[0].PublicURL == "" {
+		c.clear(exposure)
+		return nil, errRelayDidNotReturnPublicURL
+	}
+	return map[string]any{
+		"publicURL": ready[0].PublicURL,
+		"aliasURL":  ready[0].AliasURL,
+	}, nil
 }
 
 func (c *browserConnector) stop(_ js.Value, _ []js.Value) any {

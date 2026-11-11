@@ -89,20 +89,30 @@ func TestLeaseHostname(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := LeaseHostname(tt.raw, tt.root)
 			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("LeaseHostname(%q, %q) error = nil, want invalid label error", tt.raw, tt.root)
-				}
+				rejectInvalidLeaseHostname(t, tt.raw, tt.root)
 				return
 			}
-			if err != nil {
-				t.Fatalf("LeaseHostname(%q, %q) error = %v", tt.raw, tt.root, err)
-			}
-			if got != tt.want {
-				t.Fatalf("LeaseHostname(%q, %q) = %q, want %q", tt.raw, tt.root, got, tt.want)
-			}
+			checkComposedLeaseHostname(t, tt.raw, tt.root, tt.want)
 		})
+	}
+}
+
+func checkComposedLeaseHostname(t *testing.T, raw, root, want string) {
+	t.Helper()
+	got, err := LeaseHostname(raw, root)
+	if err != nil {
+		t.Fatalf("LeaseHostname(%q, %q) error = %v", raw, root, err)
+	}
+	if got != want {
+		t.Fatalf("LeaseHostname(%q, %q) = %q, want %q", raw, root, got, want)
+	}
+}
+
+func rejectInvalidLeaseHostname(t *testing.T, raw, root string) {
+	t.Helper()
+	if _, err := LeaseHostname(raw, root); err == nil {
+		t.Fatalf("LeaseHostname(%q, %q) error = nil, want invalid label error", raw, root)
 	}
 }
 
@@ -110,6 +120,30 @@ func TestCanonicalLeaseHostname(t *testing.T) {
 	t.Parallel()
 
 	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
+	checkCanonicalBasicName(t, address)
+	checkCanonicalMaxLabel(t, address)
+	checkCanonicalUnnamedName(t, address)
+	const addr = "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
+	for name, label := range map[string]string{
+		strings.Repeat("a", 23):                 "5e2twslnrzki2h4l7bzvq--" + addr,
+		"internal-metrics-dashboard-production": "okm4rhbie4a4gidozw5r5--" + addr,
+		strings.Repeat("a", 63):                 "c7pboclanhxavtsfp7efc--" + addr,
+	} {
+		checkCanonicalHashedName(t, address, name, label)
+	}
+	for _, name := range []string{
+		strings.Repeat("a", 64),
+		addr,
+		"myapp-" + addr,
+		"5e2twslnrzki2h4l7bzvq--" + addr,
+	} {
+		rejectCanonicalBadName(t, address, name)
+	}
+	rejectCanonicalShortAddress(t)
+}
+
+func checkCanonicalBasicName(t *testing.T, address string) {
+	t.Helper()
 	want := "herdr-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com"
 	got, err := CanonicalLeaseHostname("Herdr", address, "Example.COM.")
 	if err != nil {
@@ -118,52 +152,52 @@ func TestCanonicalLeaseHostname(t *testing.T) {
 	if got != want {
 		t.Fatalf("CanonicalLeaseHostname() = %q, want %q", got, want)
 	}
+}
 
+func checkCanonicalMaxLabel(t *testing.T, address string) {
+	t.Helper()
 	maxName := strings.Repeat("a", 22)
-	got, err = CanonicalLeaseHostname(maxName, address, "example.com")
+	got, err := CanonicalLeaseHostname(maxName, address, "example.com")
 	if err != nil {
 		t.Fatalf("CanonicalLeaseHostname(maximum name) error = %v", err)
 	}
 	if label := strings.SplitN(got, ".", 2)[0]; len(label) != 63 {
 		t.Fatalf("canonical label length = %d, want 63", len(label))
 	}
+}
 
+func checkCanonicalUnnamedName(t *testing.T, address string) {
+	t.Helper()
 	unnamedWant := "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com"
-	got, err = CanonicalLeaseHostname("", address, "Example.COM.")
+	got, err := CanonicalLeaseHostname("", address, "Example.COM.")
 	if err != nil {
 		t.Fatalf("CanonicalLeaseHostname(empty name) error = %v", err)
 	}
 	if got != unnamedWant {
 		t.Fatalf("CanonicalLeaseHostname(empty name) = %q, want %q", got, unnamedWant)
 	}
+}
 
-	// Names over 22 characters keep the full address and replace the name
-	// with a 21-character hash (golden values computed independently).
-	const addr = "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
-	for name, label := range map[string]string{
-		strings.Repeat("a", 23):                 "5e2twslnrzki2h4l7bzvq--" + addr,
-		"internal-metrics-dashboard-production": "okm4rhbie4a4gidozw5r5--" + addr,
-		strings.Repeat("a", 63):                 "c7pboclanhxavtsfp7efc--" + addr,
-	} {
-		got, err := CanonicalLeaseHostname(name, address, "example.com")
-		if err != nil {
-			t.Fatalf("CanonicalLeaseHostname(%d-character name) error = %v", len(name), err)
-		}
-		if got != label+".example.com" {
-			t.Fatalf("CanonicalLeaseHostname(%q) = %q, want %q", name, got, label+".example.com")
-		}
+func checkCanonicalHashedName(t *testing.T, address, name, label string) {
+	t.Helper()
+	got, err := CanonicalLeaseHostname(name, address, "example.com")
+	if err != nil {
+		t.Fatalf("CanonicalLeaseHostname(%d-character name) error = %v", len(name), err)
 	}
+	if got != label+".example.com" {
+		t.Fatalf("CanonicalLeaseHostname(%q) = %q, want %q", name, got, label+".example.com")
+	}
+}
 
-	for _, name := range []string{
-		strings.Repeat("a", 64),
-		addr,
-		"myapp-" + addr,
-		"5e2twslnrzki2h4l7bzvq--" + addr,
-	} {
-		if _, err := CanonicalLeaseHostname(name, address, "example.com"); err == nil {
-			t.Fatalf("CanonicalLeaseHostname(%q) error = nil", name)
-		}
+func rejectCanonicalBadName(t *testing.T, address, name string) {
+	t.Helper()
+	if _, err := CanonicalLeaseHostname(name, address, "example.com"); err == nil {
+		t.Fatalf("CanonicalLeaseHostname(%q) error = nil", name)
 	}
+}
+
+func rejectCanonicalShortAddress(t *testing.T) {
+	t.Helper()
 	if _, err := CanonicalLeaseHostname("herdr", "0x1234", "example.com"); err == nil {
 		t.Fatal("CanonicalLeaseHostname(short address) error = nil")
 	}

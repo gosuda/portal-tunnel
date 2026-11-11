@@ -17,25 +17,9 @@ import (
 func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 	t.Parallel()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithCancel(t.Context())
-	got := make(chan http.Header, 1)
-	done := make(chan error, 1)
-	go func() {
-		done <- RunHTTP(ctx, listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			got <- r.Header.Clone()
-			w.WriteHeader(http.StatusNoContent)
-		}), "")
-	}()
-	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Errorf("RunHTTP() error = %v", err)
-		}
-	})
+	defer cancel()
+	listener, got := startStrippingServer(t, ctx)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+listener.Addr().String()+"/", nil)
 	if err != nil {
@@ -57,7 +41,33 @@ func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	header := <-got
+	checkStrippedPortalHeaders(t, <-got)
+}
+
+func startStrippingServer(t *testing.T, ctx context.Context) (net.Listener, chan http.Header) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan http.Header, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- RunHTTP(ctx, listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got <- r.Header.Clone()
+			w.WriteHeader(http.StatusNoContent)
+		}), "")
+	}()
+	t.Cleanup(func() {
+		if err := <-done; err != nil {
+			t.Errorf("RunHTTP() error = %v", err)
+		}
+	})
+	return listener, got
+}
+
+func checkStrippedPortalHeaders(t *testing.T, header http.Header) {
+	t.Helper()
 	if header.Get("X-Keep") != "kept" {
 		t.Fatalf("handler header X-Keep = %q; the request was altered beyond the Portal headers", header.Get("X-Keep"))
 	}
@@ -66,7 +76,6 @@ func TestRunHTTPStripsInboundPortalIdentityHeaders(t *testing.T) {
 			t.Errorf("handler received forged %s = %q", key, values)
 		}
 	}
-
 	if got := header.Values("X-Forwarded-Proto"); len(got) != 1 || got[0] != "https" {
 		t.Errorf("handler X-Forwarded-Proto = %q; want only https", got)
 	}
@@ -219,30 +228,34 @@ func TestHTTPRouteRemovesOtherSpellingsOfTheForwardedHeaders(t *testing.T) {
 	for _, prefix := range []string{"/", "/app"} {
 		t.Run(prefix, func(t *testing.T) {
 			t.Parallel()
-
-			route, err := newHTTPRoute(HTTPRouteConfig{Prefix: prefix, Upstream: "http://127.0.0.1:3000"})
-			if err != nil {
-				t.Fatalf("newHTTPRoute() error = %v", err)
-			}
-			in := httptest.NewRequest(http.MethodGet, "http://app.relay.example"+prefix, nil)
-			for _, name := range append(spoofed, "X_keep") {
-				in.Header[name] = []string{"spoofed"}
-			}
-			pr := &httputil.ProxyRequest{In: in, Out: in.Clone(t.Context())}
-			route.rewriteProxyRequest(pr)
-
-			for _, name := range spoofed {
-				if _, ok := pr.Out.Header[name]; ok {
-					t.Errorf("%s reached the upstream", name)
-				}
-			}
-			if _, ok := pr.Out.Header["X_keep"]; !ok {
-				t.Error("X_keep was removed, but it is not a forwarded header")
-			}
-			if got := pr.Out.Header.Get("X-Forwarded-Prefix"); (got != "") != (prefix != "/") {
-				t.Errorf("X-Forwarded-Prefix = %q for the route %q", got, prefix)
-			}
+			checkForwardedHeadersStripped(t, prefix, spoofed)
 		})
+	}
+}
+
+func checkForwardedHeadersStripped(t *testing.T, prefix string, spoofed []string) {
+	t.Helper()
+	route, err := newHTTPRoute(HTTPRouteConfig{Prefix: prefix, Upstream: "http://127.0.0.1:3000"})
+	if err != nil {
+		t.Fatalf("newHTTPRoute() error = %v", err)
+	}
+	in := httptest.NewRequest(http.MethodGet, "http://app.relay.example"+prefix, nil)
+	for _, name := range append(spoofed, "X_keep") {
+		in.Header[name] = []string{"spoofed"}
+	}
+	pr := &httputil.ProxyRequest{In: in, Out: in.Clone(t.Context())}
+	route.rewriteProxyRequest(pr)
+
+	for _, name := range spoofed {
+		if _, ok := pr.Out.Header[name]; ok {
+			t.Errorf("%s reached the upstream", name)
+		}
+	}
+	if _, ok := pr.Out.Header["X_keep"]; !ok {
+		t.Error("X_keep was removed, but it is not a forwarded header")
+	}
+	if got := pr.Out.Header.Get("X-Forwarded-Prefix"); (got != "") != (prefix != "/") {
+		t.Errorf("X-Forwarded-Prefix = %q for the route %q", got, prefix)
 	}
 }
 

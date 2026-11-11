@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Search, Settings } from "lucide-react";
 import { AdminHeader } from "@/components/AdminHeader";
@@ -54,6 +55,94 @@ interface AdminServerListProps {
   onBulkBan: (identityKeys: string[]) => void | Promise<void>;
   auth: AdminAuth;
 }
+
+function retainValidKeys(previous: Set<string>, validIdentityKeys: Set<string>): Set<string> {
+  if (previous.size === 0) {
+    return previous;
+  }
+  const next = new Set<string>();
+  previous.forEach((identityKey) => {
+    if (validIdentityKeys.has(identityKey)) {
+      next.add(identityKey);
+    }
+  });
+  return next.size === previous.size ? previous : next;
+}
+
+function useAdminSelection(filteredServers: AdminServer[]): {
+  selectedIdentityKeys: Set<string>;
+  isAllSelected: boolean;
+  allIdentityKeys: string[];
+  handleToggleSelect: (identityKey: string) => void;
+  handleClearSelection: () => void;
+  handleSelectAll: () => void;
+  runBulkAction: (handler: (identityKeys: string[]) => void | Promise<void>) => Promise<void>;
+} {
+  const [selectedIdentityKeys, setSelectedIdentityKeys] = useState<Set<string>>(new Set());
+
+  const handleToggleSelect = (identityKey: string) => {
+    setSelectedIdentityKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(identityKey)) {
+        next.delete(identityKey);
+      } else {
+        next.add(identityKey);
+      }
+      return next;
+    });
+  };
+
+  const handleClearSelection = () => {
+    setSelectedIdentityKeys(new Set());
+  };
+
+  const allIdentityKeys = useMemo(
+    () => [...new Set(filteredServers.map((server) => server.identityKey).filter((key) => key.trim().length > 0))],
+    [filteredServers]
+  );
+
+  useEffect(() => {
+    const validIdentityKeys = new Set(allIdentityKeys);
+    setSelectedIdentityKeys((prev) => retainValidKeys(prev, validIdentityKeys));
+  }, [allIdentityKeys]);
+
+  const isAllSelected =
+    allIdentityKeys.length > 0 &&
+    allIdentityKeys.every((identityKey) => selectedIdentityKeys.has(identityKey));
+
+  const handleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedIdentityKeys(new Set());
+    } else {
+      setSelectedIdentityKeys(new Set(allIdentityKeys));
+    }
+  };
+
+  const runBulkAction = async (
+    handler: (identityKeys: string[]) => void | Promise<void>
+  ) => {
+    if (selectedIdentityKeys.size === 0) {
+      return;
+    }
+    try {
+      await handler(Array.from(selectedIdentityKeys));
+      handleClearSelection();
+    } catch (err) {
+      console.error("Failed bulk admin action", err);
+    }
+  };
+
+  return {
+    selectedIdentityKeys,
+    isAllSelected,
+    allIdentityKeys,
+    handleToggleSelect,
+    handleClearSelection,
+    handleSelectAll,
+    runBulkAction,
+  };
+}
+
 export function AdminServerList({
   title = "PORTAL ADMIN",
   searchQuery,
@@ -83,78 +172,16 @@ export function AdminServerList({
   onBulkDeny,
   onBulkBan,
   auth,
-}: AdminServerListProps) {
+}: AdminServerListProps): JSX.Element {
   const [showFilterModal, setShowFilterModal] = useState(false);
-  const [selectedIdentityKeys, setSelectedIdentityKeys] = useState<Set<string>>(new Set());
-  const handleToggleSelect = (identityKey: string) => {
-    setSelectedIdentityKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(identityKey)) {
-        next.delete(identityKey);
-      } else {
-        next.add(identityKey);
-      }
-      return next;
-    });
-  };
-
-  const handleClearSelection = () => {
-    setSelectedIdentityKeys(new Set());
-  };
-
-  const allIdentityKeys = useMemo(
-    () => [...new Set(filteredServers.map((server) => server.identityKey).filter((key) => key.trim().length > 0))],
-    [filteredServers]
-  );
-
-  useEffect(() => {
-    const validIdentityKeys = new Set(allIdentityKeys);
-    setSelectedIdentityKeys((prev) => {
-      if (prev.size === 0) {
-        return prev;
-      }
-
-      const next = new Set<string>();
-      prev.forEach((identityKey) => {
-        if (validIdentityKeys.has(identityKey)) {
-          next.add(identityKey);
-        }
-      });
-
-      if (next.size === prev.size) {
-        return prev;
-      }
-
-      return next;
-    });
-  }, [allIdentityKeys]);
-
-  const isAllSelected =
-    allIdentityKeys.length > 0 &&
-    allIdentityKeys.every((identityKey) => selectedIdentityKeys.has(identityKey));
-
-  const handleSelectAll = () => {
-    if (isAllSelected) {
-      setSelectedIdentityKeys(new Set());
-    } else {
-      setSelectedIdentityKeys(new Set(allIdentityKeys));
-    }
-  };
-
-  const runBulkAction = async (
-    handler: (identityKeys: string[]) => void | Promise<void>
-  ) => {
-    if (selectedIdentityKeys.size === 0) {
-      return;
-    }
-
-    try {
-      await handler(Array.from(selectedIdentityKeys));
-      handleClearSelection();
-    } catch (err) {
-      console.error("Failed bulk admin action", err);
-    }
-  };
+  const {
+    selectedIdentityKeys,
+    isAllSelected,
+    allIdentityKeys,
+    handleToggleSelect,
+    handleSelectAll,
+    runBulkAction,
+  } = useAdminSelection(filteredServers);
 
   const handleBulkApprove = () => {
     void runBulkAction(onBulkApprove);

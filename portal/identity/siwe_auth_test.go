@@ -36,20 +36,32 @@ func issueTestChallenge(t *testing.T, auth *SIWEAuthenticator, wallet LocalAutho
 	return challenge
 }
 
+type signedWalletChallenge struct {
+	auth      *SIWEAuthenticator
+	wallet    LocalAuthority
+	now       time.Time
+	challenge SIWEChallenge
+	signature string
+}
+
+func issueSignedWalletChallenge(t *testing.T) signedWalletChallenge {
+	t.Helper()
+	auth := newTestAuthenticator(t)
+	wallet := testWallet(t)
+	now := time.Now().UTC()
+	challenge := issueTestChallenge(t, auth, wallet, now)
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signedWalletChallenge{auth: auth, wallet: wallet, now: now, challenge: challenge, signature: signature}
+}
+
 func TestIssueIsStatelessUnderFlood(t *testing.T) {
 	auth := newTestAuthenticator(t)
 	wallet := testWallet(t)
 	now := time.Now().UTC()
-
-	const flood = 5000
-	var challenge SIWEChallenge
-	var err error
-	for i := 0; i < flood; i++ {
-		challenge, err = auth.Issue(wallet.Identity().Address, testDomain, "https://"+testDomain+"/", now)
-		if err != nil {
-			t.Fatalf("issue %d of %d: %v", i+1, flood, err)
-		}
-	}
+	challenge := issueChallengeFlood(t, auth, wallet, now)
 	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +73,20 @@ func TestIssueIsStatelessUnderFlood(t *testing.T) {
 	if !strings.EqualFold(address, wallet.Identity().Address) {
 		t.Fatalf("address = %q; want %q", address, wallet.Identity().Address)
 	}
+}
+
+func issueChallengeFlood(t *testing.T, auth *SIWEAuthenticator, wallet LocalAuthority, now time.Time) SIWEChallenge {
+	t.Helper()
+	const flood = 5000
+	var challenge SIWEChallenge
+	for i := range flood {
+		var err error
+		challenge, err = auth.Issue(wallet.Identity().Address, testDomain, "https://"+testDomain+"/", now)
+		if err != nil {
+			t.Fatalf("issue %d of %d: %v", i+1, flood, err)
+		}
+	}
+	return challenge
 }
 
 func TestVerifyRejectsTamperedToken(t *testing.T) {
@@ -102,71 +128,42 @@ func TestVerifyRejectsExpiredChallenge(t *testing.T) {
 }
 
 func TestVerifyRejectsChallengeFromBeforeNotBefore(t *testing.T) {
-	auth := newTestAuthenticator(t)
-	wallet := testWallet(t)
-	now := time.Now().UTC()
-	challenge := issueTestChallenge(t, auth, wallet, now)
-	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now.Add(time.Second), now); !errors.Is(err, ErrSIWEChallengeExpired) {
+	signed := issueSignedWalletChallenge(t)
+	if _, err := signed.auth.Verify(signed.challenge.ID, signed.challenge.Message, signed.signature, testDomain, signed.now.Add(time.Second), signed.now); !errors.Is(err, ErrSIWEChallengeExpired) {
 		t.Fatalf("Verify() error = %v, want %v", err, ErrSIWEChallengeExpired)
 	}
-	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, now, now); err != nil {
+	if _, err := signed.auth.Verify(signed.challenge.ID, signed.challenge.Message, signed.signature, testDomain, signed.now, signed.now); err != nil {
 		t.Fatalf("Verify() from the first moment = %v", err)
 	}
 }
 
 func TestVerifyAllowsReplayWithinTTL(t *testing.T) {
-	auth := newTestAuthenticator(t)
-	wallet := testWallet(t)
-	now := time.Now().UTC()
-	challenge := issueTestChallenge(t, auth, wallet, now)
-	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	signed := issueSignedWalletChallenge(t)
 	for i := range 2 {
-		address, err := auth.Verify(challenge.ID, challenge.Message, signature, testDomain, time.Time{}, now)
+		address, err := signed.auth.Verify(signed.challenge.ID, signed.challenge.Message, signed.signature, testDomain, time.Time{}, signed.now)
 		if err != nil {
 			t.Fatalf("verify %d: %v", i+1, err)
 		}
-		if !strings.EqualFold(address, wallet.Identity().Address) {
-			t.Fatalf("address = %q; want %q", address, wallet.Identity().Address)
+		if !strings.EqualFold(address, signed.wallet.Identity().Address) {
+			t.Fatalf("address = %q; want %q", address, signed.wallet.Identity().Address)
 		}
 	}
 }
 
 func TestVerifyRejectsTamperedMessage(t *testing.T) {
-	auth := newTestAuthenticator(t)
-	wallet := testWallet(t)
-	now := time.Now().UTC()
-	challenge := issueTestChallenge(t, auth, wallet, now)
-	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tampered := strings.Replace(challenge.Message, "Sign in to Portal", "Sign in to Portsl", 1)
-	if tampered == challenge.Message {
+	signed := issueSignedWalletChallenge(t)
+	tampered := strings.Replace(signed.challenge.Message, "Sign in to Portal", "Sign in to Portsl", 1)
+	if tampered == signed.challenge.Message {
 		t.Fatal("message tamper did not change anything")
 	}
-	if _, err := auth.Verify(challenge.ID, tampered, signature, testDomain, time.Time{}, now); !errors.Is(err, ErrSIWEInvalidSignature) {
+	if _, err := signed.auth.Verify(signed.challenge.ID, tampered, signed.signature, testDomain, time.Time{}, signed.now); !errors.Is(err, ErrSIWEInvalidSignature) {
 		t.Fatalf("err = %v; want ErrSIWEInvalidSignature", err)
 	}
 }
 
 func TestVerifyRejectsWrongDomain(t *testing.T) {
-	auth := newTestAuthenticator(t)
-	wallet := testWallet(t)
-	now := time.Now().UTC()
-	challenge := issueTestChallenge(t, auth, wallet, now)
-	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := auth.Verify(challenge.ID, challenge.Message, signature, "other.example", time.Time{}, now); !errors.Is(err, ErrSIWEInvalidSignature) {
+	signed := issueSignedWalletChallenge(t)
+	if _, err := signed.auth.Verify(signed.challenge.ID, signed.challenge.Message, signed.signature, "other.example", time.Time{}, signed.now); !errors.Is(err, ErrSIWEInvalidSignature) {
 		t.Fatalf("err = %v; want ErrSIWEInvalidSignature", err)
 	}
 }

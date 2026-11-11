@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { MoonStar, Sun } from "lucide-react";
 import clsx from "clsx";
 import { Button } from "@/components/ui/button";
@@ -7,7 +8,7 @@ interface ThemeToggleButtonProps {
   className?: string;
 }
 
-export function ThemeToggleButton({ className }: ThemeToggleButtonProps) {
+export function ThemeToggleButton({ className }: ThemeToggleButtonProps): JSX.Element {
   const { theme, toggleTheme } = useTheme();
   const nextTheme = theme === "dark" ? "light" : "dark";
 

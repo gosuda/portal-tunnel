@@ -54,21 +54,8 @@ func nanoSendBlock(destination, amount, confirmed string) map[string]any {
 		},
 	}
 }
-
-func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
-	t.Parallel()
-	const (
-		paidHash        = "ECCB8CB65CD3106EDA8CE9AA893FEAD497A91BCA903890CBD7A5C59F06AB9113"
-		underpaidHash   = "1111111111111111111111111111111111111111111111111111111111111111"
-		wrongPayeeHash  = "2222222222222222222222222222222222222222222222222222222222222222"
-		unconfirmedHash = "3333333333333333333333333333333333333333333333333333333333333333"
-	)
-	ledger := map[string]map[string]any{
-		paidHash:        nanoSendBlock(nanoTestPayTo, nanoTestRawFor001XNO, "true"),
-		underpaidHash:   nanoSendBlock(nanoTestPayTo, "9999999999999999999999999999", "true"),
-		wrongPayeeHash:  nanoSendBlock(nanoTestOtherPeer, nanoTestRawFor001XNO, "true"),
-		unconfirmedHash: nanoSendBlock(nanoTestPayTo, nanoTestRawFor001XNO, "false"),
-	}
+func newNanoPaymentFixture(t *testing.T, ledger map[string]map[string]any) (http.Handler, facilitatortypes.PaymentRequirements, *atomic.Int32) {
+	t.Helper()
 	nodeA := newNanoRPCNode(t, ledger)
 	nodeB := newNanoRPCNode(t, ledger)
 
@@ -96,6 +83,12 @@ func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
 	if rec.Code != http.StatusPaymentRequired {
 		t.Fatalf("unpaid status = %d, want 402", rec.Code)
 	}
+	accepted := decodeNanoPaymentFixtureChallenge(t, rec)
+	return handler, accepted, &upstreamHits
+}
+
+func decodeNanoPaymentFixtureChallenge(t *testing.T, rec *httptest.ResponseRecorder) facilitatortypes.PaymentRequirements {
+	t.Helper()
 	rawChallenge, err := base64.StdEncoding.DecodeString(rec.Header().Get(x402http.HeaderPaymentRequired))
 	if err != nil {
 		t.Fatalf("decode challenge: %v", err)
@@ -114,38 +107,79 @@ func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
 		accepted.Amount != nanoTestRawFor001XNO || accepted.PayTo != nanoTestPayTo {
 		t.Fatalf("accepted = %+v, want exact nano:mainnet XNO %s to %s", accepted, nanoTestRawFor001XNO, nanoTestPayTo)
 	}
+	return accepted
+}
 
-	pay := func(path, blockHash string) *httptest.ResponseRecorder {
-		raw, err := json.Marshal(facilitatortypes.PaymentPayload{
-			X402Version: int(facilitatortypes.X402VersionV2),
-			Accepted:    accepted,
-			Payload:     map[string]any{"blockHash": blockHash},
-		})
-		if err != nil {
-			t.Fatalf("marshal payment: %v", err)
-		}
-		req := httptest.NewRequest(http.MethodGet, "https://example.com"+path, nil)
-		req.Header.Set(x402http.HeaderPaymentSignature, base64.StdEncoding.EncodeToString(raw))
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		return rec
+func payNanoPath(t *testing.T, handler http.Handler, accepted facilitatortypes.PaymentRequirements, path, blockHash string) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(facilitatortypes.PaymentPayload{
+		X402Version: int(facilitatortypes.X402VersionV2),
+		Accepted:    accepted,
+		Payload:     map[string]any{"blockHash": blockHash},
+	})
+	if err != nil {
+		t.Fatalf("marshal payment: %v", err)
 	}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com"+path, nil)
+	req.Header.Set(x402http.HeaderPaymentSignature, base64.StdEncoding.EncodeToString(raw))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
 
+func checkPrepareRouted(t *testing.T, handler http.Handler, path, method string, status int) {
+	t.Helper()
+	body, err := json.Marshal(x402PreparePaymentRequest{Path: path, Method: method})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://tenant.example"+X402PreparePath, strings.NewReader(string(body))))
+	if rec.Code != status {
+		t.Fatalf("status = %d, body = %q; want %d", rec.Code, rec.Body.String(), status)
+	}
+}
+
+func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
+	t.Parallel()
+	const (
+		paidHash        = "ECCB8CB65CD3106EDA8CE9AA893FEAD497A91BCA903890CBD7A5C59F06AB9113"
+		underpaidHash   = "1111111111111111111111111111111111111111111111111111111111111111"
+		wrongPayeeHash  = "2222222222222222222222222222222222222222222222222222222222222222"
+		unconfirmedHash = "3333333333333333333333333333333333333333333333333333333333333333"
+	)
+	ledger := map[string]map[string]any{
+		paidHash:        nanoSendBlock(nanoTestPayTo, nanoTestRawFor001XNO, "true"),
+		underpaidHash:   nanoSendBlock(nanoTestPayTo, "9999999999999999999999999999", "true"),
+		wrongPayeeHash:  nanoSendBlock(nanoTestOtherPeer, nanoTestRawFor001XNO, "true"),
+		unconfirmedHash: nanoSendBlock(nanoTestPayTo, nanoTestRawFor001XNO, "false"),
+	}
+	handler, accepted, upstreamHits := newNanoPaymentFixture(t, ledger)
+	checkNanoPaymentRejectsInvalid(t, handler, accepted, upstreamHits)
+	checkNanoPaymentAcceptsValid(t, handler, accepted, upstreamHits, paidHash)
+	checkNanoPaymentRejectsReplay(t, handler, accepted, upstreamHits, paidHash)
+}
+
+func checkNanoPaymentRejectsInvalid(t *testing.T, handler http.Handler, accepted facilitatortypes.PaymentRequirements, upstreamHits *atomic.Int32) {
+	t.Helper()
 	for name, hash := range map[string]string{
-		"underpaid":   underpaidHash,
-		"wrong payee": wrongPayeeHash,
-		"unconfirmed": unconfirmedHash,
+		"underpaid":   "1111111111111111111111111111111111111111111111111111111111111111",
+		"wrong payee": "2222222222222222222222222222222222222222222222222222222222222222",
+		"unconfirmed": "3333333333333333333333333333333333333333333333333333333333333333",
 		"unknown":     strings.Repeat("4", 64),
 	} {
-		if rec := pay("/paid/item", hash); rec.Code != http.StatusPaymentRequired {
+		if rec := payNanoPath(t, handler, accepted, "/paid/item", hash); rec.Code != http.StatusPaymentRequired {
 			t.Fatalf("%s payment status = %d, want 402", name, rec.Code)
 		}
 	}
 	if hits := upstreamHits.Load(); hits != 0 {
 		t.Fatalf("upstream reached %d times before a valid payment", hits)
 	}
+}
 
-	rec = pay("/paid/item", strings.ToLower(paidHash))
+func checkNanoPaymentAcceptsValid(t *testing.T, handler http.Handler, accepted facilitatortypes.PaymentRequirements, upstreamHits *atomic.Int32, paidHash string) {
+	t.Helper()
+	rec := payNanoPath(t, handler, accepted, "/paid/item", strings.ToLower(paidHash))
 	if rec.Code != http.StatusOK || rec.Body.String() != "paid content" {
 		t.Fatalf("paid status = %d body = %q, want 200 paid content", rec.Code, rec.Body.String())
 	}
@@ -155,9 +189,12 @@ func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
 	if hits := upstreamHits.Load(); hits != 1 {
 		t.Fatalf("upstream hits = %d, want 1", hits)
 	}
+}
 
+func checkNanoPaymentRejectsReplay(t *testing.T, handler http.Handler, accepted facilitatortypes.PaymentRequirements, upstreamHits *atomic.Int32, paidHash string) {
+	t.Helper()
 	for _, path := range []string{"/paid/item", "/also-paid/item"} {
-		if rec := pay(path, paidHash); rec.Code != http.StatusPaymentRequired {
+		if rec := payNanoPath(t, handler, accepted, path, paidHash); rec.Code != http.StatusPaymentRequired {
 			t.Fatalf("replayed payment on %s status = %d, want 402", path, rec.Code)
 		}
 	}
@@ -210,6 +247,12 @@ func TestComposeHTTPRoutesPaymentFollowsSelectedRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkSelectedRouteResponses(t, handler)
+	checkSelectedRoutePrepare(t, handler)
+}
+
+func checkSelectedRouteResponses(t *testing.T, handler http.Handler) {
+	t.Helper()
 	for _, tc := range []struct {
 		method string
 		path   string
@@ -231,6 +274,10 @@ func TestComposeHTTPRoutesPaymentFollowsSelectedRoute(t *testing.T) {
 			}
 		})
 	}
+}
+
+func checkSelectedRoutePrepare(t *testing.T, handler http.Handler) {
+	t.Helper()
 	for _, tc := range []struct {
 		path   string
 		method string
@@ -243,15 +290,7 @@ func TestComposeHTTPRoutesPaymentFollowsSelectedRoute(t *testing.T) {
 		{"/payment", "GET", http.StatusNotFound},
 	} {
 		t.Run("prepare "+tc.method+" "+tc.path, func(t *testing.T) {
-			body, err := json.Marshal(x402PreparePaymentRequest{Path: tc.path, Method: tc.method})
-			if err != nil {
-				t.Fatal(err)
-			}
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://tenant.example"+X402PreparePath, strings.NewReader(string(body))))
-			if rec.Code != tc.status {
-				t.Fatalf("status = %d, body = %q; want %d", rec.Code, rec.Body.String(), tc.status)
-			}
+			checkPrepareRouted(t, handler, tc.path, tc.method, tc.status)
 		})
 	}
 }

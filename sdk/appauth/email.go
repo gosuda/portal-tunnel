@@ -251,6 +251,14 @@ func (e *emailAuthenticator) deliver(ctx context.Context, to string, message []b
 	if err := client.Rcpt(to); err != nil {
 		return fmt.Errorf("smtp RCPT TO: %w", smtpReplyCode(err))
 	}
+	if err := writeEmailDeliverData(client, message); err != nil {
+		return err
+	}
+	_ = client.Quit()
+	return nil
+}
+
+func writeEmailDeliverData(client *smtp.Client, message []byte) error {
 	data, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("smtp DATA: %w", smtpReplyCode(err))
@@ -261,7 +269,6 @@ func (e *emailAuthenticator) deliver(ctx context.Context, to string, message []b
 	if err := data.Close(); err != nil {
 		return fmt.Errorf("smtp DATA: %w", smtpReplyCode(err))
 	}
-	_ = client.Quit()
 	return nil
 }
 

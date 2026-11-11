@@ -132,6 +132,10 @@ func (a *SIWEAuthenticator) Issue(address, domain, uri string, now time.Time) (S
 	}
 	domain = strings.TrimSpace(domain)
 	now = now.UTC()
+	return a.buildChallengeMessage(address, domain, uri, now)
+}
+
+func (a *SIWEAuthenticator) buildChallengeMessage(address, domain, uri string, now time.Time) (SIWEChallenge, error) {
 	expiresAt := now.Add(siweChallengeTTL)
 	payload := siweChallengePayload{
 		ID:        utils.RandomID(a.challengePrefix),

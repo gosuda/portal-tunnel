@@ -26,6 +26,93 @@ func TestPreferredDSRecordPrefersSHA256(t *testing.T) {
 	}
 }
 
+type ensureRecordVultrFake struct {
+	t       *testing.T
+	mu      sync.Mutex
+	records map[string]govultr.DomainRecord
+}
+
+func newEnsureRecordVultrFake(t *testing.T, recordType, data string) *ensureRecordVultrFake {
+	t.Helper()
+	return &ensureRecordVultrFake{
+		t: t,
+		records: map[string]govultr.DomainRecord{
+			"ipv4":  {ID: "ipv4", Name: "relay", Type: "A", Data: "192.0.2.1"},
+			"ipv6":  {ID: "ipv6", Name: "relay", Type: "AAAA", Data: "2001:db8::1"},
+			"other": {ID: "other", Name: "other", Type: recordType, Data: data},
+			"txt":   {ID: "txt", Name: "relay", Type: "TXT", Data: "preserve me"},
+		},
+	}
+}
+
+func (f *ensureRecordVultrFake) serveEnsureRecordVultr(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	const recordsPath = "/v2/domains/example.com/records"
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == recordsPath:
+		f.listEnsureRecordVultr(w)
+	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, recordsPath+"/"):
+		f.patchEnsureRecordVultr(w, r)
+	default:
+		f.t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected request", http.StatusBadRequest)
+	}
+}
+
+func (f *ensureRecordVultrFake) listEnsureRecordVultr(w http.ResponseWriter) {
+	listed := make([]govultr.DomainRecord, 0, len(f.records))
+	for _, rec := range f.records {
+		listed = append(listed, rec)
+	}
+	if err := json.NewEncoder(w).Encode(map[string]any{"records": listed}); err != nil {
+		f.t.Error(err)
+	}
+}
+
+func (f *ensureRecordVultrFake) patchEnsureRecordVultr(w http.ResponseWriter, r *http.Request) {
+	const recordsPath = "/v2/domains/example.com/records"
+	id := strings.TrimPrefix(r.URL.Path, recordsPath+"/")
+	rec, ok := f.records[id]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	var update govultr.DomainRecordUpdateReq
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		f.t.Error(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if update.Name != nil {
+		rec.Name = *update.Name
+	}
+	rec.Type, rec.Data = update.Type, update.Data
+	f.records[id] = rec
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *ensureRecordVultrFake) verifyEnsureRecordVultr(recordType, data string) {
+	f.t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	got := make(map[string]string, len(f.records))
+	for _, rec := range f.records {
+		got[rec.Type+" "+rec.Name] = rec.Data
+	}
+	want := map[string]string{
+		"A relay":             "192.0.2.1",
+		"AAAA relay":          "2001:db8::1",
+		recordType + " other": data,
+		"TXT relay":           "preserve me",
+	}
+	want[recordType+" relay"] = data
+	if len(f.records) != len(want) || !reflect.DeepEqual(got, want) {
+		f.t.Fatalf("records = %#v, want %#v", f.records, want)
+	}
+}
+
 func TestEnsureRecordPreservesOtherAddressFamily(t *testing.T) {
 	t.Parallel()
 
@@ -39,51 +126,8 @@ func TestEnsureRecordPreservesOtherAddressFamily(t *testing.T) {
 		t.Run(tc.recordType, func(t *testing.T) {
 			t.Parallel()
 
-			var mu sync.Mutex
-			records := map[string]govultr.DomainRecord{
-				"ipv4":  {ID: "ipv4", Name: "relay", Type: "A", Data: "192.0.2.1"},
-				"ipv6":  {ID: "ipv6", Name: "relay", Type: "AAAA", Data: "2001:db8::1"},
-				"other": {ID: "other", Name: "other", Type: tc.recordType, Data: tc.data},
-				"txt":   {ID: "txt", Name: "relay", Type: "TXT", Data: "preserve me"},
-			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				mu.Lock()
-				defer mu.Unlock()
-
-				const recordsPath = "/v2/domains/example.com/records"
-				switch {
-				case r.Method == http.MethodGet && r.URL.Path == recordsPath:
-					listed := make([]govultr.DomainRecord, 0, len(records))
-					for _, rec := range records {
-						listed = append(listed, rec)
-					}
-					if err := json.NewEncoder(w).Encode(map[string]any{"records": listed}); err != nil {
-						t.Error(err)
-					}
-				case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, recordsPath+"/"):
-					id := strings.TrimPrefix(r.URL.Path, recordsPath+"/")
-					rec, ok := records[id]
-					if !ok {
-						http.NotFound(w, r)
-						return
-					}
-					var update govultr.DomainRecordUpdateReq
-					if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-						t.Error(err)
-						http.Error(w, err.Error(), http.StatusBadRequest)
-						return
-					}
-					if update.Name != nil {
-						rec.Name = *update.Name
-					}
-					rec.Type, rec.Data = update.Type, update.Data
-					records[id] = rec
-					w.WriteHeader(http.StatusNoContent)
-				default:
-					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-					http.Error(w, "unexpected request", http.StatusBadRequest)
-				}
-			}))
+			fake := newEnsureRecordVultrFake(t, tc.recordType, tc.data)
+			server := httptest.NewServer(http.HandlerFunc(fake.serveEnsureRecordVultr))
 			defer server.Close()
 
 			client := govultr.NewClient(server.Client())
@@ -93,23 +137,7 @@ func TestEnsureRecordPreservesOtherAddressFamily(t *testing.T) {
 			if err := ensureRecord(context.Background(), client, "example.com", "relay.example.com", tc.recordType, tc.data); err != nil {
 				t.Fatal(err)
 			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			got := make(map[string]string, len(records))
-			for _, rec := range records {
-				got[rec.Type+" "+rec.Name] = rec.Data
-			}
-			want := map[string]string{
-				"A relay":                "192.0.2.1",
-				"AAAA relay":             "2001:db8::1",
-				tc.recordType + " other": tc.data,
-				"TXT relay":              "preserve me",
-			}
-			want[tc.recordType+" relay"] = tc.data
-			if len(records) != len(want) || !reflect.DeepEqual(got, want) {
-				t.Fatalf("records = %#v, want %#v", records, want)
-			}
+			fake.verifyEnsureRecordVultr(tc.recordType, tc.data)
 		})
 	}
 }

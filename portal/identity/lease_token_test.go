@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (
@@ -52,6 +54,11 @@ func TestLeaseAccessTokenClaimsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyLeaseAccessToken() error = %v", err)
 	}
+	checkLeaseAccessClaims(t, claims, issued, leaseIdentity)
+}
+
+func checkLeaseAccessClaims(t *testing.T, claims, issued LeaseAccessTokenClaims, leaseIdentity types.Identity) {
+	t.Helper()
 	if claims.Issuer != testTokenIssuer {
 		t.Fatalf("issuer = %q, want %q", claims.Issuer, testTokenIssuer)
 	}
@@ -89,6 +96,11 @@ func TestReverseCapabilityClaimsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyReverseCapability() error = %v", err)
 	}
+	checkReverseCapabilityClaims(t, claims, issued, leaseIdentity)
+}
+
+func checkReverseCapabilityClaims(t *testing.T, claims, issued LeaseAccessTokenClaims, leaseIdentity types.Identity) {
+	t.Helper()
 	if claims.Issuer != testTokenIssuer {
 		t.Fatalf("issuer = %q, want %q", claims.Issuer, testTokenIssuer)
 	}
@@ -114,7 +126,17 @@ func TestLeaseTokenAudiencesRejectEachOther(t *testing.T) {
 	authority := NewLocalAuthority(leaseIdentity)
 	publicKey := authority.Identity().PublicKey
 	now := time.Now().UTC()
+	leaseToken, reverseToken := issuedAudienceTokens(t, authority, leaseIdentity, now)
+	if _, err := VerifyReverseCapability(leaseToken, publicKey, testTokenIssuer, now); err == nil {
+		t.Fatal("lease access token accepted as a reverse capability: audiences are not mutually exclusive")
+	}
+	if _, err := VerifyLeaseAccessToken(reverseToken, publicKey, testTokenIssuer, now); err == nil {
+		t.Fatal("reverse capability accepted as a lease access token: audiences are not mutually exclusive")
+	}
+}
 
+func issuedAudienceTokens(t *testing.T, authority LocalAuthority, leaseIdentity types.Identity, now time.Time) (string, string) {
+	t.Helper()
 	leaseToken, _, err := IssueLeaseAccessToken(authority, testTokenIssuer, leaseIdentity, testTokenLeaseID, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("IssueLeaseAccessToken() error = %v", err)
@@ -123,13 +145,7 @@ func TestLeaseTokenAudiencesRejectEachOther(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueReverseCapability() error = %v", err)
 	}
-
-	if _, err := VerifyReverseCapability(leaseToken, publicKey, testTokenIssuer, now); err == nil {
-		t.Fatal("lease access token accepted as a reverse capability: audiences are not mutually exclusive")
-	}
-	if _, err := VerifyLeaseAccessToken(reverseToken, publicKey, testTokenIssuer, now); err == nil {
-		t.Fatal("reverse capability accepted as a lease access token: audiences are not mutually exclusive")
-	}
+	return leaseToken, reverseToken
 }
 
 func TestExpiredLeaseAccessTokenRejected(t *testing.T) {

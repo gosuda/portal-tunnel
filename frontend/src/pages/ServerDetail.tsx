@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { SsgoiTransition } from "@ssgoi/react";
 import { useEffect } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
@@ -27,7 +28,7 @@ function consumeLeftForService(): boolean {
   }
 }
 
-export function ServerDetail() {
+export function ServerDetail(): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const server = location.state as BaseServer | null;

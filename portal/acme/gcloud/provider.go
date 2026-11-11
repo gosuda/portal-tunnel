@@ -1,7 +1,6 @@
 package gcloud
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,13 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"cloud.google.com/go/compute/metadata"
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/providers/dns/gcloud"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"google.golang.org/api/dns/v1"
-	"google.golang.org/api/option"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -151,16 +146,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 		return err
 	}
 
-	var existing []*dns.ResourceRecordSet
-	var errs []error
-	for _, recordType := range []string{"A", "AAAA"} {
-		records, err := listRecordSets(ctx, service, runtimeCfg.ProjectID, zone.Name, name, recordType)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("list gcloud %s records %s: %w", recordType, name, err))
-			continue
-		}
-		existing = append(existing, records...)
-	}
+	existing, errs := listDeleteAddressRecordsExisting(ctx, service, runtimeCfg.ProjectID, zone.Name, name)
 	if len(existing) > 0 {
 		if err := applyChange(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.Change{
 			Deletions: existing,
@@ -190,25 +176,10 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 		return fmt.Errorf("list gcloud TXT records %s: %w", name, err)
 	}
 
-	values := make([]string, 0, len(existing)+1)
-	seen := make(map[string]struct{}, len(existing)+1)
-	for _, recordSet := range existing {
-		for _, raw := range recordSet.Rrdatas {
-			normalized := dnsrecord.TXTContent(raw)
-			if normalized == "" {
-				continue
-			}
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
-			values = append(values, normalized)
-		}
-	}
-	if _, ok := seen[value]; ok {
+	values, present := mergeEnsureTXTRecordValues(existing, value)
+	if present {
 		return nil
 	}
-	values = append(values, value)
 
 	if err := replaceRecordSet(ctx, service, runtimeCfg.ProjectID, zone.Name, existing, &dns.ResourceRecordSet{
 		Name:    fqdn(name),
@@ -243,30 +214,10 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 		return nil
 	}
 
-	remaining := make([]string, 0, len(existing))
-	seen := make(map[string]struct{}, len(existing))
-	removed := false
-	for _, recordSet := range existing {
-		for _, raw := range recordSet.Rrdatas {
-			normalized := dnsrecord.TXTContent(raw)
-			if normalized == "" {
-				continue
-			}
-			if strings.HasPrefix(normalized, matchPrefix) {
-				removed = true
-				continue
-			}
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
-			remaining = append(remaining, normalized)
-		}
-	}
+	remaining, removed := filterDeleteTXTRecordsRemaining(existing, matchPrefix)
 	if !removed {
 		return nil
 	}
-
 	if len(remaining) == 0 {
 		if err := applyChange(ctx, service, runtimeCfg.ProjectID, zone.Name, &dns.Change{
 			Deletions: existing,
@@ -287,414 +238,70 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 	return nil
 }
 
-func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, dsRecord, message string, err error) {
-	if p == nil {
-		return "", "", "", errGcloudProviderIsNil
-	}
-	baseDomain, err = dnsrecord.BaseDomain(baseDomain)
-	if err != nil {
-		return "", "", "", err
-	}
-
-	service, runtimeCfg, zone, err := p.newService(ctx, baseDomain)
-	if err != nil {
-		return "", "", "", err
-	}
-	managedZone := zone.Name
-	zone, err = service.ManagedZones.Get(runtimeCfg.ProjectID, managedZone).Context(ctx).Do()
-	if err != nil {
-		return "", "", "", fmt.Errorf("get gcloud managed zone %s: %w", managedZone, err)
-	}
-
-	currentState := strings.ToLower(strings.TrimSpace(dnssecState(zone)))
-	if currentState != "on" && currentState != "transfer" {
-		if err := enableDNSSEC(ctx, service, runtimeCfg.ProjectID, managedZone); err != nil {
-			return "", "", "", fmt.Errorf("enable gcloud dnssec: %w", err)
-		}
-		zone, err = service.ManagedZones.Get(runtimeCfg.ProjectID, managedZone).Context(ctx).Do()
+func listDeleteAddressRecordsExisting(ctx context.Context, service *dns.Service, projectID, zoneName, name string) ([]*dns.ResourceRecordSet, []error) {
+	var existing []*dns.ResourceRecordSet
+	var errs []error
+	for _, recordType := range []string{"A", "AAAA"} {
+		records, err := listRecordSets(ctx, service, projectID, zoneName, name, recordType)
 		if err != nil {
-			return "", "", "", fmt.Errorf("refresh gcloud managed zone %s: %w", managedZone, err)
-		}
-	}
-
-	keys, err := listDNSKeys(ctx, service, runtimeCfg.ProjectID, managedZone)
-	if err != nil {
-		return "", "", "", fmt.Errorf("list gcloud dnssec keys: %w", err)
-	}
-
-	return dnssecStatusFromZone(zone, keys)
-}
-
-func newRuntimeConfig(ctx context.Context, cfg Config) (runtimeConfig, error) {
-	creds, err := google.FindDefaultCredentials(ctx, dns.NdevClouddnsReadwriteScope)
-	if err != nil {
-		return runtimeConfig{}, fmt.Errorf("load gcloud credentials: %w", err)
-	}
-
-	projectID := strings.TrimSpace(cfg.ProjectID)
-	projectID = cmp.Or(projectID, strings.TrimSpace(creds.ProjectID))
-	if projectID == "" && metadata.OnGCE() {
-		if detected, err := metadata.ProjectIDWithContext(ctx); err == nil {
-			projectID = strings.TrimSpace(detected)
-		}
-	}
-	if projectID == "" {
-		return runtimeConfig{}, errGcloudProjectIDIsRequired
-	}
-
-	return runtimeConfig{
-		ProjectID:   projectID,
-		ManagedZone: strings.TrimSpace(cfg.ManagedZone),
-		HTTPClient:  oauth2.NewClient(ctx, creds.TokenSource),
-	}, nil
-}
-
-func (p *Provider) newService(ctx context.Context, domain string) (*dns.Service, runtimeConfig, *dns.ManagedZone, error) {
-	runtimeCfg, err := newRuntimeConfig(ctx, p.cfg)
-	if err != nil {
-		return nil, runtimeConfig{}, nil, err
-	}
-
-	service, err := dns.NewService(ctx, option.WithHTTPClient(runtimeCfg.HTTPClient))
-	if err != nil {
-		return nil, runtimeConfig{}, nil, fmt.Errorf("create gcloud dns service: %w", err)
-	}
-
-	zone, err := p.findManagedZone(ctx, service, runtimeCfg.ProjectID, domain, runtimeCfg.ManagedZone)
-	if err != nil {
-		return nil, runtimeConfig{}, nil, err
-	}
-	return service, runtimeCfg, zone, nil
-}
-
-func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, projectID, domain, explicit string) (*dns.ManagedZone, error) {
-	if service == nil {
-		return nil, errGcloudDNSServiceIsNil
-	}
-	domain = utils.NormalizeHostname(domain)
-	candidates := utils.DomainCandidates(domain)
-
-	zones := p.zones.Load()
-	for _, candidate := range candidates {
-		if zoneName := zones[candidate]; zoneName != "" {
-			return &dns.ManagedZone{Name: zoneName, DnsName: fqdn(candidate)}, nil
-		}
-	}
-
-	if explicit = strings.TrimSpace(explicit); explicit != "" {
-		zone, err := service.ManagedZones.Get(projectID, explicit).Context(ctx).Do()
-		if err != nil {
-			return nil, fmt.Errorf("get gcloud managed zone %q: %w", explicit, err)
-		}
-		if err := validateManagedZone(zone, domain, explicit); err != nil {
-			return nil, err
-		}
-		if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" {
-			p.zones.UpdateCopy(func(zones *map[string]string) {
-				if *zones == nil {
-					*zones = make(map[string]string)
-				}
-				(*zones)[zoneDomain] = zone.Name
-			})
-		}
-		return zone, nil
-	}
-
-	for _, candidate := range candidates {
-		out, err := service.ManagedZones.List(projectID).DnsName(fqdn(candidate)).Context(ctx).Do()
-		if err != nil {
-			return nil, fmt.Errorf("list gcloud managed zones: %w", err)
-		}
-		for _, zone := range out.ManagedZones {
-			if !isPublicZone(zone) || utils.NormalizeHostname(zone.DnsName) != candidate {
-				continue
-			}
-			if zone.Name != "" {
-				p.zones.UpdateCopy(func(zones *map[string]string) {
-					if *zones == nil {
-						*zones = make(map[string]string)
-					}
-					(*zones)[candidate] = zone.Name
-				})
-			}
-			return zone, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no gcloud public managed zone found for %s", domain)
-}
-
-func validateManagedZone(zone *dns.ManagedZone, domain, explicit string) error {
-	if zone == nil {
-		return fmt.Errorf("gcloud managed zone %q is nil", explicit)
-	}
-	if !isPublicZone(zone) {
-		return fmt.Errorf("gcloud managed zone %q is not public", explicit)
-	}
-	if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain == "" || !utils.HostnameMatchesBaseDomain(domain, zoneDomain) {
-		return fmt.Errorf("gcloud managed zone %q does not cover %s", explicit, domain)
-	}
-	return nil
-}
-
-func ensureRecordSet(ctx context.Context, service *dns.Service, projectID, managedZone string, desired *dns.ResourceRecordSet) error {
-	existing, err := listRecordSets(ctx, service, projectID, managedZone, desired.Name, desired.Type)
-	if err != nil {
-		return err
-	}
-	if len(existing) == 1 && sameRecordSet(existing[0], desired) {
-		return nil
-	}
-	return replaceRecordSet(ctx, service, projectID, managedZone, existing, desired)
-}
-
-func replaceRecordSet(ctx context.Context, service *dns.Service, projectID, managedZone string, existing []*dns.ResourceRecordSet, desired *dns.ResourceRecordSet) error {
-	change := &dns.Change{
-		Additions: []*dns.ResourceRecordSet{desired},
-	}
-	if len(existing) > 0 {
-		change.Deletions = existing
-	}
-	return applyChange(ctx, service, projectID, managedZone, change)
-}
-
-func applyChange(ctx context.Context, service *dns.Service, projectID, managedZone string, change *dns.Change) error {
-	if service == nil {
-		return errGcloudDNSServiceIsNil
-	}
-
-	result, err := service.Changes.Create(projectID, managedZone, change).Context(ctx).Do()
-	if err != nil {
-		return err
-	}
-	if strings.EqualFold(strings.TrimSpace(result.Status), "done") {
-		return nil
-	}
-
-	for {
-		if !utils.SleepOrDone(ctx, defaultPollPeriod) {
-			return ctx.Err()
-		}
-		result, err = service.Changes.Get(projectID, managedZone, result.Id).Context(ctx).Do()
-		if err != nil {
-			return err
-		}
-		if strings.EqualFold(strings.TrimSpace(result.Status), "done") {
-			return nil
-		}
-	}
-}
-
-func listRecordSets(ctx context.Context, service *dns.Service, projectID, managedZone, name, recordType string) ([]*dns.ResourceRecordSet, error) {
-	if service == nil {
-		return nil, errGcloudDNSServiceIsNil
-	}
-
-	recordType = strings.ToUpper(strings.TrimSpace(recordType))
-	name = fqdn(name)
-	out, err := service.ResourceRecordSets.List(projectID, managedZone).Name(name).Type(recordType).Context(ctx).Do()
-	if err != nil {
-		return nil, err
-	}
-
-	filtered := make([]*dns.ResourceRecordSet, 0, len(out.Rrsets))
-	for _, recordSet := range out.Rrsets {
-		if !strings.EqualFold(strings.TrimSpace(recordSet.Name), name) || !strings.EqualFold(strings.TrimSpace(recordSet.Type), recordType) {
+			errs = append(errs, fmt.Errorf("list gcloud %s records %s: %w", recordType, name, err))
 			continue
 		}
-		filtered = append(filtered, recordSet)
+		existing = append(existing, records...)
 	}
-	return filtered, nil
+	return existing, errs
 }
 
-func enableDNSSEC(ctx context.Context, service *dns.Service, projectID, managedZone string) error {
-	if service == nil {
-		return errGcloudDNSServiceIsNil
-	}
-
-	operation, err := service.ManagedZones.Patch(projectID, managedZone, &dns.ManagedZone{
-		DnssecConfig: &dns.ManagedZoneDnsSecConfig{
-			State: "on",
-		},
-	}).Context(ctx).Do()
-	if err != nil {
-		return err
-	}
-	if strings.EqualFold(strings.TrimSpace(operation.Status), "done") {
-		return nil
-	}
-
-	for {
-		if !utils.SleepOrDone(ctx, defaultPollPeriod) {
-			return ctx.Err()
-		}
-		operation, err = service.ManagedZoneOperations.Get(projectID, managedZone, operation.Id).Context(ctx).Do()
-		if err != nil {
-			return err
-		}
-		if strings.EqualFold(strings.TrimSpace(operation.Status), "done") {
-			return nil
-		}
-	}
-}
-
-func listDNSKeys(ctx context.Context, service *dns.Service, projectID, managedZone string) ([]*dns.DnsKey, error) {
-	if service == nil {
-		return nil, errGcloudDNSServiceIsNil
-	}
-
-	keys := make([]*dns.DnsKey, 0, 2)
-	err := service.DnsKeys.List(projectID, managedZone).DigestType("sha256,sha384,sha1").Pages(ctx, func(page *dns.DnsKeysListResponse) error {
-		keys = append(keys, page.DnsKeys...)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return keys, nil
-}
-
-func dnssecStatusFromZone(zone *dns.ManagedZone, keys []*dns.DnsKey) (state, dsRecord, message string, err error) {
-	state = strings.TrimSpace(dnssecState(zone))
-	dsRecord = activeDSRecord(keys)
-	if dsRecord != "" {
-		message = "publish the DS record at the registrar after Cloud DNS zone signing is enabled"
-	} else if strings.EqualFold(state, "on") || strings.EqualFold(state, "transfer") {
-		message = "wait for the active Cloud DNS DS record before updating the registrar"
-	}
-	return state, dsRecord, message, nil
-}
-
-func activeDSRecord(keys []*dns.DnsKey) string {
-	for _, key := range keys {
-		if key == nil || !key.IsActive || !strings.EqualFold(strings.TrimSpace(key.Type), "keySigning") {
-			continue
-		}
-		if ds, ok := dnsKeyDSRecord(key); ok {
-			return ds
-		}
-	}
-	return ""
-}
-
-func dnsKeyDSRecord(key *dns.DnsKey) (string, bool) {
-	if key == nil {
-		return "", false
-	}
-
-	algorithm, ok := dnssecAlgorithmCode(key.Algorithm)
-	if !ok {
-		return "", false
-	}
-	digest, ok := preferredDigest(key.Digests)
-	if !ok {
-		return "", false
-	}
-	digestType, ok := dnssecDigestTypeCode(digest.Type)
-	if !ok {
-		return "", false
-	}
-
-	return fmt.Sprintf("%d %d %d %s", key.KeyTag, algorithm, digestType, strings.TrimSpace(digest.Digest)), true
-}
-
-func preferredDigest(digests []*dns.DnsKeyDigest) (*dns.DnsKeyDigest, bool) {
-	for _, candidate := range []string{"sha256", "sha384", "sha1"} {
-		for _, digest := range digests {
-			if digest == nil || !strings.EqualFold(strings.TrimSpace(digest.Type), candidate) || strings.TrimSpace(digest.Digest) == "" {
+func mergeEnsureTXTRecordValues(existing []*dns.ResourceRecordSet, value string) ([]string, bool) {
+	values := make([]string, 0, len(existing)+1)
+	seen := make(map[string]struct{}, len(existing)+1)
+	for _, recordSet := range existing {
+		for _, raw := range recordSet.Rrdatas {
+			normalized := dnsrecord.TXTContent(raw)
+			if normalized == "" {
 				continue
 			}
-			return digest, true
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			values = append(values, normalized)
 		}
 	}
-	return nil, false
+	if _, ok := seen[value]; ok {
+		return nil, true
+	}
+	return append(values, value), false
 }
 
-func dnssecAlgorithmCode(raw string) (int, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "rsasha1":
-		return 5, true
-	case "rsasha256":
-		return 8, true
-	case "rsasha512":
-		return 10, true
-	case "ecdsap256sha256":
-		return 13, true
-	case "ecdsap384sha384":
-		return 14, true
-	default:
-		return 0, false
+func filterDeleteTXTRecordsRemaining(existing []*dns.ResourceRecordSet, matchPrefix string) ([]string, bool) {
+	remaining := make([]string, 0, len(existing))
+	seen := make(map[string]struct{}, len(existing))
+	removed := false
+	for _, recordSet := range existing {
+		var dropped bool
+		remaining, dropped = appendFilterDeleteTXTRecordsValues(seen, remaining, recordSet.Rrdatas, matchPrefix)
+		removed = removed || dropped
 	}
+	return remaining, removed
 }
 
-func dnssecDigestTypeCode(raw string) (int, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "sha1":
-		return 1, true
-	case "sha256":
-		return 2, true
-	case "sha384":
-		return 4, true
-	default:
-		return 0, false
-	}
-}
-
-func dnssecState(zone *dns.ManagedZone) string {
-	if zone == nil || zone.DnssecConfig == nil {
-		return ""
-	}
-	return zone.DnssecConfig.State
-}
-
-func sameRecordSet(current, desired *dns.ResourceRecordSet) bool {
-	if current == nil || desired == nil {
-		return false
-	}
-	if !strings.EqualFold(strings.TrimSpace(current.Name), strings.TrimSpace(desired.Name)) || !strings.EqualFold(strings.TrimSpace(current.Type), strings.TrimSpace(desired.Type)) || current.Ttl != desired.Ttl {
-		return false
-	}
-
-	currentValues := make(map[string]int, len(current.Rrdatas))
-	for _, value := range current.Rrdatas {
-		currentValues[dnsrecord.TXTContent(value)]++
-	}
-	for _, value := range desired.Rrdatas {
-		normalized := dnsrecord.TXTContent(value)
-		if currentValues[normalized] == 0 {
-			return false
+func appendFilterDeleteTXTRecordsValues(seen map[string]struct{}, remaining []string, rrdatas []string, matchPrefix string) ([]string, bool) {
+	removed := false
+	for _, raw := range rrdatas {
+		normalized := dnsrecord.TXTContent(raw)
+		if normalized == "" {
+			continue
 		}
-		currentValues[normalized]--
-	}
-	for _, remaining := range currentValues {
-		if remaining != 0 {
-			return false
+		if strings.HasPrefix(normalized, matchPrefix) {
+			removed = true
+			continue
 		}
-	}
-	return true
-}
-
-func recordTTL(recordSets []*dns.ResourceRecordSet) int64 {
-	for _, recordSet := range recordSets {
-		if recordSet != nil && recordSet.Ttl > 0 {
-			return recordSet.Ttl
+		if _, ok := seen[normalized]; ok {
+			continue
 		}
+		seen[normalized] = struct{}{}
+		remaining = append(remaining, normalized)
 	}
-	return defaultRecordTTL
-}
-
-func isPublicZone(zone *dns.ManagedZone) bool {
-	if zone == nil {
-		return false
-	}
-	visibility := strings.ToLower(strings.TrimSpace(zone.Visibility))
-	return visibility == "" || visibility == "public"
-}
-
-func fqdn(name string) string {
-	normalized := utils.NormalizeHostname(name)
-	if normalized == "" {
-		return ""
-	}
-	return normalized + "."
+	return remaining, removed
 }
