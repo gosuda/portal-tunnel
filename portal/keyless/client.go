@@ -168,7 +168,8 @@ func (c *Client) SetAccessToken(token string) {
 	c.mu.Unlock()
 }
 
-// RefreshChain reloads configured local files or the relay chain. Invalid replacements
+// RefreshChain reloads configured files, a persisted automatic bundle, or the relay
+// bootstrap chain. It never issues certificates. Invalid replacements
 // leave the previous generation intact; existing connections are not restarted.
 func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
 	return c.refreshChain(ctx, nil)
@@ -179,7 +180,7 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 		return false, errKeylessClientIsUnavailable
 	}
 	bootstrapRecovery := c.automatic != nil && stale != nil && stale.signer != nil
-	// Stale bootstrap recovery must not wait for an ACME operation. Its
+	// Stale bootstrap recovery must not wait for another reload. Its
 	// compare-and-swap below cannot overwrite a concurrently activated local pin.
 	if !bootstrapRecovery {
 		if c.automatic != nil {
@@ -202,21 +203,21 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 	} else {
 		next, err = c.loadPin(ctx)
 	}
-	var issuanceErr error
+	var reloadErr error
 	if err != nil && !bootstrapRecovery && c.automatic != nil && current != nil && current.signer != nil {
-		issuanceErr = err
+		reloadErr = err
 		// Bootstrap is still allowed: preserve normal relay certificate rotation
 		// during an issuance outage. Local activation never takes this path.
 		next, err = c.relay.acquire(ctx)
 	}
 	if err != nil {
-		return false, errors.Join(issuanceErr, err)
+		return false, errors.Join(reloadErr, err)
 	}
 	if current != nil && bytes.Equal(next.chainPEM, current.chainPEM) {
 		if next.signer != nil {
 			_ = next.signer.Close()
 		}
-		return false, issuanceErr
+		return false, reloadErr
 	}
 	c.mu.Lock()
 	staleRecovery := bootstrapRecovery && c.pin != stale
@@ -252,7 +253,7 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 	if current != nil && current.signer != nil {
 		_ = current.signer.Close()
 	}
-	return true, issuanceErr
+	return true, reloadErr
 }
 
 func pinIsStale(err error) bool {
@@ -344,7 +345,14 @@ func (c *Client) loadPin(ctx context.Context) (*pinnedChain, error) {
 		return nil, err
 	}
 	if c.automatic != nil {
-		return c.automatic.acquire(ctx)
+		bundle, err := c.automatic.readBundle()
+		if err != nil {
+			return nil, err
+		}
+		if bundle.CertificatePEM == "" {
+			return nil, errAutomaticCertificateMissing
+		}
+		return newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname, "")
 	}
 	if c.files != nil {
 		return c.files.acquire()

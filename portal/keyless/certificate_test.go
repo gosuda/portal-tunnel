@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestAutomaticCertificateState(t *testing.T) {
@@ -169,7 +174,10 @@ func TestAutomaticBootstrapRefreshDuringIssuanceOutage(t *testing.T) {
 	relay.renew(renewed, true)
 	changed, err := client.RefreshChain(t.Context())
 	if err == nil || !changed {
-		t.Fatalf("legacy issuance endpoint: changed=%v error=%v", changed, err)
+		t.Fatalf("missing local bundle: changed=%v error=%v", changed, err)
+	}
+	if relay.issuanceRequests.Load() != 0 {
+		t.Fatal("bootstrap lease check initiated issuance")
 	}
 	leaf, err := relay.visit(t, client, issuer.pool)
 	if err != nil {
@@ -201,8 +209,7 @@ func TestStaleBootstrapRecoveryDoesNotWaitForIssuance(t *testing.T) {
 	stale := client.pinned()
 	renewed := issuer.issue(t, 3)
 	relay.renew(renewed, true)
-	// Issuance owns refreshMu until its potentially long network timeout.
-	// Stale TLS recovery must remain independent of that operation.
+	// Stale TLS recovery remains independent of another chain reload.
 	client.refreshMu.Lock()
 	defer client.refreshMu.Unlock()
 	changed, err := client.refreshChain(t.Context(), stale)
@@ -256,5 +263,128 @@ func TestAutomaticCloseCancelsPendingIssuance(t *testing.T) {
 	}
 	if err := client.WaitReady(t.Context()); err == nil {
 		t.Fatal("closed client became ready")
+	}
+}
+
+// Lease checks cannot initiate issuance after a failure or cancel a slow worker
+// attempt. A gate models CA work outliving the lease caller's deadline.
+func TestAutomaticWorkerOwnsIssuanceAfterFailure(t *testing.T) {
+	issuer := newTestIssuer(t)
+	relayCert := issuer.issueFor(t, 2, "127.0.0.1")
+	var requests atomic.Int64
+	started, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			http.Error(w, "temporary issuance failure", http.StatusServiceUnavailable)
+			return
+		}
+		close(started)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		var request types.TenantCertificateRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		block, _ := pem.Decode([]byte(request.CSRPEM))
+		if block == nil {
+			t.Error("missing CSR")
+			return
+		}
+		csr, err := x509.ParseCertificateRequest(block.Bytes)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		template := *issuer.issue(t, 3).leaf
+		der, err := x509.CreateCertificate(rand.Reader, &template, issuer.cert, csr.PublicKey, issuer.key)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		chain := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.cert.Raw})...)
+		_ = json.NewEncoder(w).Encode(types.APIEnvelope[types.TenantCertificateResponse]{OK: true, Data: types.TenantCertificateResponse{CertificatePEM: string(chain)}})
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{relayCert.tls}, MinVersion: tls.VersionTLS12}
+	server.StartTLS()
+	defer server.Close()
+	client := &Client{hostname: tenantHostname, ready: make(chan struct{})}
+	client.relay = &relaySource{hostname: tenantHostname, relayURL: server.URL, headers: client.headers}
+	client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
+	if _, err := client.automatic.acquire(t.Context()); err == nil {
+		t.Fatal("initial issuance succeeded")
+	}
+	pending, err := client.automatic.readBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// During worker backoff, a lease check must not take over issuance.
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	_, _ = client.RefreshChain(ctx)
+	if requests.Load() != 1 {
+		t.Fatal("lease check issued after failure")
+	}
+	client.automatic.start(client)
+	defer client.Close()
+	defer close(release)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not start")
+	}
+	ctx, cancel = context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	_, _ = client.RefreshChain(ctx)
+	<-ctx.Done()
+	// Releasing only after the short deadline proves it cannot cancel issuance.
+	select {
+	case release <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatal("lease deadline canceled worker issuance")
+	}
+	readyCtx, readyCancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer readyCancel()
+	if err := client.WaitReady(readyCtx); err != nil {
+		t.Fatal(err)
+	}
+	if !client.pinned().local || requests.Load() != 2 {
+		t.Fatal("worker did not exclusively activate local material")
+	}
+	installed, err := client.automatic.readBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.KeyPEM != pending.KeyPEM {
+		t.Fatal("worker replaced persisted key")
+	}
+}
+
+func TestAutomaticRetryAfterIsBounded(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"120", 2 * time.Minute}, {"18446744073709551615", time.Hour},
+		{time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat), time.Hour},
+		{"-1", 0}, {"invalid", 0}, {"Wed, 01 Jan 2020 00:00:00 GMT", 0},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Retry-After", test.value)
+				http.Error(w, "retry later", http.StatusTooManyRequests)
+			}))
+			defer server.Close()
+			source := &automaticSource{relaySource: &relaySource{hostname: tenantHostname, relayURL: server.URL, headers: func() http.Header { return http.Header{} }}, certificateDir: t.TempDir()}
+			_, err := source.acquire(t.Context())
+			var retry *certificateRetryError
+			if !errors.As(err, &retry) || retry.delay != test.want {
+				t.Fatalf("Retry-After %q: %v, want %v", test.value, err, test.want)
+			}
+		})
 	}
 }

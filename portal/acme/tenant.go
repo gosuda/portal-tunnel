@@ -3,10 +3,8 @@ package acme
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
@@ -31,8 +29,9 @@ var (
 	errTenantCertificateMissing = errors.New("issuer returned no tenant certificate")
 )
 
-// ParseTenantCSR accepts one exact authorized canonical DNS name, not wildcard,
-// IP, email or URI identities. The common name cannot add an order identifier.
+// ParseTenantCSR accepts an ECDSA P-256 key and one exact authorized canonical
+// DNS name, not wildcard, IP, email or URI identities. The common name cannot add
+// an order identifier.
 func ParseTenantCSR(encoded string, allowed []string) (*x509.CertificateRequest, error) {
 	block, rest := pem.Decode([]byte(encoded))
 	if block == nil || block.Type != "CERTIFICATE REQUEST" || len(strings.TrimSpace(string(rest))) != 0 {
@@ -81,17 +80,8 @@ func ParseTenantCSR(encoded string, allowed []string) (*x509.CertificateRequest,
 			}
 		}
 	}
-	switch key := csr.PublicKey.(type) {
-	case *ecdsa.PublicKey:
-		if key.Curve != elliptic.P256() {
-			return nil, errTenantCSRKey
-		}
-	case *rsa.PublicKey:
-		if key.N.BitLen() < 2048 || key.N.BitLen() > 4096 {
-			return nil, errTenantCSRKey
-		}
-	case ed25519.PublicKey:
-	default:
+	key, ok := csr.PublicKey.(*ecdsa.PublicKey)
+	if !ok || key.Curve != elliptic.P256() {
 		return nil, errTenantCSRKey
 	}
 	return csr, nil

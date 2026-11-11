@@ -19,6 +19,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -44,6 +46,13 @@ type automaticSource struct {
 	cancel         context.CancelFunc
 	done           chan struct{}
 }
+
+type certificateRetryError struct {
+	error
+	delay time.Duration
+}
+
+func (e *certificateRetryError) Unwrap() error { return e.error }
 
 // The private key is persisted before contacting the CA, and the completed pair
 // replaces the same bundle atomically. Lease credentials never enter this file.
@@ -160,7 +169,12 @@ func (a *automaticSource) maintainCertificate(ctx context.Context, c *Client) {
 		case <-timer.C:
 		}
 		issueCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		_, err := c.RefreshChain(issueCtx)
+		// Only this worker issues. Lease checks must not lend their shorter
+		// deadline to CA/DNS work or bypass the worker's retry backoff.
+		_, err := a.acquire(issueCtx)
+		if err == nil {
+			_, err = c.RefreshChain(issueCtx)
+		}
 		cancel()
 		if ctx.Err() != nil {
 			return
@@ -168,6 +182,10 @@ func (a *automaticSource) maintainCertificate(ctx context.Context, c *Client) {
 		if err != nil {
 			log.Warn().Err(err).Str("hostname", c.hostname).Msg("tenant certificate issuance or renewal failed; retaining current TLS material")
 			delay = backoff
+			var retry *certificateRetryError
+			if errors.As(err, &retry) {
+				delay = max(delay, retry.delay)
+			}
 			backoff = min(2*backoff, time.Hour)
 		} else {
 			delay, backoff = time.Hour, time.Minute
@@ -250,7 +268,17 @@ func (c *automaticSource) acquire(ctx context.Context) (*pinnedChain, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, utils.DecodeAPIRequestError(resp)
+		err := utils.DecodeAPIRequestError(resp)
+		// The relay is untrusted: bound seconds before conversion, and never
+		// let its response defer renewal checks indefinitely.
+		value := strings.TrimSpace(resp.Header.Get("Retry-After"))
+		var delay time.Duration
+		if seconds, parseErr := strconv.ParseUint(value, 10, 64); parseErr == nil {
+			delay = time.Duration(min(seconds, uint64(time.Hour/time.Second))) * time.Second
+		} else if when, parseErr := http.ParseTime(value); parseErr == nil {
+			delay = min(time.Hour, max(0, time.Until(when)))
+		}
+		return nil, &certificateRetryError{error: err, delay: delay}
 	}
 	var envelope types.APIEnvelope[types.TenantCertificateResponse]
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 128<<10)).Decode(&envelope); err != nil {

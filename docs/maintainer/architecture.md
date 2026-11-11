@@ -299,7 +299,13 @@ The keyless client owns validated, immutable certificate/signer generations,
 atomic activation, readiness, and in-flight handshake safety. Concrete internal
 relay, manual-file, and automatic certificate sources own acquisition. The
 automatic source additionally owns persisted bundles, CSR issuance, renewal,
-and cancellation/join of its worker. Once local material is installed, a failed
+and cancellation/join of its worker. Only that worker submits CSRs; lease chain
+checks reload persisted bundles or rotate the bootstrap relay chain without
+starting issuance. The persisted P-256 key is intentionally reused across retries,
+renewals, and restarts; automatic key rotation is not implemented. Failed issuance
+uses exponential backoff from one minute to one hour, honoring a relay's
+`Retry-After` seconds or HTTP date up to a one-hour cap. Shutdown interrupts both
+requests and retry waits. Once local material is installed, a failed
 renewal cannot restore relay-backed signing.
 
 The SDK lease separately owns the optional CAA/CT observer. It receives the

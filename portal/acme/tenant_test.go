@@ -3,9 +3,12 @@ package acme
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -69,6 +72,51 @@ func TestTenantCSRRestrictsEveryIdentity(t *testing.T) {
 	block.Bytes[len(block.Bytes)-1] ^= 1
 	if _, err := ParseTenantCSR(string(pem.EncodeToMemory(block)), allowed); err == nil {
 		t.Fatal("bad CSR signature accepted")
+	}
+}
+
+func TestTenantCSRRequiresP256Key(t *testing.T) {
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ed25519Key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		key   crypto.Signer
+		valid bool
+	}{
+		{"P-256", p256, true},
+		{"P-384", p384, false},
+		{"RSA", rsaKey, false},
+		{"Ed25519", ed25519Key, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			names := []string{"tenant.example.com"}
+			der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{DNSNames: names}, tc.key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}))
+			_, err = ParseTenantCSR(encoded, names)
+			if tc.valid && err != nil {
+				t.Fatalf("ParseTenantCSR() error = %v", err)
+			}
+			if !tc.valid && !errors.Is(err, errTenantCSRKey) {
+				t.Fatalf("ParseTenantCSR() error = %v, want unsupported key", err)
+			}
+		})
 	}
 }
 
