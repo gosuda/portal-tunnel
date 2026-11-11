@@ -109,58 +109,78 @@ func Marshal(id types.Identity) ([]byte, error) {
 }
 
 func resolveKeyMaterial(id types.Identity) (types.Identity, error) {
-	resolved := id
+	trimmed := trimmedIdentityCopy(id)
+	return keyedIdentityFromTrimmed(trimmed)
+}
 
-	resolved.Name = strings.TrimSpace(resolved.Name)
-	resolved.Address = strings.TrimSpace(resolved.Address)
-	resolved.PublicKey = strings.TrimSpace(resolved.PublicKey)
-	resolved.PrivateKey = strings.TrimSpace(resolved.PrivateKey)
-	resolved.Mnemonic = normalizeMnemonic(resolved.Mnemonic)
-	resolved.DerivationPath = strings.TrimSpace(resolved.DerivationPath)
-	resolved.TokenSecret = strings.TrimSpace(resolved.TokenSecret)
+func trimmedIdentityCopy(id types.Identity) types.Identity {
+	id.Name = strings.TrimSpace(id.Name)
+	id.Address = strings.TrimSpace(id.Address)
+	id.PublicKey = strings.TrimSpace(id.PublicKey)
+	id.PrivateKey = strings.TrimSpace(id.PrivateKey)
+	id.Mnemonic = normalizeMnemonic(id.Mnemonic)
+	id.DerivationPath = strings.TrimSpace(id.DerivationPath)
+	id.TokenSecret = strings.TrimSpace(id.TokenSecret)
+	return id
+}
 
-	if resolved.Mnemonic != "" {
-		privateKey, derivationPath, err := deriveSecp256k1PrivateKeyFromMnemonic(resolved.Mnemonic, resolved.DerivationPath)
-		if err != nil {
-			return types.Identity{}, err
-		}
-		resolved.DerivationPath = derivationPath
-		if resolved.PrivateKey == "" {
-			resolved.PrivateKey = privateKey
-		} else if !strings.EqualFold(utils.TrimHexPrefix(resolved.PrivateKey), privateKey) {
-			return types.Identity{}, errIdentityPrivateKeyDoesNotMatch
-		}
-	} else if resolved.DerivationPath != "" {
-		return types.Identity{}, errIdentityDerivationPathRequiresMnemonic
+func keyedIdentityFromTrimmed(trimmed types.Identity) (types.Identity, error) {
+	resolved := trimmed
+	if err := applyMnemonicKeyMaterial(&resolved); err != nil {
+		return types.Identity{}, err
 	}
-
 	if resolved.PrivateKey == "" {
 		return types.Identity{}, errIdentityPrivateKeyIsRequired
 	}
-
 	signingIdentity, err := ResolveSecp256k1Identity(resolved.PrivateKey)
 	if err != nil {
 		return types.Identity{}, err
 	}
-	if resolved.Address != "" {
-		address, err := NormalizeEVMAddress(resolved.Address)
-		if err != nil {
-			return types.Identity{}, err
-		}
-		if address != signingIdentity.Address {
-			return types.Identity{}, errIdentityAddressDoesNotMatchPrivate
-		}
-		resolved.Address = address
-	} else {
-		resolved.Address = signingIdentity.Address
+	if err := resolveIdentityAddress(&resolved, signingIdentity.Address); err != nil {
+		return types.Identity{}, err
 	}
 	if resolved.PublicKey != "" && !strings.EqualFold(utils.TrimHexPrefix(resolved.PublicKey), signingIdentity.PublicKey) {
 		return types.Identity{}, errIdentityPublicKeyDoesNotMatch
 	}
 	resolved.PublicKey = signingIdentity.PublicKey
 	resolved.PrivateKey = signingIdentity.PrivateKey
-
 	return resolved, nil
+}
+
+func applyMnemonicKeyMaterial(resolved *types.Identity) error {
+	if resolved.Mnemonic == "" {
+		if resolved.DerivationPath != "" {
+			return errIdentityDerivationPathRequiresMnemonic
+		}
+		return nil
+	}
+	privateKey, derivationPath, err := deriveSecp256k1PrivateKeyFromMnemonic(resolved.Mnemonic, resolved.DerivationPath)
+	if err != nil {
+		return err
+	}
+	resolved.DerivationPath = derivationPath
+	if resolved.PrivateKey == "" {
+		resolved.PrivateKey = privateKey
+	} else if !strings.EqualFold(utils.TrimHexPrefix(resolved.PrivateKey), privateKey) {
+		return errIdentityPrivateKeyDoesNotMatch
+	}
+	return nil
+}
+
+func resolveIdentityAddress(resolved *types.Identity, signingAddress string) error {
+	if resolved.Address == "" {
+		resolved.Address = signingAddress
+		return nil
+	}
+	address, err := NormalizeEVMAddress(resolved.Address)
+	if err != nil {
+		return err
+	}
+	if address != signingAddress {
+		return errIdentityAddressDoesNotMatchPrivate
+	}
+	resolved.Address = address
+	return nil
 }
 
 type storedIdentity struct {

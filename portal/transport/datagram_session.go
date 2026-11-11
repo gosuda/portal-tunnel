@@ -209,28 +209,32 @@ func (s *DatagramSession) receiveLoop(conn *quic.Conn, leaseDone <-chan struct{}
 			s.mu.Unlock()
 			return
 		}
-
 		frame, err := decodeDatagram(data)
 		if err != nil || len(frame.Payload) > types.MaxUDPPayloadSize {
 			continue
 		}
 		frame.LeaseDone = leaseDone
-
-		if s.dropIncoming {
-			select {
-			case s.incoming <- frame:
-			default:
-			}
-			continue
+		if s.forwardDatagramFrame(conn, frame) {
+			return
 		}
+	}
+}
 
+func (s *DatagramSession) forwardDatagramFrame(conn *quic.Conn, frame types.DatagramFrame) bool {
+	if s.dropIncoming {
 		select {
 		case s.incoming <- frame:
-		case <-s.done:
-			return
-		case <-conn.Context().Done():
-			return
+		default:
 		}
+		return false
+	}
+	select {
+	case s.incoming <- frame:
+		return false
+	case <-s.done:
+		return true
+	case <-conn.Context().Done():
+		return true
 	}
 }
 

@@ -217,6 +217,20 @@ func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
 	return record.syncENSGaslessDNS(ctx, s.acmeManager)
 }
 
+func (s *Server) isDNSHostnameOwnedLocked(hostname string, now time.Time) bool {
+	for _, current := range s.registry.records {
+		if current == nil || current.isExpired(now) {
+			continue
+		}
+		for _, currentHostname := range current.hostnames() {
+			if currentHostname == hostname {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
 	if s == nil || record == nil || s.acmeManager == nil || s.registry == nil {
 		return
@@ -227,22 +241,7 @@ func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
 	now := time.Now()
 
 	for _, hostname := range record.hostnames() {
-		owned := false
-		for _, current := range registry.records {
-			if current == nil || current.isExpired(now) {
-				continue
-			}
-			for _, currentHostname := range current.hostnames() {
-				if currentHostname == hostname {
-					owned = true
-					break
-				}
-			}
-			if owned {
-				break
-			}
-		}
-		if owned {
+		if s.isDNSHostnameOwnedLocked(hostname, now) {
 			continue
 		}
 		// Delete is an enqueue-only operation. Keeping the registry read lock

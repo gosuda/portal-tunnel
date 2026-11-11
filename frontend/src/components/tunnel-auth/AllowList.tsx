@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { useId, useState } from "react";
 import { Chip, ChipField, Notice, TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { ALLOW_COPY, FieldIssues } from "./authShared";
@@ -16,7 +17,7 @@ export function AllowList({
   auth: TunnelAuthOptions;
   patch: (next: Partial<TunnelAuthOptions>) => void;
   issues: TunnelAuthIssue[];
-}) {
+}): JSX.Element | null {
   const inputId = useId();
   const [draft, setDraft] = useState("");
   const method = auth.method;

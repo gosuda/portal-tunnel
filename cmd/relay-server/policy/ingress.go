@@ -47,24 +47,31 @@ func (i *Ingress) allowsTunnelFrom(source netip.Addr) bool {
 	})
 }
 
+func (i *Ingress) forwardedHeaderAddr(req *http.Request) (netip.Addr, bool) {
+	if i == nil || !i.trustProxyHeaders || !isTrustedProxyRemoteAddr(req.RemoteAddr, i.trustedProxyCIDRs) {
+		return netip.Addr{}, false
+	}
+	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
+		before, _, _ := strings.Cut(xff, ",")
+		if ip := parseSourceAddr(before); ip.IsValid() {
+			return ip, true
+		}
+	}
+	if xri := req.Header.Get("X-Real-IP"); xri != "" {
+		if ip := parseSourceAddr(xri); ip.IsValid() {
+			return ip, true
+		}
+	}
+	return netip.Addr{}, false
+}
+
 func (i *Ingress) SourceAddr(req *http.Request) netip.Addr {
 	if req == nil {
 		return netip.Addr{}
 	}
-	if i != nil && i.trustProxyHeaders && isTrustedProxyRemoteAddr(req.RemoteAddr, i.trustedProxyCIDRs) {
-		if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
-			before, _, _ := strings.Cut(xff, ",")
-			if ip := parseSourceAddr(before); ip.IsValid() {
-				return ip
-			}
-		}
-		if xri := req.Header.Get("X-Real-IP"); xri != "" {
-			if ip := parseSourceAddr(xri); ip.IsValid() {
-				return ip
-			}
-		}
+	if ip, ok := i.forwardedHeaderAddr(req); ok {
+		return ip
 	}
-
 	host, _, err := net.SplitHostPort(req.RemoteAddr)
 	if err != nil {
 		return parseSourceAddr(req.RemoteAddr)

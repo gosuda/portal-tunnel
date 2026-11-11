@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import {
   createContext,
   startTransition,
@@ -57,7 +58,7 @@ function applyTheme(theme: Theme) {
   root.style.colorScheme = theme;
 }
 
-export function ThemeProvider({ children }: PropsWithChildren) {
+export function ThemeProvider({ children }: PropsWithChildren): JSX.Element {
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
 
   useLayoutEffect(() => {
@@ -87,7 +88,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   );
 }
 
-export function useTheme() {
+export function useTheme(): ThemeContextValue {
   const value = useContext(ThemeContext);
   if (!value) {
     throw new Error("useTheme must be used within ThemeProvider");

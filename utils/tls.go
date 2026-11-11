@@ -68,40 +68,12 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 
 // FetchEndpointCertificateChain dials endpoint and returns its PEM-encoded peer chain.
 func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
-	raw := strings.TrimSpace(endpoint)
-	if raw == "" {
-		return nil, errEndpointIsRequired
-	}
-	if !strings.Contains(raw, "://") {
-		raw = "https://" + raw
-	}
-
-	u, err := url.Parse(raw)
+	u, err := parseEndpointURL(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("parse endpoint url: %w", err)
-	}
-	if !strings.EqualFold(u.Scheme, "https") {
-		return nil, errRelayEndpointMustUseHTTPS
+		return nil, err
 	}
 	if runtime.GOOS == "js" {
-		u.Path = types.PathSDKCertificateChain
-		u.RawPath = ""
-		u.RawQuery = ""
-		u.ForceQuery = false
-		u.Fragment = ""
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("fetch certificate chain: %w", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("fetch certificate chain: unexpected status %d", resp.StatusCode)
-		}
-		return io.ReadAll(resp.Body)
+		return fetchChainOverHTTPS(ctx, u)
 	}
 
 	host := u.Hostname()
@@ -110,23 +82,11 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 	}
 	port := cmp.Or(u.Port(), "443")
 	serverName = cmp.Or(serverName, host)
-
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	rawConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	tlsConn, err := dialEndpointTLS(ctx, host, port, serverName)
 	if err != nil {
-		return nil, fmt.Errorf("dial relay endpoint: %w", err)
+		return nil, err
 	}
-
-	tlsConn := tls.Client(rawConn, &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		ServerName:         serverName,
-		InsecureSkipVerify: IsLocalRelayHost(host),
-		NextProtos:         []string{"http/1.1"},
-	})
 	defer tlsConn.Close()
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return nil, fmt.Errorf("tls handshake with relay endpoint: %w", err)
-	}
 
 	peerCerts := tlsConn.ConnectionState().PeerCertificates
 	if len(peerCerts) == 0 {
@@ -141,6 +101,64 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 		})...)
 	}
 	return chainPEM, nil
+}
+
+func parseEndpointURL(endpoint string) (*url.URL, error) {
+	raw := strings.TrimSpace(endpoint)
+	if raw == "" {
+		return nil, errEndpointIsRequired
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse endpoint url: %w", err)
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return nil, errRelayEndpointMustUseHTTPS
+	}
+	return u, nil
+}
+
+func fetchChainOverHTTPS(ctx context.Context, u *url.URL) ([]byte, error) {
+	u.Path = types.PathSDKCertificateChain
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch certificate chain: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch certificate chain: unexpected status %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func dialEndpointTLS(ctx context.Context, host, port, serverName string) (*tls.Conn, error) {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	rawConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		return nil, fmt.Errorf("dial relay endpoint: %w", err)
+	}
+	tlsConn := tls.Client(rawConn, &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         serverName,
+		InsecureSkipVerify: IsLocalRelayHost(host),
+		NextProtos:         []string{"http/1.1"},
+	})
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = rawConn.Close()
+		return nil, fmt.Errorf("tls handshake with relay endpoint: %w", err)
+	}
+	return tlsConn, nil
 }
 
 func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {

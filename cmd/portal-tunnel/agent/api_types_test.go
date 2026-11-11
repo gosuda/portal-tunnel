@@ -59,9 +59,10 @@ func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
 	if err := (AgentTunnelUpdateRequest{Auth: changes}).applyAuth(&applied); err != nil {
 		t.Fatal(err)
 	}
-	desired.OIDCClientSecret = "secret"
-	if !reflect.DeepEqual(applied, desired) {
-		t.Fatalf("applied = %+v, want %+v", applied, desired)
+	wantApplied := desired
+	wantApplied.OIDCClientSecret = "secret"
+	if !reflect.DeepEqual(applied, wantApplied) {
+		t.Fatalf("applied = %+v, want %+v", applied, wantApplied)
 	}
 	if authChanges(applied, applied) != nil {
 		t.Fatal("equal settings have changes")

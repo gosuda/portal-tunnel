@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import type { ApprovalMode } from "@/hooks/useAdmin";
 
 interface ApprovalModeToggleProps {
@@ -10,7 +11,7 @@ export const ApprovalModeToggle = ({
   approvalMode,
   disabled = false,
   onApprovalModeChange,
-}: ApprovalModeToggleProps) => (
+}: ApprovalModeToggleProps): JSX.Element => (
   <div className="flex rounded-lg overflow-hidden border border-foreground/20">
     <button
       disabled={disabled}

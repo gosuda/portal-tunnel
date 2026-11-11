@@ -31,6 +31,38 @@ func getSigninPage(handler http.Handler, host string) *httptest.ResponseRecorder
 	return rec
 }
 
+func checkSigninShellStatus(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", rec.Code)
+	}
+}
+
+func checkSigninShellHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if got := rec.Header().Get("Content-Security-Policy"); got != signinContentSecurityPolicy {
+		t.Fatalf("Content-Security-Policy = %q", got)
+	}
+	for header, want := range map[string]string{
+		"Content-Type":           "text/html; charset=utf-8",
+		"Cache-Control":          "no-store",
+		"X-Content-Type-Options": "nosniff",
+	} {
+		if got := rec.Header().Get(header); got != want {
+			t.Fatalf("%s = %q; want %q", header, got, want)
+		}
+	}
+}
+
+func checkSigninPagesShareOneShellBody(t *testing.T, body string, host string, control string) {
+	t.Helper()
+	for _, want := range []string{"Protected by Portal", `id="mark"`, host, control} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("page is missing %q", want)
+		}
+	}
+}
+
 func TestSigninPagesShareOneShell(t *testing.T) {
 	t.Parallel()
 
@@ -45,27 +77,9 @@ func TestSigninPagesShareOneShell(t *testing.T) {
 		t.Run(tc.provider, func(t *testing.T) {
 			t.Parallel()
 			rec := getSigninPage(newSigninTestHandler(t, tc.provider), "app.example")
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d; want 200", rec.Code)
-			}
-			if got := rec.Header().Get("Content-Security-Policy"); got != signinContentSecurityPolicy {
-				t.Fatalf("Content-Security-Policy = %q", got)
-			}
-			for header, want := range map[string]string{
-				"Content-Type":           "text/html; charset=utf-8",
-				"Cache-Control":          "no-store",
-				"X-Content-Type-Options": "nosniff",
-			} {
-				if got := rec.Header().Get(header); got != want {
-					t.Fatalf("%s = %q; want %q", header, got, want)
-				}
-			}
-			body := rec.Body.String()
-			for _, want := range []string{"Protected by Portal", `id="mark"`, "app.example", tc.control} {
-				if !strings.Contains(body, want) {
-					t.Fatalf("page is missing %q", want)
-				}
-			}
+			checkSigninShellStatus(t, rec)
+			checkSigninShellHeaders(t, rec)
+			checkSigninPagesShareOneShellBody(t, rec.Body.String(), "app.example", tc.control)
 		})
 	}
 }

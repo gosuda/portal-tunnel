@@ -94,6 +94,14 @@ func NormalizeEVMAddress(raw string) (string, error) {
 	_, _ = hasher.Write([]byte(lowerHex))
 	hash := hasher.Sum(nil)
 
+	checksummed := checksumEVMAddress(lowerHex, hash)
+	if hexPart != lowerHex && hexPart != strings.ToUpper(hexPart) && hexPart != checksummed {
+		return "", errAddressChecksumIsInvalid
+	}
+	return "0x" + checksummed, nil
+}
+
+func checksumEVMAddress(lowerHex string, hash []byte) string {
 	var builder strings.Builder
 	builder.Grow(len(lowerHex))
 	for idx, ch := range lowerHex {
@@ -101,7 +109,6 @@ func NormalizeEVMAddress(raw string) (string, error) {
 			builder.WriteRune(ch)
 			continue
 		}
-
 		nibble := hash[idx/2]
 		if idx%2 == 0 {
 			nibble >>= 4
@@ -114,12 +121,7 @@ func NormalizeEVMAddress(raw string) (string, error) {
 		}
 		builder.WriteRune(ch)
 	}
-
-	checksummed := builder.String()
-	if hexPart != lowerHex && hexPart != strings.ToUpper(hexPart) && hexPart != checksummed {
-		return "", errAddressChecksumIsInvalid
-	}
-	return "0x" + checksummed, nil
+	return builder.String()
 }
 
 func AddressFromCompressedPublicKeyHex(rawPublicKey string) (string, error) {

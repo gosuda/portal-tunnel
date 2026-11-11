@@ -61,11 +61,8 @@ func dialQUICFrom(t *testing.T, ctx context.Context, addr, sourceIP string) *qui
 	return peer
 }
 
-func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	relay, addr := startQUICRelay(t, ctx)
-
+func dialPendingPeers(t *testing.T, ctx context.Context, addr string) []*quic.Conn {
+	t.Helper()
 	var peers []*quic.Conn
 	for source := 1; source <= 16; source++ {
 		for i := 0; i < 4; i++ {
@@ -81,17 +78,29 @@ func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
 			}
 		}
 	}
-	extra := dialQUICFrom(t, ctx, addr, "127.0.0.17")
+	return peers
+}
+
+func assertExtraConnectionClosed(t *testing.T, extra *quic.Conn) {
+	t.Helper()
 	select {
 	case <-extra.Context().Done():
 	case <-time.After(2 * time.Second):
 		t.Fatal("connection beyond pending-auth capacity remained open")
 	}
+}
+
+func assertPeersAlive(t *testing.T, peers []*quic.Conn) {
+	t.Helper()
 	for i, peer := range peers {
 		if err := peer.Context().Err(); err != nil {
 			t.Fatalf("pending connection %d closed early: %v", i, context.Cause(peer.Context()))
 		}
 	}
+}
+
+func shutdownRelayAndAssertClosed(t *testing.T, relay *portal.Server, peers []*quic.Conn) {
+	t.Helper()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer shutdownCancel()
 	if err := relay.Shutdown(shutdownCtx); err != nil {
@@ -107,6 +116,18 @@ func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
 			t.Fatalf("shutdown left pending connection %d open", i)
 		}
 	}
+}
+
+func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	relay, addr := startQUICRelay(t, ctx)
+
+	peers := dialPendingPeers(t, ctx, addr)
+	extra := dialQUICFrom(t, ctx, addr, "127.0.0.17")
+	assertExtraConnectionClosed(t, extra)
+	assertPeersAlive(t, peers)
+	shutdownRelayAndAssertClosed(t, relay, peers)
 }
 
 func TestQUICPendingAuthPerSourceBoundAndTimeoutRelease(t *testing.T) {

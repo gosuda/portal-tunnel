@@ -30,20 +30,25 @@ func NewHandler(prefix, root, index string) http.Handler {
 		}
 		defer dir.Close()
 
-		if rel != "/" {
-			served, err := serveStaticFile(w, req, dir, rel)
-			if err != nil {
-				http.NotFound(w, req)
-				return
-			}
-			if served {
-				return
-			}
+		if serveStaticSiteFile(w, req, dir, rel) {
+			return
 		}
 		if served, err := serveStaticFile(w, req, dir, "/"+index); err != nil || !served {
 			http.NotFound(w, req)
 		}
 	})
+}
+
+func serveStaticSiteFile(w http.ResponseWriter, req *http.Request, dir *os.Root, rel string) bool {
+	if rel == "/" {
+		return false
+	}
+	served, err := serveStaticFile(w, req, dir, rel)
+	if err != nil {
+		http.NotFound(w, req)
+		return true
+	}
+	return served
 }
 
 func serveStaticFile(w http.ResponseWriter, req *http.Request, dir *os.Root, rel string) (bool, error) {

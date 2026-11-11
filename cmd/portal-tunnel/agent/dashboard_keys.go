@@ -321,15 +321,9 @@ func agentDashboardKeyStep(key string) int {
 
 func (m agentDashboardModel) renderKeyBar(width int) string {
 	th := &m.theme
-	type entry struct{ hint, label string }
-	var entries []entry
-	for _, live := range m.liveBindings() {
-		if live.binding.label != "" {
-			entries = append(entries, entry{hint: th.keyHint(live.keys), label: live.binding.label})
-		}
-	}
+	entries := m.liveKeyEntries(th)
 
-	entryWidth := func(e entry) int { return lipgloss.Width(e.hint) + 1 + lipgloss.Width(e.label) }
+	entryWidth := func(e agentDashboardKeyEntry) int { return lipgloss.Width(e.hint) + 1 + lipgloss.Width(e.label) }
 	gap := lipgloss.Width(agentDashboardKeyBarGap)
 	used := 1
 	if len(entries) > 0 {
@@ -346,6 +340,18 @@ func (m agentDashboardModel) renderKeyBar(width int) string {
 		parts = append(parts, th.selected.Render(e.hint)+" "+th.text.Render(e.label))
 	}
 	return agentDashboardPadLine(" "+strings.Join(parts, agentDashboardKeyBarGap), width)
+}
+
+type agentDashboardKeyEntry struct{ hint, label string }
+
+func (m agentDashboardModel) liveKeyEntries(th *agentDashboardTheme) []agentDashboardKeyEntry {
+	var entries []agentDashboardKeyEntry
+	for _, live := range m.liveBindings() {
+		if live.binding.label != "" {
+			entries = append(entries, agentDashboardKeyEntry{hint: th.keyHint(live.keys), label: live.binding.label})
+		}
+	}
+	return entries
 }
 
 func (th *agentDashboardTheme) keyHint(keys []string) string {

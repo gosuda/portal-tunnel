@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -10,12 +11,154 @@ type TagComboboxProps = {
   onRemove: (tag: string) => void;
 };
 
+const MAX_TAG_OPTIONS = 8;
+
+function filterTagOptions(
+  availableTags: string[],
+  selectedTags: string[],
+  inputValue: string
+): string[] {
+  const query = inputValue.trim().toLowerCase();
+  const pool = availableTags.filter((tag) => !selectedTags.includes(tag));
+  if (query === "") {
+    return pool.slice(0, MAX_TAG_OPTIONS);
+  }
+  return pool.filter((tag) => tag.toLowerCase().includes(query)).slice(0, MAX_TAG_OPTIONS);
+}
+
+function moveActiveIndex(length: number, current: number, delta: number): number {
+  if (length === 0) {
+    return 0;
+  }
+  return (current + delta + length) % length;
+}
+
+function tagForCommit(
+  open: boolean,
+  options: string[],
+  activeIndex: number,
+  inputValue: string
+): string | null {
+  if (open && options[activeIndex] !== undefined) {
+    return options[activeIndex];
+  }
+  const draft = inputValue.trim();
+  return draft === "" ? null : draft;
+}
+
+function measureDropdownPanel(el: HTMLDivElement | null): React.CSSProperties | undefined {
+  if (!el) {
+    return undefined;
+  }
+  const rect = el.getBoundingClientRect();
+  return {
+    position: "absolute",
+    top: rect.bottom + window.scrollY + 4,
+    left: rect.left + window.scrollX,
+    width: rect.width,
+    zIndex: 50,
+  };
+}
+
+function commitTagSelection(tag: string, selectedTags: string[], onAdd: (tag: string) => void, setInputValue: (value: string) => void, setOpen: (open: boolean) => void): void {
+  if (!tag || selectedTags.includes(tag)) {
+    return;
+  }
+  onAdd(tag);
+  setInputValue("");
+  setOpen(false);
+}
+
+function handleComboboxKey(event: React.KeyboardEvent<HTMLInputElement>, state: { open: boolean; filtered: string[]; activeIndex: number; inputValue: string }, controls: { openDropdown: () => void; closeDropdown: () => void; moveActive: (delta: number) => void; commit: (tag: string) => void }): void {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    controls.openDropdown();
+    controls.moveActive(event.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    const tag = tagForCommit(state.open, state.filtered, state.activeIndex, state.inputValue);
+    if (tag !== null) {
+      controls.commit(tag);
+    }
+    return;
+  }
+  if (event.key === "Escape") {
+    controls.closeDropdown();
+  }
+}
+
+function SelectedTags({ selectedTags, onRemove }: { selectedTags: string[]; onRemove: (tag: string) => void }): JSX.Element {
+  return (
+    <>
+      {selectedTags.map((tag) => (
+        <Button
+          key={tag}
+          variant="secondary"
+          size="sm"
+          className="h-7 rounded-md px-3 bg-secondary text-primary text-xs"
+          onClick={() => onRemove(tag)}
+          aria-label={`Remove tag ${tag}`}
+        >
+          {tag}
+          <span className="ml-2 bg-secondary text-primary">×</span>
+        </Button>
+      ))}
+    </>
+  );
+}
+
+function TagOptionDropdown({ open, options, panelStyle, activeIndex, listId, onSelect }: {
+  open: boolean;
+  options: string[];
+  panelStyle: React.CSSProperties | undefined;
+  activeIndex: number;
+  listId: string;
+  onSelect: (tag: string) => void;
+}): React.ReactNode {
+  if (!open || options.length === 0 || !panelStyle) {
+    return null;
+  }
+  return createPortal(
+    <div
+      style={panelStyle}
+      className="rounded-md border border-border bg-background shadow-lg overflow-hidden"
+    >
+      <ul
+        id={listId}
+        role="listbox"
+        className="max-h-56 overflow-auto py-1"
+      >
+        {options.map((tag, idx) => (
+          <li key={tag} role="option" aria-selected={idx === activeIndex}>
+            <button
+              type="button"
+              className={cn(
+                "flex w-full items-center px-3 py-2 text-left text-sm transition-colors",
+                idx === activeIndex
+                  ? "bg-primary/20 text-foreground"
+                  : "hover:bg-border/60"
+              )}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onSelect(tag)}
+            >
+              {tag}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>,
+    document.body
+  );
+}
+
 export function TagCombobox({
   availableTags,
   selectedTags,
   onAdd,
   onRemove,
-}: TagComboboxProps) {
+}: TagComboboxProps): JSX.Element {
   const [inputValue, setInputValue] = useState("");
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -24,12 +167,10 @@ export function TagCombobox({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties>();
 
-  const filtered = useMemo(() => {
-    const query = inputValue.trim().toLowerCase();
-    const pool = availableTags.filter((tag) => !selectedTags.includes(tag));
-    if (!query) return pool.slice(0, 8);
-    return pool.filter((tag) => tag.toLowerCase().includes(query)).slice(0, 8);
-  }, [availableTags, selectedTags, inputValue]);
+  const filtered = useMemo(
+    () => filterTagOptions(availableTags, selectedTags, inputValue),
+    [availableTags, selectedTags, inputValue]
+  );
 
   useEffect(() => {
     setActiveIndex(0);
@@ -38,16 +179,7 @@ export function TagCombobox({
   useEffect(() => {
     if (!open) return;
     const updatePosition = () => {
-      const el = containerRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      setPanelStyle({
-        position: "absolute",
-        top: rect.bottom + window.scrollY + 4,
-        left: rect.left + window.scrollX,
-        width: rect.width,
-        zIndex: 50,
-      });
+      setPanelStyle(measureDropdownPanel(containerRef.current));
     };
     updatePosition();
     window.addEventListener("resize", updatePosition);
@@ -59,33 +191,16 @@ export function TagCombobox({
   }, [open]);
 
   const addTag = (tag: string) => {
-    if (!tag || selectedTags.includes(tag)) return;
-    onAdd(tag);
-    setInputValue("");
-    setOpen(false);
+    commitTagSelection(tag, selectedTags, onAdd, setInputValue, setOpen);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setOpen(true);
-      setActiveIndex((i) => (i + 1) % Math.max(filtered.length, 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setOpen(true);
-      setActiveIndex((i) =>
-        filtered.length === 0 ? 0 : (i - 1 + filtered.length) % filtered.length
-      );
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (open && filtered[activeIndex]) {
-        addTag(filtered[activeIndex]);
-      } else if (inputValue.trim()) {
-        addTag(inputValue.trim());
-      }
-    } else if (e.key === "Escape") {
-      setOpen(false);
-    }
+    handleComboboxKey(e, { open, filtered, activeIndex, inputValue }, {
+      openDropdown: () => setOpen(true),
+      closeDropdown: () => setOpen(false),
+      moveActive: (delta: number) => setActiveIndex((i) => moveActiveIndex(filtered.length, i, delta)),
+      commit: addTag,
+    });
   };
 
   const BLUR_CLOSE_DELAY_MS = 100;
@@ -101,19 +216,7 @@ export function TagCombobox({
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5 min-h-10">
         <div className="flex flex-1 flex-wrap items-center gap-2 overflow-hidden">
-          {selectedTags.map((tag) => (
-            <Button
-              key={tag}
-              variant="secondary"
-              size="sm"
-              className="h-7 rounded-md px-3 bg-secondary text-primary text-xs"
-              onClick={() => onRemove(tag)}
-              aria-label={`Remove tag ${tag}`}
-            >
-              {tag}
-              <span className="ml-2 bg-secondary text-primary">×</span>
-            </Button>
-          ))}
+          <SelectedTags selectedTags={selectedTags} onRemove={onRemove} />
           <input
             ref={inputRef}
             value={inputValue}
@@ -135,40 +238,14 @@ export function TagCombobox({
         </div>
       </div>
 
-      {open &&
-        filtered.length > 0 &&
-        panelStyle &&
-        createPortal(
-          <div
-            style={panelStyle}
-            className="rounded-md border border-border bg-background shadow-lg overflow-hidden"
-          >
-            <ul
-              id={listId}
-              role="listbox"
-              className="max-h-56 overflow-auto py-1"
-            >
-              {filtered.map((tag, idx) => (
-                <li key={tag} role="option" aria-selected={idx === activeIndex}>
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center px-3 py-2 text-left text-sm transition-colors",
-                      idx === activeIndex
-                        ? "bg-primary/20 text-foreground"
-                        : "hover:bg-border/60"
-                    )}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => addTag(tag)}
-                  >
-                    {tag}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>,
-          document.body
-        )}
+      <TagOptionDropdown
+        open={open}
+        options={filtered}
+        panelStyle={panelStyle}
+        activeIndex={activeIndex}
+        listId={listId}
+        onSelect={addTag}
+      />
     </div>
   );
 }

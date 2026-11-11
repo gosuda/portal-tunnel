@@ -42,6 +42,74 @@ function matchesStatus(online: boolean, status: StatusFilter): boolean {
   }
 }
 
+function countAvailableTags(servers: BaseServer[]): string[] {
+  const counts = new Map<string, number>();
+  servers.forEach((server) => {
+    server.tags.forEach((tag) => {
+      const normalizedTag = tag.trim().toLowerCase();
+      if (!normalizedTag) {
+        return;
+      }
+      counts.set(normalizedTag, (counts.get(normalizedTag) || 0) + 1);
+    });
+  });
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([tag]) => tag);
+}
+
+function matchesListTags(server: BaseServer, selectedTagSet: Set<string>): boolean {
+  if (selectedTagSet.size === 0) {
+    return true;
+  }
+  return server.tags.some((tag) => selectedTagSet.has(tag.toLowerCase().trim()));
+}
+
+function matchesListSearch(server: BaseServer, query: string): boolean {
+  if (query === "") {
+    return true;
+  }
+  return (
+    server.name.toLowerCase().includes(query) ||
+    server.description.toLowerCase().includes(query) ||
+    (server.paymentLabel || "").toLowerCase().includes(query) ||
+    server.tags.some((tag) => tag.toLowerCase().includes(query))
+  );
+}
+
+function compareServers(
+  sortValue: SortOption,
+  now: number
+): (a: BaseServer, b: BaseServer) => number {
+  switch (sortValue) {
+    case "recommended":
+      return (a, b) =>
+        (b.reputation?.up ?? 0) - (a.reputation?.up ?? 0) ||
+        a.name.localeCompare(b.name) ||
+        a.id.localeCompare(b.id);
+    case "name-asc":
+      return (a, b) => a.name.localeCompare(b.name);
+    case "name-desc":
+      return (a, b) => b.name.localeCompare(a.name);
+    case "updated":
+      return (a, b) =>
+        parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0);
+    case "duration":
+      return (a, b) =>
+        parseTimestamp(a.firstSeen, now) - parseTimestamp(b.firstSeen, now);
+    case "description":
+      return (a, b) => a.description.localeCompare(b.description);
+    case "tags":
+      return (a, b) => (a.tags[0] || "").localeCompare(b.tags[0] || "");
+    case "owner":
+      return (a, b) => a.owner.localeCompare(b.owner);
+    default:
+      return (a, b) =>
+        parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
+        a.name.localeCompare(b.name) ||
+        a.id.localeCompare(b.id);
+  }
+}
 export function useList<T extends BaseServer>({
   servers,
   additionalFilter,
@@ -50,22 +118,10 @@ export function useList<T extends BaseServer>({
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sortBy, setSortBy] = useState<SortOption>(DEFAULT_SORT);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const availableTags = useMemo(() => {
-    const counts = new Map<string, number>();
-    servers.forEach((server) => {
-      server.tags.forEach((tag) => {
-        const normalizedTag = tag.trim().toLowerCase();
-        if (!normalizedTag) {
-          return;
-        }
-        counts.set(normalizedTag, (counts.get(normalizedTag) || 0) + 1);
-      });
-    });
-
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([tag]) => tag);
-  }, [servers]);
+  const availableTags = useMemo(
+    () => countAvailableTags(servers),
+    [servers]
+  );
 
   useEffect(() => {
     const availableTagSet = new Set(availableTags);
@@ -79,72 +135,16 @@ export function useList<T extends BaseServer>({
     const query = searchQuery.trim().toLowerCase();
     const selectedTagSet = new Set(selectedTags);
     const now = Date.now();
-
-    const matchesTags = (server: T): boolean => {
-      if (selectedTagSet.size === 0) {
-        return true;
-      }
-
-      return server.tags.some((tag) => selectedTagSet.has(tag.toLowerCase().trim()));
-    };
-
-    const matchesSearch = (server: T): boolean => {
-      if (query === "") {
-        return true;
-      }
-
-      return (
-        server.name.toLowerCase().includes(query) ||
-        server.description.toLowerCase().includes(query) ||
-        (server.paymentLabel || "").toLowerCase().includes(query) ||
-        server.tags.some((tag) => tag.toLowerCase().includes(query))
-      );
-    };
-
     const filtered = servers.filter((server) => {
       const matchesAdditional = additionalFilter ? additionalFilter(server) : true;
-
       return (
-        matchesSearch(server) &&
+        matchesListSearch(server, query) &&
         matchesStatus(server.online, status) &&
-        matchesTags(server) &&
+        matchesListTags(server, selectedTagSet) &&
         matchesAdditional
       );
     });
-
-    const sortByField = (sortValue: SortOption) => {
-      switch (sortValue) {
-        case "recommended":
-          return (a: T, b: T) =>
-            (b.reputation?.up ?? 0) - (a.reputation?.up ?? 0) ||
-            a.name.localeCompare(b.name) ||
-            a.id.localeCompare(b.id);
-        case "name-asc":
-          return (a: T, b: T) => a.name.localeCompare(b.name);
-        case "name-desc":
-          return (a: T, b: T) => b.name.localeCompare(a.name);
-        case "updated":
-          return (a: T, b: T) =>
-            parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0);
-        case "duration":
-          return (a: T, b: T) =>
-            parseTimestamp(a.firstSeen, now) - parseTimestamp(b.firstSeen, now);
-        case "description":
-          return (a: T, b: T) => a.description.localeCompare(b.description);
-        case "tags":
-          return (a: T, b: T) => (a.tags[0] || "").localeCompare(b.tags[0] || "");
-        case "owner":
-          return (a: T, b: T) => a.owner.localeCompare(b.owner);
-        default:
-          return (a: T, b: T) =>
-            parseTimestamp(b.firstSeen, 0) - parseTimestamp(a.firstSeen, 0) ||
-            a.name.localeCompare(b.name) ||
-            a.id.localeCompare(b.id);
-      }
-    };
-
-    const compare = sortByField(sortBy);
-    return filtered.sort(compare);
+    return filtered.sort(compareServers(sortBy, now));
   }, [servers, searchQuery, status, sortBy, selectedTags, additionalFilter]);
 
   function handleTagToggle(tag: string): void {

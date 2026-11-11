@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 
@@ -19,7 +18,6 @@ import (
 	"github.com/gosuda/keyless_tls/keyless/t13server"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -70,20 +68,14 @@ type pinnedChain struct {
 // and wires the remote transcript signer to the relay's /v1/sign endpoint.
 // ctx controls initialization; subsequent operations use their own contexts.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
-	normalizedRelayURL, err := utils.NormalizeRelayURL(config.RelayURL)
+	normalizedRelayURL, serverName, err := resolveRelayEndpoint(config.RelayURL)
 	if err != nil {
 		return nil, err
 	}
+	return buildTenantClient(ctx, config, normalizedRelayURL, serverName)
+}
 
-	parsed, err := url.Parse(normalizedRelayURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse relay url: %w", err)
-	}
-	serverName := parsed.Hostname()
-	if serverName == "" {
-		return nil, errRelayHostnameIsRequired
-	}
-
+func buildTenantClient(ctx context.Context, config ClientConfig, normalizedRelayURL, serverName string) (*Client, error) {
 	chainPEM, err := relayChain(ctx, normalizedRelayURL, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("prepare keyless materials: %w", err)
@@ -98,7 +90,6 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		serverName:  serverName,
 		hostname:    hostname,
 	}
-
 	if client.pin, err = client.newPin(chainPEM); err != nil {
 		return nil, err
 	}
@@ -269,23 +260,4 @@ func (c *Client) Close() error {
 		}
 	})
 	return c.closeErr
-}
-
-func relayChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
-	chainPEM, err := utils.FetchEndpointCertificateChain(ctx, endpoint, serverName)
-	if err != nil {
-		return nil, fmt.Errorf("fetch signer certificate chain: %w", err)
-	}
-	if len(chainPEM) == 0 {
-		return nil, errKeylessCertificateChainIsRequired
-	}
-	return chainPEM, nil
-}
-
-func verifyCertificateHostname(certPEM []byte, hostname string) error {
-	leaf, err := utils.ParseCertificatePEM(certPEM)
-	if err != nil {
-		return err
-	}
-	return leaf.VerifyHostname(hostname)
 }
