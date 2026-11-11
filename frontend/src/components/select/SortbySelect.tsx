@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import {
   Select,
   SelectContent,
@@ -22,7 +23,7 @@ export const SortbySelect = ({
   hideFiltersOnMobile,
   allowRecommendationSort = false,
   className,
-}: SortbySelectProps) => (
+}: SortbySelectProps): JSX.Element => (
   <Select
     value={sortBy}
     onValueChange={(value) => onSortByChange(value as SortOption)}

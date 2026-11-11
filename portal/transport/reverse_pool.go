@@ -118,8 +118,8 @@ func (r *offerReservation) Cancel() {
 // It does not write a raw/TLS start frame or retain the acquired connection.
 func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
 	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 		p.mu.Lock()
 		if p.closing {
@@ -150,11 +150,18 @@ func (p *ReversePool) Acquire(ctx context.Context) (net.Conn, error) {
 		}
 		notify := p.notify
 		p.mu.Unlock()
-		select {
-		case <-ctx.Done():
+		if waitNotifyForAcquire(ctx, notify) != nil {
 			return nil, ctx.Err()
-		case <-notify:
 		}
+	}
+}
+
+func waitNotifyForAcquire(ctx context.Context, notify <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-notify:
+		return nil
 	}
 }
 
@@ -220,6 +227,15 @@ func (p *ReversePool) signalLocked() {
 	p.notify = make(chan struct{})
 }
 
+func (p *ReversePool) removeConnLocked(c *pooledConn) {
+	for i, queued := range p.ready {
+		if queued == c {
+			p.ready = append(p.ready[:i], p.ready[i+1:]...)
+			break
+		}
+	}
+}
+
 func (p *ReversePool) keepIdle(c *pooledConn) {
 	defer close(c.done)
 	if p.idleInterval <= 0 {
@@ -237,12 +253,7 @@ func (p *ReversePool) keepIdle(c *pooledConn) {
 		if c.err = WriteKeepalive(c.Conn); c.err != nil {
 			_ = c.Close()
 			p.mu.Lock()
-			for i, queued := range p.ready {
-				if queued == c {
-					p.ready = append(p.ready[:i], p.ready[i+1:]...)
-					break
-				}
-			}
+			p.removeConnLocked(c)
 			p.mu.Unlock()
 			return
 		}

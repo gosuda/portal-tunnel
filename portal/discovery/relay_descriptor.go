@@ -75,16 +75,7 @@ func SignRelayDescriptor(desc types.RelayDescriptor, authority identity.Authorit
 // canonical bytes and confirms that the recovered signing key corresponds to
 // the descriptor's Address field. It returns the verified normalized
 // descriptor on success.
-func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
-	rawSignature := strings.TrimSpace(desc.Signature)
-	if rawSignature == "" {
-		return types.RelayDescriptor{}, errRelayDescriptorIsNotSigned
-	}
-
-	normalized, err := NormalizeRelayDescriptor(desc)
-	if err != nil {
-		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: normalize: %w", err)
-	}
+func verifyDescriptorSignature(normalized types.RelayDescriptor, rawSignature string) (types.RelayDescriptor, error) {
 	signature, err := base64.StdEncoding.DecodeString(rawSignature)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: base64 decode: %w", err)
@@ -93,12 +84,10 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("canonicalize relay descriptor: %w", err)
 	}
-
 	publicKey, err := identity.RecoverSHA256Secp256k1Compact(canonical, signature)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: %w", err)
 	}
-
 	publicKeyHex := hex.EncodeToString(publicKey.SerializeCompressed())
 	derivedAddress, err := identity.AddressFromCompressedPublicKeyHex(publicKeyHex)
 	if err != nil {
@@ -111,9 +100,68 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 	return normalized, nil
 }
 
+func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
+	rawSignature := strings.TrimSpace(desc.Signature)
+	if rawSignature == "" {
+		return types.RelayDescriptor{}, errRelayDescriptorIsNotSigned
+	}
+	normalized, err := NormalizeRelayDescriptor(desc)
+	if err != nil {
+		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: normalize: %w", err)
+	}
+	return verifyDescriptorSignature(normalized, rawSignature)
+}
+
 // NormalizeRelayDescriptor validates and canonicalizes a relay descriptor:
 // trims fields, defaults the version, normalizes the API address and the
 // signer address, and rejects inconsistent or incomplete entries.
+func checkNormalizeRelayDescriptorAddrs(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
+	if desc.APIHTTPSAddr != "" {
+		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
+		if err != nil {
+			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
+		}
+		desc.APIHTTPSAddr = normalized
+		if len(desc.APIHTTPSAddr) > types.MaxRelayDescriptorURLBytes {
+			return types.RelayDescriptor{}, errAPIHTTPSAddrExceedsMaximumLength
+		}
+	}
+	if desc.Address != "" {
+		normalized, err := identity.NormalizeEVMAddress(desc.Address)
+		if err != nil {
+			return types.RelayDescriptor{}, fmt.Errorf("normalize address: %w", err)
+		}
+		desc.Address = normalized
+	}
+	return desc, nil
+}
+
+func checkNormalizeRelayDescriptorLoad(desc types.RelayDescriptor) error {
+	if desc.ActiveConnections < 0 {
+		return errActiveConnectionsIsInvalid
+	}
+	if desc.TCPBPS < 0 || math.IsNaN(desc.TCPBPS) || math.IsInf(desc.TCPBPS, 0) {
+		return errTCPBPSIsInvalid
+	}
+	return nil
+}
+
+func checkDescriptorRequired(desc types.RelayDescriptor) error {
+	switch {
+	case desc.Address == "":
+		return errAddressIsRequired
+	case desc.Version != types.DiscoveryVersion:
+		return fmt.Errorf("unsupported relay descriptor version %q", desc.Version)
+	case desc.APIHTTPSAddr == "":
+		return errAPIHTTPSAddrIsRequired
+	case desc.ExpiresAt.IsZero():
+		return errExpiresAtIsRequired
+	case desc.IssuedAt.After(desc.ExpiresAt):
+		return errIssuedAtMustBeBeforeExpiresAt
+	}
+	return nil
+}
+
 func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
 	if len(desc.APIHTTPSAddr) > types.MaxRelayDescriptorURLBytes {
 		return types.RelayDescriptor{}, errAPIHTTPSAddrExceedsMaximumLength
@@ -136,44 +184,17 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	if !desc.ExpiresAt.IsZero() {
 		desc.ExpiresAt = desc.ExpiresAt.UTC()
 	}
-
-	if desc.APIHTTPSAddr != "" {
-		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
-		if err != nil {
-			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
-		}
-		desc.APIHTTPSAddr = normalized
-		if len(desc.APIHTTPSAddr) > types.MaxRelayDescriptorURLBytes {
-			return types.RelayDescriptor{}, errAPIHTTPSAddrExceedsMaximumLength
-		}
+	addrs, err := checkNormalizeRelayDescriptorAddrs(desc)
+	if err != nil {
+		return types.RelayDescriptor{}, err
 	}
-	if desc.Address != "" {
-		normalized, err := identity.NormalizeEVMAddress(desc.Address)
-		if err != nil {
-			return types.RelayDescriptor{}, fmt.Errorf("normalize address: %w", err)
-		}
-		desc.Address = normalized
+	desc = addrs
+	if err := checkNormalizeRelayDescriptorLoad(desc); err != nil {
+		return types.RelayDescriptor{}, err
 	}
-	if desc.ActiveConnections < 0 {
-		return types.RelayDescriptor{}, errActiveConnectionsIsInvalid
+	if err := checkDescriptorRequired(desc); err != nil {
+		return types.RelayDescriptor{}, err
 	}
-	if desc.TCPBPS < 0 || math.IsNaN(desc.TCPBPS) || math.IsInf(desc.TCPBPS, 0) {
-		return types.RelayDescriptor{}, errTCPBPSIsInvalid
-	}
-
-	switch {
-	case desc.Address == "":
-		return types.RelayDescriptor{}, errAddressIsRequired
-	case desc.Version != types.DiscoveryVersion:
-		return types.RelayDescriptor{}, fmt.Errorf("unsupported relay descriptor version %q", desc.Version)
-	case desc.APIHTTPSAddr == "":
-		return types.RelayDescriptor{}, errAPIHTTPSAddrIsRequired
-	case desc.ExpiresAt.IsZero():
-		return types.RelayDescriptor{}, errExpiresAtIsRequired
-	case desc.IssuedAt.After(desc.ExpiresAt):
-		return types.RelayDescriptor{}, errIssuedAtMustBeBeforeExpiresAt
-	}
-
 	return desc, nil
 }
 

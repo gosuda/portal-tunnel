@@ -1,4 +1,4 @@
-export function copyCode(node: HTMLElement) {
+export function copyCode(node: HTMLElement): { update: () => void; destroy: () => void } {
 	const wrappers: HTMLDivElement[] = [];
 
 	function addButtons() {

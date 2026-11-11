@@ -1,12 +1,14 @@
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useMemo, useState, type ChangeEvent, type Dispatch, type SetStateAction } from "react";
 import { useCopy } from "@/hooks/useCopy";
 import { readCurrentOrigin } from "@/lib/origin";
 import { normalizeExposeName } from "@/lib/exposeName";
-import { classifyShareInput } from "@/lib/shareLink";
+import { classifyShareInput, type ShareKind } from "@/lib/shareLink";
 import {
   DEFAULT_TUNNEL_AUTH,
   buildTunnelCommand,
   validateTunnelAuth,
+  type TunnelAuthIssue,
+  type TunnelAuthOptions,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
@@ -21,7 +23,7 @@ interface TunnelCommandExtras {
   os?: TunnelCommandOS;
 }
 
-export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
+export function useTunnelCommand(extras: TunnelCommandExtras = {}): { target: string; setTarget: Dispatch<SetStateAction<string>>; name: string; copied: boolean; effectiveName: string; auth: TunnelAuthOptions; setAuth: Dispatch<SetStateAction<TunnelAuthOptions>>; authIssues: TunnelAuthIssue[]; shareKind: ShareKind; installBlock: string; runBlock: string; handleCopy: () => Promise<void> | undefined; handleNameChange: (event: ChangeEvent<HTMLInputElement>) => void } {
   const currentOrigin = useMemo(() => readCurrentOrigin(), []);
 
   const [target, setTarget] = useState("");

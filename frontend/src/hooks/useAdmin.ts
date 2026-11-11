@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { useList } from "@/hooks/useList";
+import { useList, type UseListReturn } from "@/hooks/useList";
 import { leaseToServer, type BaseServer } from "@/lib/server";
 import type { BanFilter } from "@/types/filters";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
@@ -124,8 +124,206 @@ async function loadPolicyState(): Promise<PolicyViewState> {
     settings: normalizePolicySettings(state?.policy),
   };
 }
+interface UseAdminResult extends UseListReturn<AdminServer> {
+  servers: AdminServer[];
+  banFilter: BanFilter;
+  approvalMode: ApprovalMode;
+  udpSettings: PortSettings;
+  tcpPortSettings: PortSettings;
+  policySaving: boolean;
+  loading: boolean;
+  error: string;
+  handleBanFilterChange: (value: BanFilter) => void;
+  handleBanStatus: (identityKey: string, isBan: boolean) => Promise<void>;
+  handleBPSChange: (identityKey: string, bps: number | null) => Promise<void>;
+  handleApprovalModeChange: (mode: ApprovalMode) => Promise<void>;
+  handleUDPSettingsChange: (settings: PortSettings) => Promise<void>;
+  handleTCPPortSettingsChange: (settings: PortSettings) => Promise<void>;
+  handleApproveStatus: (identityKey: string, approve: boolean) => Promise<void>;
+  handleDenyStatus: (identityKey: string, deny: boolean) => Promise<void>;
+  handleBulkApprove: (identityKeys: string[]) => Promise<void>;
+  handleBulkDeny: (identityKeys: string[]) => Promise<void>;
+  handleBulkBan: (identityKeys: string[]) => Promise<void>;
+}
 
-export function useAdmin(enabled = true) {
+async function refreshPolicyView(
+  view: { showLoading: boolean; apply: (state: PolicyViewState) => void },
+  isCurrent: () => boolean,
+  setError: (message: string) => void,
+  setLoading: (loading: boolean) => void
+): Promise<void> {
+  setError("");
+  if (view.showLoading) {
+    setLoading(true);
+  }
+  try {
+    const state = await loadPolicyState();
+    if (isCurrent()) {
+      view.apply(state);
+    }
+  } catch (err: unknown) {
+    if (isCurrent()) {
+      setError(toAdminErrorMessage(err, "Failed to load admin data"));
+    }
+  } finally {
+    if (isCurrent()) {
+      setLoading(false);
+    }
+  }
+}
+
+function toBulkLeasePolicy(identityKey: string, action: LeaseAction): LeasePolicyUpdate {
+  if (action === "approve") {
+    return { identity_key: identityKey, is_approved: true };
+  }
+  if (action === "deny") {
+    return { identity_key: identityKey, is_denied: true };
+  }
+  return { identity_key: identityKey, is_banned: true };
+}
+
+function firstRejectedResult(
+  results: PromiseSettledResult<unknown>[]
+): PromiseRejectedResult | undefined {
+  return results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected"
+  );
+}
+
+function withServerBPS(rows: PolicyLease[], identityKey: string, bps: number): PolicyLease[] {
+  return rows.map((row) =>
+    row.identity_key.trim() === identityKey ? { ...row, bps } : row
+  );
+}
+
+async function persistServerBPS(
+  identityKey: string,
+  normalizedBPS: number,
+  updateLeasePolicy: (identityKey: string, policy: Omit<LeasePolicyUpdate, "identity_key">) => Promise<void>
+): Promise<void> {
+  if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
+    await updateLeasePolicy(identityKey, { bps: 0 });
+    return;
+  }
+  await updateLeasePolicy(identityKey, { bps: normalizedBPS });
+}
+
+function reportAdminActionError(err: unknown, setError: (message: string) => void): void {
+  const message = toAdminErrorMessage(err, "Action failed");
+  console.error("admin action failed", err);
+  setError(message);
+}
+
+async function savePolicySettings(
+  current: PolicySettings,
+  overrides: Partial<PolicySettings>,
+  setPolicySettings: (settings: PolicySettings) => void
+): Promise<void> {
+  const response = await apiClient.post<PolicySettings>(RELAY_API_PATHS.policy.root, {
+    ...current,
+    ...overrides,
+  });
+  setPolicySettings(normalizePolicySettings(response));
+}
+
+function matchesBanFilter(server: AdminServer, banFilter: BanFilter): boolean {
+  switch (banFilter) {
+    case "banned":
+      return server.isBanned;
+    case "active":
+      return !server.isBanned;
+    default:
+      return true;
+  }
+}
+
+function applyEnabledState(
+  enabled: boolean,
+  reload: (showLoading: boolean) => Promise<void>,
+  setError: (message: string) => void,
+  setLoading: (loading: boolean) => void
+): void {
+  if (enabled) {
+    void reload(true);
+  } else {
+    setError("");
+    setLoading(false);
+  }
+}
+
+function normalizeBulkLeaseKeys(identityKeys: string[]): string[] {
+  return [...new Set(identityKeys.filter((identityKey) => identityKey.length > 0))];
+}
+
+function throwOnBulkLeaseFailure(results: PromiseSettledResult<unknown>[]): void {
+  const failed = firstRejectedResult(results);
+  if (!failed) {
+    return;
+  }
+  throw failed.reason instanceof Error
+    ? failed.reason
+    : new Error(`bulk lease action failed: ${String(failed.reason)}`);
+}
+
+async function executeBulkLeaseAction(identityKeys: string[], action: LeaseAction, post: (identityKey: string, policy: LeasePolicyUpdate) => Promise<unknown>): Promise<void> {
+  const normalizedIdentityKeys = normalizeBulkLeaseKeys(identityKeys);
+  if (normalizedIdentityKeys.length === 0) {
+    throw new Error("No valid leases selected");
+  }
+  const results = await Promise.allSettled(
+    normalizedIdentityKeys.map((identityKey) =>
+      post(identityKey, toBulkLeasePolicy(identityKey, action))
+    )
+  );
+  throwOnBulkLeaseFailure(results);
+}
+
+function normalizeBPS(bps: number): number {
+  return Math.max(0, Math.trunc(bps));
+}
+
+function findPreviousBPS(rows: PolicyLease[], identityKey: string): number {
+  return rows.find((row) => row.identity_key.trim() === identityKey)?.bps ?? 0;
+}
+
+async function applyServerBPSChange(identityKey: string, bps: number | null, deps: { serverData: PolicyLease[]; setServerData: (update: (prev: PolicyLease[]) => PolicyLease[]) => void; runAdminAction: (action: () => Promise<void>) => Promise<void>; updateLeasePolicy: (identityKey: string, policy: Omit<LeasePolicyUpdate, "identity_key">) => Promise<void> }): Promise<void> {
+  if (!identityKey) {
+    throw new Error("Missing lease identity");
+  }
+  if (bps === null) {
+    await deps.runAdminAction(() => deps.updateLeasePolicy(identityKey, { reset_bps: true }));
+    return;
+  }
+  const normalizedBPS = normalizeBPS(bps);
+  const previousBPS = findPreviousBPS(deps.serverData, identityKey);
+  deps.setServerData((prev) => withServerBPS(prev, identityKey, normalizedBPS));
+  try {
+    await deps.runAdminAction(() =>
+      persistServerBPS(identityKey, normalizedBPS, deps.updateLeasePolicy)
+    );
+  } catch (err) {
+    deps.setServerData((prev) => withServerBPS(prev, identityKey, previousBPS));
+    throw err;
+  }
+}
+
+async function saveGuardedPolicySettings(current: PolicySettings, overrides: Partial<PolicySettings>, controls: { pending: { current: boolean }; setPolicySaving: (value: boolean) => void; runAdminAction: (action: () => Promise<void>) => Promise<void>; setPolicySettings: (settings: PolicySettings) => void }): Promise<void> {
+  if (controls.pending.current) {
+    return;
+  }
+  controls.pending.current = true;
+  controls.setPolicySaving(true);
+  try {
+    await controls.runAdminAction(() =>
+      savePolicySettings(current, overrides, controls.setPolicySettings)
+    );
+  } finally {
+    controls.pending.current = false;
+    controls.setPolicySaving(false);
+  }
+}
+
+export function useAdmin(enabled: boolean = true): UseAdminResult {
   const [serverData, setServerData] = useState<PolicyLease[]>([]);
   const [policySettings, setPolicySettings] = useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
   const policyUpdatePending = useRef(false);
@@ -144,33 +342,12 @@ export function useAdmin(enabled = true) {
 
   const reload = async (showLoading: boolean) => {
     const generation = ++loadGeneration.current;
-    setError("");
-    if (showLoading) {
-      setLoading(true);
-    }
-    try {
-      const state = await loadPolicyState();
-      if (generation === loadGeneration.current) {
-        applyPolicyState(state);
-      }
-    } catch (err: unknown) {
-      if (generation === loadGeneration.current) {
-        setError(toAdminErrorMessage(err, "Failed to load admin data"));
-      }
-    } finally {
-      if (generation === loadGeneration.current) {
-        setLoading(false);
-      }
-    }
+    const isCurrent = () => generation === loadGeneration.current;
+    await refreshPolicyView({ showLoading, apply: applyPolicyState }, isCurrent, setError, setLoading);
   };
 
   const loadOnEnable = useEffectEvent(() => {
-    if (enabled) {
-      void reload(true);
-    } else {
-      setError("");
-      setLoading(false);
-    }
+    applyEnabledState(enabled, reload, setError, setLoading);
   });
 
   useEffect(() => {
@@ -184,16 +361,8 @@ export function useAdmin(enabled = true) {
     return serverData.map((row) => toAdminServer(row));
   }, [serverData]);
 
-  const additionalFilter = (server: AdminServer) => {
-    switch (banFilter) {
-      case "banned":
-        return server.isBanned;
-      case "active":
-        return !server.isBanned;
-      default:
-        return true;
-    }
-  };
+  const additionalFilter = (server: AdminServer) =>
+    matchesBanFilter(server, banFilter);
 
   const listState = useList({
     servers,
@@ -206,29 +375,13 @@ export function useAdmin(enabled = true) {
       await action();
       await reload(false);
     } catch (err: unknown) {
-      const message = toAdminErrorMessage(err, "Action failed");
-      console.error(err);
-      setError(message);
+      reportAdminActionError(err, setError);
       throw err;
     }
   };
 
   const updatePolicySettings = async (overrides: Partial<PolicySettings>) => {
-    if (policyUpdatePending.current) return;
-    policyUpdatePending.current = true;
-    setPolicySaving(true);
-    try {
-      await runAdminAction(async () => {
-        const response = await apiClient.post<PolicySettings>(RELAY_API_PATHS.policy.root, {
-          ...policySettings,
-          ...overrides,
-        });
-        setPolicySettings(normalizePolicySettings(response));
-      });
-    } finally {
-      policyUpdatePending.current = false;
-      setPolicySaving(false);
-    }
+    await saveGuardedPolicySettings(policySettings, overrides, { pending: policyUpdatePending, setPolicySaving, runAdminAction, setPolicySettings });
   };
 
   const updateLeasePolicy = async (
@@ -252,45 +405,7 @@ export function useAdmin(enabled = true) {
     runAdminAction(() => updateLeasePolicy(identityKey, { is_banned: isBan }));
 
   const handleBPSChange = async (identityKey: string, bps: number | null) => {
-    if (!identityKey) {
-      throw new Error("Missing lease identity");
-    }
-
-    if (bps === null) {
-      await runAdminAction(() => updateLeasePolicy(identityKey, { reset_bps: true }));
-      return;
-    }
-
-    const normalizedBPS = Math.max(0, Math.trunc(bps));
-    const previousBPS =
-      serverData.find((row) => row.identity_key.trim() === identityKey)?.bps ?? 0;
-
-    setServerData((prev) =>
-      prev.map((row) =>
-        row.identity_key.trim() === identityKey
-          ? { ...row, bps: normalizedBPS }
-          : row
-      )
-    );
-
-    try {
-      await runAdminAction(async () => {
-        if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
-          await updateLeasePolicy(identityKey, { bps: 0 });
-          return;
-        }
-        await updateLeasePolicy(identityKey, { bps: normalizedBPS });
-      });
-    } catch (err) {
-      setServerData((prev) =>
-        prev.map((row) =>
-          row.identity_key.trim() === identityKey
-            ? { ...row, bps: previousBPS }
-            : row
-        )
-      );
-      throw err;
-    }
+    await applyServerBPSChange(identityKey, bps, { serverData, setServerData, runAdminAction, updateLeasePolicy });
   };
 
   const handleApprovalModeChange = (mode: ApprovalMode) =>
@@ -312,36 +427,9 @@ export function useAdmin(enabled = true) {
     runAdminAction(() => updateLeasePolicy(identityKey, { is_denied: deny }));
 
   const runBulkLeaseAction = async (identityKeys: string[], action: LeaseAction) => {
-    const normalizedIdentityKeys = [...new Set(
-      identityKeys.filter((identityKey) => identityKey.length > 0)
-    )];
-    if (normalizedIdentityKeys.length === 0) {
-      throw new Error("No valid leases selected");
-    }
-
-    const results = await Promise.allSettled(
-      normalizedIdentityKeys.map((identityKey) => {
-        const policy: LeasePolicyUpdate =
-          action === "approve"
-            ? { identity_key: identityKey, is_approved: true }
-            : action === "deny"
-              ? { identity_key: identityKey, is_denied: true }
-              : { identity_key: identityKey, is_banned: true };
-        return apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, policy);
-      })
+    await executeBulkLeaseAction(identityKeys, action, (_identityKey, policy) =>
+      apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, policy)
     );
-
-    const failed = results.find(
-      (
-        result
-      ): result is PromiseRejectedResult =>
-        result.status === "rejected"
-    );
-    if (failed) {
-      throw failed.reason instanceof Error
-        ? failed.reason
-        : new Error(String(failed.reason));
-    }
   };
 
   const handleBulkAction = (identityKeys: string[], action: LeaseAction) =>

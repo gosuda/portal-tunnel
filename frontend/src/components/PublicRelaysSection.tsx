@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { useMemo, useState } from "react";
 import { Check, Copy, ExternalLink, Globe, Search } from "lucide-react";
 import { relayReleaseLabel, type KnownRelay, type RelayReleases } from "@/lib/relays";
@@ -13,33 +14,82 @@ export interface PublicRelaysSectionProps {
   onCopyURL: (key: string, text: string) => void | Promise<void>;
 }
 
+function matchesRelaySearch(
+  relay: KnownRelay,
+  releases: RelayReleases,
+  query: string
+): boolean {
+  const label =
+    relayReleaseLabel(releases.versions, relay, releases.discovery) ?? "";
+  return (
+    relay.relayURL.toLowerCase().includes(query) ||
+    label.toLowerCase().includes(query)
+  );
+}
+
+function filterPublicRelays(
+  knownRelays: KnownRelay[],
+  releases: RelayReleases,
+  searchQuery: string
+): KnownRelay[] {
+  const query = searchQuery.trim().toLowerCase();
+  if (query === "") {
+    return knownRelays;
+  }
+  return knownRelays.filter((relay) => matchesRelaySearch(relay, releases, query));
+}
+
+function PublicRelayCard({ relay, releases, copiedURL, onCopyURL }: {
+  relay: KnownRelay;
+  releases: RelayReleases;
+  copiedURL: string | null;
+  onCopyURL: (key: string, text: string) => void | Promise<void>;
+}): JSX.Element {
+  const releaseLabel = relayReleaseLabel(releases.versions, relay, releases.discovery);
+  const isCopied = copiedURL === relay.relayURL;
+  return (
+    <article className="min-w-0 rounded-xl border border-border bg-card/85 p-5 backdrop-blur-sm">
+      <Globe className="mb-4 size-8 text-muted-foreground" />
+      <a
+        href={relay.relayURL}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={relay.relayURL}
+        className="block truncate text-sm font-semibold hover:underline"
+      >
+        {relay.relayURL}
+      </a>
+      <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>
+          {relay.isCurrent ? "Current relay" : "Public relay"}
+          {releaseLabel ? ` / ${releaseLabel}` : ""}
+        </span>
+        <button
+          type="button"
+          onClick={() => void onCopyURL(relay.relayURL, relay.relayURL)}
+          aria-label={isCopied ? `Copied ${relay.relayURL}` : `Copy ${relay.relayURL}`}
+          className="flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-secondary"
+        >
+          {isCopied ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}
+        </button>
+      </div>
+    </article>
+  );
+}
+
 export function PublicRelaysSection({
   knownRelays,
   relayReleases,
   loading,
   copiedURL,
   onCopyURL,
-}: PublicRelaysSectionProps) {
+}: PublicRelaysSectionProps): JSX.Element {
   const [searchQuery, setSearchQuery] = useState("");
 
-  const filteredRelays = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) {
-      return knownRelays;
-    }
-    return knownRelays.filter((relay) => {
-      const label =
-        relayReleaseLabel(
-          relayReleases.versions,
-          relay,
-          relayReleases.discovery
-        ) ?? "";
-      return (
-        relay.relayURL.toLowerCase().includes(q) ||
-        label.toLowerCase().includes(q)
-      );
-    });
-  }, [knownRelays, relayReleases, searchQuery]);
+  const filteredRelays = useMemo(
+    () => filterPublicRelays(knownRelays, relayReleases, searchQuery),
+    [knownRelays, relayReleases, searchQuery]
+  );
 
   return (
     <section id="public-relays" aria-labelledby="public-relays-title" className="px-4 py-6 lg:px-8">
@@ -75,38 +125,15 @@ export function PublicRelaysSection({
         <p className="py-12 text-sm text-muted-foreground">No relays found.</p>
       ) : (
         <div className="mt-6 grid gap-4 min-[700px]:grid-cols-2 min-[1300px]:grid-cols-3">
-          {filteredRelays.map((relay) => {
-            const releaseLabel = relayReleaseLabel(relayReleases.versions, relay, relayReleases.discovery);
-            const isCopied = copiedURL === relay.relayURL;
-            return (
-              <article key={relay.relayURL} className="min-w-0 rounded-xl border border-border bg-card/85 p-5 backdrop-blur-sm">
-                <Globe className="mb-4 size-8 text-muted-foreground" />
-                <a
-                  href={relay.relayURL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={relay.relayURL}
-                  className="block truncate text-sm font-semibold hover:underline"
-                >
-                  {relay.relayURL}
-                </a>
-                <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>
-                    {relay.isCurrent ? "Current relay" : "Public relay"}
-                    {releaseLabel ? ` / ${releaseLabel}` : ""}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void onCopyURL(relay.relayURL, relay.relayURL)}
-                    aria-label={isCopied ? `Copied ${relay.relayURL}` : `Copy ${relay.relayURL}`}
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-secondary"
-                  >
-                    {isCopied ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}
-                  </button>
-                </div>
-              </article>
-            );
-          })}
+          {filteredRelays.map((relay) => (
+            <PublicRelayCard
+              key={relay.relayURL}
+              relay={relay}
+              releases={relayReleases}
+              copiedURL={copiedURL}
+              onCopyURL={onCopyURL}
+            />
+          ))}
         </div>
       )}
     </section>

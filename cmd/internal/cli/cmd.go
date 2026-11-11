@@ -29,34 +29,21 @@ func RunCommands(
 	usage func(io.Writer),
 	commands map[string]CommandFunc,
 ) error {
-	defaultCommand, hasDefaultCommand := commands[""]
 	if len(args) == 0 {
-		if hasDefaultCommand {
-			return defaultCommand(nil)
-		}
-		if usage != nil {
-			usage(stdout)
-		}
-		return nil
+		return dispatchRunCommandsNoArgs(stdout, usage, commands)
 	}
 
 	command := strings.TrimSpace(args[0])
 	switch {
 	case command == "help":
-		if runCommand, ok := commands[command]; ok {
-			return runCommand(args[1:])
-		}
-		if usage != nil {
-			usage(stdout)
-		}
-		return nil
+		return dispatchRunCommandsHelp(args[1:], stdout, usage, commands)
 	case command == "-h" || command == "--help":
 		if usage != nil {
 			usage(stdout)
 		}
 		return nil
 	case command == "" || strings.HasPrefix(command, "-"):
-		if hasDefaultCommand {
+		if defaultCommand, ok := commands[""]; ok {
 			return defaultCommand(args)
 		}
 	}
@@ -69,6 +56,26 @@ func RunCommands(
 		return fmt.Errorf("unknown command %q", command)
 	}
 	return runCommand(args[1:])
+}
+
+func dispatchRunCommandsHelp(args []string, stdout io.Writer, usage func(io.Writer), commands map[string]CommandFunc) error {
+	if runCommand, ok := commands["help"]; ok {
+		return runCommand(args)
+	}
+	if usage != nil {
+		usage(stdout)
+	}
+	return nil
+}
+
+func dispatchRunCommandsNoArgs(stdout io.Writer, usage func(io.Writer), commands map[string]CommandFunc) error {
+	if defaultCommand, ok := commands[""]; ok {
+		return defaultCommand(nil)
+	}
+	if usage != nil {
+		usage(stdout)
+	}
+	return nil
 }
 
 func NewFlagSet(name string, usage func(io.Writer)) *flag.FlagSet {
@@ -106,11 +113,29 @@ func ParseFlagSet(fs *flag.FlagSet, args []string, usage func(io.Writer)) error 
 	return nil
 }
 
+func appendFlagOperand(flagDef *flag.Flag, args []string, i int, flags []string) ([]string, int) {
+	boolValue, ok := flagDef.Value.(boolFlagValue)
+	if ok && boolValue.IsBoolFlag() {
+		if i+1 >= len(args) {
+			return flags, i
+		}
+		next := strings.TrimSpace(args[i+1])
+		if _, err := strconv.ParseBool(next); err == nil {
+			flags[len(flags)-1] = args[i] + "=" + next
+			return flags, i + 1
+		}
+		return flags, i
+	}
+	if i+1 >= len(args) {
+		return flags, i
+	}
+	return append(flags, args[i+1]), i + 1
+}
+
 func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 	if fs == nil || len(args) < 2 {
 		return args
 	}
-
 	flags := make([]string, 0, len(args))
 	positionals := make([]string, 0, len(args))
 
@@ -125,43 +150,35 @@ func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
 			flags = append(flags, "--")
 			break
 		}
-
-		name := strings.TrimLeft(strings.TrimSpace(arg), "-")
-		before, _, hasInlineValue := strings.Cut(name, "=")
-		if hasInlineValue {
-			name = strings.TrimSpace(before)
-		}
-		if name == "" {
+		updated, next, handled := consumeSingleFlagArg(fs, args, i, flags)
+		flags, i = updated, next
+		if !handled {
 			positionals = append(positionals, args[i])
-			continue
 		}
-
-		flags = append(flags, args[i])
-
-		flagDef := fs.Lookup(name)
-		if hasInlineValue || flagDef == nil {
-			continue
-		}
-		boolValue, ok := flagDef.Value.(boolFlagValue)
-		if ok && boolValue.IsBoolFlag() {
-			if i+1 >= len(args) {
-				continue
-			}
-			next := strings.TrimSpace(args[i+1])
-			if _, err := strconv.ParseBool(next); err == nil {
-				flags[len(flags)-1] = args[i] + "=" + next
-				i++
-			}
-			continue
-		}
-		if i+1 >= len(args) {
-			continue
-		}
-		i++
-		flags = append(flags, args[i])
 	}
 
 	return append(flags, positionals...)
+}
+
+func consumeSingleFlagArg(fs *flag.FlagSet, args []string, i int, flags []string) ([]string, int, bool) {
+	name := strings.TrimLeft(strings.TrimSpace(args[i]), "-")
+	before, _, hasInlineValue := strings.Cut(name, "=")
+	if hasInlineValue {
+		name = strings.TrimSpace(before)
+	}
+	if name == "" {
+		return flags, i, false
+	}
+	flags = append(flags, args[i])
+	if hasInlineValue {
+		return flags, i, true
+	}
+	flagDef := fs.Lookup(name)
+	if flagDef == nil {
+		return flags, i, true
+	}
+	updated, next := appendFlagOperand(flagDef, args, i, flags)
+	return updated, next, true
 }
 
 func OptionalSingleArg(args []string, name string) (string, error) {

@@ -67,6 +67,10 @@ func LoadOrCreate(name, path, rawJSON string) (types.Identity, error) {
 	if path == "" {
 		return generated, nil
 	}
+	return persistClientIdentity(path, generated)
+}
+
+func persistClientIdentity(path string, generated types.Identity) (types.Identity, error) {
 	data, err := Marshal(generated)
 	if err != nil {
 		return types.Identity{}, err

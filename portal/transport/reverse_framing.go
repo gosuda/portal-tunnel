@@ -25,34 +25,60 @@ func ReadStart(ctx context.Context, conn net.Conn, timeout time.Duration) (bindi
 			_ = conn.Close()
 		}
 	}()
-	var marker [1]byte
+	marker, markerErr := nextReverseMarker(ctx, conn, timeout)
+	if markerErr != nil {
+		return nil, markerErr
+	}
+	startBinding, bindingErr := decodeReverseBinding(conn, marker)
+	if bindingErr != nil {
+		return nil, bindingErr
+	}
+	if deadlineErr := conn.SetReadDeadline(time.Time{}); deadlineErr != nil {
+		return nil, deadlineErr
+	}
+	return startBinding, nil
+}
+
+func nextReverseMarker(ctx context.Context, conn net.Conn, timeout time.Duration) (byte, error) {
 	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		marker, err := readReverseMarker(ctx, conn, timeout)
+		if err != nil {
+			return 0, err
 		}
-		if err := conn.SetReadDeadline(time.Now().Add(2 * timeout)); err != nil {
-			return nil, err
-		}
-		if _, err := io.ReadFull(conn, marker[:]); err != nil {
-			return nil, err
-		}
-		switch marker[0] {
-		case types.ReverseMarkerKeepalive:
+		if marker == types.ReverseMarkerKeepalive {
 			continue
-		case types.ReverseMarkerTLSStart:
-			binding = make([]byte, types.TLSBindingSize)
-			if _, err := io.ReadFull(conn, binding); err != nil {
-				return nil, err
-			}
-		case types.ReverseMarkerRawStart:
-		default:
-			return nil, fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])
 		}
-		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return marker, nil
+	}
+}
+
+func decodeReverseBinding(conn net.Conn, marker byte) ([]byte, error) {
+	switch marker {
+	case types.ReverseMarkerTLSStart:
+		binding := make([]byte, types.TLSBindingSize)
+		if _, err := io.ReadFull(conn, binding); err != nil {
 			return nil, err
 		}
 		return binding, nil
+	case types.ReverseMarkerRawStart:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unexpected reverse marker: 0x%02x", marker)
 	}
+}
+
+func readReverseMarker(ctx context.Context, conn net.Conn, timeout time.Duration) (byte, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * timeout)); err != nil {
+		return 0, err
+	}
+	var marker [1]byte
+	if _, err := io.ReadFull(conn, marker[:]); err != nil {
+		return 0, err
+	}
+	return marker[0], nil
 }
 
 func WriteTLSStart(conn net.Conn, binding [types.TLSBindingSize]byte) error {

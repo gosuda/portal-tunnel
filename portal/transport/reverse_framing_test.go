@@ -15,6 +15,23 @@ func TestReadRawStartSkipsKeepaliveAndPreservesPayload(t *testing.T) {
 	relay, client := net.Pipe()
 	defer relay.Close()
 	defer client.Close()
+	written := relayRawSequence(t, relay)
+	binding, err := ReadStart(context.Background(), client, time.Second)
+	if err != nil || binding != nil {
+		t.Fatalf("raw start = %x, %v", binding, err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	var payload [3]byte
+	if _, err := io.ReadFull(client, payload[:]); err != nil || string(payload[:]) != "raw" {
+		t.Fatalf("raw payload = %q, %v", payload, err)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func relayRawSequence(t *testing.T, relay net.Conn) chan error {
+	t.Helper()
 	written := make(chan error, 1)
 	go func() {
 		if err := WriteKeepalive(relay); err != nil {
@@ -28,18 +45,7 @@ func TestReadRawStartSkipsKeepaliveAndPreservesPayload(t *testing.T) {
 		_, err := relay.Write([]byte("raw"))
 		written <- err
 	}()
-	binding, err := ReadStart(context.Background(), client, time.Second)
-	if err != nil || binding != nil {
-		t.Fatalf("raw start = %x, %v", binding, err)
-	}
-	_ = client.SetReadDeadline(time.Now().Add(time.Second))
-	var payload [3]byte
-	if _, err := io.ReadFull(client, payload[:]); err != nil || string(payload[:]) != "raw" {
-		t.Fatalf("raw payload = %q, %v", payload, err)
-	}
-	if err := <-written; err != nil {
-		t.Fatal(err)
-	}
+	return written
 }
 
 func TestReadStartRejectsMalformedFraming(t *testing.T) {

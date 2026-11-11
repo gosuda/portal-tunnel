@@ -173,17 +173,7 @@ func (m agentDashboardModel) renderSettingsSection(width, rows int) agentDashboa
 		pane.addStyled(width, th.muted, "select a tunnel")
 		return pane
 	}
-
-	applyLabel := "Apply"
-	settingsChanged := m.settingsChanged(tunnel)
-	if m.settingsEditTunnelID == tunnel.ID && !settingsChanged {
-		applyLabel = "Applied"
-	}
-	pane.addButtons(th, width,
-		agentDashboardButton{label: applyLabel, action: agentDashboardActionApplySettings, disabled: !settingsChanged},
-		agentDashboardButton{label: "Access", action: agentDashboardActionOpenAccess},
-	)
-
+	pane.addView(m.settingsActionBar(th, width, tunnel))
 	var body agentDashboardView
 	m.renderSettingsInputRows(&body, width, tunnel)
 	focus, bodyRows := 0, 0
@@ -195,6 +185,20 @@ func (m agentDashboardModel) renderSettingsSection(width, rows int) agentDashboa
 	}
 	pane.addView(body.window(focus, bodyRows))
 	return pane
+}
+
+func (m agentDashboardModel) settingsActionBar(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) agentDashboardView {
+	changed := m.settingsChanged(tunnel)
+	applyLabel := "Apply"
+	if m.settingsEditTunnelID == tunnel.ID && !changed {
+		applyLabel = "Applied"
+	}
+	var bar agentDashboardView
+	bar.addButtons(th, width,
+		agentDashboardButton{label: applyLabel, action: agentDashboardActionApplySettings, disabled: !changed},
+		agentDashboardButton{label: "Access", action: agentDashboardActionOpenAccess},
+	)
+	return bar
 }
 
 func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, width int, tunnel AgentTunnelStatus) {
@@ -217,7 +221,10 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 	}
 	pane.addMeta(th, width, agentDashboardDetailLabelWidth, 0, "Discovery", strconv.FormatBool(tunnel.Discovery))
 	pane.addAccessSummary(th, width, tunnel)
+	addSettingsPayments(pane, th, width, tunnel)
+}
 
+func addSettingsPayments(pane *agentDashboardView, th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) {
 	paidRouteCount := 0
 	for _, route := range tunnel.HTTPRoutes {
 		if strings.TrimSpace(route.Amount) != "" {
@@ -243,21 +250,25 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 		pane.addStyled(width, th.muted, "no routed HTTP paths")
 		return
 	}
-
-	shown := 0
-	for _, route := range tunnel.HTTPRoutes {
-		if shown >= 4 {
-			break
-		}
-		pane.addStyled(width, th.text, agentDashboardHTTPRouteSummary(route))
-		shown++
-	}
+	shown := addSettingsRouteRows(pane, th, width, tunnel.HTTPRoutes)
 	if len(tunnel.HTTPRoutes) > shown {
 		pane.addStyled(width, th.muted, fmt.Sprintf("+%d more routes", len(tunnel.HTTPRoutes)-shown))
 	}
 	if paidRouteCount == 0 {
 		pane.addStyled(width, th.muted, "no paid routes")
 	}
+}
+
+func addSettingsRouteRows(pane *agentDashboardView, th *agentDashboardTheme, width int, routes []tunnel.HTTPRoute) int {
+	shown := 0
+	for _, route := range routes {
+		if shown >= 4 {
+			break
+		}
+		pane.addStyled(width, th.text, agentDashboardHTTPRouteSummary(route))
+		shown++
+	}
+	return shown
 }
 
 func agentDashboardHTTPRouteSummary(route tunnel.HTTPRoute) string {
@@ -268,19 +279,23 @@ func agentDashboardHTTPRouteSummary(route tunnel.HTTPRoute) string {
 	if amount := strings.TrimSpace(route.Amount); amount != "" {
 		methods := "ALL"
 		if len(route.Methods) > 0 {
-			var normalized []string
-			for _, raw := range route.Methods {
-				if method := strings.ToUpper(strings.TrimSpace(raw)); method != "" {
-					normalized = append(normalized, method)
-				}
-			}
-			if len(normalized) > 0 {
+			if normalized := agentDashboardNormalizeMethods(route.Methods); len(normalized) > 0 {
 				methods = strings.Join(normalized, ",")
 			}
 		}
 		return fmt.Sprintf("%s -> %s (%s %s)", prefix, upstream, methods, amount)
 	}
 	return prefix + " -> " + upstream
+}
+
+func agentDashboardNormalizeMethods(raw []string) []string {
+	var normalized []string
+	for _, method := range raw {
+		if method := strings.ToUpper(strings.TrimSpace(method)); method != "" {
+			normalized = append(normalized, method)
+		}
+	}
+	return normalized
 }
 
 func agentDashboardX402Network(network string, testnet bool) string {

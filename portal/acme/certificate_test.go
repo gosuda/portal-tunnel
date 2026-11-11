@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	legoacme "github.com/go-acme/lego/v4/acme"
+	"github.com/go-acme/lego/v4/acme"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
 )
@@ -153,24 +153,9 @@ func TestEvaluateRenewal(t *testing.T) {
 	)
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	domains := []string{"relay.example", "*.relay.example"}
-	newCert := func(remaining, validity time.Duration) *x509.Certificate {
-		return &x509.Certificate{
-			SerialNumber:   big.NewInt(12345),
-			AuthorityKeyId: []byte{1, 2, 3, 4, 5, 6, 7, 8},
-			DNSNames:       domains,
-			NotBefore:      now.Add(remaining - validity),
-			NotAfter:       now.Add(remaining),
-		}
-	}
-	pastWindow := &legoacme.Window{Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)}
-	farWindow := &legoacme.Window{Start: now.Add(72 * time.Hour), End: now.Add(73 * time.Hour)}
-	soonWindow := &legoacme.Window{Start: now.Add(2 * time.Hour), End: now.Add(3 * time.Hour)}
-	ariFor := func(window *legoacme.Window, retryAfter time.Duration) *certificate.RenewalInfoResponse {
-		return &certificate.RenewalInfoResponse{
-			RenewalInfoResponse: legoacme.RenewalInfoResponse{SuggestedWindow: *window},
-			RetryAfter:          retryAfter,
-		}
-	}
+	pastWindow := &acme.Window{Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)}
+	farWindow := &acme.Window{Start: now.Add(72 * time.Hour), End: now.Add(73 * time.Hour)}
+	soonWindow := &acme.Window{Start: now.Add(2 * time.Hour), End: now.Add(3 * time.Hour)}
 
 	for _, tc := range []struct {
 		name        string
@@ -181,25 +166,25 @@ func TestEvaluateRenewal(t *testing.T) {
 		wantReplace bool
 		wantRecheck time.Duration
 	}{
-		{"due window renews early and replaces the certificate", newCert(60*day, lifetime), domains, ariFor(pastWindow, 0), true, true, 24 * time.Hour},
-		{"future window defers", newCert(60*day, lifetime), domains, ariFor(farWindow, 0), false, false, 24 * time.Hour},
-		{"future window defers even below the fallback threshold", newCert(20*day, lifetime), domains, ariFor(farWindow, 0), false, false, 24 * time.Hour},
-		{"retry after below one hour is raised to one hour", newCert(60*day, lifetime), domains, ariFor(soonWindow, 5*time.Minute), false, false, time.Hour},
-		{"retry after above one day is capped at one day", newCert(60*day, lifetime), domains, ariFor(farWindow, 72*time.Hour), false, false, 24 * time.Hour},
-		{"window before the next check renews now", newCert(60*day, lifetime), domains, ariFor(soonWindow, 6*time.Hour), true, true, 6 * time.Hour},
-		{"expiry floor overrides a deferring window", newCert(3*day, lifetime), domains, ariFor(farWindow, 0), true, true, 24 * time.Hour},
-		{"next check is no later than the expiry floor", newCert(7*day+2*time.Hour, lifetime), domains, ariFor(farWindow, 0), false, false, 2 * time.Hour},
-		{"floor is a tenth of a short lifetime", newCert(3*day, 6*day), domains, ariFor(farWindow, 0), false, false, 24 * time.Hour},
-		{"short lifetime below its floor renews", newCert(10*time.Hour, 6*day), domains, ariFor(farWindow, 0), true, true, 24 * time.Hour},
-		{"expired certificate renews without ReplacesCertID", newCert(-time.Hour, lifetime), domains, ariFor(farWindow, 0), true, false, 24 * time.Hour},
-		{"domain mismatch renews without ReplacesCertID", newCert(60*day, lifetime), []string{"other.example", "*.other.example"}, ariFor(farWindow, 0), true, false, 24 * time.Hour},
-		{"zero window falls back to the threshold", newCert(60*day, lifetime), domains, ariFor(&legoacme.Window{}, 0), false, false, 24 * time.Hour},
-		{"zero window renews below the threshold", newCert(10*day, lifetime), domains, ariFor(&legoacme.Window{}, 0), true, false, 24 * time.Hour},
-		{"inverted window falls back to the threshold", newCert(60*day, lifetime), domains, ariFor(&legoacme.Window{Start: farWindow.End, End: farWindow.Start}, 0), false, false, 24 * time.Hour},
-		{"inverted window renews below the threshold", newCert(10*day, lifetime), domains, ariFor(&legoacme.Window{Start: pastWindow.End, End: pastWindow.Start}, 0), true, false, 24 * time.Hour},
-		{"missing ARI falls back to the threshold", newCert(60*day, lifetime), domains, nil, false, false, 24 * time.Hour},
-		{"missing ARI renews below the threshold", newCert(10*day, lifetime), domains, nil, true, false, 24 * time.Hour},
-		{"certificate that is not valid yet is left alone", newCert(60*day, 59*day), domains, nil, false, false, 24 * time.Hour},
+		{"due window renews early and replaces the certificate", newEvaluateRenewalCert(now, domains, 60*day, lifetime), domains, newEvaluateRenewalARI(pastWindow, 0), true, true, 24 * time.Hour},
+		{"future window defers", newEvaluateRenewalCert(now, domains, 60*day, lifetime), domains, newEvaluateRenewalARI(farWindow, 0), false, false, 24 * time.Hour},
+		{"future window defers even below the fallback threshold", newEvaluateRenewalCert(now, domains, 20*day, lifetime), domains, newEvaluateRenewalARI(farWindow, 0), false, false, 24 * time.Hour},
+		{"retry after below one hour is raised to one hour", newEvaluateRenewalCert(now, domains, 60*day, lifetime), domains, newEvaluateRenewalARI(soonWindow, 5*time.Minute), false, false, time.Hour},
+		{"retry after above one day is capped at one day", newEvaluateRenewalCert(now, domains, 60*day, lifetime), domains, newEvaluateRenewalARI(farWindow, 72*time.Hour), false, false, 24 * time.Hour},
+		{"window before the next check renews now", newEvaluateRenewalCert(now, domains, 60*day, lifetime), domains, newEvaluateRenewalARI(soonWindow, 6*time.Hour), true, true, 6 * time.Hour},
+		{"expiry floor overrides a deferring window", newEvaluateRenewalCert(now, domains, 3*day, lifetime), domains, newEvaluateRenewalARI(farWindow, 0), true, true, 24 * time.Hour},
+		{"next check is no later than the expiry floor", newEvaluateRenewalCert(now, domains, 7*day+2*time.Hour, lifetime), domains, newEvaluateRenewalARI(farWindow, 0), false, false, 2 * time.Hour},
+		{"floor is a tenth of a short lifetime", newEvaluateRenewalCert(now, domains, 3*day, 6*day), domains, newEvaluateRenewalARI(farWindow, 0), false, false, 24 * time.Hour},
+		{"short lifetime below its floor renews", newEvaluateRenewalCert(now, domains, 10*time.Hour, 6*day), domains, newEvaluateRenewalARI(farWindow, 0), true, true, 24 * time.Hour},
+		{"expired certificate renews without ReplacesCertID", newEvaluateRenewalCert(now, domains, -time.Hour, lifetime), domains, newEvaluateRenewalARI(farWindow, 0), true, false, 24 * time.Hour},
+		{"domain mismatch renews without ReplacesCertID", newEvaluateRenewalCert(now, domains, 60*day, lifetime), []string{"other.example", "*.other.example"}, newEvaluateRenewalARI(farWindow, 0), true, false, 24 * time.Hour},
+		{"zero window falls back to the threshold", newEvaluateRenewalCert(now, domains, 60*day, lifetime), domains, newEvaluateRenewalARI(&acme.Window{}, 0), false, false, 24 * time.Hour},
+		{"zero window renews below the threshold", newEvaluateRenewalCert(now, domains, 10*day, lifetime), domains, newEvaluateRenewalARI(&acme.Window{}, 0), true, false, 24 * time.Hour},
+		{"inverted window falls back to the threshold", newEvaluateRenewalCert(now, domains, 60*day, lifetime), domains, newEvaluateRenewalARI(&acme.Window{Start: farWindow.End, End: farWindow.Start}, 0), false, false, 24 * time.Hour},
+		{"inverted window renews below the threshold", newEvaluateRenewalCert(now, domains, 10*day, lifetime), domains, newEvaluateRenewalARI(&acme.Window{Start: pastWindow.End, End: pastWindow.Start}, 0), true, false, 24 * time.Hour},
+		{"missing ARI falls back to the threshold", newEvaluateRenewalCert(now, domains, 60*day, lifetime), domains, nil, false, false, 24 * time.Hour},
+		{"missing ARI renews below the threshold", newEvaluateRenewalCert(now, domains, 10*day, lifetime), domains, nil, true, false, 24 * time.Hour},
+		{"certificate that is not valid yet is left alone", newEvaluateRenewalCert(now, domains, 60*day, 59*day), domains, nil, false, false, 24 * time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -209,6 +194,23 @@ func TestEvaluateRenewal(t *testing.T) {
 				t.Fatalf("evaluateRenewal = (%v, %q, %v); want (%v, replaces=%v, %v)", renew, replacesCertID, recheck, tc.wantRenew, tc.wantReplace, tc.wantRecheck)
 			}
 		})
+	}
+}
+
+func newEvaluateRenewalCert(now time.Time, domains []string, remaining, validity time.Duration) *x509.Certificate {
+	return &x509.Certificate{
+		SerialNumber:   big.NewInt(12345),
+		AuthorityKeyId: []byte{1, 2, 3, 4, 5, 6, 7, 8},
+		DNSNames:       domains,
+		NotBefore:      now.Add(remaining - validity),
+		NotAfter:       now.Add(remaining),
+	}
+}
+
+func newEvaluateRenewalARI(window *acme.Window, retryAfter time.Duration) *certificate.RenewalInfoResponse {
+	return &certificate.RenewalInfoResponse{
+		RenewalInfoResponse: acme.RenewalInfoResponse{SuggestedWindow: *window},
+		RetryAfter:          retryAfter,
 	}
 }
 
@@ -323,24 +325,34 @@ func TestTLSFilesSelectOnlyTheConfiguredCAsCertificate(t *testing.T) {
 	if err := writeManualRelayCertificate(t, keyDir, baseDomain); err != nil {
 		t.Fatalf("writeManualRelayCertificate() error = %v", err)
 	}
-	newManager := func(caDirURL string) *Manager {
-		t.Helper()
-		manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53, CADirURL: caDirURL})
-		if err != nil {
-			t.Fatalf("NewManager(%q) error = %v", caDirURL, err)
-		}
-		return manager
-	}
-	production, staging := newManager(""), newManager(lego.LEDirectoryStaging)
-
+	production := newScopedCAManager(t, keyDir, baseDomain, "")
+	staging := newScopedCAManager(t, keyDir, baseDomain, lego.LEDirectoryStaging)
 	productionCert, _ := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
+	checkInitialCAFiles(t, production, staging, productionCert)
+	checkCAFilesAfterStagingIssue(t, staging, production, keyDir, baseDomain)
+}
+
+func newScopedCAManager(t *testing.T, keyDir, baseDomain, caDirURL string) *Manager {
+	t.Helper()
+	manager, err := NewManager(Config{BaseDomain: baseDomain, KeyDir: keyDir, DNSProvider: TypeRoute53, CADirURL: caDirURL})
+	if err != nil {
+		t.Fatalf("NewManager(%q) error = %v", caDirURL, err)
+	}
+	return manager
+}
+
+func checkInitialCAFiles(t *testing.T, production, staging *Manager, productionCert string) {
+	t.Helper()
 	if cert, _, err := production.TLSFiles(); err != nil || cert != productionCert {
 		t.Fatalf("production TLSFiles() = %q, %v; want %q", cert, err, productionCert)
 	}
 	if cert, _, err := staging.TLSFiles(); err == nil {
 		t.Fatalf("staging TLSFiles() = %q; want no certificate, since only Let's Encrypt production issued one", cert)
 	}
+}
 
+func checkCAFilesAfterStagingIssue(t *testing.T, staging, production *Manager, keyDir, baseDomain string) {
+	t.Helper()
 	stagingCert, stagingKey := certificateFilePaths(keyDir, lego.LEDirectoryStaging)
 	if err := writeRelayCertificate(t, stagingCert, stagingKey, baseDomain, time.Now().Add(90*24*time.Hour)); err != nil {
 		t.Fatalf("writeRelayCertificate() error = %v", err)
@@ -348,6 +360,7 @@ func TestTLSFilesSelectOnlyTheConfiguredCAsCertificate(t *testing.T) {
 	if cert, key, err := staging.TLSFiles(); err != nil || cert != stagingCert || key != stagingKey {
 		t.Fatalf("staging TLSFiles() = %q, %q, %v; want %q, %q", cert, key, err, stagingCert, stagingKey)
 	}
+	productionCert, _ := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
 	if cert, _, err := production.TLSFiles(); err != nil || cert != productionCert {
 		t.Fatalf("production TLSFiles() after staging issued = %q, %v; want %q", cert, err, productionCert)
 	}

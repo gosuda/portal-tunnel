@@ -23,17 +23,21 @@ func portalHeaderNames(h http.Header) []string {
 	return names
 }
 
-func TestStripRequestHeaders(t *testing.T) {
-	t.Parallel()
-	var gotHeaders http.Header
+func newStripRequestHeadersHandler(t *testing.T, gotHeaders *http.Header) http.Handler {
+	t.Helper()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHeaders = r.Header.Clone()
+		*gotHeaders = r.Header.Clone()
 		w.WriteHeader(http.StatusOK)
 	})
 	handler, err := NewStripRequestHeaders(next, []string{"X-Custom", "Authorization"})
 	if err != nil {
 		t.Fatalf("NewStripRequestHeaders() error = %v", err)
 	}
+	return handler
+}
+
+func checkStripRequestHeadersBasic(t *testing.T, handler http.Handler, gotHeaders *http.Header) {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
 	req.Header.Set("X-Custom", "secret")
 	req.Header.Set("Authorization", "Bearer abc")
@@ -49,6 +53,10 @@ func TestStripRequestHeaders(t *testing.T) {
 	if gotHeaders.Get("X-Keep") != "keep" {
 		t.Fatalf("X-Keep = %q, want keep", gotHeaders.Get("X-Keep"))
 	}
+}
+
+func checkStripRequestHeadersIgnoreCase(t *testing.T, handler http.Handler, gotHeaders *http.Header) {
+	t.Helper()
 	req2 := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
 	req2.Header.Set("x-custom", "secret")
 	rec2 := httptest.NewRecorder()
@@ -56,16 +64,29 @@ func TestStripRequestHeaders(t *testing.T) {
 	if gotHeaders.Get("X-Custom") != "" {
 		t.Fatal("x-custom forwarded after case-insensitive strip")
 	}
+}
+
+func checkStripRequestHeadersUnderscore(t *testing.T, handler http.Handler, gotHeaders *http.Header) {
+	t.Helper()
 	req3 := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
 	req3.Header["X_custom"] = []string{"secret"}
 	req3.Header["X_keep"] = []string{"keep"}
 	handler.ServeHTTP(httptest.NewRecorder(), req3)
-	if _, ok := gotHeaders["X_custom"]; ok {
+	if _, ok := (*gotHeaders)["X_custom"]; ok {
 		t.Fatal("X_custom forwarded after the strip of X-Custom")
 	}
-	if _, ok := gotHeaders["X_keep"]; !ok {
+	if _, ok := (*gotHeaders)["X_keep"]; !ok {
 		t.Fatal("X_keep removed, but nothing asked for X-Keep to be stripped")
 	}
+}
+
+func TestStripRequestHeaders(t *testing.T) {
+	t.Parallel()
+	var gotHeaders http.Header
+	handler := newStripRequestHeadersHandler(t, &gotHeaders)
+	checkStripRequestHeadersBasic(t, handler, &gotHeaders)
+	checkStripRequestHeadersIgnoreCase(t, handler, &gotHeaders)
+	checkStripRequestHeadersUnderscore(t, handler, &gotHeaders)
 }
 
 func TestStripRequestHeadersRejectsHost(t *testing.T) {

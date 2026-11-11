@@ -114,6 +114,18 @@ func (r *AgentTunnelUpdateRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	auth, err := collectTunnelUpdateAuth(fields)
+	if err != nil {
+		return err
+	}
+	if len(auth) > 0 {
+		named.Auth = auth
+	}
+	*r = AgentTunnelUpdateRequest(named)
+	return nil
+}
+
+func collectTunnelUpdateAuth(fields map[string]json.RawMessage) (map[string]json.RawMessage, error) {
 	auth := make(map[string]json.RawMessage)
 	for key, value := range fields {
 		key = strings.ToLower(key)
@@ -121,16 +133,12 @@ func (r *AgentTunnelUpdateRequest) UnmarshalJSON(data []byte) error {
 			continue
 		}
 		if _, ok := auth[key]; ok {
-			return fmt.Errorf("auth field %q is sent more than once", key)
+			return nil, fmt.Errorf("auth field %q is sent more than once", key)
 		}
 		auth[key] = value
 	}
 	maps.DeleteFunc(auth, func(_ string, value json.RawMessage) bool { return bytes.Equal(value, []byte("null")) })
-	if len(auth) > 0 {
-		named.Auth = auth
-	}
-	*r = AgentTunnelUpdateRequest(named)
-	return nil
+	return auth, nil
 }
 
 func (r AgentTunnelUpdateRequest) MarshalJSON() ([]byte, error) {
@@ -186,13 +194,28 @@ func authChanges(stored, desired appauth.Config) map[string]json.RawMessage {
 		_ = json.Unmarshal(data, &out)
 		return out
 	}
+
 	from, to := fields(stored), fields(desired)
+	changes := changedAuthFields(from, to)
+	maps.Copy(changes, clearedAuthFields(from, to))
+	if len(changes) == 0 {
+		return nil
+	}
+	return changes
+}
+
+func changedAuthFields(from, to map[string]json.RawMessage) map[string]json.RawMessage {
 	changes := make(map[string]json.RawMessage)
 	for key, value := range to {
 		if !bytes.Equal(from[key], value) {
 			changes[key] = value
 		}
 	}
+	return changes
+}
+
+func clearedAuthFields(from, to map[string]json.RawMessage) map[string]json.RawMessage {
+	changes := make(map[string]json.RawMessage)
 	for key, value := range from {
 		if _, ok := to[key]; ok {
 			continue
@@ -209,9 +232,6 @@ func authChanges(stored, desired appauth.Config) map[string]json.RawMessage {
 		case []any:
 			changes[key] = json.RawMessage(`[]`)
 		}
-	}
-	if len(changes) == 0 {
-		return nil
 	}
 	return changes
 }

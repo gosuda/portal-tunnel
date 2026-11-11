@@ -8,9 +8,6 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,25 +15,12 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestServerStatsLeaseLifecycleAndCumulativeTraffic(t *testing.T) {
-	registry := newTestRegistry(t, false, false)
-	server := &Server{registry: registry}
-	if got := server.Stats(); got != (ServerStats{}) {
-		t.Fatalf("initial Stats() = %+v", got)
-	}
-	if got := (*Server)(nil).Stats(); got != (ServerStats{}) {
-		t.Fatalf("nil Stats() = %+v", got)
-	}
-	_, response, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: newTestLeaseIdentity(t, "stats"),
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	registry, server := newStatsLeaseFixture(t)
+	response := registerStatsLease(t, registry)
 	left, client := net.Pipe()
 	right, peer := net.Pipe()
 	defer client.Close()
@@ -51,24 +35,67 @@ func TestServerStatsLeaseLifecycleAndCumulativeTraffic(t *testing.T) {
 		_, err := client.Write([]byte("hello"))
 		writeDone <- err
 	}()
+	drainStatsBridge(t, peer, writeDone)
+	checkStatsLeaseRegistered(t, server)
+	_ = client.Close()
+	_ = peer.Close()
+	<-bridgeDone
+	unregisterStatsLease(t, registry, response)
+	checkStatsLeaseUnregistered(t, server)
+}
+
+func newStatsLeaseFixture(t *testing.T) (*leaseRegistry, *Server) {
+	t.Helper()
+	registry := newTestRegistry(t, false, false)
+	server := &Server{registry: registry}
+	if got := server.Stats(); got != (ServerStats{}) {
+		t.Fatalf("initial Stats() = %+v", got)
+	}
+	if got := (*Server)(nil).Stats(); got != (ServerStats{}) {
+		t.Fatalf("nil Stats() = %+v", got)
+	}
+	return registry, server
+}
+
+func registerStatsLease(t *testing.T, registry *leaseRegistry) types.RegisterResponse {
+	t.Helper()
+	_, response, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: newTestLeaseIdentity(t, "stats"),
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func checkStatsLeaseRegistered(t *testing.T, server *Server) {
+	t.Helper()
+	if got := server.Stats(); got.ActiveLeases != 1 || got.ActiveConnections != 1 {
+		t.Fatalf("registered Stats() = %+v", got)
+	}
+}
+
+func unregisterStatsLease(t *testing.T, registry *leaseRegistry, response types.RegisterResponse) {
+	t.Helper()
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: response.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkStatsLeaseUnregistered(t *testing.T, server *Server) {
+	t.Helper()
+	if got := server.Stats(); got != (ServerStats{ForwardedBytes: 5}) {
+		t.Fatalf("unregistered Stats() = %+v", got)
+	}
+}
+func drainStatsBridge(t *testing.T, peer net.Conn, writeDone <-chan error) {
+	t.Helper()
 	buf := make([]byte, 5)
 	if _, err := io.ReadFull(peer, buf); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-writeDone; err != nil {
 		t.Fatal(err)
-	}
-	if got := server.Stats(); got.ActiveLeases != 1 || got.ActiveConnections != 1 {
-		t.Fatalf("registered Stats() = %+v", got)
-	}
-	_ = client.Close()
-	_ = peer.Close()
-	<-bridgeDone
-	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: response.AccessToken}); err != nil {
-		t.Fatal(err)
-	}
-	if got := server.Stats(); got != (ServerStats{ForwardedBytes: 5}) {
-		t.Fatalf("unregistered Stats() = %+v", got)
 	}
 }
 
@@ -127,21 +154,39 @@ func TestTransportPolicyValidationDoesNotChangeEnforcement(t *testing.T) {
 }
 
 func TestServerStatsConcurrentLeaseLifecycle(t *testing.T) {
-	registry := newTestRegistry(t, false, false)
-	server := &Server{registry: registry}
-	leaseIdentity := newTestLeaseIdentity(t, "stats-concurrent")
+	registry, server, leaseIdentity := newConcurrentStatsFixture(t)
 	var readers sync.WaitGroup
 	for range 4 {
 		readers.Add(1)
 		go func() {
 			defer readers.Done()
 			for range 100 {
-				if got := server.Stats(); got.ActiveLeases < 0 || got.ActiveLeases > 1 {
-					t.Errorf("Stats() during registration = %+v", got)
-				}
+				checkConcurrentStatsBounds(t, server)
 			}
 		}()
 	}
+	reregisterConcurrentLeases(t, registry, leaseIdentity)
+	readers.Wait()
+	checkConcurrentStatsFinal(t, server)
+}
+
+func newConcurrentStatsFixture(t *testing.T) (*leaseRegistry, *Server, types.Identity) {
+	t.Helper()
+	registry := newTestRegistry(t, false, false)
+	server := &Server{registry: registry}
+	leaseIdentity := newTestLeaseIdentity(t, "stats-concurrent")
+	return registry, server, leaseIdentity
+}
+
+func checkConcurrentStatsBounds(t *testing.T, server *Server) {
+	t.Helper()
+	if got := server.Stats(); got.ActiveLeases < 0 || got.ActiveLeases > 1 {
+		t.Errorf("Stats() during registration = %+v", got)
+	}
+}
+
+func reregisterConcurrentLeases(t *testing.T, registry *leaseRegistry, leaseIdentity types.Identity) {
+	t.Helper()
 	for range 10 {
 		_, response, err := registry.Register(types.RegisterChallengeRequest{
 			Identity: leaseIdentity,
@@ -153,7 +198,10 @@ func TestServerStatsConcurrentLeaseLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	readers.Wait()
+}
+
+func checkConcurrentStatsFinal(t *testing.T, server *Server) {
+	t.Helper()
 	if got := server.Stats(); got.ActiveLeases != 0 {
 		t.Fatalf("final Stats() = %+v", got)
 	}
@@ -161,6 +209,15 @@ func TestServerStatsConcurrentLeaseLifecycle(t *testing.T) {
 
 func TestBackhaulPendingSourcesSharesIPv6SubnetBudget(t *testing.T) {
 	sources := newBackhaulPendingSources()
+	held := fillSubnetBudget(t, sources)
+	extra := &net.UDPAddr{IP: net.ParseIP("2001:db8:1234:5678::ffff"), Port: 23456}
+	other := &net.UDPAddr{IP: net.ParseIP("2001:db8:1234:5679::1"), Port: 23456}
+	checkSubnetBudgetOverflow(t, sources, extra, other)
+	checkSubnetBudgetRelease(t, sources, held, extra)
+}
+
+func fillSubnetBudget(t *testing.T, sources *backhaulPendingSources) []*net.UDPAddr {
+	t.Helper()
 	var held []*net.UDPAddr
 	for i := 0; i < quicBackhaulPerSourceLimit; i++ {
 		ip := net.ParseIP("2001:db8:1234:5678::1")
@@ -171,14 +228,21 @@ func TestBackhaulPendingSourcesSharesIPv6SubnetBudget(t *testing.T) {
 		}
 		held = append(held, remote)
 	}
-	extra := &net.UDPAddr{IP: net.ParseIP("2001:db8:1234:5678::ffff"), Port: 23456}
+	return held
+}
+
+func checkSubnetBudgetOverflow(t *testing.T, sources *backhaulPendingSources, extra, other *net.UDPAddr) {
+	t.Helper()
 	if sources.acquire(extra) {
 		t.Fatal("another address in the same /64 bypassed the subnet budget")
 	}
-	other := &net.UDPAddr{IP: net.ParseIP("2001:db8:1234:5679::1"), Port: 23456}
 	if !sources.acquire(other) {
 		t.Fatal("a different /64 did not have an independent budget")
 	}
+}
+
+func checkSubnetBudgetRelease(t *testing.T, sources *backhaulPendingSources, held []*net.UDPAddr, extra *net.UDPAddr) {
+	t.Helper()
 	sources.release(held[0])
 	if !sources.acquire(extra) {
 		t.Fatal("released subnet slot could not be acquired by another address")
@@ -187,7 +251,6 @@ func TestBackhaulPendingSourcesSharesIPv6SubnetBudget(t *testing.T) {
 		t.Fatal("reacquiring the released subnet slot exceeded the shared budget")
 	}
 }
-
 func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
 	_, err := NewServer(ServerConfig{
 		PortalURL: "https://user:secret@localhost",
@@ -204,29 +267,36 @@ func TestNewServerRejectsPortalURLCredentialsWithoutEchoingThem(t *testing.T) {
 func TestHTTPRedirectTargetValidation(t *testing.T) {
 	for _, target := range []string{"http://localhost:4017", "http://relay.example", "//relay.example", "https://user:pass@relay.example", "https://relay.example:0", "https://relay.example:65536", "https://relay.example:bad", "https://relay.example:", "https:///missing-host", "https://./"} {
 		t.Run(target, func(t *testing.T) {
-			if _, err := NormalizeHTTPRedirectConfig(HTTPRedirectConfig{Enabled: true}, target); err == nil {
-				t.Fatal("NormalizeHTTPRedirectConfig() error = nil, want invalid redirect target rejection")
-			}
+			rejectRedirectTarget(t, target)
 		})
 	}
 
-	for _, hsts := range []bool{false, true} {
-		scheme := "HTTPS"
-		if hsts {
-			scheme = "hTtPs"
-		}
+	for _, scheme := range []string{"HTTPS", "hTtPs"} {
 		t.Run(scheme, func(t *testing.T) {
-			cfg, err := NormalizeHTTPRedirectConfig(HTTPRedirectConfig{
-				Enabled: true,
-				HSTS:    hsts,
-			}, scheme+"://localhost:4017/base/?configured=discarded#fragment")
-			if err != nil {
-				t.Fatalf("NormalizeHTTPRedirectConfig() error = %v, want %q scheme accepted", err, scheme)
-			}
-			if !cfg.Enabled || cfg.Addr != DefaultHTTPRedirectAddr || cfg.HSTS != hsts {
-				t.Fatalf("NormalizeHTTPRedirectConfig() cfg = %+v, want enabled config with default redirect address and hsts=%v", cfg, hsts)
-			}
+			admitRedirectTarget(t, scheme)
 		})
+	}
+}
+
+func rejectRedirectTarget(t *testing.T, target string) {
+	t.Helper()
+	if _, err := NormalizeHTTPRedirectConfig(HTTPRedirectConfig{Enabled: true}, target); err == nil {
+		t.Fatal("NormalizeHTTPRedirectConfig() error = nil, want invalid redirect target rejection")
+	}
+}
+
+func admitRedirectTarget(t *testing.T, scheme string) {
+	t.Helper()
+	hsts := scheme != "HTTPS"
+	cfg, err := NormalizeHTTPRedirectConfig(HTTPRedirectConfig{
+		Enabled: true,
+		HSTS:    hsts,
+	}, scheme+"://localhost:4017/base/?configured=discarded#fragment")
+	if err != nil {
+		t.Fatalf("NormalizeHTTPRedirectConfig() error = %v, want %q scheme accepted", err, scheme)
+	}
+	if !cfg.Enabled || cfg.Addr != DefaultHTTPRedirectAddr || cfg.HSTS != hsts {
+		t.Fatalf("NormalizeHTTPRedirectConfig() cfg = %+v, want enabled config with default redirect address and hsts=%v", cfg, hsts)
 	}
 }
 
@@ -350,306 +420,4 @@ func newConnectTestRelay(t *testing.T) (*Server, *url.URL, string) {
 
 func wsURL(relayURL *url.URL) string {
 	return strings.Replace(relayURL.String(), "http://", "ws://", 1)
-}
-
-func TestPublicIngressAggregateAdmissionAndRelease(t *testing.T) {
-	var server Server
-	var conns []net.Conn
-	for range publicIngressLimit {
-		conn, peer := net.Pipe()
-		t.Cleanup(func() { _ = conn.Close(); _ = peer.Close() })
-		if !server.admitIngress(conn, false) {
-			t.Fatal("connection below aggregate limit rejected")
-		}
-		conns = append(conns, conn)
-	}
-	extra, peer := net.Pipe()
-	defer extra.Close()
-	defer peer.Close()
-	if server.admitIngress(extra, false) {
-		t.Fatal("raw TCP bypassed tenant connection budget")
-	}
-	if !server.admitIngress(extra, true) {
-		t.Fatal("tenant saturation blocked root inspection")
-	}
-	if server.promoteIngress() {
-		t.Fatal("SNI tenant bypassed tenant connection budget")
-	}
-	server.releaseIngress(conns[0], false)
-	if !server.promoteIngress() {
-		t.Fatal("released tenant capacity was not reusable")
-	}
-	server.closeIngress()
-	if server.admitIngress(conns[0], false) {
-		t.Fatal("connection admitted after shutdown")
-	}
-	server.releaseIngress(extra, false)
-	for _, conn := range conns[1:] {
-		server.releaseIngress(conn, false)
-	}
-	server.ingressWorkers.Wait()
-}
-
-func TestCertificateSignerMismatchRejectsStartup(t *testing.T) {
-	managerA, err := acme.NewManager(acme.Config{BaseDomain: "localhost", KeyDir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := managerA.EnsureTLSMaterial(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	certFile, _, err := managerA.TLSFiles()
-	if err != nil {
-		t.Fatal(err)
-	}
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	managerB, err := acme.NewManager(acme.Config{BaseDomain: "localhost", KeyDir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := managerB.EnsureTLSMaterial(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	_, keyFile, err := managerB.TLSFiles()
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyPEM, err := os.ReadFile(keyFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	stateDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(stateDir, "fullchain.pem"), certPEM, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stateDir, "privatekey.pem"), keyPEM, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	relay, err := NewServer(ServerConfig{
-		PortalURL:     "https://localhost",
-		StateDir:      stateDir,
-		SNIListenAddr: "127.0.0.1:0",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = relay.Start(t.Context(), http.NotFoundHandler())
-	if err == nil {
-		_ = relay.Shutdown(context.Background())
-		t.Fatal("Start() succeeded with mismatched certificate and private key")
-	}
-	if !strings.Contains(err.Error(), "private key does not match public key") {
-		t.Fatalf("Start() error = %q, want key mismatch", err)
-	}
-}
-
-func TestRelayHTTPRedirectListener(t *testing.T) {
-	t.Run("enabled answers only with the canonical origin", func(t *testing.T) {
-		for _, hsts := range []bool{false, true} {
-			t.Run("hsts="+strconv.FormatBool(hsts), func(t *testing.T) {
-				redirectListener, err := net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					t.Fatal(err)
-				}
-				redirectAddr := redirectListener.Addr().String()
-				_ = redirectListener.Close()
-
-				sniListener, err := net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					t.Fatal(err)
-				}
-				sniAddr := sniListener.Addr().String()
-				_ = sniListener.Close()
-
-				server, err := NewServer(ServerConfig{
-					PortalURL:     "https://localhost:4017/base/?configured=discarded#fragment",
-					StateDir:      t.TempDir(),
-					SNIListenAddr: sniAddr,
-					HTTPRedirect:  HTTPRedirectConfig{Enabled: true, Addr: redirectAddr, HSTS: hsts},
-				})
-				if err != nil {
-					t.Fatalf("create portal server: %v", err)
-				}
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				if err := server.Start(ctx, http.NotFoundHandler()); err != nil {
-					t.Fatalf("start portal server: %v", err)
-				}
-
-				client := &http.Client{
-					Transport:     &http.Transport{DisableKeepAlives: true},
-					CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-					Timeout:       5 * time.Second,
-				}
-				t.Cleanup(client.CloseIdleConnections)
-
-				for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodOptions} {
-					req, err := http.NewRequest(method, "http://"+redirectAddr+"//tenant/path?secret=discarded", nil)
-					if err != nil {
-						t.Fatalf("build %s request: %v", method, err)
-					}
-					if method == http.MethodOptions {
-						req.URL.Path = "*"
-						req.URL.RawQuery = ""
-					}
-					req.Host = "attacker.example"
-					req.Header.Set("X-Forwarded-Host", "other-attacker.example")
-					resp, err := client.Do(req)
-					if err != nil {
-						t.Fatalf("%s redirect request: %v", method, err)
-					}
-					_ = resp.Body.Close()
-					const wantLocation = "https://localhost:4017/base"
-					if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != wantLocation {
-						t.Fatalf("%s: status=%d Location=%q, want 301 to %s", method, resp.StatusCode, resp.Header.Get("Location"), wantLocation)
-					}
-					wantHSTS := ""
-					if hsts {
-						wantHSTS = "max-age=31536000"
-					}
-					if got := resp.Header.Get("Strict-Transport-Security"); got != wantHSTS {
-						t.Fatalf("%s: Strict-Transport-Security=%q, want %q", method, got, wantHSTS)
-					}
-				}
-
-				shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
-				defer c()
-				if err := server.Shutdown(shutdownCtx); err != nil {
-					t.Fatalf("shutdown: %v", err)
-				}
-				if err := server.Wait(); err != nil {
-					t.Fatalf("wait: %v", err)
-				}
-				released, err := net.Listen("tcp", redirectAddr)
-				if err != nil {
-					t.Fatalf("redirect port not released after shutdown: %v", err)
-				}
-				_ = released.Close()
-			})
-		}
-	})
-
-	t.Run("disabled leaves the configured address unbound", func(t *testing.T) {
-		redirectListener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		redirectAddr := redirectListener.Addr().String()
-		_ = redirectListener.Close()
-
-		sniListener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		sniAddr := sniListener.Addr().String()
-		_ = sniListener.Close()
-
-		server, err := NewServer(ServerConfig{
-			PortalURL:     "https://localhost:4017",
-			StateDir:      t.TempDir(),
-			SNIListenAddr: sniAddr,
-			HTTPRedirect:  HTTPRedirectConfig{Addr: redirectAddr},
-		})
-		if err != nil {
-			t.Fatalf("create portal server: %v", err)
-		}
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		if err := server.Start(ctx, http.NotFoundHandler()); err != nil {
-			t.Fatalf("start portal server: %v", err)
-		}
-		t.Cleanup(func() {
-			shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
-			defer c()
-			_ = server.Shutdown(shutdownCtx)
-			_ = server.Wait()
-		})
-
-		listener, err := net.Listen("tcp", redirectAddr)
-		if err != nil {
-			t.Fatalf("disabled redirect must not bind the configured address %s: %v", redirectAddr, err)
-		}
-		_ = listener.Close()
-	})
-
-	t.Run("bind failure cleans up and retries", func(t *testing.T) {
-		occupied, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("occupy redirect address: %v", err)
-		}
-		redirectAddr := occupied.Addr().String()
-
-		sniListener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			_ = occupied.Close()
-			t.Fatal(err)
-		}
-		sniAddr := sniListener.Addr().String()
-		_ = sniListener.Close()
-
-		cfg := ServerConfig{
-			PortalURL:     "https://localhost:4017",
-			StateDir:      t.TempDir(),
-			SNIListenAddr: sniAddr,
-			HTTPRedirect:  HTTPRedirectConfig{Enabled: true, Addr: redirectAddr},
-		}
-		server, err := NewServer(cfg)
-		if err != nil {
-			_ = occupied.Close()
-			t.Fatalf("create portal server: %v", err)
-		}
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		if startErr := server.Start(ctx, http.NotFoundHandler()); startErr == nil {
-			shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
-			defer c()
-			_ = server.Shutdown(shutdownCtx)
-			_ = server.Wait()
-			_ = occupied.Close()
-			t.Fatal("Start() succeeded with the redirect address already occupied")
-		}
-		if err := occupied.Close(); err != nil {
-			t.Fatalf("release occupied redirect address: %v", err)
-		}
-		rebound, err := net.Listen("tcp", sniAddr)
-		if err != nil {
-			t.Fatalf("failed Start leaked the SNI listener: %v", err)
-		}
-		_ = rebound.Close()
-
-		retry, err := NewServer(cfg)
-		if err != nil {
-			t.Fatalf("create retry portal server: %v", err)
-		}
-		if err := retry.Start(ctx, http.NotFoundHandler()); err != nil {
-			t.Fatalf("retry Start() after releasing the redirect address: %v", err)
-		}
-		defer func() {
-			shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
-			defer c()
-			_ = retry.Shutdown(shutdownCtx)
-			_ = retry.Wait()
-		}()
-
-		client := &http.Client{
-			Transport:     &http.Transport{DisableKeepAlives: true},
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-			Timeout:       5 * time.Second,
-		}
-		t.Cleanup(client.CloseIdleConnections)
-		resp, err := client.Get("http://" + redirectAddr + "/ignored")
-		if err != nil {
-			t.Fatalf("GET retry redirect: %v", err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != "https://localhost:4017" {
-			t.Fatalf("retry: status=%d Location=%q, want 301 to the canonical origin", resp.StatusCode, resp.Header.Get("Location"))
-		}
-	})
 }

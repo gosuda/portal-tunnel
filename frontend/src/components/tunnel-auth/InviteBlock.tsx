@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { useId, useState } from "react";
 import {
   Select,
@@ -25,7 +26,7 @@ export function InviteBlock({
   allow: string[];
   exampleURL: string;
   os: TunnelCommandOS;
-}) {
+}): JSX.Element {
   const expiresId = useId();
   const [address, setAddress] = useState("");
   const [subject, setSubject] = useState("");

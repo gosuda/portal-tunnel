@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -19,18 +18,31 @@ func TestReserveOfferCommitsProtocolAckBeforeClaimMarker(t *testing.T) {
 	server, client := net.Pipe()
 	t.Cleanup(func() { _ = client.Close() })
 
-	ack := make(chan byte, 1)
-	go func() {
-		var value [1]byte
-		_, _ = client.Read(value[:])
-		ack <- value[0]
-	}()
+	ack := startReserveAckReader(t, client)
 	reservation, err := relay.ReserveOffer(server)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	claimed := startReserveClaim(ctx, t, relay)
+	commitReserveOffer(t, server, reservation)
+	verifyReserveAckClaim(t, client, ack, claimed)
+}
+
+func startReserveAckReader(t *testing.T, client net.Conn) <-chan byte {
+	t.Helper()
+	ack := make(chan byte, 1)
+	go func() {
+		var value [1]byte
+		_, _ = client.Read(value[:])
+		ack <- value[0]
+	}()
+	return ack
+}
+
+func startReserveClaim(ctx context.Context, t *testing.T, relay *ReversePool) <-chan net.Conn {
+	t.Helper()
 	claimed := make(chan net.Conn, 1)
 	go func() {
 		conn, err := relay.Acquire(ctx)
@@ -39,16 +51,24 @@ func TestReserveOfferCommitsProtocolAckBeforeClaimMarker(t *testing.T) {
 		}
 		claimed <- conn
 	}()
+	return claimed
+}
+
+func commitReserveOffer(t *testing.T, server net.Conn, reservation *offerReservation) {
+	t.Helper()
 	if _, err := server.Write([]byte{7}); err != nil {
 		t.Fatal(err)
 	}
 	if err := reservation.Commit(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func verifyReserveAckClaim(t *testing.T, client net.Conn, ack <-chan byte, claimed <-chan net.Conn) {
+	t.Helper()
 	if got := <-ack; got != 7 {
 		t.Fatalf("protocol acknowledgement = %d", got)
 	}
-
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
 	var frame [1 + types.TLSBindingSize]byte
 	if _, err := io.ReadFull(client, frame[:]); err != nil {
@@ -69,14 +89,25 @@ func TestTLSBindingFramingRoundTrip(t *testing.T) {
 	t.Cleanup(relay.Close)
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() { _ = clientConn.Close() })
-	if err := relay.Offer(serverConn); err != nil {
-		t.Fatal(err)
-	}
+	offerTLSBindingFramingRoundTrip(t, relay, serverConn)
 
 	binding := [16]byte{
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
 	}
+	claimed, claimErr := startBindingClaim(t, relay, binding)
+	verifyBindingRoundTrip(t, clientConn, binding, claimed, claimErr)
+}
+
+func offerTLSBindingFramingRoundTrip(t *testing.T, relay *ReversePool, serverConn net.Conn) {
+	t.Helper()
+	if err := relay.Offer(serverConn); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func startBindingClaim(t *testing.T, relay *ReversePool, binding [16]byte) (<-chan net.Conn, <-chan error) {
+	t.Helper()
 	claimed := make(chan net.Conn, 1)
 	claimErr := make(chan error, 1)
 	go func() {
@@ -92,7 +123,11 @@ func TestTLSBindingFramingRoundTrip(t *testing.T) {
 		}
 		claimed <- conn
 	}()
+	return claimed, claimErr
+}
 
+func verifyBindingRoundTrip(t *testing.T, clientConn net.Conn, binding [16]byte, claimed <-chan net.Conn, claimErr <-chan error) {
+	t.Helper()
 	gotBinding, err := ReadStart(context.Background(), clientConn, time.Second)
 	if err != nil {
 		t.Fatalf("RunSession: %v", err)
@@ -129,40 +164,49 @@ func TestReversePoolCloseReleasesAllAcquirers(t *testing.T) {
 	}
 }
 
-func TestReversePoolReservationSurvivesConcurrentClose(t *testing.T) {
-	for _, commit := range []bool{false, true} {
-		t.Run(fmt.Sprint(commit), func(t *testing.T) {
-			pool := NewReversePool(time.Minute, 1)
-			conn, peer := net.Pipe()
-			defer conn.Close()
-			defer peer.Close()
-			reservation, err := pool.ReserveOffer(conn)
-			if err != nil {
-				t.Fatal(err)
-			}
-			closed := make(chan struct{})
-			go func() { pool.Close(); close(closed) }()
-			if commit {
-				if err := reservation.Commit(); err != nil {
-					t.Fatalf("acknowledged reservation could not commit: %v", err)
-				}
-			} else {
-				reservation.Cancel()
-			}
-			reservation.Cancel()
-			select {
-			case <-closed:
-			case <-time.After(time.Second):
-				t.Fatal("Close did not finish after reservation resolution")
-			}
-			if commit {
-				if _, err := peer.Read(make([]byte, 1)); err == nil {
-					t.Fatal("committed connection survived pool close")
-				}
-			} else if err := conn.SetDeadline(time.Now()); err != nil {
-				t.Fatalf("cancellation closed caller-owned connection: %v", err)
-			}
-		})
+func TestReversePoolCommittedReservationSurvivesConcurrentClose(t *testing.T) {
+	_, _, peer, reservation, closed := setupReservationRace(t)
+	if err := reservation.Commit(); err != nil {
+		t.Fatalf("acknowledged reservation could not commit: %v", err)
+	}
+	reservation.Cancel()
+	awaitPoolClosed(t, closed)
+	if _, err := peer.Read(make([]byte, 1)); err == nil {
+		t.Fatal("committed connection survived pool close")
+	}
+}
+
+func TestReversePoolCanceledReservationSurvivesConcurrentClose(t *testing.T) {
+	_, conn, _, reservation, closed := setupReservationRace(t)
+	reservation.Cancel()
+	reservation.Cancel()
+	awaitPoolClosed(t, closed)
+	if err := conn.SetDeadline(time.Now()); err != nil {
+		t.Fatalf("cancellation closed caller-owned connection: %v", err)
+	}
+}
+
+func setupReservationRace(t *testing.T) (*ReversePool, net.Conn, net.Conn, *offerReservation, chan struct{}) {
+	t.Helper()
+	pool := NewReversePool(time.Minute, 1)
+	conn, peer := net.Pipe()
+	t.Cleanup(func() { _ = conn.Close() })
+	t.Cleanup(func() { _ = peer.Close() })
+	reservation, err := pool.ReserveOffer(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() { pool.Close(); close(closed) }()
+	return pool, conn, peer, reservation, closed
+}
+
+func awaitPoolClosed(t *testing.T, closed <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after reservation resolution")
 	}
 }
 
@@ -171,20 +215,36 @@ func TestReversePoolAcquireTransfersUnframedConnection(t *testing.T) {
 	defer pool.Close()
 	conn, peer := net.Pipe()
 	defer peer.Close()
+	offerUnframedConnection(t, pool, conn)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	acquired := acquireUnframedConnection(ctx, t, pool, conn)
+	defer acquired.Close()
+	pool.Close()
+	verifyUnframedPayload(t, acquired, peer)
+}
+
+func offerUnframedConnection(t *testing.T, pool *ReversePool, conn net.Conn) {
+	t.Helper()
 	if err := pool.Offer(conn); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+}
+
+func acquireUnframedConnection(ctx context.Context, t *testing.T, pool *ReversePool, want net.Conn) net.Conn {
+	t.Helper()
 	acquired, err := pool.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer acquired.Close()
-	if acquired != conn {
+	if acquired != want {
 		t.Fatal("Acquire wrapped the connection")
 	}
-	pool.Close()
+	return acquired
+}
+
+func verifyUnframedPayload(t *testing.T, acquired net.Conn, peer net.Conn) {
+	t.Helper()
 	written := make(chan error, 1)
 	go func() { _, err := acquired.Write([]byte("payload")); written <- err }()
 	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
@@ -246,7 +306,15 @@ func TestReversePoolPauseDropsIdleConnectionsAndRefusesOffers(t *testing.T) {
 	if err := pool.Offer(local); err != nil {
 		t.Fatal(err)
 	}
+	pauseIdleConnections(t, pool, remote)
+	refuseOfferWhilePaused(t, pool)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	resumeOfferAcquire(ctx, t, pool)
+}
 
+func pauseIdleConnections(t *testing.T, pool *ReversePool, remote net.Conn) {
+	t.Helper()
 	closeIdle := pool.Pause()
 	if closeIdle == nil || pool.ReadyCount() != 0 {
 		t.Fatalf("Pause left %d idle connections", pool.ReadyCount())
@@ -255,7 +323,10 @@ func TestReversePoolPauseDropsIdleConnectionsAndRefusesOffers(t *testing.T) {
 	if _, err := remote.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 		t.Fatalf("idle connection stayed open: %v", err)
 	}
+}
 
+func refuseOfferWhilePaused(t *testing.T, pool *ReversePool) {
+	t.Helper()
 	refused, refusedRemote := net.Pipe()
 	t.Cleanup(func() { _ = refusedRemote.Close() })
 	if err := pool.Offer(refused); !errors.Is(err, errPoolPaused) {
@@ -264,15 +335,16 @@ func TestReversePoolPauseDropsIdleConnectionsAndRefusesOffers(t *testing.T) {
 	if _, err := refusedRemote.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 		t.Fatalf("refused connection stayed open: %v", err)
 	}
+}
 
+func resumeOfferAcquire(ctx context.Context, t *testing.T, pool *ReversePool) {
+	t.Helper()
 	pool.Resume()
 	accepted, acceptedRemote := net.Pipe()
 	t.Cleanup(func() { _ = acceptedRemote.Close() })
 	if err := pool.Offer(accepted); err != nil {
 		t.Fatalf("Offer() after Resume = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
 	if conn, err := pool.Acquire(ctx); err != nil || conn != accepted {
 		t.Fatalf("Acquire() after Resume = %v, %v", conn, err)
 	}

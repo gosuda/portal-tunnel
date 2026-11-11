@@ -65,20 +65,29 @@ func ParseHTTPRoute(value string) (HTTPRoute, error) {
 	}
 	route := HTTPRoute{Prefix: utils.NormalizeURLPath(prefix), Upstream: fields[0]}
 	if len(fields) == 2 {
-		methods, amount, hasMethods := strings.Cut(fields[1], ":")
-		if !hasMethods {
-			amount = fields[1]
+		var err error
+		route, err = parseConfigRoutePayment(route, fields[1])
+		if err != nil {
+			return HTTPRoute{}, err
 		}
-		if amount == "" {
-			return HTTPRoute{}, fmt.Errorf("payment amount is required")
-		}
-		route.Amount = amount
-		if hasMethods {
-			var err error
-			route.Methods, err = gateway.NormalizePaymentMethods(strings.Split(methods, ","))
-			if err != nil {
-				return HTTPRoute{}, err
-			}
+	}
+	return route, nil
+}
+
+func parseConfigRoutePayment(route HTTPRoute, field string) (HTTPRoute, error) {
+	methods, amount, hasMethods := strings.Cut(field, ":")
+	if !hasMethods {
+		amount = field
+	}
+	if amount == "" {
+		return HTTPRoute{}, fmt.Errorf("payment amount is required")
+	}
+	route.Amount = amount
+	if hasMethods {
+		var err error
+		route.Methods, err = gateway.NormalizePaymentMethods(strings.Split(methods, ","))
+		if err != nil {
+			return HTTPRoute{}, err
 		}
 	}
 	return route, nil
@@ -94,18 +103,9 @@ func (c *Config) Normalize() error {
 	c.Serve = strings.TrimSpace(c.Serve)
 	c.UDPAddr = strings.TrimSpace(c.UDPAddr)
 	if c.HTTPRoutes != nil {
-		routes := make([]HTTPRoute, 0, len(c.HTTPRoutes))
-		for _, route := range c.HTTPRoutes {
-			methods, err := gateway.NormalizePaymentMethods(route.Methods)
-			if err != nil {
-				return fmt.Errorf("HTTP route %q: %w", route.Prefix, err)
-			}
-			routes = append(routes, HTTPRoute{
-				Prefix:   strings.TrimSpace(route.Prefix),
-				Upstream: strings.TrimSpace(route.Upstream),
-				Methods:  methods,
-				Amount:   strings.TrimSpace(route.Amount),
-			})
+		routes, err := normalizeConfigHTTPRoutes(c.HTTPRoutes)
+		if err != nil {
+			return err
 		}
 		c.HTTPRoutes = routes
 	}
@@ -124,6 +124,23 @@ func (c *Config) Normalize() error {
 	}
 	c.X402Config = c.X402Config.Normalize()
 	return nil
+}
+
+func normalizeConfigHTTPRoutes(routes []HTTPRoute) ([]HTTPRoute, error) {
+	normalized := make([]HTTPRoute, 0, len(routes))
+	for _, route := range routes {
+		methods, err := gateway.NormalizePaymentMethods(route.Methods)
+		if err != nil {
+			return nil, fmt.Errorf("HTTP route %q: %w", route.Prefix, err)
+		}
+		normalized = append(normalized, HTTPRoute{
+			Prefix:   strings.TrimSpace(route.Prefix),
+			Upstream: strings.TrimSpace(route.Upstream),
+			Methods:  methods,
+			Amount:   strings.TrimSpace(route.Amount),
+		})
+	}
+	return normalized, nil
 }
 
 // Spec resolves c into the runtime description of the tunnel: it normalizes c,
@@ -150,18 +167,24 @@ func (c Config) Spec() (Spec, error) {
 	if c.UDPEnabled {
 		spec.Transport.UDP = &UDPConfig{Target: c.UDPAddr}
 	}
-	auth := c.AuthConfig
-	if c.Serve != "" || len(c.HTTPRoutes) > 0 || !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) > 0 {
-		spec.HTTP = &HTTPConfig{
-			Serve:               c.Serve,
-			Routes:              c.HTTPRoutes,
-			StripRequestHeaders: c.StripRequestHeaders,
-			Payment:             c.X402Config,
-			Cache:               c.Cache,
-		}
-		if !auth.IsZero() {
-			spec.HTTP.Auth = &auth
-		}
-	}
+	spec.HTTP = buildConfigSpecHTTP(c)
 	return spec, spec.Validate()
+}
+
+func buildConfigSpecHTTP(c Config) *HTTPConfig {
+	auth := c.AuthConfig
+	if c.Serve == "" && len(c.HTTPRoutes) == 0 && auth.IsZero() && c.Cache == nil && len(c.StripRequestHeaders) == 0 {
+		return nil
+	}
+	httpConfig := &HTTPConfig{
+		Serve:               c.Serve,
+		Routes:              c.HTTPRoutes,
+		StripRequestHeaders: c.StripRequestHeaders,
+		Payment:             c.X402Config,
+		Cache:               c.Cache,
+	}
+	if !auth.IsZero() {
+		httpConfig.Auth = &auth
+	}
+	return httpConfig
 }
