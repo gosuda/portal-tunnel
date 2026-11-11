@@ -29,15 +29,6 @@ func (c *relaySource) acquire(ctx context.Context) (*pinnedChain, error) {
 	return c.newPin(chain)
 }
 
-// fileSource owns reloadable operator-provided material. Errors never fall back.
-type fileSource struct {
-	certFile, keyFile, hostname, alternativeHostname string
-}
-
-func (s *fileSource) acquire() (*pinnedChain, error) {
-	return loadLocalPin(s.certFile, s.keyFile, s.hostname, s.alternativeHostname)
-}
-
 func (c *relaySource) newPin(chainPEM []byte) (*pinnedChain, error) {
 	if err := verifyCertificateHostname(chainPEM, c.hostname); err != nil {
 		return nil, fmt.Errorf("keyless certificate does not cover %s: %w", c.hostname, err)

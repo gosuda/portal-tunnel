@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func testMonitor(t *testing.T) *certificateMonitor {
@@ -525,7 +527,7 @@ func TestMonitorOutagesPreserveUnknownEvidence(t *testing.T) {
 		t.Fatalf("outage not preserved as unknown: %+v %v", evidence, err)
 	}
 	// An evidence lock held by another process cannot block the TLS owner.
-	lock, err := lockCertificate(filepath.Join(m.dir, "evidence.json.lock"))
+	lock, err := utils.TryLockFile(filepath.Join(m.dir, "evidence.json.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}

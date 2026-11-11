@@ -23,7 +23,7 @@ import (
 func TestTenantCertificateOwnershipTracksLiveLease(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	owner := newTestLeaseIdentity(t, "tenant")
-	record, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+	record, _, _, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestTenantCertificateOwnershipTracksLiveLease(t *testing.T) {
 	if _, err := registry.tenantCertificateNames(record); err == nil {
 		t.Fatal("expired lease can issue")
 	}
-	replacement, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+	replacement, _, _, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestTenantCertificateEndpointRequiresOptInAndAuthentication(t *testing.T) {
 	if got := request("", "{}").Code; got != http.StatusForbidden {
 		t.Fatalf("unauthenticated status=%d", got)
 	}
-	_, registration, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestTenantCertificateRejectsReassignableAlias(t *testing.T) {
 	}
 	server := &Server{registry: registry, acmeManager: manager, cfg: utils.NewSnapshot(ServerConfig{TenantCertificates: true})}
 	server.identity.Name = "localhost"
-	_, registration, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "alias")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: newTestLeaseIdentity(t, "alias")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestPublicTenantCertificateRequiresExplicitApproval(t *testing.T) {
 	server.identity.Name = "example.com"
 	for i := range 3 {
 		owner := newTestLeaseIdentity(t, fmt.Sprintf("tenant%d", i))
-		_, registration, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+		_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

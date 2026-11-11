@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -367,7 +367,6 @@ func TestExposeRejectsInvalidLocalTLSOptions(t *testing.T) {
 	}{
 		{"certificate only", []Option{WithTLSCertificate("cert.pem", "")}},
 		{"key only", []Option{WithTLSCertificate("", "key.pem")}},
-		{"relay cache", []Option{WithTLSCertificate("cert.pem", "key.pem"), WithStaticRelayCache(".", time.Hour)}},
 		{"raw TCP", []Option{WithTLSCertificate("cert.pem", "key.pem"), WithTCP()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -387,7 +386,6 @@ func TestExposeRejectsInvalidAutomaticTLSOptions(t *testing.T) {
 		{"missing state", []Option{WithAutomaticTLS("", false)}},
 		{"blank state", []Option{WithAutomaticTLS(" ", true)}},
 		{"manual files", []Option{WithAutomaticTLS("state", false), WithTLSCertificate("cert.pem", "key.pem")}},
-		{"relay cache", []Option{WithAutomaticTLS("state", false), WithStaticRelayCache(".", time.Hour)}},
 		{"raw TCP", []Option{WithAutomaticTLS("state", true), WithTCP()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -416,7 +414,7 @@ func TestExposeRejectsInvalidCertificateFiles(t *testing.T) {
 				_ = exposure.Close()
 				t.Fatal("Expose started with invalid manual certificate files")
 			}
-			if !errors.Is(err, keyless.ErrLocalCertificate) {
+			if !errors.Is(err, localtls.ErrLocalCertificate) {
 				t.Fatalf("Expose() = %v, want local certificate error before relay registration", err)
 			}
 		})
@@ -428,7 +426,7 @@ func TestTerminalRelayErrorsPreserveTransportRetries(t *testing.T) {
 		err      error
 		terminal bool
 	}{
-		{fmt.Errorf("manual TLS: %w", keyless.ErrLocalCertificate), true},
+		{fmt.Errorf("manual TLS: %w", localtls.ErrLocalCertificate), true},
 		{context.Canceled, false},
 		{context.DeadlineExceeded, false},
 		{io.EOF, false},
@@ -445,8 +443,8 @@ func TestWaitReadyOnlyReturnsFailuresWhenAllRelaysAreTerminal(t *testing.T) {
 	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 1)}
 	readyCtx, readyCancel := context.WithTimeout(t.Context(), time.Second)
 	defer readyCancel()
-	exposure.setRelayStatus(badRelay, listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: keyless.ErrLocalCertificate})
-	if _, err := exposure.WaitReady(readyCtx); !errors.Is(err, keyless.ErrLocalCertificate) {
+	exposure.setRelayStatus(badRelay, listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: localtls.ErrLocalCertificate})
+	if _, err := exposure.WaitReady(readyCtx); !errors.Is(err, localtls.ErrLocalCertificate) {
 		t.Fatalf("terminal relay returned %v", err)
 	}
 	exposure.syncRelayStatuses([]string{badRelay, otherRelay})

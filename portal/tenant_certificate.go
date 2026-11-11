@@ -25,6 +25,9 @@ func (r *leaseRegistry) tenantCertificateNames(record *leaseRecord) ([]string, e
 	if blocked, ok := r.blocked[current.ServiceKey()]; ok {
 		return nil, blocked.refusal
 	}
+	if current.Namespace != types.LocalTLSNamespaceV1 || !utils.IsLocalTLSHostname(current.CanonicalHostname, r.rootHostname) {
+		return nil, errUnauthorized
+	}
 	if current.reverse == nil {
 		return nil, errTransportMismatch
 	}

@@ -1,4 +1,4 @@
-package keyless
+package localtls
 
 import (
 	"bytes"
@@ -30,8 +30,7 @@ import (
 )
 
 var (
-	errAutomaticCanonicalHostnameOnly        = errors.New("automatic certificates support only canonical hostnames")
-	errAutomaticCertificateDirectoryRequired = errors.New("require-local needs automatic certificate storage or certificate files")
+	errAutomaticCertificateDirectoryRequired = errors.New("local TLS needs automatic certificate storage or certificate files")
 	errAutomaticAndManualCertificateConflict = errors.New("automatic certificate storage cannot be combined with certificate files")
 	errAutomaticBundleInvalid                = errors.New("invalid automatic tenant certificate bundle")
 	errAutomaticCertificateMissing           = errors.New("automatic tenant certificate is not available yet")
@@ -41,7 +40,9 @@ var (
 // automaticSource owns persisted keys, issuance requests, and the renewal worker.
 // Cancellation interrupts the local HTTP request; the relay owns order cleanup.
 type automaticSource struct {
-	*relaySource
+	relayURL       string
+	hostname       string
+	headers        func() http.Header
 	certificateDir string
 	cancel         context.CancelFunc
 	done           chan struct{}
@@ -124,8 +125,8 @@ func (c *automaticSource) saveBundle(bundle certificateBundle) error {
 	return os.Rename(name, c.bundlePath())
 }
 
-// initial loads durable local material before considering relay bootstrap.
-func (a *automaticSource) initial(ctx context.Context, requireLocal bool) (*pinnedChain, error) {
+// initial loads durable local material; missing material waits for issuance.
+func (a *automaticSource) initial(ctx context.Context) (*pinnedChain, error) {
 	if err := utils.EnsurePrivateDir(a.certificateDir); err != nil {
 		return nil, err
 	}
@@ -134,7 +135,7 @@ func (a *automaticSource) initial(ctx context.Context, requireLocal bool) (*pinn
 		return nil, err
 	}
 	if bundle.CertificatePEM != "" {
-		pin, err := newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), a.hostname, "")
+		pin, err := newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), a.hostname)
 		if err == nil {
 			return pin, nil
 		}
@@ -145,10 +146,7 @@ func (a *automaticSource) initial(ctx context.Context, requireLocal bool) (*pinn
 		// Expired persisted local material must renew, never restore relay signing.
 		return nil, nil
 	}
-	if requireLocal {
-		return nil, nil
-	}
-	return a.relaySource.acquire(ctx)
+	return nil, nil
 }
 
 func (a *automaticSource) start(c *Client) {
@@ -189,7 +187,7 @@ func (a *automaticSource) maintainCertificate(ctx context.Context, c *Client) {
 			backoff = min(2*backoff, time.Hour)
 		} else {
 			delay, backoff = time.Hour, time.Minute
-			if pin := c.pinned(); pin != nil && pin.signer == nil {
+			if pin := c.pinned(); pin != nil {
 				untilRenewal := time.Until(pin.leaf.NotAfter) - pin.leaf.NotAfter.Sub(pin.leaf.NotBefore)/3
 				delay = min(delay, max(time.Second, untilRenewal))
 			}
@@ -223,7 +221,7 @@ func (c *automaticSource) acquire(ctx context.Context) (*pinnedChain, error) {
 		return nil, err
 	}
 	if bundle.CertificatePEM != "" {
-		pin, err := newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname, "")
+		pin, err := newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname)
 		if err == nil {
 			renewBefore := pin.leaf.NotAfter.Sub(pin.leaf.NotBefore) / 3
 			if time.Until(pin.leaf.NotAfter) > renewBefore {
@@ -309,7 +307,7 @@ func (c *automaticSource) acquire(ctx context.Context) (*pinnedChain, error) {
 	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: c.hostname, Roots: tlsConfig.RootCAs, Intermediates: intermediates}); err != nil {
 		return nil, fmt.Errorf("verify issued tenant certificate: %w", err)
 	}
-	pin, err := newLocalPin(chain, []byte(bundle.KeyPEM), c.hostname, "")
+	pin, err := newLocalPin(chain, []byte(bundle.KeyPEM), c.hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -320,14 +318,14 @@ func (c *automaticSource) acquire(ctx context.Context) (*pinnedChain, error) {
 	return pin, nil
 }
 
-// WaitReady gates traffic until require-local initialization has a usable
+// WaitReady gates traffic until local TLS initialization has a usable
 // certificate. Lease renewal remains the SDK's responsibility while this waits.
 func (c *Client) WaitReady(ctx context.Context) error {
 	if c.pinned() != nil {
 		return nil
 	}
 	if c == nil || c.automatic == nil {
-		return errKeylessClientIsUnavailable
+		return errLocalClientIsUnavailable
 	}
 	select {
 	case <-ctx.Done():
@@ -335,6 +333,6 @@ func (c *Client) WaitReady(ctx context.Context) error {
 	case <-c.ready:
 		return nil
 	case <-c.automatic.done:
-		return errKeylessClientIsUnavailable
+		return errLocalClientIsUnavailable
 	}
 }

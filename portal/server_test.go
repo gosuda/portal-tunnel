@@ -59,7 +59,7 @@ func newStatsLeaseFixture(t *testing.T) (*leaseRegistry, *Server) {
 
 func registerStatsLease(t *testing.T, registry *leaseRegistry) types.RegisterResponse {
 	t.Helper()
-	_, response, err := registry.Register(types.RegisterChallengeRequest{
+	_, _, response, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "stats"),
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
@@ -188,7 +188,7 @@ func checkConcurrentStatsBounds(t *testing.T, server *Server) {
 func reregisterConcurrentLeases(t *testing.T, registry *leaseRegistry, leaseIdentity types.Identity) {
 	t.Helper()
 	for range 10 {
-		_, response, err := registry.Register(types.RegisterChallengeRequest{
+		_, _, response, err := registry.Register(types.RegisterChallengeRequest{
 			Identity: leaseIdentity,
 		}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 		if err != nil {
@@ -335,7 +335,7 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 
 func TestRegisterLeaseWithUDPAndRawTCP(t *testing.T) {
 	registry := newTestRegistry(t, true, true)
-	_, resp, err := registry.Register(types.RegisterChallengeRequest{
+	_, _, resp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:   newTestLeaseIdentity(t, "demo"),
 		UDPEnabled: true,
 		TCPEnabled: true,
@@ -355,7 +355,7 @@ func TestRawPortsAreAllocatedPerIdentity(t *testing.T) {
 	registry := newTestRegistry(t, true, true)
 	register := func(clientIP string) types.RegisterResponse {
 		t.Helper()
-		_, resp, err := registry.Register(types.RegisterChallengeRequest{
+		_, _, resp, err := registry.Register(types.RegisterChallengeRequest{
 			AllowCanonicalFallback: true,
 			Identity:               newTestLeaseIdentity(t, "shared"),
 			UDPEnabled:             true,
@@ -399,7 +399,7 @@ func newConnectTestRelay(t *testing.T) (*Server, *url.URL, string) {
 	t.Helper()
 
 	registry := newTestRegistry(t, false, false)
-	_, registered, err := registry.Register(types.RegisterChallengeRequest{
+	_, _, registered, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "browser"),
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {

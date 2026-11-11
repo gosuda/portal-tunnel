@@ -108,11 +108,9 @@ func (m *Manager) syncChangedAddressRecords(ctx context.Context, state *maintena
 		if publicIP == state.lastPublicIPs[ipv4] {
 			continue
 		}
-		if m.cfg.ENSGaslessEnabled {
-			if err := m.syncTrackedENSGaslessHostAddressRecords(ctx, publicIP); err != nil {
-				syncErr = errors.Join(syncErr, err)
-				continue
-			}
+		if err := m.syncTrackedENSGaslessHostAddressRecords(ctx, publicIP); err != nil {
+			syncErr = errors.Join(syncErr, err)
+			continue
 		}
 		state.lastPublicIPs[ipv4] = publicIP
 	}

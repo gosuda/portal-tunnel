@@ -18,19 +18,21 @@ import (
 
 type leaseRecord struct {
 	types.Identity
-	id                string
-	ExpiresAt         time.Time
-	FirstSeenAt       time.Time
-	LastSeenAt        time.Time
-	sourceAddr        netip.Addr
-	registerSource    netip.Addr
-	ReportedIP        string
-	Hostname          string
-	CanonicalHostname string
-	Metadata          types.LeaseMetadata
-	Overlay           bool
-	pinnedChain       []byte
-	verifiedChain     []byte
+	id                      string
+	ExpiresAt               time.Time
+	FirstSeenAt             time.Time
+	LastSeenAt              time.Time
+	sourceAddr              netip.Addr
+	registerSource          netip.Addr
+	ReportedIP              string
+	Hostname                string
+	Namespace               string
+	LegacyCanonicalHostname string
+	CanonicalHostname       string
+	Metadata                types.LeaseMetadata
+	Overlay                 bool
+	pinnedChain             []byte
+	verifiedChain           []byte
 
 	registerChallenge *identity.RegisterChallenge
 
@@ -47,7 +49,11 @@ type leaseRecord struct {
 }
 
 func (r *leaseRecord) cacheLeaseLocked() cache.Lease {
-	return cache.Lease{ID: r.id, Owner: r.ServiceKey(), Hostname: r.CanonicalHostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
+	hostname := r.CanonicalHostname
+	if r.Namespace == types.LocalTLSNamespaceV1 {
+		hostname = r.LegacyCanonicalHostname
+	}
+	return cache.Lease{ID: r.id, Owner: r.ServiceKey(), Hostname: hostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {
@@ -59,6 +65,9 @@ func (r *leaseRecord) hostnames() []string {
 		return nil
 	}
 	hostnames := []string{r.CanonicalHostname}
+	if r.LegacyCanonicalHostname != "" {
+		hostnames = append(hostnames, r.LegacyCanonicalHostname)
+	}
 	if r.Hostname != "" {
 		hostnames = append(hostnames, r.Hostname)
 	}
@@ -196,7 +205,7 @@ func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manag
 		return nil
 	}
 	for _, hostname := range r.hostnames() {
-		if err := manager.SyncENSGaslessHostname(ctx, hostname, r.Address); err != nil {
+		if err := manager.SyncLeaseHostname(ctx, hostname, r.Address); err != nil {
 			return err
 		}
 	}
@@ -247,7 +256,7 @@ func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
 		// Delete is an enqueue-only operation. Keeping the registry read lock
 		// through the enqueue orders this command against lease registration's
 		// write lock and its later DNS sync enqueue.
-		err := s.acmeManager.DeleteENSGaslessHostname(ctx, hostname)
+		err := s.acmeManager.DeleteLeaseHostname(ctx, hostname)
 		if err != nil {
 			log.Warn().
 				Err(err).

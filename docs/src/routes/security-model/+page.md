@@ -19,6 +19,26 @@ handshake flow, and browser-delegation context, read
 [Building End-to-End TLS Tunnels Without Delegated Credentials](/keyless-tls).
 Raw port transports and opt-in static caching have different boundaries below.
 
+## Local TLS service namespace
+
+`<service>.<40-lowercase-hex-address>.<relay-root>` is a tunnel-owned Local TLS
+endpoint with an exact per-service leaf certificate. It is advertised only after
+capability negotiation and certificate readiness. It never falls back to Keyless
+or redirects automatically; unavailable certificates fail closed. Friendly aliases
+and old one-label address-derived URLs retain their legacy Keyless behavior.
+Moving to a new URL requires explicit application origin and cookie migration.
+
+The relay's existing wildcard cannot cover this two-label namespace. The relay
+still controls DNS/ACME validation and may obtain a new competing certificate;
+CT/CAA observations do not prevent that attack. Native channel binding signs the
+entire hostname, nonce, and current TLS Exporter. Sibling services cannot substitute
+bindings. Standard browser JavaScript cannot obtain the exporter and has no
+identical authentication proof. Legacy relay-cached sessions are outside this
+live tunnel-terminated channel-binding guarantee.
+
+Local HTTP handlers support HTTP/2 with HTTP/1.1 backend translation, and retain
+HTTP/1.1. Raw decrypted stream consumers do not gain HTTP/2 merely from ALPN.
+Neither the friendly Keyless path nor relay-cache/control-plane ALPN changes.
 ## Opt-in Static Cache
 
 `portal expose --serve ./dist --cache` explicitly permits selected relays to
@@ -27,7 +47,9 @@ expose HTTP headers and content to the serving relay. If that connection falls
 back to the live origin, it still trusts the relay; browser-to-origin end-to-end
 TLS is not restored on an already terminated connection.
 
-Only the identity-bound canonical hostname is cacheable. Friendly hostnames
+Only eligible legacy identity-bound hostnames are cacheable. New canonical
+`<service>.<address>.<relay-root>` URLs never use relay static cache, retained
+snapshots, or fallback: their TLS endpoint stays in the tunnel. Friendly hostnames
 are reusable, first-come aliases, so they remain live-origin routes and do not
 serve retained content after the origin disconnects.
 

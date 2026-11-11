@@ -57,7 +57,7 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 	return r.enforceRefuseChallengeBudgetLocked(len(held), issued)
 }
 
-func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, canonicalOnly bool) (string, string, error) {
+func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, canonicalOnly bool, namespace string) (string, string, error) {
 	var publicHostname string
 	if leaseIdentity.Name != "" && !canonicalOnly {
 		var err error
@@ -66,7 +66,15 @@ func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, c
 			return "", "", err
 		}
 	}
-	canonicalHostname, err := utils.CanonicalLeaseHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
+	hostname := utils.CanonicalLeaseHostname
+	switch namespace {
+	case "":
+	case types.LocalTLSNamespaceV1:
+		hostname = utils.LocalTLSLeaseHostname
+	default:
+		return "", "", fmt.Errorf("unsupported namespace %q", namespace)
+	}
+	canonicalHostname, err := hostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
 	if err != nil {
 		return "", "", err
 	}
@@ -86,14 +94,16 @@ func clampRegisterStartedAt(requested time.Time, issuedAt time.Time) time.Time {
 
 func formatRegisterResponse(record *leaseRecord, accessToken string, reverseEndpoint types.ReverseEndpoint) types.RegisterResponse {
 	resp := types.RegisterResponse{
-		Identity:          record.Identity,
-		Hostname:          record.Hostname,
-		CanonicalHostname: record.CanonicalHostname,
-		ExpiresAt:         record.ExpiresAt,
-		AccessToken:       accessToken,
-		ReverseEndpoint:   reverseEndpoint,
-		UDPEnabled:        record.datagram != nil,
-		TCPEnabled:        record.tcpPort > 0,
+		Identity:                record.Identity,
+		Namespace:               record.Namespace,
+		LegacyCanonicalHostname: record.LegacyCanonicalHostname,
+		Hostname:                record.Hostname,
+		CanonicalHostname:       record.CanonicalHostname,
+		ExpiresAt:               record.ExpiresAt,
+		AccessToken:             accessToken,
+		ReverseEndpoint:         reverseEndpoint,
+		UDPEnabled:              record.datagram != nil,
+		TCPEnabled:              record.tcpPort > 0,
 	}
 	if record.datagram != nil {
 		resp.UDPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.datagram.UDPPort())
@@ -113,7 +123,7 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	if err != nil {
 		return nil, "", err
 	}
-	publicHostname, canonicalHostname, err := r.resolveRegisterHostnames(leaseIdentity, req.CanonicalOnly)
+	publicHostname, canonicalHostname, err := r.resolveRegisterHostnames(leaseIdentity, req.CanonicalOnly, req.Namespace)
 	if err != nil {
 		return nil, "", err
 	}
@@ -134,6 +144,7 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	issuedAt := claims.IssuedAt.Time().UTC()
 	record := &leaseRecord{
 		Identity:          leaseIdentity,
+		Namespace:         req.Namespace,
 		id:                leaseID,
 		Hostname:          publicHostname,
 		CanonicalHostname: canonicalHostname,
@@ -146,6 +157,12 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 		registerSource:    sourceAddr,
 		ReportedIP:        utils.SanitizeReportedIP(reportedIP),
 		reverse:           transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
+	}
+	if req.Namespace == types.LocalTLSNamespaceV1 {
+		record.LegacyCanonicalHostname, err = utils.CanonicalLeaseHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	if served != nil {
 		record.pinnedChain = served.CertPEM
@@ -221,7 +238,7 @@ func (r *leaseRegistry) resolveHostnameConflictLocked(record *leaseRecord, exist
 	if existingHostname == "" || existingHostname != record.Hostname {
 		return nil
 	}
-	if !req.AllowCanonicalFallback {
+	if !req.AllowCanonicalFallback && req.Namespace != types.LocalTLSNamespaceV1 {
 		return errHostnameConflict
 	}
 	record.Hostname = ""
@@ -294,13 +311,13 @@ func (r *leaseRegistry) removeRegisterRecordLocked(record *leaseRecord, identity
 	}
 }
 
-func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, types.RegisterResponse, error) {
+func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, *leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
-		return nil, types.RegisterResponse{}, errFeatureUnavailable
+		return nil, nil, types.RegisterResponse{}, errFeatureUnavailable
 	}
 	record, accessToken, err := r.buildRegisterRecord(req, sourceAddr, reportedIP, served)
 	if err != nil {
-		return nil, types.RegisterResponse{}, err
+		return nil, nil, types.RegisterResponse{}, err
 	}
 	identityKey := record.ServiceKey()
 
@@ -308,13 +325,13 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	if err := r.allocateRegisterTransportsLocked(record, req); err != nil {
 		r.mu.Unlock()
 		r.rollbackRecord(record)
-		return nil, types.RegisterResponse{}, err
+		return nil, nil, types.RegisterResponse{}, err
 	}
 	r.mu.Unlock()
 
 	if err := record.Start(); err != nil {
 		r.rollbackRecord(record)
-		return nil, types.RegisterResponse{}, err
+		return nil, nil, types.RegisterResponse{}, err
 	}
 
 	r.mu.Lock()
@@ -323,12 +340,12 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	if err := r.checkRegisterHostnameLocked(record, identityKey, req, now); err != nil {
 		r.mu.Unlock()
 		r.rollbackRecord(record)
-		return nil, types.RegisterResponse{}, err
+		return nil, nil, types.RegisterResponse{}, err
 	}
 	if err := r.checkRegisterCapacityLocked(record, now); err != nil {
 		r.mu.Unlock()
 		r.rollbackRecord(record)
-		return nil, types.RegisterResponse{}, err
+		return nil, nil, types.RegisterResponse{}, err
 	}
 	r.pruneRegisterPendingLocked(record, identityKey)
 	replaced := r.insertRegisterRecordLocked(record, req, replacedIndex, now)
@@ -350,8 +367,8 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 			r.overlay.ForgetLease(record.id)
 		}
 		r.rollbackRecord(record)
-		return nil, types.RegisterResponse{}, err
+		return nil, replaced, types.RegisterResponse{}, err
 	}
 
-	return record, formatRegisterResponse(record, accessToken, reverseEndpoint), nil
+	return record, replaced, formatRegisterResponse(record, accessToken, reverseEndpoint), nil
 }

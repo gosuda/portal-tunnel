@@ -199,6 +199,10 @@ func (s *Server) HandleSign(w http.ResponseWriter, r *http.Request) {
 	s.signer.ServeHTTP(w, r, leaseID)
 }
 func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host string) {
+	if utils.IsLocalTLSHostname(host, s.registry.rootHostname) {
+		http.Error(w, "local TLS hostnames require tunnel termination", http.StatusMisdirectedRequest)
+		return
+	}
 	if req.TLS == nil || utils.NormalizeHostname(req.TLS.ServerName) != host {
 		http.Error(w, "TLS name and request host must match", http.StatusMisdirectedRequest)
 		return

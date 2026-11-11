@@ -24,7 +24,8 @@ import (
 )
 
 type listenerSnapshot struct {
-	hostname string
+	hostname       string
+	legacyHostname string
 
 	aliasHostname       string
 	udpAddr             string
@@ -32,7 +33,7 @@ type listenerSnapshot struct {
 	accessToken         string
 	reverse             types.ReverseEndpoint
 	expiresAt           time.Time
-	tenantTLS           *keyless.Client
+	tenantTLS           tenantTLSClient
 	certificateObserver *keyless.CertificateObserver
 
 	approval RelayApproval
@@ -152,6 +153,9 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 }
 
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && !endpoint.local.Ready() {
+		return ""
+	}
 	return l.leaseURL(lease.hostname)
 }
 
@@ -268,6 +272,17 @@ func (l *listener) runLeaseStartSessions(leaseCtx context.Context, workers *sync
 }
 
 func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.WaitGroup, errCh chan error) {
+	if lease, ok := l.leaseSnapshot(); ok {
+		if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				if endpoint.local.WaitReady(leaseCtx) == nil {
+					l.reportAvailable()
+				}
+			}()
+		}
+	}
 	if l.udpEnabled {
 		workers.Add(1)
 		go func() {
@@ -363,7 +378,7 @@ func (s *runReverseSessionLoopState) runReverseSessionLoopClaimRetry(ctx context
 	return false, nil
 }
 
-func (s *runReverseSessionLoopState) runReverseSessionLoopSettle(ctx context.Context, lease listenerSnapshot, conn net.Conn, tenantTLS *keyless.Client, probeReady chan<- struct{}) (bool, error) {
+func (s *runReverseSessionLoopState) runReverseSessionLoopSettle(ctx context.Context, lease listenerSnapshot, conn net.Conn, tenantTLS tenantTLSClient, probeReady chan<- struct{}) (bool, error) {
 	l := s.listener
 	l.reportStreamReady()
 	select {
@@ -391,10 +406,7 @@ func (s *runReverseSessionLoopState) runReverseSessionLoopSettle(ctx context.Con
 	}
 }
 
-func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, reverseTransport *leaseReverseTransport, probeReady chan<- struct{}) error {
-	if err := tenantTLS.WaitReady(ctx); err != nil {
-		return err
-	}
+func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS tenantTLSClient, sessionSlot int, reverseTransport *leaseReverseTransport, probeReady chan<- struct{}) error {
 	state := &runReverseSessionLoopState{listener: l, sessionSlot: sessionSlot}
 	for {
 		lease, _ := l.leaseSnapshot()
@@ -421,7 +433,7 @@ func (l *listener) failoverReverseEndpoint(ctx context.Context, lease listenerSn
 	return false, nil
 }
 
-func (l *listener) claimReverseSession(ctx context.Context, conn net.Conn, tenantTLS *keyless.Client) (bool, error) {
+func (l *listener) claimReverseSession(ctx context.Context, conn net.Conn, tenantTLS tenantTLSClient) (bool, error) {
 	defer l.reportStreamClosed()
 	binding, err := transport.ReadStart(ctx, conn, defaultHandshakeTimeout)
 	if err != nil {

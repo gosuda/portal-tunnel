@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -163,6 +165,7 @@ func (l *listener) runRenewLoop(ctx context.Context) error {
 		if err := l.renewLeaseWithRetry(ctx); err != nil {
 			return err
 		}
+		l.reportAvailable()
 	}
 }
 
@@ -283,7 +286,7 @@ func (l *listener) applyRenewedLease(ctx context.Context, lease listenerSnapshot
 	return nil
 }
 
-func (l *listener) refreshTenantChain(ctx context.Context, tenantTLS *keyless.Client) bool {
+func (l *listener) refreshTenantChain(ctx context.Context, tenantTLS tenantTLSClient) bool {
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	changed, err := tenantTLS.RefreshChain(checkCtx)
@@ -309,7 +312,6 @@ func (l *listener) refreshTenantChain(ctx context.Context, tenantTLS *keyless.Cl
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	registerReq := types.RegisterChallengeRequest{
 		AllowCanonicalFallback: true,
-		CanonicalOnly:          l.tlsStateDir != "",
 		Identity:               l.identity,
 		Metadata:               l.metadataSnapshot(),
 		Overlay:                l.overlay,
@@ -318,15 +320,17 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		TCPEnabled:             l.tcpEnabled,
 		StartedAt:              l.startedAt,
 	}
+	if l.tlsStateDir != "" || l.tlsCertFile != "" {
+		registerReq.Namespace = types.LocalTLSNamespaceV1
+	}
 	l.cache.ConfigureRegistration(&registerReq)
 	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))
 	if err != nil {
 		return err
 	}
-	if l.tlsStateDir != "" {
-		// Automatic certificates cannot safely outlive a reassigned alias.
-		// Older relays may ignore CanonicalOnly; never advertise that alias.
-		resp.Hostname = ""
+	if resp.Namespace != types.LocalTLSNamespaceV1 && (l.tlsRequireLocal || l.tlsCertFile != "") {
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
+		return fmt.Errorf("%w: relay does not support the required Local TLS namespace", errRelayIncompatible)
 	}
 	if err := l.confirmNewRegistration(resp); err != nil {
 		return err
@@ -362,21 +366,38 @@ func (l *listener) confirmNewRegistration(resp types.RegisterResponse) error {
 	return nil
 }
 
-func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse, observer *keyless.CertificateObserver) (*keyless.Client, error) {
-	tenantTLS, err := keyless.NewClient(ctx, keyless.ClientConfig{
-		AlternativeHostname:   resp.Hostname,
-		CertFile:              l.tlsCertFile,
-		KeyFile:               l.tlsKeyFile,
-		CertificateDir:        l.tlsStateDir,
-		RequireLocal:          l.tlsRequireLocal,
-		InstalledCertificates: observer.Events(),
-		RelayURL:              l.api.relayURL.String(),
-		Hostname:              resp.CanonicalHostname,
-		AccessToken:           resp.AccessToken,
+func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse, observer *keyless.CertificateObserver) (tenantTLSClient, error) {
+	legacyHostname := resp.CanonicalHostname
+	if resp.Namespace == types.LocalTLSNamespaceV1 {
+		legacyHostname = resp.LegacyCanonicalHostname
+	}
+	legacy, err := keyless.NewClient(ctx, keyless.ClientConfig{
+		AlternativeHostname: resp.Hostname,
+		RelayURL:            l.api.relayURL.String(),
+		Hostname:            legacyHostname,
+		AccessToken:         resp.AccessToken,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return nil, err
+	}
+	var tenantTLS tenantTLSClient = legacy
+	if resp.Namespace == types.LocalTLSNamespaceV1 {
+		local, localErr := localtls.NewClient(ctx, localtls.ClientConfig{
+			RelayURL: l.api.relayURL.String(), Hostname: resp.CanonicalHostname,
+			AccessToken: resp.AccessToken, CertificateDir: l.tlsStateDir,
+			CertFile: l.tlsCertFile, KeyFile: l.tlsKeyFile,
+			InstalledCertificates: observer.Events(),
+		})
+		if localErr != nil {
+			_ = legacy.Close()
+			_ = l.api.unregister(context.Background(), resp.AccessToken)
+			return nil, localErr
+		}
+		if l.http2Enabled.Load() {
+			local.SetNextProtos([]string{"h2", "http/1.1"})
+		}
+		tenantTLS = &namespaceTLS{local: local, legacy: legacy, hostname: resp.CanonicalHostname, legacyHostname: legacyHostname, aliasHostname: resp.Hostname}
 	}
 	if ctx.Err() != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
@@ -386,9 +407,10 @@ func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterR
 	return tenantTLS, nil
 }
 
-func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS *keyless.Client, observer *keyless.CertificateObserver) error {
+func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS tenantTLSClient, observer *keyless.CertificateObserver) error {
 	next := listenerSnapshot{
 		hostname:            resp.CanonicalHostname,
+		legacyHostname:      resp.LegacyCanonicalHostname,
 		aliasHostname:       resp.Hostname,
 		udpAddr:             resp.UDPAddr,
 		tcpAddr:             resp.TCPAddr,
@@ -400,6 +422,9 @@ func (l *listener) storeRegistrationLease(ctx context.Context, resp types.Regist
 		chainCheckedAt:      time.Now(),
 	}
 	oldLease := l.lease.Swap(next)
+	if l.http2Enabled.Load() {
+		l.enableHTTP2()
+	}
 	if oldLease.tenantTLS != nil {
 		_ = oldLease.tenantTLS.Close()
 		oldLease.certificateObserver.Close()

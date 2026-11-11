@@ -1,4 +1,4 @@
-package keyless
+package localtls
 
 import (
 	"bytes"
@@ -23,7 +23,7 @@ import (
 func TestAutomaticCertificateState(t *testing.T) {
 	const hostname = "tenant.test.example"
 	dir := t.TempDir()
-	client := &automaticSource{relaySource: &relaySource{hostname: hostname, relayURL: "https://127.0.0.1:1", serverName: "127.0.0.1", headers: func() http.Header { return http.Header{} }}, certificateDir: dir}
+	client := &automaticSource{hostname: hostname, relayURL: "https://127.0.0.1:1", headers: func() http.Header { return http.Header{} }, certificateDir: dir}
 	// Failed initial issuance keeps its generated key for the next attempt.
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
@@ -58,7 +58,7 @@ func TestAutomaticCertificateState(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A restart with persisted usable material has no dependency on the issuer.
-	restarted, err := NewClient(t.Context(), ClientConfig{RelayURL: client.relayURL, Hostname: hostname, CertificateDir: dir, RequireLocal: true})
+	restarted, err := NewClient(t.Context(), ClientConfig{RelayURL: client.relayURL, Hostname: hostname, CertificateDir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,21 +75,19 @@ func TestAutomaticCertificateState(t *testing.T) {
 	if err := os.WriteFile(client.bundlePath(), []byte("corrupt"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, requireLocal := range []bool{false, true} {
-		if got, err := NewClient(t.Context(), ClientConfig{RelayURL: client.relayURL, Hostname: hostname, CertificateDir: dir, RequireLocal: requireLocal}); err == nil {
-			got.Close()
-			t.Fatal("corrupt state silently selected bootstrap")
-		}
+	if got, err := NewClient(t.Context(), ClientConfig{RelayURL: client.relayURL, Hostname: hostname, CertificateDir: dir}); err == nil {
+		got.Close()
+		t.Fatal("corrupt persisted material accepted")
 	}
 }
 
-func TestAutomaticCertificateRequireLocalReadiness(t *testing.T) {
-	client, err := NewClient(t.Context(), ClientConfig{RelayURL: "https://127.0.0.1:1", Hostname: "tenant.test.example", CertificateDir: t.TempDir(), RequireLocal: true})
+func TestAutomaticCertificateReadiness(t *testing.T) {
+	client, err := NewClient(t.Context(), ClientConfig{RelayURL: "https://127.0.0.1:1", Hostname: "tenant.test.example", CertificateDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if client.pinned() != nil {
-		t.Fatal("require-local bootstrapped relay signer")
+		t.Fatal("local TLS became ready without a certificate")
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -146,7 +144,7 @@ func TestExpiredAutomaticCertificateDoesNotBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := &automaticSource{relaySource: &relaySource{hostname: hostname}, certificateDir: dir}
+	owner := &automaticSource{hostname: hostname, certificateDir: dir}
 	if err := owner.saveBundle(certificateBundle{
 		Hostname:       hostname,
 		KeyPEM:         string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})),
@@ -164,108 +162,6 @@ func TestExpiredAutomaticCertificateDoesNotBootstrap(t *testing.T) {
 	}
 }
 
-func TestAutomaticBootstrapRefreshDuringIssuanceOutage(t *testing.T) {
-	issuer := newTestIssuer(t)
-	before, renewed := issuer.issue(t, 2), issuer.issue(t, 3)
-	relay := newRelayStandIn(t, before)
-	client := relay.newClient(t)
-	// The shared refresh owner also operates during automatic bootstrap.
-	client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
-	relay.renew(renewed, true)
-	changed, err := client.RefreshChain(t.Context())
-	if err == nil || !changed {
-		t.Fatalf("missing local bundle: changed=%v error=%v", changed, err)
-	}
-	if relay.issuanceRequests.Load() != 0 {
-		t.Fatal("bootstrap lease check initiated issuance")
-	}
-	leaf, err := relay.visit(t, client, issuer.pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(leaf.Raw, renewed.leaf.Raw) {
-		t.Fatal("bootstrap did not adopt renewed relay material")
-	}
-}
-
-func TestAutomaticCertificateRejectsAlias(t *testing.T) {
-	client, err := NewClient(t.Context(), ClientConfig{
-		RelayURL: "https://127.0.0.1:1", Hostname: "tenant.test.example",
-		AlternativeHostname: "alias.test.example", CertificateDir: t.TempDir(),
-	})
-	if !errors.Is(err, errAutomaticCanonicalHostnameOnly) {
-		if client != nil {
-			client.Close()
-		}
-		t.Fatalf("automatic alias configuration = %v", err)
-	}
-}
-
-func TestStaleBootstrapRecoveryDoesNotWaitForIssuance(t *testing.T) {
-	issuer := newTestIssuer(t)
-	relay := newRelayStandIn(t, issuer.issue(t, 2))
-	client := relay.newClient(t)
-	client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
-	stale := client.pinned()
-	renewed := issuer.issue(t, 3)
-	relay.renew(renewed, true)
-	// Stale TLS recovery remains independent of another chain reload.
-	client.refreshMu.Lock()
-	defer client.refreshMu.Unlock()
-	changed, err := client.refreshChain(t.Context(), stale)
-	if err != nil || !changed {
-		t.Fatalf("stale bootstrap recovery = %v, %v", changed, err)
-	}
-	// The issuing endpoint is absent, so success proves it was not called.
-	leaf, err := relay.visit(t, client, issuer.pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(leaf.Raw, renewed.leaf.Raw) {
-		t.Fatal("stale bootstrap retained old certificate")
-	}
-	if _, err := os.Stat(client.automatic.bundlePath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale recovery touched issuance state: %v", err)
-	}
-}
-
-// The local lease lifecycle must not wait for remote CA/DNS work after its HTTP
-// request is canceled. The relay remains responsible for serializing and cleaning
-// up that work; this client does not spawn a detached replacement worker.
-func TestAutomaticCloseCancelsPendingIssuance(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-release
-	}))
-	defer server.Close()
-	defer close(release)
-	client, err := NewClient(t.Context(), ClientConfig{RelayURL: server.URL, Hostname: "tenant.test.example", CertificateDir: t.TempDir(), RequireLocal: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("issuance did not start")
-	}
-	done := make(chan error, 1)
-	go func() { done <- client.Close() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Close waited for remote issuance")
-	}
-	if err := client.WaitReady(t.Context()); err == nil {
-		t.Fatal("closed client became ready")
-	}
-}
-
 // Lease checks cannot initiate issuance after a failure or cancel a slow worker
 // attempt. A gate models CA work outliving the lease caller's deadline.
 func TestAutomaticWorkerOwnsIssuanceAfterFailure(t *testing.T) {
@@ -274,6 +170,11 @@ func TestAutomaticWorkerOwnsIssuanceAfterFailure(t *testing.T) {
 	var requests atomic.Int64
 	started, release := make(chan struct{}), make(chan struct{})
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != types.PathV1TenantCertificate {
+			t.Errorf("unexpected relay endpoint: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
 		if requests.Add(1) == 1 {
 			http.Error(w, "temporary issuance failure", http.StatusServiceUnavailable)
 			return
@@ -300,6 +201,7 @@ func TestAutomaticWorkerOwnsIssuanceAfterFailure(t *testing.T) {
 			return
 		}
 		template := *issuer.issue(t, 3).leaf
+		template.IPAddresses = nil
 		der, err := x509.CreateCertificate(rand.Reader, &template, issuer.cert, csr.PublicKey, issuer.key)
 		if err != nil {
 			t.Error(err)
@@ -313,8 +215,7 @@ func TestAutomaticWorkerOwnsIssuanceAfterFailure(t *testing.T) {
 	server.StartTLS()
 	defer server.Close()
 	client := &Client{hostname: tenantHostname, ready: make(chan struct{})}
-	client.relay = &relaySource{hostname: tenantHostname, relayURL: server.URL, headers: client.headers}
-	client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
+	client.automatic = &automaticSource{hostname: tenantHostname, relayURL: server.URL, headers: client.headers, certificateDir: t.TempDir()}
 	if _, err := client.automatic.acquire(t.Context()); err == nil {
 		t.Fatal("initial issuance succeeded")
 	}
@@ -352,7 +253,7 @@ func TestAutomaticWorkerOwnsIssuanceAfterFailure(t *testing.T) {
 	if err := client.WaitReady(readyCtx); err != nil {
 		t.Fatal(err)
 	}
-	if !client.pinned().local || requests.Load() != 2 {
+	if client.pinned() == nil || requests.Load() != 2 {
 		t.Fatal("worker did not exclusively activate local material")
 	}
 	installed, err := client.automatic.readBundle()
@@ -379,7 +280,7 @@ func TestAutomaticRetryAfterIsBounded(t *testing.T) {
 				http.Error(w, "retry later", http.StatusTooManyRequests)
 			}))
 			defer server.Close()
-			source := &automaticSource{relaySource: &relaySource{hostname: tenantHostname, relayURL: server.URL, headers: func() http.Header { return http.Header{} }}, certificateDir: t.TempDir()}
+			source := &automaticSource{hostname: tenantHostname, relayURL: server.URL, headers: func() http.Header { return http.Header{} }, certificateDir: t.TempDir()}
 			_, err := source.acquire(t.Context())
 			var retry *certificateRetryError
 			if !errors.As(err, &retry) || retry.delay != test.want {

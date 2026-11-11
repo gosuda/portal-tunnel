@@ -132,9 +132,9 @@ func registerPaymentTransportFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *
 }
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
-	fs.BoolVar(&cfg.TLSAuto, "tls-auto", false, "Obtain and renew tunnel-owned certificates through the relay; Keyless bootstrap is allowed unless --tls-require-local")
+	fs.BoolVar(&cfg.TLSAuto, "tls-auto", false, "Obtain and renew exact service.address certificates; canonical TLS never falls back to Keyless")
 	fs.StringVar(&cfg.TLSStateDir, "tls-state-dir", "", "Persistent certificate/key directory for --tls-auto (default identity path plus .tls; required with --identity-json)")
-	fs.BoolVar(&cfg.TLSRequireLocal, "tls-require-local", false, "Require a local certificate before accepting traffic; never fall back to relay signing")
+	fs.BoolVar(&cfg.TLSRequireLocal, "tls-require-local", false, "Require relay support for the Local TLS namespace; reject legacy-only relays")
 	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "Tenant certificate chain PEM file; requires --tls-key and never falls back to relay signing")
 	fs.StringVar(&cfg.TLSKey, "tls-key", "", "Tenant private key PEM file; requires --tls-cert")
 	fs.StringVar(&cfg.TLSMonitorStateDir, "tls-monitor-state-dir", "", "Enable evaluation-only certificate monitoring and persist evidence here; sends hostname queries to public DNS and CertSpotter")

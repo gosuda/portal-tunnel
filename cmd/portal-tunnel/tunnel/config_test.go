@@ -384,3 +384,18 @@ func TestCertificateMonitoringConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalTLSSelectsHTTPHandler(t *testing.T) {
+	for _, config := range []Config{
+		{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs"},
+		{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem"},
+	} {
+		spec, err := config.Spec()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if spec.HTTP == nil {
+			t.Fatal("Local TLS targets need HTTP handling for h2 translation")
+		}
+	}
+}

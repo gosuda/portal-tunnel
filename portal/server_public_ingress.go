@@ -24,7 +24,9 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 	}
 	helloSpan := clientHello.HandshakeMessage
 	serverName := utils.NormalizeHostname(clientHello.ServerName)
-	if serverName == "" || serverName == s.identity.Name || s.registry.cache.Has(serverName) {
+	localTLS := utils.IsLocalTLSHostname(serverName, s.registry.rootHostname)
+	relayAPI := serverName == "" || serverName == s.identity.Name
+	if !localTLS && (relayAPI || s.registry.cache.Has(serverName)) {
 		select {
 		case s.apiHandoff.conns <- wrappedConn:
 		case <-s.apiHandoff.done:

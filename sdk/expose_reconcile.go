@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +18,13 @@ type exposureConn struct {
 	localAddr  string
 	remoteAddr string
 	closeOnce  sync.Once
+}
+
+func (c *exposureConn) ConnectionState() tls.ConnectionState {
+	if conn, ok := c.Conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+		return conn.ConnectionState()
+	}
+	return tls.ConnectionState{}
 }
 
 func (c *exposureConn) CloseWrite() error {
@@ -269,6 +277,9 @@ func (e *Exposure) publishRelayListenerLocked(relayURL string) (bool, error) {
 	})
 	if err != nil {
 		return false, err
+	}
+	if e.http2Enabled {
+		listener.enableHTTP2()
 	}
 	return e.publishCreatedListener(relayURL, listener), nil
 }

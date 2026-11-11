@@ -115,11 +115,16 @@ func (m *Manager) syncENSDNSSEC(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address string) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+// SyncLeaseHostname maintains exact canonical address records even without ENS.
+// It shares the serialized DNS lifecycle and durable tracking used by ENS aliases.
+func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address string) error {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
+	if !m.cfg.ENSGaslessEnabled && !utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
+		return nil
+	}
 	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" {
 		return errHostnameIsRequired
@@ -135,11 +140,14 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 	return m.queueENSCommand(ctx, ensDNSCommand{hostname: hostname, address: address})
 }
 
-func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) error {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
+	if !m.cfg.ENSGaslessEnabled && !utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
+		return nil
+	}
 	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" {
 		return nil
@@ -177,6 +185,9 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		if err := m.ensureENSCommandAddresses(ctx, command); err != nil {
 			return err
 		}
+	}
+	if !m.cfg.ENSGaslessEnabled && utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
+		return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string { return append(hostnames, command.hostname) })
 	}
 	return m.applyENSCommandStoreGaslessTXT(ctx, command)
 }

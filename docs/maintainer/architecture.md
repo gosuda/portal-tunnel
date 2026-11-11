@@ -295,18 +295,24 @@ cancellation or exposure closure closes and joins those local connections.
 
 ### Tenant TLS certificate ownership
 
-The keyless client owns validated, immutable certificate/signer generations,
-atomic activation, readiness, and in-flight handshake safety. Concrete internal
-relay, manual-file, and automatic certificate sources own acquisition. The
-automatic source additionally owns persisted bundles, CSR issuance, renewal,
-and cancellation/join of its worker. Only that worker submits CSRs; lease chain
-checks reload persisted bundles or rotate the bootstrap relay chain without
-starting issuance. The persisted P-256 key is intentionally reused across retries,
-renewals, and restarts; automatic key rotation is not implemented. Failed issuance
-uses exponential backoff from one minute to one hour, honoring a relay's
-`Retry-After` seconds or HTTP date up to a one-hour cap. Shutdown interrupts both
-requests and retry waits. Once local material is installed, a failed
-renewal cannot restore relay-backed signing.
+The negotiated `local-tls-v1` namespace fixes TLS policy by hostname. Friendly
+and legacy canonical URLs use the relay-backed Keyless engine. New exact
+`<service>.<address>.<root>` canonical URLs use a separate `portal/localtls`
+endpoint based on Go `crypto/tls`; they never use Keyless or relay static cache.
+Each endpoint retains atomic certificate rotation and in-flight handshake safety.
+The SDK dispatches by exact lease hostname and advertises canonical readiness
+only while usable local material exists. Legacy clients and relays retain their
+original URL and cache behavior through capability negotiation.
+
+The local endpoint's automatic source owns persisted bundles, CSR issuance,
+renewal, and cancellation/join of its worker. Only that worker submits CSRs;
+lease chain checks reload persisted bundles without starting issuance. The
+persisted P-256 key is intentionally reused across retries, renewals, and
+restarts; automatic key rotation is not implemented. Failed issuance uses
+exponential backoff from one minute to one hour, honoring a relay's `Retry-After`
+seconds or HTTP date up to a one-hour cap. Shutdown interrupts requests and
+retry waits. Missing or expired local material fails closed on the new canonical
+hostname without changing the separate friendly Keyless endpoint.
 
 The SDK lease separately owns the optional CAA/CT observer. It receives the
 canonical hostname and bounded, copied public leaf installation events, not the

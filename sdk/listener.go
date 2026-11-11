@@ -15,6 +15,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -72,6 +73,7 @@ type listenerStatus struct {
 	approval  RelayApproval
 	err       error
 	publicURL string
+	legacyURL string
 	aliasURL  string
 	udpAddr   string
 	tcpAddr   string
@@ -84,7 +86,7 @@ func isTerminalRelayError(err error) bool {
 	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok && apiErr.IsRateLimited() {
 		return false
 	}
-	if errors.Is(err, errRelayIncompatible) || errors.Is(err, keyless.ErrLocalCertificate) {
+	if errors.Is(err, errRelayIncompatible) || errors.Is(err, localtls.ErrLocalCertificate) {
 		return true
 	}
 	if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
@@ -156,6 +158,7 @@ type listener struct {
 	mitmManager   *mitmManager
 	statusUpdates chan listenerStatus
 	readySessions atomic.Int32
+	http2Enabled  atomic.Bool
 
 	api           *apiClient
 	reverseTLSMu  sync.Mutex
@@ -305,7 +308,7 @@ func (l *listener) reportAvailable() {
 		return
 	}
 	state := RelayConnecting
-	if l.readySessions.Load() > 0 {
+	if l.readySessions.Load() > 0 && l.publicURLForLease(lease) != "" {
 		state = RelayReady
 	}
 	if state == RelayConnecting && lease.approval != "" {
@@ -319,6 +322,7 @@ func (l *listener) reportAvailable() {
 	l.report(listenerStatus{
 		state:     state,
 		publicURL: l.publicURLForLease(lease),
+		legacyURL: l.leaseURL(lease.legacyHostname),
 		aliasURL:  l.aliasURLForLease(lease),
 		udpAddr:   udpAddr,
 		tcpAddr:   lease.tcpAddr,

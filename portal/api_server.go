@@ -282,6 +282,7 @@ func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescr
 // facilitator (cmd/relay-server); this report stays x402-blind.
 func (s *Server) DomainReport() types.DomainResponse {
 	return types.DomainResponse{
+		Namespaces:      []string{types.LocalTLSNamespaceV1},
 		Cache:           s.registry.cache.Limits(),
 		ProtocolVersion: types.SDKVersion,
 		ReleaseVersion:  types.ReleaseVersion,

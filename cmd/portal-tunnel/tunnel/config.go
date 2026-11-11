@@ -199,7 +199,10 @@ func (c Config) Spec() (Spec, error) {
 
 func buildConfigSpecHTTP(c Config) *HTTPConfig {
 	auth := c.AuthConfig
-	if c.Serve == "" && len(c.HTTPRoutes) == 0 && auth.IsZero() && c.Cache == nil && len(c.StripRequestHeaders) == 0 {
+	localTLS := c.TLSAuto || c.TLSCert != ""
+	httpRouting := c.Serve != "" || len(c.HTTPRoutes) != 0
+	httpPolicy := !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) != 0
+	if !localTLS && !httpRouting && !httpPolicy {
 		return nil
 	}
 	httpConfig := &HTTPConfig{

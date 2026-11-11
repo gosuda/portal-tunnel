@@ -160,16 +160,18 @@ func (r *leaseRegistry) deleteRecord(i int) {
 
 func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 	lease := types.Lease{
-		Name:              record.Name,
-		Address:           record.Address,
-		ExpiresAt:         record.ExpiresAt,
-		FirstSeenAt:       record.FirstSeenAt,
-		LastSeenAt:        record.LastSeenAt,
-		Hostname:          record.Hostname,
-		CanonicalHostname: record.CanonicalHostname,
-		UDPEnabled:        record.datagram != nil,
-		TCPEnabled:        record.tcpPort > 0,
-		Metadata:          record.Metadata.Copy(),
+		Namespace:               record.Namespace,
+		LegacyCanonicalHostname: record.LegacyCanonicalHostname,
+		Name:                    record.Name,
+		Address:                 record.Address,
+		ExpiresAt:               record.ExpiresAt,
+		FirstSeenAt:             record.FirstSeenAt,
+		LastSeenAt:              record.LastSeenAt,
+		Hostname:                record.Hostname,
+		CanonicalHostname:       record.CanonicalHostname,
+		UDPEnabled:              record.datagram != nil,
+		TCPEnabled:              record.tcpPort > 0,
+		Metadata:                record.Metadata.Copy(),
 	}
 	if record.tcpPort > 0 {
 		lease.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort)

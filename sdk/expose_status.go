@@ -24,11 +24,31 @@ func (e *Exposure) Relays() []RelayStatus {
 	e.mu.RLock()
 	relays := make([]RelayStatus, 0, len(e.statuses))
 	for _, status := range e.statuses {
-		relays = append(relays, status)
+		relays = append(relays, e.currentRelayStatusLocked(status))
 	}
 	e.mu.RUnlock()
 	slices.SortFunc(relays, compareRelayStatusRelays)
 	return relays
+}
+
+// Re-evaluate certificate validity at read time, including idle connections
+// whose certificate may have expired since the last transport status event.
+func (e *Exposure) currentRelayStatusLocked(status RelayStatus) RelayStatus {
+	listener := e.relayListeners[status.RelayURL]
+	if listener == nil {
+		return status
+	}
+	lease, ok := listener.leaseSnapshot()
+	if !ok {
+		return status
+	}
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && !endpoint.local.Ready() {
+		status.PublicURL = ""
+		if status.State == RelayReady {
+			status.State = RelayConnecting
+		}
+	}
+	return status
 }
 
 func compareRelayStatusRelays(a, b RelayStatus) int {
@@ -160,15 +180,18 @@ func mergeRelayScalarFieldsLocked(previous RelayStatus, update listenerStatus, r
 func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayStatus {
 	if update.state == RelayFailed {
 		status.AliasURL = ""
+		status.LegacyURL = ""
 	}
 	if update.state == RelayConnecting {
 		status.PublicURL = ""
+		status.LegacyURL = ""
 		status.AliasURL = ""
 		status.UDPAddr = ""
 		status.TCPAddr = ""
 	}
-	if update.publicURL != "" || update.state == RelayReady {
+	if update.publicURL != "" || update.legacyURL != "" || update.aliasURL != "" || update.state == RelayReady {
 		status.PublicURL = update.publicURL
+		status.LegacyURL = update.legacyURL
 		status.AliasURL = update.aliasURL
 	}
 	if update.udpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
@@ -181,7 +204,7 @@ func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayS
 }
 
 func (e *Exposure) announceRelayStatusChange(previous, status RelayStatus) {
-	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
+	advertised := (previous.State != RelayReady || previous.PublicURL != status.PublicURL) && status.State == RelayReady && status.PublicURL != ""
 	if advertised {
 		message := "service ready at " + status.PublicURL
 		if status.AliasURL != "" {
@@ -258,6 +281,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 	}
 	return a.RelayURL == b.RelayURL &&
 		a.PublicURL == b.PublicURL &&
+		a.LegacyURL == b.LegacyURL &&
 		a.AliasURL == b.AliasURL &&
 		a.UDPAddr == b.UDPAddr &&
 		a.TCPAddr == b.TCPAddr &&
@@ -352,6 +376,7 @@ func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <
 	allTerminal := len(e.statuses) > 0
 	var terminalErr error
 	for _, status := range e.statuses {
+		status = e.currentRelayStatusLocked(status)
 		if matches(status) {
 			ready = append(ready, status)
 		}

@@ -41,16 +41,69 @@ func NormalizeServiceName(raw string) (string, error) {
 }
 
 // ExtractCanonicalHostnameAddress extracts the 40-character hexadecimal EVM
-// address embedded in the first DNS label of a canonical Portal lease hostname
-// (<address>.<root>, <name>-<address>.<root>, or <hash>--<address>.<root>) and
-// returns it with a lowercase 0x prefix.
+// address from the second label of a service.address.root hostname, or the
+// first label of a legacy canonical hostname, with a lowercase 0x prefix.
+// Routing must additionally validate depth relative to its configured root.
 func ExtractCanonicalHostnameAddress(hostname string) (string, error) {
 	label, rest, ok := strings.Cut(NormalizeHostWithoutPort(hostname), ".")
-	if !ok || label == "" || rest == "" || !hasCanonicalShape(label) {
+	if !ok || label == "" || rest == "" {
 		return "", errHostnameDoesNotContainCanonicalLease
 	}
-	address := label[len(label)-40:]
-	return "0x" + strings.ToLower(address), nil
+	// Service labels cannot have the legacy canonical shape. Check it first so
+	// a relay root beginning with a hexadecimal label cannot replace the owner.
+	if hasCanonicalShape(label) {
+		return "0x" + strings.ToLower(label[len(label)-40:]), nil
+	}
+	if address, root, found := strings.Cut(rest, "."); found && root != "" && isHexAddress(address) {
+		if normalized, err := NormalizeServiceName(label); err == nil && normalized == label {
+			return "0x" + strings.ToLower(address), nil
+		}
+	}
+	return "", errHostnameDoesNotContainCanonicalLease
+}
+
+// LocalTLSLeaseHostname binds an exact service label and wallet under the relay
+// root. The reserved default label represents an unnamed service.
+func LocalTLSLeaseHostname(name, address, rootHost string) (string, error) {
+	label := types.UnnamedServiceLabel
+	if strings.TrimSpace(name) != "" {
+		var err error
+		label, err = NormalizeServiceName(name)
+		if err != nil {
+			return "", err
+		}
+		if label == types.UnnamedServiceLabel {
+			return "", fmt.Errorf("service name %q is reserved for unnamed services", label)
+		}
+	}
+	addressHost, err := CanonicalLeaseHostname("", address, rootHost)
+	if err != nil {
+		return "", err
+	}
+	hostname := label + "." + addressHost
+	if len(hostname) > 253 {
+		return "", fmt.Errorf("local TLS hostname exceeds DNS length limit")
+	}
+	return hostname, nil
+}
+
+// IsLocalTLSHostname recognizes the exact two-label namespace relative to the
+// configured root, never by an absolute DNS depth.
+func IsLocalTLSHostname(hostname, rootHost string) bool {
+	root := NormalizeHostWithoutPort(rootHost)
+	if ip := net.ParseIP(root); ip != nil && ip.IsLoopback() {
+		root = "localhost"
+	}
+	relative, ok := strings.CutSuffix(NormalizeHostWithoutPort(hostname), "."+root)
+	if !ok || root == "" {
+		return false
+	}
+	labels := strings.Split(relative, ".")
+	if len(labels) != 2 || !isHexAddress(labels[1]) {
+		return false
+	}
+	label, err := NormalizeServiceName(labels[0])
+	return err == nil && label == labels[0]
 }
 
 func hasCanonicalShape(label string) bool {

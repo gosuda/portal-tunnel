@@ -26,6 +26,8 @@ import (
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/idna"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
@@ -282,7 +284,7 @@ func (m *certificateMonitor) rememberLocalCertificate(cert *x509.Certificate) {
 	}
 	// Installation events and polls share one worker, but multiple SDK leases
 	// or processes may use the same hostname's public history.
-	lock, err := lockCertificate(filepath.Join(m.dir, "local.lock"))
+	lock, err := utils.TryLockFile(filepath.Join(m.dir, "local.lock"))
 	if err != nil {
 		m.warn("cannot lock local public certificate history", err)
 		return
@@ -608,7 +610,7 @@ func (m *certificateMonitor) poll(parent context.Context) {
 		return
 	}
 	// Reuse the existing cross-process lock, without coupling to issuance locks.
-	lock, err := lockCertificate(filepath.Join(m.dir, "evidence.json.lock"))
+	lock, err := utils.TryLockFile(filepath.Join(m.dir, "evidence.json.lock"))
 	if err != nil {
 		m.warn("cannot lock evidence storage", err)
 		return

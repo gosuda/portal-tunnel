@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -57,27 +57,32 @@ func writeTenantCertificate(t *testing.T, hostnames ...string) (string, string) 
 	return certFile, keyFile
 }
 
-// A certificate unrelated to the relay's certificate must work through the
-// real relay, exposure, tenant TLS engine, and exporter self-probe.
+// An exact tenant leaf uses separate trust from the relay and never needs to
+// cover the friendly alias, which stays on the Keyless path.
 func TestLocalTenantCertificate(t *testing.T) {
-	certFile, keyFile := writeTenantCertificate(t, "*.localhost", "*.127.0.0.1")
-	logs := captureSDKLogs(t)
-	h := newHarness(t, sdk.WithTLSCertificate(certFile, keyFile), sdk.WithMITMProtection(true))
-	publicURL := h.waitForPublicURL()
-	if body, ok := tenantGet(h.sniAddr, certFile, publicURL); !ok || body != marker {
-		t.Fatalf("local certificate tenant response = %q, success %v", body, ok)
+	h := newHarness(t)
+	h.waitForPublicURL()
+	id, err := identity.Generate("manual")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := tenantGet(h.sniAddr, h.certificate, publicURL); ok {
+	hostname, err := utils.LocalTLSLeaseHostname(id.Name, id.Address, "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	certFile, keyFile := writeTenantCertificate(t, hostname)
+	_, ready := namespaceService(t, h, id, marker, sdk.WithTLSCertificate(certFile, keyFile))
+	if body, ok := tenantGet(h.sniAddr, certFile, ready.PublicURL); !ok || body != marker {
+		t.Fatalf("manual leaf response=%q ok=%v", body, ok)
+	}
+	if _, ok := tenantGet(h.sniAddr, h.certificate, ready.PublicURL); ok {
 		t.Fatal("tenant unexpectedly used relay certificate")
 	}
-	deadline := time.Now().Add(20 * time.Second)
-	tick := time.NewTicker(20 * time.Millisecond)
-	defer tick.Stop()
-	for !logs.contains("tls passthrough self-probe passed") {
-		if time.Now().After(deadline) {
-			t.Fatalf("local tenant exporter probe failed: %s", logs.snapshot())
-		}
-		<-tick.C
+	if ready.AliasURL == "" {
+		t.Fatal("manual leaf unnecessarily suppressed friendly alias")
+	}
+	if body, ok := tenantGet(h.sniAddr, h.certificate, ready.AliasURL); !ok || body != marker {
+		t.Fatalf("friendly keyless response=%q ok=%v", body, ok)
 	}
 }
 
@@ -88,92 +93,16 @@ func TestLocalTenantCertificateWrongHostnameFailsReady(t *testing.T) {
 	defer cancel()
 	_, err := h.exposure.WaitReady(ctx)
 	var hostnameErr x509.HostnameError
-	if !errors.Is(err, keyless.ErrLocalCertificate) || !errors.As(err, &hostnameErr) {
-		t.Fatalf("WaitReady() = %v, want local hostname error", err)
+	if !errors.Is(err, localtls.ErrLocalCertificate) || !errors.As(err, &hostnameErr) {
+		t.Fatalf("WaitReady=%v, want local hostname error", err)
 	}
-	statuses := h.exposure.Relays()
-	if len(statuses) != 1 || statuses[0].State != sdk.RelayFailed || statuses[0].Failure != sdk.RelayFailureTerminal {
-		t.Fatalf("wrong-hostname relay status = %+v", statuses)
-	}
-	if leases := h.server.PublicLeases(); len(leases) != 0 {
-		t.Fatalf("invalid certificate retained a relay lease: %+v", leases)
+	for _, status := range h.exposure.Relays() {
+		if status.PublicURL != "" {
+			t.Fatalf("invalid certificate advertised canonical: %+v", status)
+		}
 	}
 	publicURL := "https://" + net.JoinHostPort(hostnameErr.Host, strconv.Itoa(h.sniPort))
 	if _, ok := tenantGet(h.sniAddr, h.certificate, publicURL); ok {
 		t.Fatal("invalid manual certificate fell back to relay signing")
-	}
-}
-
-func TestLocalTenantCertificateKeepsCoveredRelays(t *testing.T) {
-	// The first relay's existing lease owns the friendly alias, so our local
-	// certificate only needs the canonical name there. The second relay offers
-	// the alias too; that relay alone must fail when the pair does not cover it.
-	h := newHarness(t)
-	h.waitForPublicURL()
-	other := newHarnessWithName(t, "other", "127.0.0.1", "")
-	other.waitForPublicURL()
-	clientIdentity, err := identity.Generate("e2e")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hostname, err := utils.CanonicalLeaseHostname(clientIdentity.Name, clientIdentity.Address, "localhost")
-	if err != nil {
-		t.Fatal(err)
-	}
-	certFile, keyFile := writeTenantCertificate(t, hostname)
-	exposure, err := sdk.Expose(t.Context(), clientIdentity, []string{"https://" + h.sniAddr}, sdk.WithTLSCertificate(certFile, keyFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxyDone := make(chan error, 1)
-	go func() { proxyDone <- sdk.Proxy(t.Context(), exposure, h.service.Listener.Addr().String()) }()
-	t.Cleanup(func() {
-		_ = exposure.Close()
-		select {
-		case err := <-proxyDone:
-			if err != nil && !errors.Is(err, context.Canceled) {
-				t.Error(err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Error("proxy did not stop")
-		}
-	})
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-	defer cancel()
-	ready, err := exposure.WaitReady(ctx)
-	if err != nil || len(ready) != 1 || ready[0].AliasURL != "" {
-		t.Fatalf("canonical-only local relay: %+v, %v", ready, err)
-	}
-	publicURL := ready[0].PublicURL
-	badURL := "https://" + other.sniAddr
-	if err := exposure.AddRelay(badURL); err != nil {
-		t.Fatal(err)
-	}
-	for {
-		var failed bool
-		for _, status := range exposure.Relays() {
-			if status.RelayURL == badURL && status.State == sdk.RelayFailed {
-				var hostnameErr x509.HostnameError
-				if status.Failure != sdk.RelayFailureTerminal || !errors.As(status.Err, &hostnameErr) {
-					t.Fatalf("uncovered relay failure = %+v", status)
-				}
-				failed = true
-			}
-		}
-		if failed {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("uncovered relay did not fail: %+v", exposure.Relays())
-		case <-exposure.Updates():
-		}
-	}
-	ready, err = exposure.WaitReady(ctx)
-	if err != nil || len(ready) != 1 || ready[0].PublicURL != publicURL {
-		t.Fatalf("covered relay lost readiness: %+v, %v", ready, err)
-	}
-	if body, ok := tenantGet(h.sniAddr, certFile, publicURL); !ok || body != marker {
-		t.Fatalf("covered relay stopped serving: %q, %v", body, ok)
 	}
 }

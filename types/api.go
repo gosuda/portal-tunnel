@@ -70,7 +70,15 @@ type RegisterRequest struct {
 	ReportedIP    string `json:"reported_ip,omitempty"`
 }
 
+// LocalTLSNamespaceV1 is explicitly negotiated before issuing two-label tenant
+// hostnames. An absent namespace retains the legacy URL and TLS contract.
+const LocalTLSNamespaceV1 = "local-tls-v1"
+
+// UnnamedServiceLabel is reserved only in the new Local TLS namespace.
+const UnnamedServiceLabel = "default"
+
 type RegisterChallengeRequest struct {
+	Namespace string `json:"namespace,omitempty"`
 	// CanonicalOnly requests only the identity-bound hostname, without acquiring a friendly alias.
 	CanonicalOnly bool `json:"canonical_only,omitempty"`
 	Cache         bool `json:"cache,omitempty"`
@@ -103,16 +111,18 @@ type ReverseEndpoint struct {
 }
 
 type RegisterResponse struct {
-	Identity          Identity        `json:"identity"`
-	Hostname          string          `json:"hostname"`
-	CanonicalHostname string          `json:"canonical_hostname"`
-	ExpiresAt         time.Time       `json:"expires_at"`
-	AccessToken       string          `json:"access_token"`
-	ReverseEndpoint   ReverseEndpoint `json:"reverse_endpoint"`
-	UDPAddr           string          `json:"udp_addr,omitempty"`
-	UDPEnabled        bool            `json:"udp_enabled,omitempty"`
-	TCPAddr           string          `json:"tcp_addr,omitempty"`
-	TCPEnabled        bool            `json:"tcp_enabled,omitempty"`
+	Namespace               string          `json:"namespace,omitempty"`
+	LegacyCanonicalHostname string          `json:"legacy_canonical_hostname,omitempty"`
+	Identity                Identity        `json:"identity"`
+	Hostname                string          `json:"hostname"`
+	CanonicalHostname       string          `json:"canonical_hostname"`
+	ExpiresAt               time.Time       `json:"expires_at"`
+	AccessToken             string          `json:"access_token"`
+	ReverseEndpoint         ReverseEndpoint `json:"reverse_endpoint"`
+	UDPAddr                 string          `json:"udp_addr,omitempty"`
+	UDPEnabled              bool            `json:"udp_enabled,omitempty"`
+	TCPAddr                 string          `json:"tcp_addr,omitempty"`
+	TCPEnabled              bool            `json:"tcp_enabled,omitempty"`
 }
 
 // MaxDiscoveryResponseBytes is the decoded-byte budget for both discovery
@@ -187,6 +197,7 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
+	Namespaces      []string           `json:"namespaces,omitempty"`
 	Cache           *StaticCacheLimits `json:"cache,omitempty"`
 	ProtocolVersion string             `json:"protocol_version"`
 	ReleaseVersion  string             `json:"release_version"`

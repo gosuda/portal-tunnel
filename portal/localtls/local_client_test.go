@@ -1,4 +1,4 @@
-package keyless
+package localtls
 
 import (
 	"bytes"
@@ -74,9 +74,8 @@ func TestLocalTenantTLSReplacement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, err := tenant.(interface {
-			ExportKeyingMaterial(string, []byte, int) ([]byte, error)
-		}).ExportKeyingMaterial("Portal-MITM-Probe-v1", nil, 32)
+		tenantState := tenant.(*tls.Conn).ConnectionState()
+		b, err := tenantState.ExportKeyingMaterial("Portal-MITM-Probe-v1", nil, 32)
 		if err != nil || !bytes.Equal(a, b) {
 			t.Fatalf("exporter mismatch: %v", err)
 		}
@@ -165,7 +164,6 @@ func TestLocalTenantCertificateValidation(t *testing.T) {
 		{Hostname: "tenant.test.example", CertFile: certFile},
 		{Hostname: "tenant.test.example", CertFile: " ", KeyFile: " "},
 		{Hostname: "other.test.example", CertFile: certFile, KeyFile: keyFile},
-		{Hostname: "tenant.test.example", AlternativeHostname: "alias.test.example", CertFile: certFile, KeyFile: keyFile},
 	} {
 		config.RelayURL = "https://127.0.0.1:1"
 		if client, err := NewClient(t.Context(), config); err == nil {
@@ -201,7 +199,6 @@ func TestLocalTenantCertificateValidityAndAlgorithm(t *testing.T) {
 	}{
 		{"expired", elliptic.P256(), time.Now().Add(-2 * time.Hour), time.Now().Add(-time.Hour)},
 		{"future", elliptic.P256(), time.Now().Add(time.Hour), time.Now().Add(2 * time.Hour)},
-		{"unsupported-curve", elliptic.P384(), time.Now().Add(-time.Hour), time.Now().Add(time.Hour)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -291,21 +288,5 @@ func TestInstalledCertificateEventsNeverOwnTLSMaterial(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("observer blocked activation")
-	}
-}
-
-func TestRelayBootstrapIsNotAnInstalledLocalCertificate(t *testing.T) {
-	issuer := newTestIssuer(t)
-	relay := newRelayStandIn(t, issuer.issue(t, 2))
-	events := make(chan []byte, 1)
-	client, err := NewClient(t.Context(), ClientConfig{RelayURL: relay.url, Hostname: tenantHostname, InstalledCertificates: events})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	select {
-	case <-events:
-		t.Fatal("relay bootstrap was reported as local material")
-	default:
 	}
 }

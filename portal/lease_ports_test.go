@@ -41,12 +41,12 @@ func TestLeaseHostnameConflictRollsBackRawPorts(t *testing.T) {
 		UDPEnabled: true,
 		TCPEnabled: true,
 	}
-	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	checkHostnameConflictFreesPorts(t, registry, request)
 	request.Identity = newTestLeaseIdentity(t, "accepted")
-	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
 		t.Fatalf("rejected identities exhausted raw ports: %v", err)
 	}
 }
@@ -55,7 +55,7 @@ func checkHostnameConflictFreesPorts(t *testing.T, registry *leaseRegistry, requ
 	t.Helper()
 	for i := range 3 {
 		request.Identity = newTestLeaseIdentity(t, "conflict")
-		if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errHostnameConflict) {
+		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errHostnameConflict) {
 			t.Fatalf("rejected registration %d error = %v, want hostname conflict", i, err)
 		}
 		if len(registry.udpPorts.available) != 1 || len(registry.tcpPorts.available) != 1 ||
@@ -107,7 +107,7 @@ func TestLeaseCapacityRejectionRollsBackRawPorts(t *testing.T) {
 				UDPEnabled: true,
 				TCPEnabled: true,
 			}
-			if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+			if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			if tc.limitUDP {
@@ -118,7 +118,7 @@ func TestLeaseCapacityRejectionRollsBackRawPorts(t *testing.T) {
 			checkCapacityRejectionFreesPorts(t, registry, request, tc.wantError)
 			registry.setTransportPolicy(true, 2, true, 2)
 			request.Identity = newTestLeaseIdentity(t, "accepted")
-			if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+			if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
 				t.Fatalf("capacity rejection exhausted raw ports: %v", err)
 			}
 		})
@@ -129,7 +129,7 @@ func checkCapacityRejectionFreesPorts(t *testing.T, registry *leaseRegistry, req
 	t.Helper()
 	for i := range 3 {
 		request.Identity = newTestLeaseIdentity(t, fmt.Sprintf("rejected-%d", i))
-		if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, wantError) {
+		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, wantError) {
 			t.Fatalf("rejected registration %d error = %v, want %v", i, err, wantError)
 		}
 		if len(registry.udpPorts.available) != 1 || len(registry.tcpPorts.available) != 1 ||
@@ -158,7 +158,7 @@ func seedLeaseTCPPortsExhaustionPair(t *testing.T, registry *leaseRegistry) {
 			Identity:   newTestLeaseIdentity(t, fmt.Sprintf("tcp-%d", i)),
 			TCPEnabled: true,
 		}
-		if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -166,7 +166,7 @@ func seedLeaseTCPPortsExhaustionPair(t *testing.T, registry *leaseRegistry) {
 
 func rejectExhaustedTCPFreesUDP(t *testing.T, registry *leaseRegistry, both types.RegisterChallengeRequest) {
 	t.Helper()
-	if _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errTCPPortExhausted) {
+	if _, _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errTCPPortExhausted) {
 		t.Fatalf("Register() error = %v, want TCP port exhaustion", err)
 	}
 	if len(registry.udpPorts.available) != 2 || len(registry.udpPorts.reserved) != 0 {
@@ -178,7 +178,7 @@ func acceptUDPOnlyAfterExhaustion(t *testing.T, registry *leaseRegistry, both ty
 	t.Helper()
 	both.TCPEnabled = false
 	both.Identity = newTestLeaseIdentity(t, "udp")
-	if _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
 		t.Fatalf("failed TCP allocation exhausted UDP ports: %v", err)
 	}
 }
@@ -226,7 +226,7 @@ func TestLeasePortsStayWithServiceIdentityAcrossReconnect(t *testing.T) {
 
 func registerFirstStickyLease(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest) (*leaseRecord, types.RegisterResponse) {
 	t.Helper()
-	firstRecord, first, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	firstRecord, _, first, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func registerFirstStickyLease(t *testing.T, registry *leaseRegistry, request typ
 func rejectStickyPortsOtherOwner(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest, first types.RegisterResponse) {
 	t.Helper()
 	request.Identity = newTestLeaseIdentity(t, "shared")
-	_, other, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, other, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func rejectStickyPortsOtherOwner(t *testing.T, registry *leaseRegistry, request 
 
 func reconnectStickyLeaseKeepsPorts(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest, first types.RegisterResponse) {
 	t.Helper()
-	_, reconnected, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, reconnected, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,11 +267,11 @@ func verifyStaleCleanupKeepsPorts(t *testing.T, registry *leaseRegistry, firstRe
 	t.Helper()
 	registry.closeRecord(firstRecord)
 	request.Identity = newTestLeaseIdentity(t, "third")
-	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errUDPPortExhausted) {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errUDPPortExhausted) {
 		t.Fatalf("stale cleanup released a live UDP port: %v", err)
 	}
 	request.UDPEnabled = false
-	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errTCPPortExhausted) {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errTCPPortExhausted) {
 		t.Fatalf("stale cleanup released a live TCP port: %v", err)
 	}
 }
@@ -317,7 +317,7 @@ func listenOccupiedUDPPort(t *testing.T, port int) io.Closer {
 
 func rejectOccupiedPortWithoutReserve(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest) {
 	t.Helper()
-	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err == nil {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err == nil {
 		t.Fatal("registration succeeded with an occupied port")
 	}
 	if len(registry.udpPorts.reserved) != 0 || len(registry.tcpPorts.reserved) != 0 {
@@ -328,7 +328,7 @@ func rejectOccupiedPortWithoutReserve(t *testing.T, registry *leaseRegistry, req
 func registerOtherIdentitySucceeds(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest) {
 	t.Helper()
 	request.Identity = newTestLeaseIdentity(t, "different")
-	if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
 		t.Fatalf("occupied port prevented another identity using free ports: %v", err)
 	}
 }
@@ -336,7 +336,7 @@ func registerOtherIdentitySucceeds(t *testing.T, registry *leaseRegistry, reques
 func reuseRecoveredPortAfterClose(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest, port int) {
 	t.Helper()
 	request.Identity = newTestLeaseIdentity(t, "recovered")
-	_, response, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, response, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("registration could not reuse ports after the socket was closed: %v", err)
 	}

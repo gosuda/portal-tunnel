@@ -396,7 +396,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 func (runtime *Runtime) publicHosts() []appauth.PublicHost {
 	var hosts []appauth.PublicHost
 	for _, relay := range runtime.Exposure.Relays() {
-		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
+		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.LegacyURL}, appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
 	}
 	return hosts
 }

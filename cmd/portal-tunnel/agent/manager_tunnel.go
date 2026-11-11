@@ -191,6 +191,7 @@ func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
 		statuses = append(statuses, AgentRelayStatus{
 			RelayURL:  relay.RelayURL,
 			PublicURL: relay.PublicURL,
+			LegacyURL: relay.LegacyURL,
 			AliasURL:  aliasURL,
 			TCPAddr:   relay.TCPAddr,
 			Version:   relay.Version,

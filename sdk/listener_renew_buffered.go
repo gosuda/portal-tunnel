@@ -3,6 +3,7 @@ package sdk
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"io"
 	"net"
 )
@@ -10,6 +11,13 @@ import (
 type bufferedConn struct {
 	net.Conn
 	reader *bytes.Reader
+}
+
+func (c *bufferedConn) ConnectionState() tls.ConnectionState {
+	if conn, ok := c.Conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+		return conn.ConnectionState()
+	}
+	return tls.ConnectionState{}
 }
 
 func wrapBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {

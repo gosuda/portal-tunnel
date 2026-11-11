@@ -122,22 +122,15 @@ portal expose 3000 --relays https://relay.example.com --discovery=false \
 ```
 
 The PEM chain and matching private key must be supplied together. The certificate
-must be valid for the identity's canonical hostname on each selected relay.
-Include any short alias hostname visitors use in the certificate SANs too;
-a certificate for only the alias does not cover the canonical hostname.
-Use alias certificates only where the operator controls their continuing
-authority: releasing or reassigning an alias does not revoke an already issued
-certificate or remove the former owner's private key.
-Choose explicit relays and disable discovery unless the certificate covers all
-additional relay hostnames. Public browsers still require a publicly trusted
-certificate chain.
+must cover only the exact `<service>.<address>.<relay-root>` canonical hostname,
+not friendly aliases, wildcards, or sibling service SANs. Choose an explicit relay
+and disable discovery when the certificate covers only that relay's canonical
+hostname. Public browsers require a publicly trusted certificate chain.
 
-Tenant handshakes use the same TLS engine as Keyless TLS, but sign in process
-with the local key instead of calling the relay's `/v1/sign` endpoint. The
-exporter self-probe verifies tenant certificates separately from the relay
-control API's TLS trust. This option cannot be combined with `--cache` or
-raw `--tcp`.
-
+Canonical tenant handshakes use Go's ordinary `crypto/tls` with the local private
+key. Friendly and legacy endpoints keep their independent Keyless TLS path.
+Tenant certificate verification is separate from control API trust. Manual local
+TLS requires namespace support and cannot be combined with `--cache` or raw TCP.
 For a persistent agent, set both paths in the tunnel's existing configuration:
 
 ```toml
@@ -169,85 +162,89 @@ key persistence, and timely renewal are the operator's responsibility.
 Local key possession removes the signing round trip and dependency. It is not
 independent visitor authentication or complete MITM prevention: the relay still
 provides routing and availability, authoritative DNS control can permit competing
-certificate issuance, and a relay wildcard certificate can also cover tenant
-names.
+certificate issuance, and a relay wildcard certificate covers friendly and legacy names, not the new
+two-label service namespace.
 
-## Automatic tunnel certificates
+## Automatic tunnel certificates and service namespaces
 
-Automatic issuance is opt-in while operators measure issuance latency, renewal
-reliability, and shared CA quota use:
+Opt in to tunnel-owned TLS with `portal expose 3000 --name blog --tls-auto
+--identity-path identity.json`. The new canonical URL is
+`blog.<40-lowercase-hex-address>.<relay-root>`. The address has no `0x` prefix.
+The relay root can contain several labels. An unnamed service uses the reserved
+`default` label; an explicitly named `default` cannot enter the new namespace.
 
-```sh
-portal expose 3000 --tls-auto --identity-path identity.json
-```
+Hostname policy never changes in place:
 
-The tunnel generates and retains its private key locally. It sends only a CSR to
-the authenticated relay API; the relay uses its existing ACME account and DNS
-provider to obtain the hostname certificate. Automatic mode publishes only the
-stable identity-derived canonical URL; it neither reserves nor advertises a
-short alias. The identity's name is retained. The CSR endpoint accepts only the
-current lease's exact canonical hostname and rejects short aliases, wildcard,
-apex, and sibling requests. An automatic certificate therefore grants no
-short-alias authority that could outlive reassignment.
+- `<name>.<root>` remains a first-come friendly alias with Keyless TLS and HTTP/1.1.
+- `<service>.<address>.<root>` uses only tunnel-owned Local TLS. It is advertised
+  only after both peers negotiate support and an exact-hostname certificate is
+  usable. Issuance failure, expiry, or lost state cannot downgrade it to Keyless.
+- Existing `<name>-<address>.<root>`, `<hash>--<address>.<root>`, and
+  `<address>.<root>` URLs remain legacy compatibility endpoints. Old peers do
+  not silently acquire the new namespace. `--tls-require-local` requires a relay
+  supporting the new namespace instead of accepting a legacy-only relay.
 
-The relay must support this issuance endpoint and enable `--tenant-certificates`.
-Relay-side issuance is off by default to protect the operator's shared CA quota.
-An older or disabled relay leaves bootstrap-allowed clients on Keyless TLS;
-a `--tls-require-local` client stays unready until a local certificate is available.
+There is no automatic redirect or origin migration. Applications must explicitly
+update links, callback URLs, allowed origins, cookies, and browser storage when
+moving to the new URL. Keep existing URLs during the compatibility period; no
+removal date is currently specified.
 
-By default, an automatic tunnel with no usable persisted certificate can begin
-with Keyless TLS while issuance runs in the background. Valid local material is
-installed for new handshakes and reused after restart. Existing connections are
-not upgraded retroactively. Renewal failure preserves a still-valid local
-certificate; an expired certificate cannot serve new handshakes. Once local
-material has been issued, renewal failure or expiry does not restore Keyless
-signing. Corrupt saved material fails closed. If all saved state is deleted,
-a bootstrap-allowed restart can bootstrap again; use --tls-require-local
-to prohibit that downgrade even after state loss.
+The tunnel retains its leaf private key and sends only a CSR to the authenticated
+relay API. The relay must enable `--tenant-certificates`. Issuance is lease-scoped:
+only that service's exact canonical hostname is permitted, never wildcard,
+friendly alias, sibling hostname, or a shared SAN certificate. Relay-side budgets
+and retry backoff protect the operator's shared CA quota.
 
-To prohibit Keyless bootstrap, add `--tls-require-local`. The tunnel must obtain
-or load usable local material before accepting traffic. This setting remains in
-the persistent agent configuration across restarts; lost, corrupt, or expired
-state does not remove it. Local-key ownership is not independent visitor
-authentication.
-
-Automatic state defaults to the identity file path plus `.tls`, for example
-`identity.json.tls`. Use `--tls-state-dir` to choose another directory.
-An in-memory identity supplied by `--identity-json` requires an explicit state
-directory, even when `--identity-path` also has a value. Keep this state on
-durable private storage and back it up securely. Certificate material follows
-stable hostnames, rather than individual leases; multiple relay hostnames have
-separate material. The key is saved before the first CSR and reused during
-renewal; the matching certificate and key are stored as one atomic private
-bundle. An operating-system lock serializes concurrent issuers for that hostname.
-Issuance retries back off from one minute to one hour; successful state is checked
-hourly, or earlier when renewal is due.
-
-For a persistent agent:
+State defaults to the identity path plus `.tls`. `--tls-state-dir` overrides it;
+`--identity-json` requires an explicit state directory. Agent relative paths are
+resolved from its configuration directory. Store and back up this state privately.
+Per-hostname keys and certificate bundles are retained across restarts and reused
+for renewal; sibling services sharing one signing identity have independent leaf
+material. A still-valid certificate survives renewal failure, but expired material
+cannot serve new canonical handshakes.
 
 ```toml
 [[tunnels]]
-id = "web"
+id = "blog"
+name = "blog"
 target = "3000"
 identity_path = "identity.json"
 tls_auto = true
-tls_state_dir = "certificates"
-tls_require_local = true
+
+[[tunnels]]
+id = "api"
+name = "api"
+target = "4000"
+identity_path = "identity.json"
+tls_auto = true
 ```
 
-Explicit relative paths resolve from the agent config directory. If
-`tls_state_dir` is omitted, its default follows the resolved identity path.
-The state directory alone does not enable automatic issuance. Automatic mode
-cannot be combined with manually supplied `tls_cert`/`tls_key`, relay cache,
-or raw TCP. Manual certificate files already prohibit relay-signing fallback.
+Set each service's `name` explicitly when sharing an identity file. An explicit
+name selects a service without rewriting the key file. New key files do not store
+the service name; old files remain readable and their stored name is used only
+when no explicit name is supplied. The pair of service name and signing address
+identifies the lease; sharing a key does not merge targets or leases.
 
-CSR issuance leaves CA account authority with the relay operator. The relay's
-existing wildcard and control of authoritative DNS can still permit competing
-certificates. The gains are client-only possession of the legitimate tunnel key
-and removal of the online `/v1/sign` dependency after activation. The optional
-CAA and CT/precertificate monitor below adds warning-only observations, not
-prevention of malicious-relay impersonation.
+The CLI HTTP handler path supports HTTP/2 on Local TLS canonical connections and
+proxies requests to ordinary HTTP/1.1 backends. HTTP/1.1 stays supported. Raw SDK
+byte-stream proxy users must not advertise h2 unless their HTTP consumer handles
+it; changing ALPN alone does not translate protocols. Friendly/legacy Keyless
+connections retain HTTP/1.1. Relay control-plane and cache ALPN are unchanged.
 
+New canonical URLs never use relay static cache, retained offline responses,
+snapshot publication, or cache fallback. Their SNI always selects ciphertext
+passthrough to the tunnel, even when the tunnel or certificate is unavailable.
+Existing opt-in cache behavior remains on eligible legacy URLs only. Browser HTTP
+caching and separately configured external CDNs are independent features.
+Automatic/manual local TLS modes cannot be combined with raw TCP or relay cache.
+
+Two hostname labels prevent reuse of the relay's existing `*.<root>` certificate.
+They do not remove its DNS/ACME authority: a malicious relay may obtain a new
+competing certificate. CT/CAA monitoring is warning-only, not prevention. Native
+identity-bound channel binding authenticates the entire hostname, nonce, and
+current TLS Exporter on live tunnel-terminated sessions. Ordinary browser
+JavaScript cannot obtain that exporter and has no equivalent proof. Relay-cached
+legacy sessions have a different TLS trust boundary and no such guarantee.
 ## Certificate monitoring
 
 Monitoring is disabled by default. For a best-effort evaluation pilot, opt in

@@ -33,9 +33,7 @@ func TestNewClientHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for name, config := range map[string]ClientConfig{
-		"relay":     {},
-		"manual":    {CertFile: "missing-cert.pem", KeyFile: "missing-key.pem"},
-		"automatic": {CertificateDir: t.TempDir(), RequireLocal: true},
+		"relay": {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			config.RelayURL = "https://127.0.0.1:1"
