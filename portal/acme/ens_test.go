@@ -2,6 +2,7 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -101,6 +102,15 @@ func newTestENSManager(cfg Config, dns dnsProvider) *Manager {
 		ensCommands: make(chan ensDNSCommand, 8),
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, dns)),
 	}
+}
+
+type failingTXTZone struct {
+	dnsProvider
+	err error
+}
+
+func (z failingTXTZone) DeleteTXTRecords(context.Context, string, string) error {
+	return z.err
 }
 
 func ensTXTValues(t *testing.T, zone *fakeZone, name string) []string {
@@ -203,6 +213,34 @@ func TestENSGaslessReconcileRunsWhenDisabled(t *testing.T) {
 		t.Fatalf("reconcileTrackedENSGaslessHostnames(): %v", err)
 	}
 	checkDisabledReconcileWithdrawn(t, zone, baseDomain, host, trackedPath)
+}
+
+func TestENSGaslessReconcileReportsTXTWithdrawalFailure(t *testing.T) {
+	const (
+		baseDomain = "portal.example.com"
+		host       = "lease.portal.example.com"
+	)
+	keyDir := t.TempDir()
+	trackedPath := filepath.Join(keyDir, ensGaslessHostnamesFileName)
+	if err := utils.WriteJSONFile(trackedPath, []string{host}, 0o600); err != nil {
+		t.Fatalf("seed tracked hostnames: %v", err)
+	}
+	ctx := context.Background()
+	zone := newFakeZone()
+	if err := zone.EnsureTXTRecord(ctx, host, gaslessENSTXTPrefix+"resolver 0x4444"); err != nil {
+		t.Fatalf("seed ENS record: %v", err)
+	}
+	if err := zone.EnsureAddressRecord(ctx, host, "203.0.113.11"); err != nil {
+		t.Fatalf("seed A record: %v", err)
+	}
+	txtErr := errors.New("txt withdrawal unavailable")
+	manager := newTestENSManager(Config{BaseDomain: baseDomain, KeyDir: keyDir}, failingTXTZone{dnsProvider: zone, err: txtErr})
+	if err := manager.reconcileTrackedENSGaslessHostnames(ctx); !errors.Is(err, txtErr) {
+		t.Fatalf("reconcileTrackedENSGaslessHostnames() = %v, want the txt withdrawal failure", err)
+	}
+	if !zone.hasARecord(host) {
+		t.Fatal("address record was deleted after the txt withdrawal failed")
+	}
 }
 
 func seedDisabledReconcileZone(t *testing.T, zone *fakeZone, baseDomain, host, trackedPath string) {
