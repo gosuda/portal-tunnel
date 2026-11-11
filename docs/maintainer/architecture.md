@@ -292,3 +292,18 @@ limitation, not an unlimited TCP half-close guarantee. Relay-side revocation may
 reach the SDK as a clean EOF; the SDK preserves response-after-EOF semantics and
 can retain its local origin socket until the origin closes. Explicit SDK
 cancellation or exposure closure closes and joins those local connections.
+
+### Tenant TLS certificate ownership
+
+The keyless client owns validated, immutable certificate/signer generations,
+atomic activation, readiness, and in-flight handshake safety. Concrete internal
+relay, manual-file, and automatic certificate sources own acquisition. The
+automatic source additionally owns persisted bundles, CSR issuance, renewal,
+and cancellation/join of its worker. Once local material is installed, a failed
+renewal cannot restore relay-backed signing.
+
+The SDK lease separately owns the optional CAA/CT observer. It receives the
+canonical hostname and bounded, copied public leaf installation events, not the
+TLS client, private keys, or lease credentials. The observer owns its own polling,
+evidence persistence, and cancellation/join; observations never gate activation.
+A dropped event or crash may produce a conservative unrecognized-key warning.

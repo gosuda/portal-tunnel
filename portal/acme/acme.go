@@ -35,43 +35,44 @@ const (
 )
 
 type Config struct {
-	BaseDomain         string
-	KeyDir             string
-	CADirURL           string
-	DNSProvider        string
-	ENSGaslessEnabled  bool
-	ENSGaslessAddress  string
-	EmbeddedDNSPort    int
-	CloudflareToken    string
-	GCPProjectID       string
-	GCPManagedZone     string
-	HetznerAPIToken    string
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSSessionToken    string
-	AWSRegion          string
-	AWSHostedZoneID    string
-	AWSKMSKeyARN       string
-	VultrAPIKey        string
-	NjallaToken        string
+	// TenantIssuanceStateDir must be shared by every relay consuming the same CA quota.
+	TenantIssuanceStateDir string
+	BaseDomain             string
+	KeyDir                 string
+	CADirURL               string
+	DNSProvider            string
+	ENSGaslessEnabled      bool
+	ENSGaslessAddress      string
+	EmbeddedDNSPort        int
+	CloudflareToken        string
+	GCPProjectID           string
+	GCPManagedZone         string
+	HetznerAPIToken        string
+	AWSAccessKeyID         string
+	AWSSecretAccessKey     string
+	AWSSessionToken        string
+	AWSRegion              string
+	AWSHostedZoneID        string
+	AWSKMSKeyARN           string
+	VultrAPIKey            string
+	NjallaToken            string
 }
 
 type Manager struct {
-	tenantOrderAttempts map[string]time.Time
-	issuanceMu          sync.Mutex
-	stopCh              chan struct{}
-	stopCtx             context.Context
-	stopErr             error
-	workerCancel        context.CancelFunc
-	cfg                 Config
-	wg                  sync.WaitGroup
-	commandMu           sync.RWMutex
-	dns                 dnsProvider
-	startOnce           sync.Once
-	stopOnce            sync.Once
-	ensStatus           *utils.Snapshot[types.ENSStatus]
-	ensCommands         chan ensDNSCommand
-	material            *utils.Snapshot[servedMaterial]
+	issuanceMu   sync.Mutex
+	stopCh       chan struct{}
+	stopCtx      context.Context
+	stopErr      error
+	workerCancel context.CancelFunc
+	cfg          Config
+	wg           sync.WaitGroup
+	commandMu    sync.RWMutex
+	dns          dnsProvider
+	startOnce    sync.Once
+	stopOnce     sync.Once
+	ensStatus    *utils.Snapshot[types.ENSStatus]
+	ensCommands  chan ensDNSCommand
+	material     *utils.Snapshot[servedMaterial]
 
 	pendingDNSAddress bool
 }

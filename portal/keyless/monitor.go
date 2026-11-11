@@ -147,6 +147,7 @@ type certificateMonitor struct {
 	dir      string
 	config   MonitorConfig
 	http     *http.Client
+	events   chan []byte
 }
 
 func newCertificateMonitor(hostname string, config MonitorConfig) (*certificateMonitor, error) {
@@ -167,6 +168,7 @@ func newCertificateMonitor(hostname string, config MonitorConfig) (*certificateM
 		hostname: hostname,
 		dir:      filepath.Join(config.StateDir, publicSHA256([]byte(hostname))),
 		config:   config,
+		events:   make(chan []byte, 16),
 		http: &http.Client{
 			Timeout:       15 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -179,25 +181,86 @@ func publicSHA256(data []byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func (c *Client) startCertificateMonitor() {
-	if c.monitor == nil {
-		return
+// CertificateObserver owns optional public observations independently of TLS.
+// Event delivery is bounded and best-effort; a lost installation event can only
+// cause a conservative unrecognized-key warning, never approve an unknown key.
+type CertificateObserver struct {
+	events chan []byte
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// StartCertificateObserver starts a lease-scoped, warning-only observer.
+func StartCertificateObserver(hostname string, config MonitorConfig) (*CertificateObserver, error) {
+	monitor, err := newCertificateMonitor(hostname, config)
+	if err != nil {
+		return nil, err
 	}
+	return monitor.start(), nil
+}
+
+func (m *certificateMonitor) start() *CertificateObserver {
 	ctx, cancel := context.WithCancel(context.Background())
-	c.monitorCancel, c.monitorDone = cancel, make(chan struct{})
+	observer := &CertificateObserver{events: m.events, cancel: cancel, done: make(chan struct{})}
 	go func() {
-		defer close(c.monitorDone)
+		defer close(observer.done)
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
+		m.poll(ctx)
 		for {
-			c.monitor.poll(ctx, c)
 			select {
 			case <-ctx.Done():
 				return
+			case der := <-m.events:
+				m.rememberEvent(der)
 			case <-ticker.C:
+				m.poll(ctx)
 			}
 		}
 	}()
+	return observer
+}
+
+// Events returns the observer's input. Send nonblocking copied local leaf DER;
+// callers must not close the channel, including after Close.
+func (o *CertificateObserver) Events() chan<- []byte {
+	if o == nil {
+		return nil
+	}
+	return o.events
+}
+
+// Close cancels observations and waits for their worker. It does not touch TLS.
+func (o *CertificateObserver) Close() {
+	if o == nil {
+		return
+	}
+	o.cancel()
+	<-o.done
+}
+
+func (m *certificateMonitor) rememberEvent(der []byte) {
+	if len(der) > 256<<10 {
+		m.warn("local public certificate exceeds history size limit", nil)
+		return
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		m.warn("invalid installed public certificate", err)
+		return
+	}
+	if err := cert.VerifyHostname(m.hostname); err != nil {
+		m.warn("installed public certificate does not cover hostname", err)
+		return
+	}
+	m.rememberLocalCertificate(cert)
+}
+
+// Drain only the bounded queue snapshot so a producer cannot delay polls.
+func (m *certificateMonitor) rememberEvents() {
+	for range len(m.events) {
+		m.rememberEvent(<-m.events)
+	}
 }
 
 // Only the observation worker writes public history. No monitor disk or network
@@ -217,6 +280,14 @@ func (m *certificateMonitor) rememberLocalCertificate(cert *x509.Certificate) {
 		m.warn("cannot retain local public certificate history", err)
 		return
 	}
+	// Installation events and polls share one worker, but multiple SDK leases
+	// or processes may use the same hostname's public history.
+	lock, err := lockCertificate(filepath.Join(m.dir, "local.lock"))
+	if err != nil {
+		m.warn("cannot lock local public certificate history", err)
+		return
+	}
+	defer lock.Close()
 	files, err := m.localHistoryFiles()
 	if err != nil || len(files) >= 4096 {
 		m.warn("local public certificate history limit reached; archive and review public state", err)
@@ -241,23 +312,6 @@ func (m *certificateMonitor) localHistoryFiles() ([]os.DirEntry, error) {
 		return nil, errMonitorLocalHistoryLimit
 	}
 	return files, nil
-}
-
-func (c *Client) localCertificates() []*x509.Certificate {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	var certificates []*x509.Certificate
-	if c.pin != nil && c.pin.local && c.pin.leaf != nil {
-		certificates = append(certificates, c.pin.leaf)
-	}
-	for _, pin := range c.retired {
-		// Retired pins deliberately drop their signer; only explicit provenance
-		// distinguishes old local leaves from an old relay bootstrap leaf.
-		if pin.local && pin.leaf != nil {
-			certificates = append(certificates, pin.leaf)
-		}
-	}
-	return certificates
 }
 
 func (m *certificateMonitor) warn(message string, err error) {
@@ -545,7 +599,7 @@ func (m *certificateMonitor) knownKeys(baseline *monitorBaseline) (map[string]bo
 	return keys, nil
 }
 
-func (m *certificateMonitor) poll(parent context.Context, client *Client) {
+func (m *certificateMonitor) poll(parent context.Context) {
 	if parent.Err() != nil {
 		return
 	}
@@ -560,9 +614,7 @@ func (m *certificateMonitor) poll(parent context.Context, client *Client) {
 		return
 	}
 	defer lock.Close()
-	for _, certificate := range client.localCertificates() {
-		m.rememberLocalCertificate(certificate)
-	}
+	m.rememberEvents()
 	evidence, err := m.loadEvidence()
 	if err != nil {
 		m.warn("cannot load evidence storage", err)
@@ -597,13 +649,11 @@ func (m *certificateMonitor) poll(parent context.Context, client *Client) {
 	if err != nil {
 		m.warn("CT observation unavailable or incomplete; issuance coverage is unknown", err)
 	}
-	// Read after network observations so a rotation during this pass is known.
+	// Include installation events arriving during network observations.
+	m.rememberEvents()
 	keys, err := m.knownKeys(baseline)
 	if err != nil {
 		m.warn("local public key history unavailable", err)
-	}
-	for _, certificate := range client.localCertificates() {
-		keys[publicSHA256(certificate.RawSubjectPublicKeyInfo)] = true
 	}
 	warned := map[string]bool{}
 	for _, certificate := range evidence.Certificates {

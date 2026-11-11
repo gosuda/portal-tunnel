@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -62,12 +63,13 @@ func TestTenantCertificateEndpointRequiresOptInAndAuthentication(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := &Server{registry: registry, acmeManager: manager, cfg: utils.NewSnapshot(ServerConfig{})}
+	server.identity.Name = "localhost"
 	request := func(token, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, types.PathV1TenantCertificate, strings.NewReader(body))
 		req.Header.Set(types.HeaderAccessToken, token)
 		response := httptest.NewRecorder()
-		server.HandleTenantCertificate(response, req)
+		server.HandleTenantCertificate(response, req, nil)
 		return response
 	}
 	if got := request("", "{}").Code; got != http.StatusServiceUnavailable {
@@ -93,6 +95,7 @@ func TestTenantCertificateRejectsReassignableAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := &Server{registry: registry, acmeManager: manager, cfg: utils.NewSnapshot(ServerConfig{TenantCertificates: true})}
+	server.identity.Name = "localhost"
 	_, registration, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "alias")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -112,8 +115,38 @@ func TestTenantCertificateRejectsReassignableAlias(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, types.PathV1TenantCertificate, strings.NewReader(string(body)))
 	req.Header.Set(types.HeaderAccessToken, registration.AccessToken)
 	response := httptest.NewRecorder()
-	server.HandleTenantCertificate(response, req)
+	server.HandleTenantCertificate(response, req, nil)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("alias CSR status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPublicTenantCertificateRequiresExplicitApproval(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	manager, err := acme.NewManager(acme.Config{BaseDomain: "localhost", KeyDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{registry: registry, acmeManager: manager, cfg: utils.NewSnapshot(ServerConfig{TenantCertificates: true})}
+	server.identity.Name = "example.com"
+	for i := range 3 {
+		owner := newTestLeaseIdentity(t, fmt.Sprintf("tenant%d", i))
+		_, registration, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := func(approved []types.ServiceIdentityKey) int {
+			req := httptest.NewRequest(http.MethodPost, types.PathV1TenantCertificate, strings.NewReader("{}"))
+			req.Header.Set(types.HeaderAccessToken, registration.AccessToken)
+			response := httptest.NewRecorder()
+			server.HandleTenantCertificate(response, req, approved)
+			return response.Code
+		}
+		if got := request(nil); got != http.StatusForbidden {
+			t.Fatalf("free registration allowed issuance: %d", got)
+		}
+		if got := request([]types.ServiceIdentityKey{owner.ServiceKey()}); got != http.StatusBadRequest {
+			t.Fatalf("explicit grant did not reach CSR validation: %d", got)
+		}
 	}
 }

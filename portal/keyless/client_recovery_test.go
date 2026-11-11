@@ -36,7 +36,7 @@ func TestExpiredRelayCertificateRecovers(t *testing.T) {
 			relay := newRelayStandIn(t, expired)
 			client := relay.newClient(t)
 			if automatic {
-				client.certificateDir = t.TempDir()
+				client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
 				// Expired bootstrap recovery must not wait behind issuance.
 				client.refreshMu.Lock()
 				defer client.refreshMu.Unlock()
@@ -104,7 +104,7 @@ func TestExpiredAutomaticLocalCertificateNeverDowngrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	client.certificateDir = t.TempDir()
+	client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
 	client.pin.leaf.NotAfter = time.Now().Add(-time.Second)
 	// The relay can sign, but its issuance endpoint is unavailable. Neither the
 	// first expiry rejection nor the next connection may restore relay signing.
@@ -149,14 +149,14 @@ func TestTenantProbeAcrossLocalActivationTrustsOnlyRetiredLeaf(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 
-	client.certificateDir = t.TempDir()
-	certFile, keyFile := filepath.Join(client.certificateDir, "cert.pem"), filepath.Join(client.certificateDir, "key.pem")
+	client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
+	certFile, keyFile := filepath.Join(client.automatic.certificateDir, "cert.pem"), filepath.Join(client.automatic.certificateDir, "key.pem")
 	certPEM := writeLocalPair(t, certFile, keyFile, tenantHostname)
 	keyPEM, err := os.ReadFile(keyFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.saveBundle(certificateBundle{Hostname: tenantHostname, CertificatePEM: string(certPEM), KeyPEM: string(keyPEM)}); err != nil {
+	if err := client.automatic.saveBundle(certificateBundle{Hostname: tenantHostname, CertificatePEM: string(certPEM), KeyPEM: string(keyPEM)}); err != nil {
 		t.Fatal(err)
 	}
 	if changed, err := client.RefreshChain(ctx); err != nil || !changed {

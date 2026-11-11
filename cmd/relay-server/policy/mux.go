@@ -147,16 +147,6 @@ func registerDirectRelayRoutes(mux *http.ServeMux, s *portal.Server, fallback ht
 	mux.HandleFunc(types.PathSDKConnect, withRequestSource(ingress, s.HandleConnect))
 	mux.HandleFunc(types.PathSDKCache, s.HandleStaticCache)
 	mux.HandleFunc(types.PathV1Sign, s.HandleSign)
-	// Certificate orders have a separate budget from routine lease traffic:
-	// at most two orders per source burst and ten globally, replenished slowly.
-	tenantOrders := NewSourceLimiter(1, 2, 2, 10)
-	mux.HandleFunc(types.PathV1TenantCertificate, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, func(w http.ResponseWriter, r *http.Request) {
-		if retry, _ := tenantOrders.Allow(ingress.SourceAddr(r), 1); retry > 0 {
-			WriteRetryAfter(w, retry, "tenant certificate issuance budget exhausted")
-			return
-		}
-		s.HandleTenantCertificate(w, r)
-	})))
 	mux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
 		if !s.DiscoveryEnabled() {
 			fallback.ServeHTTP(w, r)
@@ -205,6 +195,11 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	}
 	mux := http.NewServeMux()
 	registerDirectRelayRoutes(mux, s, fallback, ingress)
+	// Pre-auth shedding protects request processing, never the CA issuance quota.
+	// Only the authenticated, explicitly approved owner reaches durable admission.
+	mux.HandleFunc(types.PathV1TenantCertificate, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, admitPreAuth(admission, ingress, preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request, _ netip.Addr) {
+		s.HandleTenantCertificate(w, r, access.Snapshot().ApprovedKeys())
+	}))))
 	mux.HandleFunc(types.PathSDKRegisterChallenge, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, admitPreAuth(admission, ingress, preAuth.ChallengeCost, handleMuxRelayChallenge(s, access)))))
 	mux.HandleFunc(types.PathSDKRegister, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, admitPreAuth(admission, ingress, preAuth.RegisterCost, handleMuxRelayRegister(s, access)))))
 	mux.HandleFunc(types.PathDiscoveryAnnounce, requireHTTPMethod(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {

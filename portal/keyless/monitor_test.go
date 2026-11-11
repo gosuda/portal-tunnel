@@ -262,16 +262,15 @@ func TestMonitorCloseCancelsIndependentWorker(t *testing.T) {
 		close(started)
 		<-r.Context().Done()
 	})
-	client := &Client{monitor: m}
-	client.startCertificateMonitor()
-	defer client.Close()
+	observer := m.start()
+	defer observer.Close()
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("monitor did not reach local HTTP fixture")
 	}
 	done := make(chan error, 1)
-	go func() { done <- client.Close() }()
+	go func() { observer.Close(); done <- nil }()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -477,10 +476,9 @@ func TestMonitorLocalHistoryAndExplicitKeyApproval(t *testing.T) {
 	old := monitorCertificate(t, nil, m.hostname, false)
 	current := monitorCertificate(t, nil, m.hostname, false)
 	remote := monitorCertificate(t, nil, "*.example", false)
-	client := &Client{pin: &pinnedChain{leaf: current, local: true}, retired: []*pinnedChain{{leaf: old, local: true}, {leaf: remote}}}
-	for _, certificate := range client.localCertificates() {
-		m.rememberLocalCertificate(certificate)
-	}
+	m.events <- old.Raw
+	m.events <- current.Raw
+	m.rememberEvents()
 	known, err := m.knownKeys(nil)
 	if err != nil || !known[publicSHA256(old.RawSubjectPublicKeyInfo)] || !known[publicSHA256(current.RawSubjectPublicKeyInfo)] || known[publicSHA256(remote.RawSubjectPublicKeyInfo)] {
 		t.Fatalf("wrong local provenance: %+v %v", known, err)
@@ -502,7 +500,7 @@ func TestMonitorLocalHistoryAndExplicitKeyApproval(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigValidationAndDisabledLifecycle(t *testing.T) {
+func TestMonitorConfigValidation(t *testing.T) {
 	for _, config := range []MonitorConfig{{}, {StateDir: " "}, {StateDir: "x", DNSResolver: "resolver.example:53"}, {StateDir: "x", DNSResolver: "1.1.1.1:0"}} {
 		if config.Validate() == nil {
 			t.Fatalf("invalid config accepted: %+v", config)
@@ -513,26 +511,15 @@ func TestMonitorConfigValidationAndDisabledLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	client := &Client{}
-	client.startCertificateMonitor()
-	if client.monitorCancel != nil || client.monitorDone != nil {
-		t.Fatal("disabled monitor started work")
-	}
-	if err := client.Close(); err != nil {
-		t.Fatal(err)
-	}
 }
 
-func TestMonitorOutagesDoNotChangeTLS(t *testing.T) {
+func TestMonitorOutagesPreserveUnknownEvidence(t *testing.T) {
 	m := testMonitor(t)
 	m.config.DNSResolver = monitorDNS(t, func(reply *dns.Msg) { reply.Rcode = dns.RcodeServerFailure })
 	monitorHTTP(t, m, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
-	pin := &pinnedChain{leaf: monitorCertificate(t, nil, m.hostname, false), local: true}
-	client := &Client{pin: pin, monitor: m}
-	m.poll(t.Context(), client)
-	if client.pinned() != pin {
-		t.Fatal("observation outage changed active TLS material")
-	}
+	cert := monitorCertificate(t, nil, m.hostname, false)
+	m.events <- cert.Raw
+	m.poll(t.Context())
 	evidence, err := m.loadEvidence()
 	if err != nil || len(evidence.CAA) != 1 || evidence.CAA[0].Error == "" || evidence.CAA[0].Records != nil || evidence.CTError == "" {
 		t.Fatalf("outage not preserved as unknown: %+v %v", evidence, err)
@@ -543,11 +530,31 @@ func TestMonitorOutagesDoNotChangeTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	m.poll(t.Context(), client)
-	if client.pinned() != pin {
-		t.Fatal("evidence contention changed active TLS material")
-	}
-	if _, err := os.Stat(filepath.Join(m.dir, "local", publicSHA256(pin.leaf.Raw)+".der")); errors.Is(err, os.ErrNotExist) {
+	m.poll(t.Context())
+	if _, err := os.Stat(filepath.Join(m.dir, "local", publicSHA256(cert.Raw)+".der")); errors.Is(err, os.ErrNotExist) {
 		t.Fatal("worker did not retain local history")
+	}
+}
+
+func TestMonitorRejectsInvalidInstalledCertificateEvents(t *testing.T) {
+	m := testMonitor(t)
+	wrong := monitorCertificate(t, nil, "other.example", false)
+	m.events <- []byte("not DER")
+	m.events <- wrong.Raw
+	m.events <- make([]byte, (256<<10)+1)
+	m.rememberEvents()
+	known, err := m.knownKeys(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(known) != 0 {
+		t.Fatal("invalid installation event approved a public key")
+	}
+	cert := monitorCertificate(t, nil, m.hostname, false)
+	m.events <- cert.Raw
+	m.rememberEvents()
+	known, err = m.knownKeys(nil)
+	if err != nil || !known[publicSHA256(cert.RawSubjectPublicKeyInfo)] {
+		t.Fatalf("valid installation event missing: %v", err)
 	}
 }

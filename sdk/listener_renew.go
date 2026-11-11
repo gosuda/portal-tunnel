@@ -331,11 +331,20 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err := l.confirmNewRegistration(resp); err != nil {
 		return err
 	}
-	tenantTLS, err := l.dialRegistrationTLS(ctx, resp)
+	var observer *keyless.CertificateObserver
+	if l.certificateMonitor != nil {
+		observer, err = keyless.StartCertificateObserver(resp.CanonicalHostname, *l.certificateMonitor)
+		if err != nil {
+			_ = l.api.unregister(context.Background(), resp.AccessToken)
+			return err
+		}
+	}
+	tenantTLS, err := l.dialRegistrationTLS(ctx, resp, observer)
 	if err != nil {
+		observer.Close()
 		return err
 	}
-	return l.storeRegistrationLease(ctx, resp, tenantTLS)
+	return l.storeRegistrationLease(ctx, resp, tenantTLS, observer)
 }
 
 func (l *listener) confirmNewRegistration(resp types.RegisterResponse) error {
@@ -353,17 +362,17 @@ func (l *listener) confirmNewRegistration(resp types.RegisterResponse) error {
 	return nil
 }
 
-func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse) (*keyless.Client, error) {
+func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse, observer *keyless.CertificateObserver) (*keyless.Client, error) {
 	tenantTLS, err := keyless.NewClient(ctx, keyless.ClientConfig{
-		AlternativeHostname: resp.Hostname,
-		CertFile:            l.tlsCertFile,
-		KeyFile:             l.tlsKeyFile,
-		CertificateDir:      l.tlsStateDir,
-		RequireLocal:        l.tlsRequireLocal,
-		CertificateMonitor:  l.certificateMonitor,
-		RelayURL:            l.api.relayURL.String(),
-		Hostname:            resp.CanonicalHostname,
-		AccessToken:         resp.AccessToken,
+		AlternativeHostname:   resp.Hostname,
+		CertFile:              l.tlsCertFile,
+		KeyFile:               l.tlsKeyFile,
+		CertificateDir:        l.tlsStateDir,
+		RequireLocal:          l.tlsRequireLocal,
+		InstalledCertificates: observer.Events(),
+		RelayURL:              l.api.relayURL.String(),
+		Hostname:              resp.CanonicalHostname,
+		AccessToken:           resp.AccessToken,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
@@ -377,21 +386,23 @@ func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterR
 	return tenantTLS, nil
 }
 
-func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS *keyless.Client) error {
+func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS *keyless.Client, observer *keyless.CertificateObserver) error {
 	next := listenerSnapshot{
-		hostname:       resp.CanonicalHostname,
-		aliasHostname:  resp.Hostname,
-		udpAddr:        resp.UDPAddr,
-		tcpAddr:        resp.TCPAddr,
-		accessToken:    resp.AccessToken,
-		reverse:        resp.ReverseEndpoint,
-		expiresAt:      resp.ExpiresAt,
-		tenantTLS:      tenantTLS,
-		chainCheckedAt: time.Now(),
+		hostname:            resp.CanonicalHostname,
+		aliasHostname:       resp.Hostname,
+		udpAddr:             resp.UDPAddr,
+		tcpAddr:             resp.TCPAddr,
+		accessToken:         resp.AccessToken,
+		reverse:             resp.ReverseEndpoint,
+		expiresAt:           resp.ExpiresAt,
+		tenantTLS:           tenantTLS,
+		certificateObserver: observer,
+		chainCheckedAt:      time.Now(),
 	}
 	oldLease := l.lease.Swap(next)
 	if oldLease.tenantTLS != nil {
 		_ = oldLease.tenantTLS.Close()
+		oldLease.certificateObserver.Close()
 	}
 	if err := ctx.Err(); err != nil {
 		lease := l.clearLease("registration canceled")
@@ -401,6 +412,7 @@ func (l *listener) storeRegistrationLease(ctx context.Context, resp types.Regist
 			}
 			if lease.tenantTLS != nil {
 				_ = lease.tenantTLS.Close()
+				lease.certificateObserver.Close()
 			}
 		}
 		return err

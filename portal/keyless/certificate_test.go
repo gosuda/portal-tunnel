@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,11 +18,11 @@ import (
 func TestAutomaticCertificateState(t *testing.T) {
 	const hostname = "tenant.test.example"
 	dir := t.TempDir()
-	client := &Client{hostname: hostname, certificateDir: dir, relayURL: "https://127.0.0.1:1", serverName: "127.0.0.1"}
+	client := &automaticSource{relaySource: &relaySource{hostname: hostname, relayURL: "https://127.0.0.1:1", serverName: "127.0.0.1", headers: func() http.Header { return http.Header{} }}, certificateDir: dir}
 	// Failed initial issuance keeps its generated key for the next attempt.
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	if _, err := client.automaticPin(ctx); err == nil {
+	if _, err := client.acquire(ctx); err == nil {
 		t.Fatal("unreachable issuer succeeded")
 	}
 	pending, err := client.readBundle()
@@ -30,7 +32,7 @@ func TestAutomaticCertificateState(t *testing.T) {
 	if pending.CertificatePEM != "" || pending.KeyPEM == "" {
 		t.Fatal("pending key not persisted")
 	}
-	if _, err := client.automaticPin(ctx); err == nil {
+	if _, err := client.acquire(ctx); err == nil {
 		t.Fatal("unreachable issuer succeeded")
 	}
 	retried, err := client.readBundle()
@@ -139,7 +141,7 @@ func TestExpiredAutomaticCertificateDoesNotBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := &Client{hostname: hostname, certificateDir: dir}
+	owner := &automaticSource{relaySource: &relaySource{hostname: hostname}, certificateDir: dir}
 	if err := owner.saveBundle(certificateBundle{
 		Hostname:       hostname,
 		KeyPEM:         string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})),
@@ -163,7 +165,7 @@ func TestAutomaticBootstrapRefreshDuringIssuanceOutage(t *testing.T) {
 	relay := newRelayStandIn(t, before)
 	client := relay.newClient(t)
 	// The shared refresh owner also operates during automatic bootstrap.
-	client.certificateDir = t.TempDir()
+	client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
 	relay.renew(renewed, true)
 	changed, err := client.RefreshChain(t.Context())
 	if err == nil || !changed {
@@ -195,7 +197,7 @@ func TestStaleBootstrapRecoveryDoesNotWaitForIssuance(t *testing.T) {
 	issuer := newTestIssuer(t)
 	relay := newRelayStandIn(t, issuer.issue(t, 2))
 	client := relay.newClient(t)
-	client.certificateDir = t.TempDir()
+	client.automatic = &automaticSource{relaySource: client.relay, certificateDir: t.TempDir()}
 	stale := client.pinned()
 	renewed := issuer.issue(t, 3)
 	relay.renew(renewed, true)
@@ -215,7 +217,44 @@ func TestStaleBootstrapRecoveryDoesNotWaitForIssuance(t *testing.T) {
 	if !bytes.Equal(leaf.Raw, renewed.leaf.Raw) {
 		t.Fatal("stale bootstrap retained old certificate")
 	}
-	if _, err := os.Stat(client.bundlePath()); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(client.automatic.bundlePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale recovery touched issuance state: %v", err)
+	}
+}
+
+// The local lease lifecycle must not wait for remote CA/DNS work after its HTTP
+// request is canceled. The relay remains responsible for serializing and cleaning
+// up that work; this client does not spawn a detached replacement worker.
+func TestAutomaticCloseCancelsPendingIssuance(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+	client, err := NewClient(t.Context(), ClientConfig{RelayURL: server.URL, Hostname: "tenant.test.example", CertificateDir: t.TempDir(), RequireLocal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("issuance did not start")
+	}
+	done := make(chan error, 1)
+	go func() { done <- client.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for remote issuance")
+	}
+	if err := client.WaitReady(t.Context()); err == nil {
+		t.Fatal("closed client became ready")
 	}
 }

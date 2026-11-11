@@ -26,7 +26,7 @@ type HTTPRedirectConfig struct {
 }
 
 type ServerConfig struct {
-	// TenantCertificates opts the relay into ACME quota use for authenticated tenants.
+	// TenantCertificates opts into ACME quota use for explicitly approved tenants.
 	TenantCertificates bool
 	Cache              cache.Config
 	IVNPConfigPath     string

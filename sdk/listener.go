@@ -396,6 +396,7 @@ func (l *listener) resetForLeaseRefresh(err error) {
 	lease := l.clearLease("lease refresh required")
 	if lease != nil && lease.tenantTLS != nil {
 		_ = lease.tenantTLS.Close()
+		lease.certificateObserver.Close()
 	}
 	l.api.resetTransport()
 	l.clearReverseTLSCache()
@@ -428,6 +429,7 @@ func (l *listener) runCloseCleanup() error {
 	var tenantErr error
 	if lease != nil && lease.tenantTLS != nil {
 		tenantErr = lease.tenantTLS.Close()
+		lease.certificateObserver.Close()
 	}
 	if l.api != nil {
 		l.api.resetTransport()

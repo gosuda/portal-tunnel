@@ -257,3 +257,55 @@ func TestExpiredLocalCertificateClosesConnection(t *testing.T) {
 		t.Fatalf("raw connection was not closed: %v", err)
 	}
 }
+
+func TestInstalledCertificateEventsNeverOwnTLSMaterial(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	writeLocalPair(t, certFile, keyFile, tenantHostname)
+	events := make(chan []byte, 1)
+	client, err := NewClient(t.Context(), ClientConfig{RelayURL: "https://127.0.0.1:1", Hostname: tenantHostname, CertFile: certFile, KeyFile: keyFile, InstalledCertificates: events})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	initial := <-events
+	if !bytes.Equal(initial, client.pinned().leaf.Raw) {
+		t.Fatal("initial certificate event missing")
+	}
+	initial[0] ^= 0xff
+	if bytes.Equal(initial, client.pinned().leaf.Raw) {
+		t.Fatal("observer mutated active certificate")
+	}
+	writeLocalPair(t, certFile, keyFile, tenantHostname)
+	if changed, err := client.RefreshChain(t.Context()); err != nil || !changed {
+		t.Fatalf("refresh = %v, %v", changed, err)
+	}
+	// The undrained observer queue cannot stall another activation.
+	writeLocalPair(t, certFile, keyFile, tenantHostname)
+	done := make(chan error, 1)
+	go func() { _, err := client.RefreshChain(t.Context()); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("observer blocked activation")
+	}
+}
+
+func TestRelayBootstrapIsNotAnInstalledLocalCertificate(t *testing.T) {
+	issuer := newTestIssuer(t)
+	relay := newRelayStandIn(t, issuer.issue(t, 2))
+	events := make(chan []byte, 1)
+	client, err := NewClient(t.Context(), ClientConfig{RelayURL: relay.url, Hostname: tenantHostname, InstalledCertificates: events})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	select {
+	case <-events:
+		t.Fatal("relay bootstrap was reported as local material")
+	default:
+	}
+}

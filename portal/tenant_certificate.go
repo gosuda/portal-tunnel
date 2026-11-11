@@ -33,7 +33,7 @@ func (r *leaseRegistry) tenantCertificateNames(record *leaseRecord) ([]string, e
 
 // HandleTenantCertificate authenticates issuance with the existing lease token.
 // The relay receives only a signed CSR and never handles the tenant private key.
-func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request, approved []types.ServiceIdentityKey) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -49,6 +49,12 @@ func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request)
 	names, err := s.registry.tenantCertificateNames(record)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
+		return
+	}
+	// Free registration is not a public CA issuance grant. Local development
+	// certificates consume no public quota and retain automatic issuance.
+	if !utils.IsLocalRelayHost(s.identity.Name) && !slices.Contains(approved, record.ServiceKey()) {
+		writeAPIErrorResponse(w, errUnauthorized)
 		return
 	}
 	request, ok := utils.DecodeJSONRequest[types.TenantCertificateRequest](w, r, 16<<10)

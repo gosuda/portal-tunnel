@@ -15,11 +15,9 @@ import (
 	"sync"
 	"time"
 
-	keylesstls "github.com/gosuda/keyless_tls/keyless"
 	"github.com/gosuda/keyless_tls/keyless/t13server"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -42,8 +40,9 @@ type ClientConfig struct {
 	AccessToken         string
 	CertificateDir      string
 	RequireLocal        bool
-	// CertificateMonitor enables warning-only public observations for Hostname.
-	CertificateMonitor *MonitorConfig
+	// InstalledCertificates receives best-effort installed local public leaf DER.
+	// Delivery never blocks TLS activation; the receiver owns its lifecycle.
+	InstalledCertificates chan<- []byte
 	// CertFile and KeyFile select local-only signing; both must be supplied.
 	CertFile string
 	KeyFile  string
@@ -55,25 +54,18 @@ type Client struct {
 	accessToken string
 	pin         *pinnedChain
 	retired     []*pinnedChain
-	certFile    string
-	keyFile     string
 	closed      bool
 	closeOnce   sync.Once
 	closeErr    error
 
-	relayURL            string
-	serverName          string
-	hostname            string
-	alternativeHostname string
+	relay     *relaySource
+	files     *fileSource
+	automatic *automaticSource
+	hostname  string
 
-	refreshMu      sync.Mutex
-	certificateDir string
-	workerCancel   context.CancelFunc
-	workerDone     chan struct{}
-	ready          chan struct{}
-	monitor        *certificateMonitor
-	monitorCancel  context.CancelFunc
-	monitorDone    chan struct{}
+	refreshMu             sync.Mutex
+	ready                 chan struct{}
+	installedCertificates chan<- []byte
 }
 
 type pinnedChain struct {
@@ -102,27 +94,20 @@ func buildTenantClient(ctx context.Context, config ClientConfig, normalizedRelay
 		return nil, errKeylessHostnameIsRequired
 	}
 	client := &Client{
-		accessToken:         strings.TrimSpace(config.AccessToken),
-		relayURL:            normalizedRelayURL,
-		serverName:          serverName,
-		hostname:            hostname,
-		alternativeHostname: strings.TrimSpace(config.AlternativeHostname),
-		certFile:            config.CertFile,
-		keyFile:             config.KeyFile,
-		certificateDir:      config.CertificateDir,
+		accessToken:           strings.TrimSpace(config.AccessToken),
+		installedCertificates: config.InstalledCertificates,
+		hostname:              hostname,
 	}
 
-	if (client.certFile == "") != (client.keyFile == "") {
+	client.relay = &relaySource{relayURL: normalizedRelayURL, serverName: serverName, hostname: hostname, headers: client.headers}
+	if (config.CertFile == "") != (config.KeyFile == "") {
 		return nil, errTenantCertificatePairRequired
+	}
+	if config.CertFile != "" {
+		client.files = &fileSource{config.CertFile, config.KeyFile, hostname, strings.TrimSpace(config.AlternativeHostname)}
 	}
 	if config.RequireLocal && config.CertificateDir == "" && config.CertFile == "" {
 		return nil, errAutomaticCertificateDirectoryRequired
-	}
-	if config.CertificateMonitor != nil {
-		client.monitor, err = newCertificateMonitor(hostname, *config.CertificateMonitor)
-		if err != nil {
-			return nil, err
-		}
 	}
 	if config.CertificateDir != "" {
 		if err := ctx.Err(); err != nil {
@@ -131,49 +116,26 @@ func buildTenantClient(ctx context.Context, config ClientConfig, normalizedRelay
 		if config.CertFile != "" {
 			return nil, errAutomaticAndManualCertificateConflict
 		}
-		if err := client.startAutomatic(ctx, config.RequireLocal); err != nil {
+		client.automatic = &automaticSource{relaySource: client.relay, certificateDir: config.CertificateDir}
+		if strings.TrimSpace(config.AlternativeHostname) != "" {
+			return nil, errAutomaticCanonicalHostnameOnly
+		}
+		if client.pin, err = client.automatic.initial(ctx, config.RequireLocal); err != nil {
 			return nil, err
 		}
-		client.startCertificateMonitor()
+		client.ready = make(chan struct{})
+		if client.pin != nil {
+			close(client.ready)
+		}
+		client.publishInstalled(client.pin)
+		client.automatic.start(client)
 		return client, nil
 	}
 	if client.pin, err = client.loadPin(ctx); err != nil {
 		return nil, err
 	}
-	client.startCertificateMonitor()
+	client.publishInstalled(client.pin)
 	return client, nil
-}
-
-func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
-	if err := verifyCertificateHostname(chainPEM, c.hostname); err != nil {
-		return nil, fmt.Errorf("keyless certificate does not cover %s: %w", c.hostname, err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(chainPEM) {
-		return nil, errKeylessPinnedRelayCertificateChainUnparsable
-	}
-	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
-		Endpoint:   c.relayURL,
-		ServerName: c.serverName,
-		KeyID:      types.KeylessRelayKeyID,
-		RootCAPEM:  chainPEM,
-		Headers:    c.headers,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create keyless remote signer: %w", err)
-	}
-	server, err := t13server.NewServer(t13server.Config{
-		CertPEM:          chainPEM,
-		NextProtos:       []string{"http/1.1"},
-		KeyID:            types.KeylessRelayKeyID,
-		TranscriptSigner: remoteSigner,
-	})
-	if err != nil {
-		_ = remoteSigner.Close()
-		return nil, fmt.Errorf("create keyless tls server: %w", err)
-	}
-	leaf, _ := utils.ParseCertificatePEM(chainPEM)
-	return &pinnedChain{chainPEM: chainPEM, server: server, pool: pool, signer: remoteSigner, leaf: leaf}, nil
 }
 
 func (c *Client) pinned() *pinnedChain {
@@ -213,14 +175,14 @@ func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
 }
 
 func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, error) {
-	if c.pinned() == nil && c.certificateDir == "" {
+	if c.pinned() == nil && c.automatic == nil {
 		return false, errKeylessClientIsUnavailable
 	}
-	bootstrapRecovery := c.certificateDir != "" && stale != nil && stale.signer != nil
+	bootstrapRecovery := c.automatic != nil && stale != nil && stale.signer != nil
 	// Stale bootstrap recovery must not wait for an ACME operation. Its
 	// compare-and-swap below cannot overwrite a concurrently activated local pin.
 	if !bootstrapRecovery {
-		if c.certificateDir != "" {
+		if c.automatic != nil {
 			if !c.refreshMu.TryLock() {
 				return false, errAutomaticCertificateBusy
 			}
@@ -236,24 +198,16 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 	var next *pinnedChain
 	var err error
 	if bootstrapRecovery {
-		var chain []byte
-		chain, err = relayChain(ctx, c.relayURL, c.serverName)
-		if err == nil {
-			next, err = c.newPin(chain)
-		}
+		next, err = c.relay.acquire(ctx)
 	} else {
 		next, err = c.loadPin(ctx)
 	}
 	var issuanceErr error
-	if err != nil && !bootstrapRecovery && c.certificateDir != "" && current != nil && current.signer != nil {
+	if err != nil && !bootstrapRecovery && c.automatic != nil && current != nil && current.signer != nil {
 		issuanceErr = err
 		// Bootstrap is still allowed: preserve normal relay certificate rotation
 		// during an issuance outage. Local activation never takes this path.
-		var chain []byte
-		chain, err = relayChain(ctx, c.relayURL, c.serverName)
-		if err == nil {
-			next, err = c.newPin(chain)
-		}
+		next, err = c.relay.acquire(ctx)
 	}
 	if err != nil {
 		return false, errors.Join(issuanceErr, err)
@@ -265,7 +219,9 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 		return false, issuanceErr
 	}
 	c.mu.Lock()
-	if c.closed || (bootstrapRecovery && c.pin != stale) {
+	staleRecovery := bootstrapRecovery && c.pin != stale
+	downgrade := c.pin != nil && c.pin.local && !next.local
+	if c.closed || staleRecovery || downgrade {
 		c.mu.Unlock()
 		if next.signer != nil {
 			_ = next.signer.Close()
@@ -289,6 +245,7 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 		close(c.ready)
 	}
 	c.pin = next
+	c.publishInstalled(next)
 	c.mu.Unlock()
 	// RemoteSigner.Close only closes idle HTTP connections; it neither cancels
 	// an in-flight signature nor prevents one on an already captured server.
@@ -319,7 +276,7 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, binding []byte
 	var err error
 	if pin.leaf != nil && (time.Now().Before(pin.leaf.NotBefore) || !time.Now().Before(pin.leaf.NotAfter)) {
 		_ = raw.Close()
-		if pin.local && c.certificateDir != "" {
+		if pin.local && c.automatic != nil {
 			// Automatic renewal owns its backoff; incoming connections must
 			// neither trigger issuance attempts nor restore relay signing.
 			return nil, errTenantCertificateNotValid
@@ -357,6 +314,8 @@ func (c *Client) TenantCertPool() *x509.CertPool {
 // readable, but RefreshChain pins nothing new after Close, so no signer is left
 // unreleased. It is safe to call more than once: the signer is closed exactly
 // once and every call returns the result of that first close attempt.
+// Shutdown cancels and joins the local renewal HTTP worker. It does not wait
+// for the remote ACME order: its serialization and DNS cleanup belong to the relay.
 func (c *Client) Close() error {
 	if c == nil {
 		return nil
@@ -364,19 +323,13 @@ func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
-		if c.workerCancel != nil {
-			c.workerCancel()
-		}
-		if c.monitorCancel != nil {
-			c.monitorCancel()
+		if c.automatic != nil && c.automatic.cancel != nil {
+			c.automatic.cancel()
 		}
 		pin := c.pin
 		c.mu.Unlock()
-		if c.workerDone != nil {
-			<-c.workerDone
-		}
-		if c.monitorDone != nil {
-			<-c.monitorDone
+		if c.automatic != nil && c.automatic.done != nil {
+			<-c.automatic.done
 		}
 		if pin != nil && pin.signer != nil {
 			c.closeErr = pin.signer.Close()
@@ -390,17 +343,13 @@ func (c *Client) loadPin(ctx context.Context) (*pinnedChain, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if c.certificateDir != "" {
-		return c.automaticPin(ctx)
+	if c.automatic != nil {
+		return c.automatic.acquire(ctx)
 	}
-	if c.certFile == "" {
-		chain, err := relayChain(ctx, c.relayURL, c.serverName)
-		if err != nil {
-			return nil, err
-		}
-		return c.newPin(chain)
+	if c.files != nil {
+		return c.files.acquire()
 	}
-	return loadLocalPin(c.certFile, c.keyFile, c.hostname, c.alternativeHostname)
+	return c.relay.acquire(ctx)
 }
 
 // TenantTLSConfig verifies self-probes against installed tenant materials,
@@ -452,5 +401,16 @@ func (c *Client) TenantTLSConfig() *tls.Config {
 			}
 			return verificationErr
 		},
+	}
+}
+
+// publishInstalled runs only while initializing or holding the activation lock.
+func (c *Client) publishInstalled(pin *pinnedChain) {
+	if c.installedCertificates == nil || pin == nil || !pin.local || pin.leaf == nil {
+		return
+	}
+	select {
+	case c.installedCertificates <- append([]byte(nil), pin.leaf.Raw...):
+	default:
 	}
 }

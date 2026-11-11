@@ -36,6 +36,15 @@ var (
 	errAutomaticCertificateBusy              = errors.New("another process is issuing this tenant certificate")
 )
 
+// automaticSource owns persisted keys, issuance requests, and the renewal worker.
+// Cancellation interrupts the local HTTP request; the relay owns order cleanup.
+type automaticSource struct {
+	*relaySource
+	certificateDir string
+	cancel         context.CancelFunc
+	done           chan struct{}
+}
+
 // The private key is persisted before contacting the CA, and the completed pair
 // replaces the same bundle atomically. Lease credentials never enter this file.
 type certificateBundle struct {
@@ -44,12 +53,12 @@ type certificateBundle struct {
 	CertificatePEM string `json:"certificate_pem,omitempty"`
 }
 
-func (c *Client) bundlePath() string {
+func (c *automaticSource) bundlePath() string {
 	hash := sha256.Sum256([]byte(c.hostname))
 	return filepath.Join(c.certificateDir, hex.EncodeToString(hash[:])+".json")
 }
 
-func (c *Client) readBundle() (certificateBundle, error) {
+func (c *automaticSource) readBundle() (certificateBundle, error) {
 	path := c.bundlePath()
 	if err := utils.EnsurePrivateFile(path); err != nil {
 		return certificateBundle{}, err
@@ -79,7 +88,7 @@ func (c *Client) readBundle() (certificateBundle, error) {
 	return bundle, nil
 }
 
-func (c *Client) saveBundle(bundle certificateBundle) error {
+func (c *automaticSource) saveBundle(bundle certificateBundle) error {
 	data, err := json.Marshal(bundle)
 	if err != nil {
 		return err
@@ -106,50 +115,40 @@ func (c *Client) saveBundle(bundle certificateBundle) error {
 	return os.Rename(name, c.bundlePath())
 }
 
-func (c *Client) startAutomatic(ctx context.Context, requireLocal bool) error {
-	if c.alternativeHostname != "" {
-		return errAutomaticCanonicalHostnameOnly
+// initial loads durable local material before considering relay bootstrap.
+func (a *automaticSource) initial(ctx context.Context, requireLocal bool) (*pinnedChain, error) {
+	if err := utils.EnsurePrivateDir(a.certificateDir); err != nil {
+		return nil, err
 	}
-	if err := utils.EnsurePrivateDir(c.certificateDir); err != nil {
-		return err
-	}
-	bundle, err := c.readBundle()
+	bundle, err := a.readBundle()
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err // Corrupt state never selects the bootstrap path.
+		return nil, err
 	}
-	if err == nil && bundle.CertificatePEM != "" {
-		c.pin, err = newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname, c.alternativeHostname)
-		// An expired certificate needs renewal, but other corrupt material
-		// requires repair rather than silently downgrading or replacing a key.
-		if err != nil {
-			var invalid x509.CertificateInvalidError
-			if !errors.As(err, &invalid) || invalid.Reason != x509.Expired {
-				return err
-			}
+	if bundle.CertificatePEM != "" {
+		pin, err := newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), a.hostname, "")
+		if err == nil {
+			return pin, nil
 		}
-	}
-	c.ready = make(chan struct{})
-	if c.pin == nil && !requireLocal && bundle.CertificatePEM == "" {
-		chain, err := relayChain(ctx, c.relayURL, c.serverName)
-		if err != nil {
-			return err
+		var invalid x509.CertificateInvalidError
+		if !errors.As(err, &invalid) || invalid.Reason != x509.Expired {
+			return nil, err
 		}
-		if c.pin, err = c.newPin(chain); err != nil {
-			return err
-		}
+		// Expired persisted local material must renew, never restore relay signing.
+		return nil, nil
 	}
-	if c.pin != nil {
-		close(c.ready)
+	if requireLocal {
+		return nil, nil
 	}
-	workerCtx, cancel := context.WithCancel(context.Background())
-	c.workerCancel = cancel
-	c.workerDone = make(chan struct{})
-	go c.maintainCertificate(workerCtx)
-	return nil
+	return a.relaySource.acquire(ctx)
 }
 
-func (c *Client) maintainCertificate(ctx context.Context) {
-	defer close(c.workerDone)
+func (a *automaticSource) start(c *Client) {
+	workerCtx, cancel := context.WithCancel(context.Background())
+	a.cancel, a.done = cancel, make(chan struct{})
+	go a.maintainCertificate(workerCtx, c)
+}
+func (a *automaticSource) maintainCertificate(ctx context.Context, c *Client) {
+	defer close(a.done)
 	delay := time.Duration(0)
 	backoff := time.Minute
 	for {
@@ -180,9 +179,9 @@ func (c *Client) maintainCertificate(ctx context.Context) {
 	}
 }
 
-// automaticPin serializes issuance across processes, reuses the persisted key,
+// acquire serializes issuance across processes, reuses the persisted key,
 // and never returns relay-backed material. Failure cannot downgrade a live pin.
-func (c *Client) automaticPin(ctx context.Context) (*pinnedChain, error) {
+func (c *automaticSource) acquire(ctx context.Context) (*pinnedChain, error) {
 	lock, err := lockCertificate(c.bundlePath() + ".lock")
 	if err != nil {
 		return nil, err
@@ -206,7 +205,7 @@ func (c *Client) automaticPin(ctx context.Context) (*pinnedChain, error) {
 		return nil, err
 	}
 	if bundle.CertificatePEM != "" {
-		pin, err := newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname, c.alternativeHostname)
+		pin, err := newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname, "")
 		if err == nil {
 			renewBefore := pin.leaf.NotAfter.Sub(pin.leaf.NotBefore) / 3
 			if time.Until(pin.leaf.NotAfter) > renewBefore {
@@ -282,7 +281,7 @@ func (c *Client) automaticPin(ctx context.Context) (*pinnedChain, error) {
 	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: c.hostname, Roots: tlsConfig.RootCAs, Intermediates: intermediates}); err != nil {
 		return nil, fmt.Errorf("verify issued tenant certificate: %w", err)
 	}
-	pin, err := newLocalPin(chain, []byte(bundle.KeyPEM), c.hostname, c.alternativeHostname)
+	pin, err := newLocalPin(chain, []byte(bundle.KeyPEM), c.hostname, "")
 	if err != nil {
 		return nil, err
 	}
@@ -299,12 +298,15 @@ func (c *Client) WaitReady(ctx context.Context) error {
 	if c.pinned() != nil {
 		return nil
 	}
+	if c == nil || c.automatic == nil {
+		return errKeylessClientIsUnavailable
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-c.ready:
 		return nil
-	case <-c.workerDone:
+	case <-c.automatic.done:
 		return errKeylessClientIsUnavailable
 	}
 }

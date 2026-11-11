@@ -113,9 +113,13 @@ func TestLocalTenantIssuanceKeepsCSRKey(t *testing.T) {
 
 func TestTenantOrderBudgetSurvivesLeaseAndKeyChanges(t *testing.T) {
 	const hostname = "tenant.example.com"
-	manager := &Manager{
-		cfg:                 Config{BaseDomain: "example.com"},
-		tenantOrderAttempts: map[string]time.Time{hostname: time.Now()},
+	manager := &Manager{cfg: Config{BaseDomain: "example.com", CADirURL: "https://ca.example/directory", TenantIssuanceStateDir: t.TempDir()}}
+	reservation, err := manager.reserveTenantOrder(hostname, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reservation.file.Close(); err != nil {
+		t.Fatal(err)
 	}
 	for range 2 {
 		encoded, _ := tenantCSR(t, &x509.CertificateRequest{DNSNames: []string{hostname}})

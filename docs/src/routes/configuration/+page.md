@@ -239,7 +239,8 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
-| `TENANT_CERTIFICATES` | `false` | bool | Opt into lease-authenticated tenant CSR issuance with the existing relay ACME account and DNS provider. Uses shared CA quota; disabled by default. Orders are source/global limited and each hostname is limited to one production attempt per hour per process. |
+| `TENANT_CERTIFICATES` | `false` | bool | Opt into tenant CSR issuance with the relay ACME account and DNS provider. Public issuance additionally requires an explicitly approved service identity and shared durable budget state. Auto-mode registration alone is not an issuance grant. Local development CAs are exempt from approval and public quota accounting. |
+| `TENANT_ISSUANCE_STATE_DIR` | (empty) | string | Required for public tenant issuance: operator-created shared durable directory with coherent operating-system file locks across all relay instances consuming the same CA quota. Missing, unreadable, corrupt, locked, or full state fails closed. |
 | `ACME_CA_DIR_URL` | `""` | string | Optional ACME CA directory URL (https) for managed certificate issuance; empty defaults to Let's Encrypt production; the CA must not require External Account Binding, which is not supported (ZeroSSL and Google Trust Services do require it); a private CA is trusted through lego's `LEGO_CA_CERTIFICATES` environment variable, the path of its PEM certificate (mount the file in Docker); the account registration and the certificate are stored per directory, so switching CAs issues a new certificate and registers a new account while the others stay on disk, unused (Let's Encrypt production keeps `fullchain.pem` and `privatekey.pem`, any other CA uses `fullchain-<id>.pem` and `privatekey-<id>.pem`) |
 | `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01 challenges, A/AAAA sync, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
@@ -836,3 +837,40 @@ reverse proxy, so stripping them here is safe and has no lasting effect.
 The same policy applies automatically to WebSocket upgrade requests routed
 through `--http-route`. Portal-owned forwarding headers are set after stripping,
 so they remain correct and trusted.
+
+### Public tenant issuance admission
+
+Explicit approval through the existing operator policy is required even in automatic
+registration mode. A fresh identity, lease, IP address, or CSR does not grant CA
+access. Denied, banned, expired, and replaced leases remain ineligible. Request
+shedding before authentication protects CPU and request processing only; it is
+not CA quota protection. Durable issuance reservations happen only after live
+lease authentication, operator approval, ownership, and CSR validation.
+
+`TENANT_ISSUANCE_STATE_DIR/tenant-orders.jsonl` is an append-only, fsynced journal
+protected by an operating-system exclusive file lock, released when the process
+exits. Every reservation is durable before an ACME client can place an order.
+Failures, cancellations, incomplete replies, and crash-ambiguous orders consume
+capacity for the full rolling seven-day window. Success appends validated public
+certificate validity dates; it never refunds a reservation. Corrupt or truncated
+state fails closed instead of resetting quotas.
+
+The conservative ceilings are 20 new attempts and 10 eligible renewal attempts
+per registered domain and CA directory in seven days, 40 total attempts per CA
+directory, and three attempts per exact hostname, with a one-hour hostname
+cooldown. Subdomains share their public-suffix-derived registered-domain bucket.
+A recorded successful, unexpired certificate reaching two thirds of its lifetime qualifies
+for the separate renewal capacity. A new CSR or key alone does not qualify, and
+renewals still consume total CA and hostname capacity. This is local admission,
+not a claim of exemption from any CA's renewal or duplicate-certificate rules.
+
+All replicas, including replicas with different ACME accounts or base subdomains,
+must point at the same pre-existing, durably provisioned, lock-coherent directory. Independent local disks
+are not a supported shared-quota deployment. Do not delete, truncate, restore an
+older copy of, or rotate this journal to recover capacity. The 16 MiB journal
+ceiling requires operator maintenance that preserves reservations and successful
+issuance history; there is no automatic reset. Filesystem locking and durable
+writes must work across the deployment. Operators must reserve additional quota
+for relay certificates and other issuers outside this endpoint and keep tenant
+issuance disabled if their CA's limits or external consumption leave insufficient
+headroom. No filesystem-local mechanism coordinates independent installations.

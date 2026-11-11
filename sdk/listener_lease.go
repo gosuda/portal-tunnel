@@ -26,13 +26,14 @@ import (
 type listenerSnapshot struct {
 	hostname string
 
-	aliasHostname string
-	udpAddr       string
-	tcpAddr       string
-	accessToken   string
-	reverse       types.ReverseEndpoint
-	expiresAt     time.Time
-	tenantTLS     *keyless.Client
+	aliasHostname       string
+	udpAddr             string
+	tcpAddr             string
+	accessToken         string
+	reverse             types.ReverseEndpoint
+	expiresAt           time.Time
+	tenantTLS           *keyless.Client
+	certificateObserver *keyless.CertificateObserver
 
 	approval RelayApproval
 

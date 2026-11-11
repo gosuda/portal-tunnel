@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	ErrTenantOrderLimited       = errors.New("tenant hostname certificate order budget exhausted")
+	ErrTenantOrderLimited       = errors.New("tenant certificate order budget exhausted")
 	errTenantCSRInvalid         = errors.New("invalid tenant certificate request")
 	errTenantCSRNames           = errors.New("tenant certificate request contains an unauthorized name")
 	errTenantCSRKey             = errors.New("unsupported tenant certificate public key")
@@ -146,26 +146,11 @@ func (m *Manager) ObtainTenantCertificate(ctx context.Context, csr *x509.Certifi
 		}
 		return append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), material.CertPEM...), nil
 	}
-	now := time.Now()
-	for name, attemptedAt := range m.tenantOrderAttempts {
-		if now.Sub(attemptedAt) >= time.Hour {
-			delete(m.tenantOrderAttempts, name)
-		}
+	reservation, err := m.reserveTenantOrder(csr.DNSNames[0], time.Now())
+	if err != nil {
+		return nil, err
 	}
-	for _, name := range csr.DNSNames {
-		if _, limited := m.tenantOrderAttempts[name]; limited {
-			return nil, ErrTenantOrderLimited
-		}
-	}
-	if len(m.tenantOrderAttempts)+len(csr.DNSNames) > 4096 {
-		return nil, ErrTenantOrderLimited
-	}
-	if m.tenantOrderAttempts == nil {
-		m.tenantOrderAttempts = make(map[string]time.Time)
-	}
-	for _, name := range csr.DNSNames {
-		m.tenantOrderAttempts[name] = now
-	}
+	defer reservation.file.Close()
 	client, err := m.newClient(ctx)
 	if err != nil {
 		return nil, err
@@ -179,6 +164,9 @@ func (m *Manager) ObtainTenantCertificate(ctx context.Context, csr *x509.Certifi
 	}
 	if obtained == nil || len(obtained.Certificate) == 0 {
 		return nil, errTenantCertificateMissing
+	}
+	if err := reservation.reconcile(obtained.Certificate, csr); err != nil {
+		return nil, err
 	}
 	return obtained.Certificate, nil
 }
