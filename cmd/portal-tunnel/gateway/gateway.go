@@ -48,6 +48,13 @@ type X402Config struct {
 	PayTo            string   `json:"x402_pay_to,omitempty" toml:"x402_pay_to,omitempty"`
 	Endpoints        []string `json:"x402_endpoints,omitempty" toml:"x402_endpoints,omitempty"`
 	FacilitatorToken string   `json:"-" toml:"x402_facilitator_token,omitempty"`
+	// NanoClaimsFile keeps spent Nano payment blocks spent across restarts:
+	// each settled block hash is appended and fsynced before the request is
+	// served. Empty keeps the in-memory claim set, which forgets on restart.
+	NanoClaimsFile string `json:"x402_nano_claims_file,omitempty" toml:"x402_nano_claims_file,omitempty"`
+	// NanoRequireBinding accepts a Nano payment only with a nano-block-sig/1
+	// binding signed by the paying account for this route.
+	NanoRequireBinding bool `json:"x402_nano_require_binding,omitempty" toml:"x402_nano_require_binding,omitempty"`
 }
 
 // Normalize returns c in the form a config stores: values without surrounding
@@ -58,6 +65,7 @@ func (c X402Config) Normalize() X402Config {
 	c.PayTo = strings.TrimSpace(c.PayTo)
 	c.Endpoints = utils.CompactStrings(c.Endpoints)
 	c.FacilitatorToken = strings.TrimSpace(c.FacilitatorToken)
+	c.NanoClaimsFile = strings.TrimSpace(c.NanoClaimsFile)
 	return c
 }
 

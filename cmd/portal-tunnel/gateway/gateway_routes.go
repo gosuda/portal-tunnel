@@ -174,9 +174,18 @@ func resolveNanoFacilitator(network string, contract X402Config, nano **nanofaci
 	if len(endpoints) > 0 && len(endpoints) < nanoscheme.MinIndependentEndpoints {
 		return fmt.Errorf("x402 XNO payment requires at least %d independent Nano RPC endpoints", nanoscheme.MinIndependentEndpoints)
 	}
-	facilitator, err := nanofacilitator.NewNanoFacilitatorWithOptions(network, "", "", nanofacilitator.NanoFacilitatorOptions{
-		Endpoints: endpoints,
-	})
+	opts := nanofacilitator.NanoFacilitatorOptions{
+		Endpoints:      endpoints,
+		RequireBinding: contract.NanoRequireBinding,
+	}
+	if path := strings.TrimSpace(contract.NanoClaimsFile); path != "" {
+		claims, err := nanofacilitator.NewFileClaimStore(path)
+		if err != nil {
+			return fmt.Errorf("x402 XNO claim log: %w", err)
+		}
+		opts.Claims = claims
+	}
+	facilitator, err := nanofacilitator.NewNanoFacilitatorWithOptions(network, "", "", opts)
 	if err != nil {
 		return err
 	}
@@ -197,6 +206,13 @@ func composeNanoRoute(prefix, amount, network string, contract X402Config, nano 
 		return nil, err
 	}
 	requirements := buildComposeNanoRouteRequirements(network, payTo, raw)
+	if contract.NanoRequireBinding {
+		binding, err := nanoBindingOffer(prefix)
+		if err != nil {
+			return nil, err
+		}
+		requirements.Extra["binding"] = binding
+	}
 	gate, err := newComposeNanoRouteGate(prefix, requirements, *nano)
 	if err != nil {
 		return nil, err

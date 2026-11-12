@@ -572,6 +572,8 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `x402_asset` | string | wCSPR CEP-18 contract hash; required for Casper payments |
 | `x402_endpoints` | string array | Optional Sui RPC endpoints, Casper facilitator URL, or Nano RPC nodes; Casper uses the first endpoint, Nano requires at least two |
 | `x402_facilitator_token` | string | Casper facilitator authorization token; when omitted, the agent uses `CSPR_CLOUD_API_KEY` |
+| `x402_nano_claims_file` | string | Optional file that keeps spent Nano payment blocks spent across restarts; omitted keeps them in memory for the life of the process |
+| `x402_nano_require_binding` | bool | Accept a Nano payment only with a `nano-block-sig/1` binding signed by the paying account; omitted or `false` accepts a bare block hash |
 | `http_routes[].amount` | string | Optional human payment amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
 | `http_routes[].methods` | string array | Optional HTTP methods that require payment on that route; empty means every method |
 
@@ -620,6 +622,15 @@ omitted), requires a confirmed send of exactly the route amount to
 `x402_pay_to`, and accepts each block hash once per tunnel process. The route
 amount is in XNO and is published in raw units (1 XNO = 10^30 raw). Nano has no
 memo field, so use a dedicated pay-to account for each paid tunnel.
+
+Set `x402_nano_claims_file` to keep accepted block hashes refused after a
+restart: each hash is appended and synced to the file before the request is
+served, and the tunnel refuses to start on a file with an unreadable line. Use
+one file per tunnel. A block hash is public once it is broadcast; set
+`x402_nano_require_binding = true` to accept a payment only when the payer
+also signs it, with the key of the account that sent the block, over the
+`extra.binding` nonce and resource published in the route's 402 (the
+`nano-block-sig/1` format of the built-in facilitator).
 
 ```toml
 x402_network = "nano:mainnet"

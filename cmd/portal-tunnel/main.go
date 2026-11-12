@@ -118,6 +118,8 @@ func registerPaymentTransportFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *
 	fs.StringVar(&cfg.Asset, "x402-asset", "", "Payment asset contract; required for Casper wCSPR")
 	cli.RepeatedStringFlag(fs, &cfg.Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint and Nano verifies each payment on every listed RPC node (at least two)")
 	env.String(fs, &cfg.FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
+	fs.StringVar(&cfg.NanoClaimsFile, "x402-nano-claims-file", "", "File that keeps spent Nano payment blocks spent across restarts (created with mode 0600); default keeps them in memory only")
+	fs.BoolVar(&cfg.NanoRequireBinding, "x402-nano-require-binding", false, "Accept a Nano payment only with a nano-block-sig/1 binding signed by the paying account for this route")
 	cli.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
 	cli.RepeatedStringFlag(fs, &cfg.StripRequestHeaders, "strip-request-header", "Client request header removed before routed HTTP forwards it upstream; repeat for multiple headers; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (Host, X-Forwarded-*) are always rewritten by the tunnel; requires --http-route or --auth")
 	fs.StringVar(&cfg.Serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")

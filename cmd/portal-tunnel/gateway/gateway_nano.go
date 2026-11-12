@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"cmp"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"slices"
@@ -66,6 +68,23 @@ func xnoToRaw(amount string) (string, error) {
 		return "", fmt.Errorf("invalid XNO amount %q", amount)
 	}
 	return raw.String(), nil
+}
+
+// nanoBindingOffer is the requirements.extra.binding a route publishes when
+// x402_nano_require_binding is set: the payer signs its block hash with this
+// nonce and resource using the key of the paying account, so a block hash seen
+// on the public ledger cannot be redeemed here by anyone else. The nonce is
+// fresh for each route in each process.
+func nanoBindingOffer(resource string) (map[string]any, error) {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("x402 XNO binding nonce: %w", err)
+	}
+	return map[string]any{
+		"scheme":   nanoscheme.BindingScheme,
+		"nonce":    hex.EncodeToString(nonce),
+		"resource": resource,
+	}, nil
 }
 
 func isDecimalDigits(value string) bool {
