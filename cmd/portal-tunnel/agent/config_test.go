@@ -109,6 +109,8 @@ x402_network = "base"
 x402_asset = "usdc"
 x402_endpoints = ["/paid"]
 x402_facilitator_token = "facilitator-token"
+x402_nano_claims_file = "./nano-claims.log"
+x402_nano_require_binding = true
 
 [[tunnels.http_routes]]
 prefix = "/api"
@@ -223,6 +225,7 @@ func TestExistingConfigKeysFillComponents(t *testing.T) {
 	payment := gateway.X402Config{
 		Testnet: true, Network: "base", Asset: "usdc", PayTo: "0x1234567890abcdef1234567890abcdef12345678",
 		Endpoints: []string{"/paid"}, FacilitatorToken: "facilitator-token",
+		NanoClaimsFile: "./nano-claims.log", NanoRequireBinding: true,
 	}
 	if got := *specs["web"].HTTP.Auth; !reflect.DeepEqual(got, oidc) {
 		t.Errorf("web auth = %+v, want %+v", got, oidc)
