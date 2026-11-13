@@ -112,6 +112,12 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	if !ok {
 		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+		// Probe the relay-owned certificate path even before local issuance is
+		// ready. The canonical hostname uses independent local TLS material.
+		lease.hostname = lease.legacyHostname
+		lease.tenantTLS = endpoint.legacy
+	}
 	if lease.hostname == "" {
 		return mitmProbeReport{}, errListenerHostnameIsUnavailable
 	}

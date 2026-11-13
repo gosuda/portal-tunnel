@@ -236,6 +236,13 @@ Checks continue without visitor traffic and are skipped while no reverse
 connection is ready. Attempts run serially. Lease termination cancels and joins
 the loop before a replacement lease starts. Socket I/O shares the overall probe
 timeout and is closed on cancellation.
+
+With Local TLS enabled, the probe targets the legacy URL using its Keyless TLS
+configuration, including while the canonical certificate is unavailable. The
+legacy and alias endpoints use relay-owned certificate material; the canonical
+hostname uses the tunnel's independent local certificate. This probe samples the
+legacy connection and does not verify every alias or canonical connection.
+
 It cannot establish that other clients or connections were forwarded honestly.
 In particular, selective MITM and probe distinguishability remain limitations;
 random padding does not establish that probes are indistinguishable from normal

@@ -279,7 +279,11 @@ func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.Wa
 	if lease, ok := l.leaseSnapshot(); ok {
 		if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
 			renew = make(chan struct{}, 1)
-			renew <- struct{}{}
+			// Registration has no local certificate report. Publish already
+			// usable material now; pending issuance will signal its own change.
+			if endpoint.local.Ready() {
+				renew <- struct{}{}
+			}
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
