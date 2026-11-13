@@ -97,7 +97,12 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   map; listener events update it, while `Relays`, `Updates`, and `WaitReady` read
   from that state. Agent status types are not part of the SDK contract.
 
-- `portal/keyless`: the tenant TLS feature boundary. It owns tenant TLS termination
+- `portal/certmonitor`: independent, warning-only CT and CAA observations. The SDK
+  owns the observer lifecycle and passes copied public certificate installation
+  events. This package owns polling, baselines, and durable evidence without
+  controlling TLS readiness, certificate issuance, or relay selection.
+
+- `portal/keyless`: the Keyless TLS feature boundary. It owns tenant TLS termination
   via the `keyless_tls` t13server and keyless remote signing — certificate chains
   are pinned from the relay, each handshake signs transcript-bound through the
   relay's `/v1/sign` endpoint, and the relay validates every signing request against

@@ -12,8 +12,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -47,7 +47,7 @@ var (
 
 // Spec is the resolved description of one tunnel that the runtime is built from.
 type Spec struct {
-	CertificateMonitor *keyless.MonitorConfig
+	CertificateMonitor *certmonitor.MonitorConfig
 	TLSAuto            bool
 	TLSStateDir        string
 	TLSRequireLocal    bool

@@ -1,27 +1,22 @@
-package keyless
+// Package certmonitor owns warning-only CT and CAA observations independently of TLS.
+package certmonitor
 
 import (
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/asn1"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
@@ -354,158 +349,6 @@ func (m *certificateMonitor) readBaseline() (*monitorBaseline, error) {
 	return &baseline, nil
 }
 
-func canonicalCAA(records []caaRecord) ([]caaRecord, error) {
-	result := slices.Clone(records)
-	if result == nil {
-		result = []caaRecord{}
-	}
-	for i := range result {
-		// DNS character-strings are octets. Refuse a lossy JSON conversion
-		// rather than recording different policy bytes as an accepted value.
-		if !utf8.ValidString(result[i].Value) {
-			return nil, errMonitorCAAValueInvalid
-		}
-		result[i].Tag = strings.ToLower(result[i].Tag)
-		if result[i].Tag == "" || len(result[i].Tag) > 255 {
-			return nil, errMonitorCAATagInvalid
-		}
-		for _, c := range result[i].Tag {
-			if c < 'a' || c > 'z' {
-				if c < '0' || c > '9' {
-					return nil, errMonitorCAATagInvalid
-				}
-			}
-		}
-	}
-	slices.SortFunc(result, func(a, b caaRecord) int {
-		if a.Flags != b.Flags {
-			return int(a.Flags) - int(b.Flags)
-		}
-		if comparison := strings.Compare(a.Tag, b.Tag); comparison != 0 {
-			return comparison
-		}
-		return strings.Compare(a.Value, b.Value)
-	})
-	return slices.Compact(result), nil
-}
-
-// RFC 8659 section 3: each CAA(domain) lookup follows aliases; if empty,
-// the walk continues with the original domain's parent, not the alias's parent.
-func (m *certificateMonitor) observeCAA(ctx context.Context) caaObservation {
-	observation := caaObservation{ObservedAt: time.Now().UTC(), Resolver: m.config.DNSResolver}
-	for owner := dns.Fqdn(m.hostname); owner != "."; {
-		records, foundAt, err := m.lookupCAA(ctx, owner)
-		if err != nil {
-			observation.Error = err.Error()
-			return observation // nil Records is unknown, never a removed policy.
-		}
-		if len(records) > 0 {
-			observation.Records, observation.Owner = records, foundAt
-			return observation
-		}
-		_, rest, _ := strings.Cut(owner, ".")
-		owner = dns.Fqdn(rest)
-	}
-	observation.Records = []caaRecord{}
-	return observation
-}
-
-func (m *certificateMonitor) lookupCAA(ctx context.Context, owner string) ([]caaRecord, string, error) {
-	seen := map[string]bool{}
-	for range 16 {
-		owner = strings.ToLower(dns.Fqdn(owner))
-		if seen[owner] {
-			return nil, "", errMonitorCAAAliasLoop
-		}
-		seen[owner] = true
-		query := new(dns.Msg)
-		query.SetQuestion(owner, dns.TypeCAA)
-		client := &dns.Client{Timeout: 3 * time.Second}
-		reply, _, err := client.ExchangeContext(ctx, query, m.config.DNSResolver)
-		if err == nil && reply.Truncated {
-			client.Net = "tcp"
-			reply, _, err = client.ExchangeContext(ctx, query, m.config.DNSResolver)
-		}
-		if err != nil {
-			return nil, "", err
-		}
-		records, alias, err := caaAnswer(reply, owner)
-		if err != nil {
-			return nil, "", err
-		}
-		if len(records) != 0 {
-			return records, owner, nil
-		}
-		if alias == "" {
-			return nil, "", nil
-		}
-		if _, ok := dns.IsDomainName(alias); !ok {
-			return nil, "", errMonitorCAAAliasInvalid
-		}
-		owner = alias
-	}
-	return nil, "", errMonitorCAAAliasLimit
-}
-
-// caaAnswer validates one DNS answer without treating aliases, referrals, or
-// malformed responses as evidence that a policy was removed.
-func caaAnswer(reply *dns.Msg, owner string) ([]caaRecord, string, error) {
-	validEnvelope := reply.Response && len(reply.Question) == 1
-	validAuthority := reply.RecursionAvailable || reply.Authoritative
-	if !validEnvelope || !validAuthority {
-		return nil, "", errMonitorCAAResponseInvalid
-	}
-	question := reply.Question[0]
-	if !strings.EqualFold(question.Name, owner) || question.Qtype != dns.TypeCAA || question.Qclass != dns.ClassINET {
-		return nil, "", errMonitorCAAResponseInvalid
-	}
-	if reply.Truncated || (reply.Rcode != dns.RcodeSuccess && reply.Rcode != dns.RcodeNameError) {
-		return nil, "", fmt.Errorf("CAA DNS response unavailable: %s", dns.RcodeToString[reply.Rcode])
-	}
-	var records []caaRecord
-	var alias string
-	// Examine only this owner. Recursive replies may contain target CAA too;
-	// query that target explicitly to preserve alias-loop/error semantics.
-	for _, rr := range reply.Answer {
-		if rr.Header().Class != dns.ClassINET {
-			continue
-		}
-		var target string
-		switch rr := rr.(type) {
-		case *dns.CAA:
-			if strings.EqualFold(rr.Hdr.Name, owner) {
-				records = append(records, caaRecord{Flags: rr.Flag, Tag: rr.Tag, Value: rr.Value})
-			}
-		case *dns.CNAME:
-			if !strings.EqualFold(rr.Hdr.Name, owner) {
-				continue
-			}
-			target = rr.Target
-		case *dns.DNAME:
-			name := strings.ToLower(rr.Hdr.Name)
-			if owner == name || !dns.IsSubDomain(name, owner) {
-				continue
-			}
-			target = strings.TrimSuffix(owner, name) + rr.Target
-		}
-		if target == "" {
-			continue
-		}
-		if alias != "" && !strings.EqualFold(alias, target) {
-			return nil, "", errMonitorCAAConflictingAliases
-		}
-		alias = target
-	}
-	if alias != "" && len(records) != 0 {
-		return nil, "", errMonitorCAARecordsAndAlias
-	}
-	if reply.Rcode == dns.RcodeNameError && len(records) != 0 {
-		return nil, "", errMonitorCAANegativeWithRecords
-	}
-	records, err := canonicalCAA(records)
-	return records, alias, err
-}
-
 func (m *certificateMonitor) loadEvidence() (monitorEvidence, error) {
 	evidence := monitorEvidence{Hostname: m.hostname, Source: certificateMonitorSource, Certificates: map[string]ctObservation{}}
 	f, err := os.Open(filepath.Join(m.dir, "evidence.json"))
@@ -668,151 +511,4 @@ func (m *certificateMonitor) poll(parent context.Context) {
 				Msg("certificate monitor: unrecognized public key observed; review evidence, not proof of unauthorized issuance or CT inclusion")
 		}
 	}
-}
-
-type ctIssuance struct {
-	ID        string `json:"id"`
-	TBSSHA256 string `json:"tbs_sha256"`
-	CertDER   []byte `json:"cert_der"`
-}
-
-func validSHA256(value string) bool {
-	decoded, err := hex.DecodeString(value)
-	return err == nil && len(decoded) == sha256.Size && strings.ToLower(value) == value
-}
-
-func (m *certificateMonitor) fetchCT(ctx context.Context, cursor string) ([]ctIssuance, time.Time, error) {
-	query := url.Values{"domain": {m.hostname}, "match_wildcards": {"true"}, "expand": {"cert_der"}}
-	if cursor != "" {
-		query.Set("after", cursor)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certificateMonitorSource+"?"+query.Encode(), nil)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	resp, err := m.http.Do(req)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	defer resp.Body.Close()
-	var retryAfter time.Time
-	if seconds, err := strconv.ParseUint(resp.Header.Get("Retry-After"), 10, 32); err == nil {
-		retryAfter = time.Now().Add(time.Duration(seconds) * time.Second).UTC()
-	} else if when, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
-		retryAfter = when.UTC()
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, retryAfter, fmt.Errorf("cert spotter returned HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, certificateMonitorBytes+1))
-	if err != nil {
-		return nil, retryAfter, err
-	}
-	if len(data) > certificateMonitorBytes {
-		return nil, retryAfter, errMonitorCTResponseLimit
-	}
-	var issuances []ctIssuance
-	if err := json.Unmarshal(data, &issuances); err != nil {
-		return nil, retryAfter, err
-	}
-	if issuances == nil || len(issuances) > 1000 {
-		return nil, retryAfter, errMonitorCTPageInvalid
-	}
-	return issuances, retryAfter, nil
-}
-
-func (m *certificateMonitor) decodeCT(issuance ctIssuance, now time.Time) (ctObservation, error) {
-	if issuance.ID == "" || len(issuance.ID) > 256 || !validSHA256(issuance.TBSSHA256) {
-		return ctObservation{}, errMonitorCTIdentityInvalid
-	}
-	certificate, err := x509.ParseCertificate(issuance.CertDER)
-	if err != nil {
-		return ctObservation{}, err
-	}
-	// The API can match legacy Common Names as well as SANs. Valid DER with
-	// no modern SAN coverage is retained but must not wedge the pagination
-	// cursor or be mistaken for a certificate usable for this hostname.
-	coversHostname := certificate.VerifyHostname(m.hostname) == nil
-	precertificate := false
-	for _, extension := range certificate.Extensions {
-		if extension.Id.Equal(asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 3}) {
-			precertificate = true
-		}
-	}
-	return ctObservation{
-		SourceID: issuance.ID, TBSSHA256: issuance.TBSSHA256, Certificate: issuance.CertDER,
-		SHA256: publicSHA256(certificate.Raw), SPKISHA256: publicSHA256(certificate.RawSubjectPublicKeyInfo),
-		DNSNames: certificate.DNSNames, CoversHostname: coversHostname, Precertificate: precertificate,
-		NotBefore: certificate.NotBefore, NotAfter: certificate.NotAfter, FirstSeen: now, LastSeen: now,
-	}, nil
-}
-
-func (m *certificateMonitor) pollCT(ctx context.Context, evidence *monitorEvidence) (result error) {
-	if time.Now().Before(evidence.CTNextCheck) {
-		return nil
-	}
-	defer func() {
-		if result != nil {
-			evidence.CTChecked, evidence.CTError = time.Now().UTC(), result.Error()
-			result = errors.Join(result, m.saveEvidence(*evidence))
-		}
-	}()
-	seenCursors := map[string]bool{}
-	observedNoncovering := false
-	defer func() {
-		if observedNoncovering {
-			m.warn("CT source returned certificates without DNS SAN coverage; retained as non-covering public evidence", nil)
-		}
-	}()
-	for range certificateMonitorPages {
-		seenCursors[evidence.Cursor] = true
-		page, retryAfter, err := m.fetchCT(ctx, evidence.Cursor)
-		if err != nil {
-			evidence.CTNextCheck = retryAfter
-			return err
-		}
-		now := time.Now().UTC()
-		next := *evidence
-		next.CTNextCheck = retryAfter
-		next.Certificates = make(map[string]ctObservation, len(evidence.Certificates)+len(page))
-		for hash, old := range evidence.Certificates {
-			next.Certificates[hash] = old
-		}
-		seenIDs := map[string]bool{}
-		for _, issuance := range page {
-			if seenCursors[issuance.ID] || seenIDs[issuance.ID] {
-				return errMonitorCTCursorStalled
-			}
-			seenIDs[issuance.ID] = true
-			observation, err := m.decodeCT(issuance, now)
-			if err != nil {
-				return err // No cursor or partial page is committed.
-			}
-			observedNoncovering = observedNoncovering || !observation.CoversHostname
-			if now.Before(observation.NotAfter) {
-				if old, ok := next.Certificates[observation.SHA256]; ok {
-					observation.FirstSeen = old.FirstSeen
-				}
-				next.Certificates[observation.SHA256] = observation
-			}
-			next.Cursor = issuance.ID
-		}
-		next.CTChecked, next.CTError = now, ""
-		if len(page) == 0 {
-			// Restart only after a complete traversal. Later passes can see a
-			// final certificate for a previously observed precertificate.
-			next.Cursor = ""
-			next.CTLastComplete = now
-		}
-		// Evidence and cursor are one atomic checkpoint: failure cannot skip
-		// an issuance on retry/restart. Preserve old, even expired evidence.
-		if err := m.saveEvidence(next); err != nil {
-			return err
-		}
-		*evidence = next
-		if len(page) == 0 || time.Now().Before(retryAfter) {
-			return nil
-		}
-	}
-	return errMonitorCTPageLimit
 }

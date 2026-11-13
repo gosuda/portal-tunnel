@@ -225,8 +225,8 @@ traffic metadata even when the tunnel holds its own certificate key.
 Native tunnels can opt into best-effort CAA and certificate transparency (CT)
 monitoring. It is disabled by default and independent of certificate provisioning:
 Keyless, manual local certificates, and automatic local certificates are supported.
-The SDK lease owns the observer separately from its TLS client. The observer
-receives only the canonical hostname and copied public local-certificate installation
+The SDK lease owns the `portal/certmonitor` observer separately from its TLS
+client. The observer receives only the canonical hostname and copied public local-certificate installation
 events. Its bounded queue, DNS/CT requests, evidence writes, and shutdown never
 participate in TLS activation or acquisition. Events are best-effort: a crash or
 full queue can cause a conservative unrecognized-key warning, not silently approve

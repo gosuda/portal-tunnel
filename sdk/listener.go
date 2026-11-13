@@ -14,7 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -52,7 +52,7 @@ const (
 )
 
 type listenerConfig struct {
-	CertificateMonitor *keyless.MonitorConfig
+	CertificateMonitor *certmonitor.MonitorConfig
 	TLSStateDir        string
 	TLSRequireLocal    bool
 	TLSCertFile        string
@@ -133,7 +133,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 }
 
 type listener struct {
-	certificateMonitor *keyless.MonitorConfig
+	certificateMonitor *certmonitor.MonitorConfig
 	tlsStateDir        string
 	tlsRequireLocal    bool
 	tlsCertFile        string

@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
@@ -335,9 +336,9 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err := l.confirmNewRegistration(resp); err != nil {
 		return err
 	}
-	var observer *keyless.CertificateObserver
+	var observer *certmonitor.CertificateObserver
 	if l.certificateMonitor != nil {
-		observer, err = keyless.StartCertificateObserver(resp.CanonicalHostname, *l.certificateMonitor)
+		observer, err = certmonitor.StartCertificateObserver(resp.CanonicalHostname, *l.certificateMonitor)
 		if err != nil {
 			_ = l.api.unregister(context.Background(), resp.AccessToken)
 			return err
@@ -366,7 +367,7 @@ func (l *listener) confirmNewRegistration(resp types.RegisterResponse) error {
 	return nil
 }
 
-func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse, observer *keyless.CertificateObserver) (tenantTLSClient, error) {
+func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse, observer *certmonitor.CertificateObserver) (tenantTLSClient, error) {
 	legacyHostname := resp.CanonicalHostname
 	if resp.Namespace == types.LocalTLSNamespaceV1 {
 		legacyHostname = resp.LegacyCanonicalHostname
@@ -409,7 +410,7 @@ func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterR
 	return tenantTLS, nil
 }
 
-func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS tenantTLSClient, observer *keyless.CertificateObserver) error {
+func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS tenantTLSClient, observer *certmonitor.CertificateObserver) error {
 	next := listenerSnapshot{
 		hostname:            resp.CanonicalHostname,
 		legacyHostname:      resp.LegacyCanonicalHostname,

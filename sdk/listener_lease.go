@@ -16,8 +16,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -34,7 +34,7 @@ type listenerSnapshot struct {
 	reverse             types.ReverseEndpoint
 	expiresAt           time.Time
 	tenantTLS           tenantTLSClient
-	certificateObserver *keyless.CertificateObserver
+	certificateObserver *certmonitor.CertificateObserver
 
 	approval RelayApproval
 

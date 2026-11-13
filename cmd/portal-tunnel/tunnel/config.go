@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -182,7 +182,7 @@ func (c Config) Spec() (Spec, error) {
 		spec.Transport.UDP = &UDPConfig{Target: c.UDPAddr}
 	}
 	if c.TLSMonitorStateDir != "" || c.TLSMonitorBaseline != "" || c.TLSMonitorDNSResolver != "" {
-		spec.CertificateMonitor = &keyless.MonitorConfig{
+		spec.CertificateMonitor = &certmonitor.MonitorConfig{
 			StateDir:     c.TLSMonitorStateDir,
 			BaselineFile: c.TLSMonitorBaseline,
 			DNSResolver:  c.TLSMonitorDNSResolver,

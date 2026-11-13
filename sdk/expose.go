@@ -15,8 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -177,7 +177,7 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
-	CertificateMonitor *keyless.MonitorConfig
+	CertificateMonitor *certmonitor.MonitorConfig
 	AutomaticTLS       bool
 	TLSStateDir        string
 	TLSRequireLocal    bool
@@ -241,7 +241,7 @@ func WithAutomaticTLS(directory string, requireLocal bool) Option {
 // Raw TCP and the browser runtime are unsupported.
 func WithCertificateMonitoring(stateDir, baselineFile, dnsResolver string) Option {
 	return func(opts *options) {
-		opts.CertificateMonitor = &keyless.MonitorConfig{
+		opts.CertificateMonitor = &certmonitor.MonitorConfig{
 			StateDir: stateDir, BaselineFile: baselineFile, DNSResolver: dnsResolver,
 		}
 	}
