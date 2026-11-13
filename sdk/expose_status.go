@@ -90,6 +90,18 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 			e.mu.Unlock()
 			return
 		}
+		// Listener reports can wait behind other producers. Resolve canonical
+		// availability here, where updates are serialized, rather than trusting
+		// material that was usable when a report was constructed.
+		lease, registered := owner.leaseSnapshot()
+		endpoint, local := lease.tenantTLS.(*namespaceTLS)
+		if registered && local {
+			update.publicURL = ""
+			if update.state == RelayReady && endpoint.local.Ready() {
+				update.publicURL = owner.leaseURL(lease.hostname)
+			}
+			update.certificateErr = endpoint.local.IssuanceError()
+		}
 	}
 	if e.statuses == nil {
 		e.statuses = make(map[string]RelayStatus)

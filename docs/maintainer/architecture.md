@@ -311,7 +311,10 @@ original URL and cache behavior through capability negotiation.
 
 The listener publishes certificate installation and expiry through the same
 status path as reverse transport changes. `Relays`, `Updates`, and `WaitReady`
-consume that stored status; queries do not repair it. The existing lease renewal
+consume that stored status; queries do not repair it. The serialized status
+owner reads current canonical certificate availability when applying listener
+reports, so a delayed report cannot undo certificate expiry withdrawal.
+The existing lease renewal
 loop serializes certificate-change reports with token renewal. It reports the
 installed leaf's expiry to the relay, where `canonical_ready` expires independently
 of the reverse connection count. This is owner-reported availability, not proof

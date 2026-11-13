@@ -320,19 +320,14 @@ func (l *listener) reportAvailable() {
 	if l.datagram != nil && l.datagram.Connected() {
 		udpAddr = lease.udpAddr
 	}
-	var certificateErr error
-	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
-		certificateErr = endpoint.local.IssuanceError()
-	}
 	l.report(listenerStatus{
-		certificateErr: certificateErr,
-		state:          state,
-		publicURL:      l.publicURLForLease(lease),
-		legacyURL:      l.leaseURL(lease.legacyHostname),
-		aliasURL:       l.aliasURLForLease(lease),
-		udpAddr:        udpAddr,
-		tcpAddr:        lease.tcpAddr,
-		version:        l.api.relayReleaseVersion(),
+		state:     state,
+		publicURL: l.leaseURL(lease.hostname),
+		legacyURL: l.leaseURL(lease.legacyHostname),
+		aliasURL:  l.aliasURLForLease(lease),
+		udpAddr:   udpAddr,
+		tcpAddr:   lease.tcpAddr,
+		version:   l.api.relayReleaseVersion(),
 	})
 }
 
