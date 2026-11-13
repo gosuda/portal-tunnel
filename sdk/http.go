@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -107,12 +105,7 @@ func (d *serveRunHTTPDriver) waitRunHTTPResult(ctx context.Context) error {
 			ctxDone = nil
 		}
 	}
-	shutdownErr := d.shutdownErr
-	if ctx.Err() != nil && shutdownErr != nil {
-		log.Warn().Err(shutdownErr).Msg("http shutdown completed with cleanup errors")
-		shutdownErr = nil
-	}
-	return errors.Join(serveErr, shutdownErr)
+	return errors.Join(serveErr, d.shutdownErr)
 }
 
 func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Server {
