@@ -1,15 +1,21 @@
 package gateway
 
 import (
+	"bytes"
 	"cmp"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/big"
+	"os"
 	"slices"
 	"strings"
 
 	nanoscheme "github.com/gosuda/x402-facilitator/scheme/nano"
+	nanofacilitator "github.com/gosuda/x402-facilitator/scheme/nano/facilitator"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -85,6 +91,41 @@ func nanoBindingOffer(resource string) (map[string]any, error) {
 		"nonce":    hex.EncodeToString(nonce),
 		"resource": resource,
 	}, nil
+}
+
+// openNanoClaimLog opens the claim log at path. A final record that is
+// complete but lacks its newline is a spent block, so it is terminated first:
+// the facilitator's FileClaimStore drops any final line without a newline as
+// a torn write, which would make that block spendable again after the next
+// restart. A final line that does not parse is left for the store to drop.
+func openNanoClaimLog(path string) (*nanofacilitator.FileClaimStore, error) {
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		var last struct {
+			Hash string `json:"hash"`
+		}
+		tail := data[bytes.LastIndexByte(data, '\n')+1:]
+		if json.Unmarshal(tail, &last) == nil && last.Hash != "" {
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				return nil, err
+			}
+			_, err = f.Write([]byte{'\n'})
+			if err == nil {
+				err = f.Sync()
+			}
+			if closeErr := f.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return nanofacilitator.NewFileClaimStore(path)
 }
 
 func isDecimalDigits(value string) bool {

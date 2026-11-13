@@ -205,6 +205,7 @@ func (spec Spec) Validate() error {
 type Runtime struct {
 	Identity     types.Identity
 	Exposure     *sdk.Exposure
+	gateway      *gateway.HTTPGateway
 	handler      http.Handler
 	target       string
 	udpTarget    string
@@ -261,7 +262,11 @@ func buildExposureOptions(spec Spec) []sdk.Option {
 }
 
 func composeTunnelHandler(spec Spec, runtime *Runtime, listenerIdentity types.Identity, routes []gateway.ExposedHTTPRoute) (http.Handler, error) {
-	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
+	var handler http.Handler
+	var err error
+	if runtime.gateway, err = gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment); err == nil {
+		handler = runtime.gateway
+	}
 	if err == nil && spec.HTTP.Auth != nil {
 		auth := *spec.HTTP.Auth
 		auth.PublicHosts = runtime.publicHosts
@@ -271,7 +276,7 @@ func composeTunnelHandler(spec Spec, runtime *Runtime, listenerIdentity types.Id
 		handler, err = gateway.NewStripRequestHeaders(handler, spec.HTTP.StripRequestHeaders)
 	}
 	if err != nil {
-		_ = runtime.Exposure.Close()
+		_ = runtime.Close()
 		return nil, err
 	}
 	return handler, nil
@@ -366,6 +371,8 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	})
 }
 
+// Close stops the exposure and releases the gateway's Nano claim log; a
+// payment that races the close is refused, never accepted unrecorded.
 func (runtime *Runtime) Close() error {
-	return runtime.Exposure.Close()
+	return errors.Join(runtime.Exposure.Close(), runtime.gateway.Close())
 }

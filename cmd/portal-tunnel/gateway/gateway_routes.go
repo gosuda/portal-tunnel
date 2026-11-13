@@ -15,7 +15,7 @@ import (
 	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 )
 
-func composePaidRoute(prefix, amount string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
+func composePaidRoute(prefix, amount string, contract X402Config, g *HTTPGateway) (*routePolicy, error) {
 	network := strings.ToLower(strings.TrimSpace(contract.Network))
 	switch {
 	case network == "" || network == suiMainnetNetwork || network == suiTestnetNetwork:
@@ -23,7 +23,7 @@ func composePaidRoute(prefix, amount string, contract X402Config, nano **nanofac
 	case casperscheme.IsCasperNetwork(network):
 		return composeCasperRoute(prefix, amount, network, contract)
 	case nanoscheme.IsNanoNetwork(network):
-		return composeNanoRoute(prefix, amount, network, contract, nano)
+		return composeNanoRoute(prefix, amount, network, contract, g)
 	default:
 		return nil, fmt.Errorf("unsupported x402 network %q", network)
 	}
@@ -161,8 +161,8 @@ func newComposeCasperRouteGate(prefix string, requirements facilitatortypes.Paym
 	return gate, nil
 }
 
-func resolveNanoFacilitator(network string, contract X402Config, nano **nanofacilitator.NanoFacilitator) error {
-	if *nano != nil {
+func resolveNanoFacilitator(network string, contract X402Config, g *HTTPGateway) error {
+	if g.nano != nil {
 		return nil
 	}
 	endpoints := make([]string, 0, len(contract.Endpoints))
@@ -179,21 +179,22 @@ func resolveNanoFacilitator(network string, contract X402Config, nano **nanofaci
 		RequireBinding: contract.NanoRequireBinding,
 	}
 	if path := strings.TrimSpace(contract.NanoClaimsFile); path != "" {
-		claims, err := nanofacilitator.NewFileClaimStore(path)
+		claims, err := openNanoClaimLog(path)
 		if err != nil {
 			return fmt.Errorf("x402 XNO claim log: %w", err)
 		}
+		g.nanoClaims = claims
 		opts.Claims = claims
 	}
 	facilitator, err := nanofacilitator.NewNanoFacilitatorWithOptions(network, "", "", opts)
 	if err != nil {
 		return err
 	}
-	*nano = facilitator
+	g.nano = facilitator
 	return nil
 }
 
-func composeNanoRoute(prefix, amount, network string, contract X402Config, nano **nanofacilitator.NanoFacilitator) (*routePolicy, error) {
+func composeNanoRoute(prefix, amount, network string, contract X402Config, g *HTTPGateway) (*routePolicy, error) {
 	payTo := normalizeNanoAddress(contract.PayTo)
 	if payTo == "" {
 		return nil, errX402XnoPaymentRequiresChecksummedNano
@@ -202,7 +203,7 @@ func composeNanoRoute(prefix, amount, network string, contract X402Config, nano 
 	if err != nil {
 		return nil, err
 	}
-	if err := resolveNanoFacilitator(network, contract, nano); err != nil {
+	if err := resolveNanoFacilitator(network, contract, g); err != nil {
 		return nil, err
 	}
 	requirements := buildComposeNanoRouteRequirements(network, payTo, raw)
@@ -213,7 +214,7 @@ func composeNanoRoute(prefix, amount, network string, contract X402Config, nano 
 		}
 		requirements.Extra["binding"] = binding
 	}
-	gate, err := newComposeNanoRouteGate(prefix, requirements, *nano)
+	gate, err := newComposeNanoRouteGate(prefix, requirements, g.nano)
 	if err != nil {
 		return nil, err
 	}

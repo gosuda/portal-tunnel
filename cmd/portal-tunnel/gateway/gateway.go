@@ -125,7 +125,7 @@ func collectComposeHTTPRoutesSDKConfigs(routes []ExposedHTTPRoute) []sdk.HTTPRou
 	return sdkConfigs
 }
 
-func buildComposeHTTPRoutesPaidEntry(route ExposedHTTPRoute, contract X402Config, nano **nanofacilitator.NanoFacilitator) (string, *routePolicy, error) {
+func buildComposeHTTPRoutesPaidEntry(route ExposedHTTPRoute, contract X402Config, g *HTTPGateway) (string, *routePolicy, error) {
 	prefix := normalizeComposeHTTPRoutesPrefix(route.Prefix)
 	amount := strings.TrimSpace(route.Amount)
 	if amount == "" {
@@ -141,7 +141,7 @@ func buildComposeHTTPRoutesPaidEntry(route ExposedHTTPRoute, contract X402Config
 	if err != nil {
 		return "", nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 	}
-	paid, err := composePaidRoute(prefix, amount, contract, nano)
+	paid, err := composePaidRoute(prefix, amount, contract, g)
 	if err != nil {
 		return "", nil, fmt.Errorf("http route %q x402 payment: %w", prefix, err)
 	}
@@ -150,49 +150,44 @@ func buildComposeHTTPRoutesPaidEntry(route ExposedHTTPRoute, contract X402Config
 	return prefix, paid, nil
 }
 
-func assembleComposeHTTPRoutesPolicies(routes []ExposedHTTPRoute, contract X402Config) (map[string]*routePolicy, bool, error) {
-	policies := make(map[string]*routePolicy, len(routes))
-	servesX402 := false
-	var nano *nanofacilitator.NanoFacilitator
+func assembleComposeHTTPRoutesPolicies(routes []ExposedHTTPRoute, contract X402Config, g *HTTPGateway) error {
+	g.policies = make(map[string]*routePolicy, len(routes))
 	for _, route := range routes {
-		prefix, paid, err := buildComposeHTTPRoutesPaidEntry(route, contract, &nano)
+		prefix, paid, err := buildComposeHTTPRoutesPaidEntry(route, contract, g)
 		if err != nil {
-			return nil, false, err
+			return err
 		}
 		if paid == nil {
 			continue
 		}
-		servesX402 = true
-		policies[prefix] = paid
+		g.servesX402 = true
+		g.policies[prefix] = paid
 	}
-	return policies, servesX402, nil
+	return nil
 }
 
 // ComposeHTTPRoutes builds the payment-agnostic sdk router and explicitly
 // wraps only the routes carrying an x402 amount with payment gates. The
 // returned handler also serves the shared x402 client and prepare endpoints
 // when at least one route is paid; a fully unpaid gateway passes those paths
-// through to the routes like any other path.
-func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (http.Handler, error) {
+// through to the routes like any other path. The caller owns the returned
+// gateway and closes it when the tunnel stops; a failed composition has
+// already released what it opened.
+func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (*HTTPGateway, error) {
 	if len(routes) == 0 {
 		return nil, errLeastOneHTTPRouteRequired
 	}
 	contract.PayTo = strings.TrimSpace(contract.PayTo)
-	sdkConfigs := collectComposeHTTPRoutesSDKConfigs(routes)
-	policies, servesX402, err := assembleComposeHTTPRoutesPolicies(routes, contract)
+	g := &HTTPGateway{clientJS: suihttp.ClientHandler()}
+	err := assembleComposeHTTPRoutesPolicies(routes, contract, g)
+	if err == nil {
+		g.routes, err = sdk.NewHTTPRoutes(collectComposeHTTPRoutesSDKConfigs(routes))
+	}
 	if err != nil {
+		_ = g.Close()
 		return nil, err
 	}
-	routed, err := sdk.NewHTTPRoutes(sdkConfigs)
-	if err != nil {
-		return nil, err
-	}
-	return &httpGateway{
-		routes:     routed,
-		policies:   policies,
-		servesX402: servesX402,
-		clientJS:   suihttp.ClientHandler(),
-	}, nil
+	return g, nil
 }
 
 type routePolicy struct {
@@ -214,14 +209,27 @@ func (p *routePolicy) paidMethod(method string) bool {
 	return ok
 }
 
-type httpGateway struct {
+// HTTPGateway serves the composed routes and their x402 gates. It owns the
+// Nano claim log when x402_nano_claims_file is set.
+type HTTPGateway struct {
 	routes     *sdk.HTTPRoutes
 	policies   map[string]*routePolicy
 	servesX402 bool
 	clientJS   http.Handler
+	nano       *nanofacilitator.NanoFacilitator
+	nanoClaims *nanofacilitator.FileClaimStore
 }
 
-func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// Close releases the Nano claim log, if one is open. Payments that reach the
+// gateway after Close are refused, never accepted unrecorded.
+func (g *HTTPGateway) Close() error {
+	if g == nil || g.nanoClaims == nil {
+		return nil
+	}
+	return g.nanoClaims.Close()
+}
+
+func (g *HTTPGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	utils.DelHeaderSpellings(r.Header, types.HeaderAccessCredential)
 	if _, ok := appauth.PrincipalFromContext(r.Context()); !ok {
 		utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
@@ -255,7 +263,7 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	handler.ServeHTTP(w, r)
 }
 
-func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
+func (g *HTTPGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -294,7 +302,7 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 	g.writeRouteChallenge(w, r, policy)
 }
 
-func (g *httpGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request, policy *routePolicy) {
+func (g *HTTPGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request, policy *routePolicy) {
 	body := struct {
 		X402Version int                                    `json:"x402Version"`
 		Error       string                                 `json:"error,omitempty"`
