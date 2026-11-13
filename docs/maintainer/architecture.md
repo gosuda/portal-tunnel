@@ -320,6 +320,9 @@ installed leaf's expiry to the relay, where `canonical_ready` expires independen
 of the reverse connection count. This is owner-reported availability, not proof
 of TLS identity. Public links use the separate friendly or legacy endpoint until
 canonical material is ready, without redirecting or downgrading the canonical.
+At lease startup, already usable manual or persisted material is reported
+immediately. Pending issuance waits for its certificate-change notification
+instead of sending an unconditional renewal after registration.
 
 The local endpoint's automatic source owns persisted bundles, CSR issuance,
 renewal, and cancellation/join of its worker. Only that worker submits CSRs;

@@ -217,13 +217,15 @@ func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
 	if _, _, manual, err := m.manualCertificateOverride(); err != nil || manual {
 		return defaultRenewInterval
 	}
-	renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-	defer cancel()
-	needsRenewal, replacesCertID, recheck := m.shouldRenew(renewCtx)
+	checkCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+	needsRenewal, replacesCertID, recheck := m.shouldRenew(checkCtx)
+	cancel()
 	if !needsRenewal {
 		return recheck
 	}
-	if err := m.provision(renewCtx, replacesCertID); err != nil {
+	// DNS propagation uses the provider's configured budget, which can exceed
+	// the short DNS-sync/ARI timeout. Shutdown still cancels the whole order.
+	if err := m.provision(ctx, replacesCertID); err != nil {
 		log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
 	}
 	return defaultRenewInterval

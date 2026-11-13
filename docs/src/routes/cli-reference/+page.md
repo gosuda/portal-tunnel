@@ -183,6 +183,19 @@ service name. When the option is omitted, a legacy file's saved name remains
 the compatibility default; otherwise the service is unnamed. Use distinct
 explicit names to serve independent targets under one signing key.
 
+For example, repeat `--name blog` when restarting a service with a newly created
+identity file:
+
+```bash
+portal expose 3000 --identity-path ./identity.json --name blog
+# On later runs, keep --name blog to select the same service.
+portal expose 3000 --identity-path ./identity.json --name blog
+```
+
+Omitting `--name` on the later run selects the unnamed service because the new
+file stores only the key identity. This changes the URL even though the signing
+key is unchanged.
+
 | Endpoint | Hostname | TLS and cache policy |
 |---|---|---|
 | Friendly alias, if available | `<name>.<relay-root>` | Keyless, HTTP/1.1, live origin only |

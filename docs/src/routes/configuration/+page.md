@@ -282,6 +282,11 @@ other tenant orders and relay renewal after cancellation. Tenant issuance
 remains disabled by default. The same cancellation and cleanup behavior applies
 to relay certificates without shortening the configured propagation budget.
 
+Scheduled relay certificate renewal gives the ARI lookup a separate two-minute
+budget. The certificate order itself uses the provider's configured propagation
+timeout and the existing HTTP request timeouts, rather than sharing the
+two-minute DNS synchronization limit. Relay shutdown still cancels the order.
+
 ### IPv4 and IPv6
 
 Managed DNS discovers public IPv4 and IPv6 independently and publishes A and

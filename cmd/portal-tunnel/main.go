@@ -87,7 +87,7 @@ func registerIdentityAuthFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *expo
 	env.Bool(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	env.String(fs, &cfg.IdentityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	env.String(fs, &cfg.IdentityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
-	fs.StringVar(&cfg.Name, "name", "", "Request a short URL without the Ethereum address (single DNS label, maximum 63 ASCII characters); applies to new identities; omitted for the address-only default service")
+	fs.StringVar(&cfg.Name, "name", "", "Select a service and request a short URL (single DNS label, maximum 63 ASCII characters); overrides the identity's saved name without changing the file; omitted uses a legacy saved name or the unnamed default service")
 	fs.StringVar(&cfg.Description, "description", "", "Service description metadata")
 	fs.StringVar(&flags.tags, "tags", "", "Service tags metadata (comma-separated)")
 	fs.StringVar(&cfg.Owner, "owner", "", "Service owner metadata")
