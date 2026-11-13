@@ -243,7 +243,7 @@ func (s *Server) isDNSHostnameOwnedLocked(hostname string, now time.Time) bool {
 		if current == nil || current.isExpired(now) {
 			continue
 		}
-		if current.dnsAddressParent() == hostname && (s.acmeManager == nil || !s.acmeManager.ENSStatus().Enabled) {
+		if current.dnsAddressParent() == hostname {
 			return true
 		}
 		for _, currentHostname := range current.hostnames() {
@@ -265,7 +265,7 @@ func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
 	now := time.Now()
 
 	hostnames := record.hostnames()
-	if parent := record.dnsAddressParent(); parent != "" && !s.acmeManager.ENSStatus().Enabled && parent != record.LegacyCanonicalHostname {
+	if parent := record.dnsAddressParent(); parent != "" && parent != record.LegacyCanonicalHostname {
 		hostnames = append(hostnames, parent)
 	}
 	for _, hostname := range hostnames {

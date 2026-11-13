@@ -177,7 +177,7 @@ func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) erro
 // waitLeaseDNS gates external DNS-01 on the existing serialized address owner.
 // The queued check follows registration's address command without writing DNS.
 func (m *Manager) waitLeaseDNS(ctx context.Context, hostname string) error {
-	if m.cfg.ENSGaslessEnabled || m.dns == nil || m.dns.Name() == TypeEmbedded {
+	if m.dns == nil || m.dns.Name() == TypeEmbedded {
 		return nil
 	}
 	ready := make(chan error, 1)
@@ -238,7 +238,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
 		}
-		if !m.cfg.ENSGaslessEnabled && utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
+		if utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
 			// An exact child suppresses wildcard answers for its address parent.
 			// Publish the parent before the child to keep legacy URLs working.
 			_, parent, _ := strings.Cut(command.hostname, ".")
@@ -251,17 +251,18 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 					return err
 				}
 			}
-			return nil
-		}
-		if err := m.ensureLeaseAddressRecords(ctx, command.hostname, publicIPs); err != nil {
+		} else if err := m.ensureLeaseAddressRecords(ctx, command.hostname, publicIPs); err != nil {
 			return err
 		}
+	}
+	if !m.cfg.ENSGaslessEnabled {
+		return nil
 	}
 	return m.applyENSCommandStoreGaslessTXT(ctx, command)
 }
 
 func (m *Manager) applyENSCommandRemove(ctx context.Context, command ensDNSCommand) error {
-	if !m.cfg.ENSGaslessEnabled && m.isLeaseAddressParent(command.hostname) {
+	if m.isLeaseAddressParent(command.hostname) {
 		tracked, err := m.trackedENSGaslessHostnames()
 		if err != nil {
 			return err
