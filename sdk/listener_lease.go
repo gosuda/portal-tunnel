@@ -18,6 +18,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -282,31 +283,7 @@ func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.Wa
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				for {
-					var expiry <-chan time.Time
-					var timer *time.Timer
-					if until := time.Until(endpoint.local.CertificateExpiry()); until > 0 {
-						timer = time.NewTimer(until)
-						expiry = timer.C
-					}
-					select {
-					case <-leaseCtx.Done():
-						if timer != nil {
-							timer.Stop()
-						}
-						return
-					case <-endpoint.local.CertificateChanges():
-					case <-expiry:
-					}
-					if timer != nil {
-						timer.Stop()
-					}
-					l.reportAvailable()
-					select {
-					case renew <- struct{}{}:
-					default:
-					}
-				}
+				l.runCertificateStatus(leaseCtx, endpoint.local, renew)
 			}()
 		}
 	}
@@ -326,6 +303,36 @@ func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.Wa
 			l.runLeaseReportError(leaseCtx, errCh, err)
 		}
 	}()
+}
+
+// runCertificateStatus publishes installation and expiry without waiting for
+// network renewal, then asks the token-owning renewal loop to report remotely.
+func (l *listener) runCertificateStatus(ctx context.Context, client *localtls.Client, renew chan<- struct{}) {
+	for {
+		var expiry <-chan time.Time
+		var timer *time.Timer
+		if until := time.Until(client.CertificateExpiry()); until > 0 {
+			timer = time.NewTimer(until)
+			expiry = timer.C
+		}
+		select {
+		case <-ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
+			return
+		case <-client.CertificateChanges():
+		case <-expiry:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		l.reportAvailable()
+		select {
+		case renew <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (l *listener) runLeaseAwait(ctx context.Context, cancel context.CancelFunc, workers *sync.WaitGroup, errCh chan error) error {
