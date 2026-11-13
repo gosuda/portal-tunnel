@@ -13,6 +13,11 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+var (
+	errTestNamespaceDeletionUnavailable    = errors.New("address deletion unavailable")
+	errTestNamespacePublicationUnavailable = errors.New("parent address publication unavailable")
+)
+
 func TestCanonicalDNSLifecycleWithoutENS(t *testing.T) {
 	const root = "relay.delegated.example.com"
 	address := "0x" + strings.Repeat("a", 40)
@@ -79,7 +84,7 @@ type failingNamespaceDNSZone struct {
 
 func (z *failingNamespaceDNSZone) DeleteAddressRecords(ctx context.Context, name string) error {
 	if name == z.unavailableChild {
-		return errors.New("address deletion unavailable")
+		return errTestNamespaceDeletionUnavailable
 	}
 	return z.fakeZone.DeleteAddressRecords(ctx, name)
 }
@@ -158,7 +163,7 @@ func (z *namespaceDNSPublicationZone) Name() string { return TypeCloudflare }
 
 func (z *namespaceDNSPublicationZone) EnsureAddressRecord(ctx context.Context, name, ip string) error {
 	if name == z.unavailableParent {
-		return errors.New("parent address publication unavailable")
+		return errTestNamespacePublicationUnavailable
 	}
 	return z.fakeZone.EnsureAddressRecord(ctx, name, ip)
 }

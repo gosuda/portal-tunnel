@@ -194,9 +194,11 @@ func TestAutomaticTenantCertificate(t *testing.T) {
 	restart(false)
 	deadline = time.Now().Add(45 * time.Second)
 	for {
-		if _, err := get(); err == nil {
+		_, err := get()
+		if err == nil {
 			break
-		} else if time.Now().After(deadline) {
+		}
+		if time.Now().After(deadline) {
 			t.Fatalf("valid canonical certificate not served after issuance disabled: %v", err)
 		}
 		<-tick.C

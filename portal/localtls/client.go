@@ -172,8 +172,13 @@ func (c *Client) SetAccessToken(token string) {
 // leave the previous generation intact; existing connections are not restarted.
 func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
 	changed, err := c.refreshChain(ctx, nil)
-	if c.automatic != nil && (errors.Is(err, errAutomaticCertificateMissing) || errors.Is(err, errLocalCertificateReloadBusy) || (errors.Is(err, os.ErrNotExist) && c.pinned() == nil)) {
-		return false, nil
+	if c.automatic != nil {
+		switch {
+		case errors.Is(err, errAutomaticCertificateMissing), errors.Is(err, errLocalCertificateReloadBusy):
+			return false, nil
+		case errors.Is(err, os.ErrNotExist) && c.pinned() == nil:
+			return false, nil
+		}
 	}
 	return changed, err
 }
@@ -234,7 +239,7 @@ func (c *Client) setIssuanceError(err error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if (c.issuanceErr == nil && policyErr == nil) || (policyErr != nil && errors.Is(c.issuanceErr, policyErr)) {
+	if errors.Is(c.issuanceErr, policyErr) {
 		return
 	}
 	c.issuanceErr = policyErr

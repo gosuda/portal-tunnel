@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -202,10 +203,7 @@ func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayS
 }
 
 func (e *Exposure) announceRelayStatusChange(previous, status RelayStatus) {
-	publicURL := status.PublicURL
-	if publicURL == "" {
-		publicURL = status.LegacyURL
-	}
+	publicURL := cmp.Or(status.PublicURL, status.LegacyURL)
 	advertised := (previous.State != RelayReady || previous.PublicURL != status.PublicURL) && status.State == RelayReady && publicURL != ""
 	if advertised {
 		message := "service ready at " + publicURL
