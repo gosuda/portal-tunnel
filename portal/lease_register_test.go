@@ -197,7 +197,7 @@ func seedInvalidRenewFixture(t *testing.T, registry *leaseRegistry) leaseRegistr
 	return leaseRegistryInvalidRenewFixture{
 		record:         record,
 		response:       registered,
-		before:         registry.publicLease(record),
+		before:         registry.publicLease(record, time.Now()),
 		beforeSource:   record.sourceAddr,
 		beforeReported: record.ReportedIP,
 	}
@@ -210,7 +210,7 @@ func rejectInvalidRenew(t *testing.T, registry *leaseRegistry, fixture leaseRegi
 	if _, _, err := registry.Renew(request, netip.MustParseAddr("203.0.113.11"), nil); err == nil {
 		t.Fatal("Renew() accepted invalid metadata or TTL")
 	}
-	if after := registry.publicLease(fixture.record); !reflect.DeepEqual(after, fixture.before) {
+	if after := registry.publicLease(fixture.record, time.Now()); !reflect.DeepEqual(after, fixture.before) {
 		t.Fatalf("rejected Renew() changed lease: before=%+v after=%+v", fixture.before, after)
 	}
 	if fixture.record.sourceAddr != fixture.beforeSource || fixture.record.ReportedIP != fixture.beforeReported {

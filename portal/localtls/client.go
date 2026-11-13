@@ -89,6 +89,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		return nil, errLocalHostnameIsRequired
 	}
 	client := &Client{
+		changes:               make(chan struct{}, 1),
 		accessToken:           strings.TrimSpace(config.AccessToken),
 		installedCertificates: config.InstalledCertificates,
 		hostname:              hostname,
@@ -119,7 +120,6 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 			return nil, err
 		}
 		client.ready = make(chan struct{})
-		client.changes = make(chan struct{}, 1)
 		if config.IssuanceDisabled && client.pin == nil {
 			client.issuanceErr = &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceDisabled, Message: "automatic tenant certificate issuance is disabled on this relay"}
 		}
@@ -411,4 +411,18 @@ func (c *Client) Ready() bool {
 	}
 	now := time.Now()
 	return !now.Before(c.pin.leaf.NotBefore) && now.Before(c.pin.leaf.NotAfter)
+}
+
+// CertificateExpiry is the installed leaf's expiry, or zero without live material.
+// The lease owner uses it to publish expiry through its ordinary status path.
+func (c *Client) CertificateExpiry() time.Time {
+	if c == nil {
+		return time.Time{}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closed || c.pin == nil {
+		return time.Time{}
+	}
+	return c.pin.leaf.NotAfter
 }

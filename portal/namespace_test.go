@@ -170,3 +170,37 @@ func TestNamespaceDNSParentHasSiblingAndLegacyOwners(t *testing.T) {
 		t.Fatal("last canonical child withdrawal must preserve the live legacy address")
 	}
 }
+
+func TestCanonicalReadinessFollowsRenewedCertificateValidity(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "")
+	_, _, registered, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: owner, Namespace: types.LocalTLSNamespaceV1,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if leases := registry.PolicyLeases(now); len(leases) != 1 || leases[0].CanonicalReady {
+		t.Fatalf("registration advertised unreported local material: %+v", leases)
+	}
+	expires := now.Add(time.Minute)
+	renewed, _, err := registry.Renew(types.RenewRequest{
+		AccessToken: registered.AccessToken, LocalTLSNotAfter: expires,
+	}, netip.Addr{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leases := registry.PolicyLeases(now); len(leases) != 1 || !leases[0].CanonicalReady {
+		t.Fatalf("valid local material not advertised: %+v", leases)
+	}
+	if leases := registry.PolicyLeases(expires); len(leases) != 1 || leases[0].CanonicalReady {
+		t.Fatalf("expired local material still advertised: %+v", leases)
+	}
+	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: renewed.AccessToken}, netip.Addr{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if leases := registry.PolicyLeases(now); len(leases) != 1 || leases[0].CanonicalReady {
+		t.Fatalf("withdrawn material still advertised: %+v", leases)
+	}
+}

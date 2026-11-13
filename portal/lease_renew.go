@@ -91,6 +91,9 @@ func (r *leaseRegistry) refreshRenewRecordLocked(record *leaseRecord, req types.
 		record.ReportedIP = reportedIP
 	}
 	record.Metadata = req.Metadata.Copy()
+	if record.Namespace == types.LocalTLSNamespaceV1 {
+		record.localTLSNotAfter = req.LocalTLSNotAfter
+	}
 	r.cache.Renew(record.cacheLeaseLocked())
 	return record.Identity, record.id, record.Overlay, expiresAt
 }
@@ -121,14 +124,14 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 		return types.RenewResponse{}, reverseEndpointInput{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 	return types.RenewResponse{
-		ExpiresAt:   expiresAt,
-		AccessToken: nextAccessToken,
-	}, reverseEndpointInput{
-		leaseIdentity: recordIdentity,
-		leaseID:       leaseID,
-		expiresAt:     expiresAt,
-		useOverlay:    useOverlay,
-	}, nil
+			ExpiresAt:   expiresAt,
+			AccessToken: nextAccessToken,
+		}, reverseEndpointInput{
+			leaseIdentity: recordIdentity,
+			leaseID:       leaseID,
+			expiresAt:     expiresAt,
+			useOverlay:    useOverlay,
+		}, nil
 }
 
 func (r *leaseRegistry) stalePinLocked(record *leaseRecord, current *acme.TLSMaterial) bool {

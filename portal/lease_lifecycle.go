@@ -92,7 +92,7 @@ func (r *leaseRegistry) collectPublicLeasesLocked(now time.Time) []types.Lease {
 		if !r.includePublicLeaseLocked(record, now) {
 			continue
 		}
-		leases = append(leases, r.publicLease(record))
+		leases = append(leases, r.publicLease(record, now))
 	}
 	return leases
 }
@@ -120,7 +120,7 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 		identityKey := record.ServiceKey()
 		serializedIdentityKey := identityKey.String()
 		leases = append(leases, types.PolicyLease{
-			Lease:       r.publicLease(record),
+			Lease:       r.publicLease(record, now),
 			IdentityKey: serializedIdentityKey,
 			BPS:         r.bps.IdentityBPS(identityKey),
 			ClientIP:    clientIP,
@@ -158,7 +158,7 @@ func (r *leaseRegistry) deleteRecord(i int) {
 	r.records = r.records[:last]
 }
 
-func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
+func (r *leaseRegistry) publicLease(record *leaseRecord, now time.Time) types.Lease {
 	lease := types.Lease{
 		Namespace:               record.Namespace,
 		LegacyCanonicalHostname: record.LegacyCanonicalHostname,
@@ -169,6 +169,7 @@ func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
 		LastSeenAt:              record.LastSeenAt,
 		Hostname:                record.Hostname,
 		CanonicalHostname:       record.CanonicalHostname,
+		CanonicalReady:          record.Namespace == types.LocalTLSNamespaceV1 && now.Before(record.localTLSNotAfter) && now.Before(record.ExpiresAt),
 		UDPEnabled:              record.datagram != nil,
 		TCPEnabled:              record.tcpPort > 0,
 		Metadata:                record.Metadata.Copy(),

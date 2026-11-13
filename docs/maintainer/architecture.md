@@ -309,6 +309,15 @@ The SDK dispatches by exact lease hostname and advertises canonical readiness
 only while usable local material exists. Legacy clients and relays retain their
 original URL and cache behavior through capability negotiation.
 
+The listener publishes certificate installation and expiry through the same
+status path as reverse transport changes. `Relays`, `Updates`, and `WaitReady`
+consume that stored status; queries do not repair it. The existing lease renewal
+loop serializes certificate-change reports with token renewal. It reports the
+installed leaf's expiry to the relay, where `canonical_ready` expires independently
+of the reverse connection count. This is owner-reported availability, not proof
+of TLS identity. Public links use the separate friendly or legacy endpoint until
+canonical material is ready, without redirecting or downgrading the canonical.
+
 The local endpoint's automatic source owns persisted bundles, CSR issuance,
 renewal, and cancellation/join of its worker. Only that worker submits CSRs;
 lease chain checks reload persisted bundles without starting issuance. The

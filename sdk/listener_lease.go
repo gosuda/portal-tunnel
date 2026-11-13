@@ -272,17 +272,39 @@ func (l *listener) runLeaseStartSessions(leaseCtx context.Context, workers *sync
 }
 
 func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.WaitGroup, errCh chan error) {
+	// Certificate observations publish local status immediately. Remote reports
+	// stay serialized with access-token rotation in the existing renewal loop.
+	var renew chan struct{}
 	if lease, ok := l.leaseSnapshot(); ok {
 		if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+			renew = make(chan struct{}, 1)
+			renew <- struct{}{}
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
 				for {
+					var expiry <-chan time.Time
+					var timer *time.Timer
+					if until := time.Until(endpoint.local.CertificateExpiry()); until > 0 {
+						timer = time.NewTimer(until)
+						expiry = timer.C
+					}
 					select {
 					case <-leaseCtx.Done():
+						if timer != nil {
+							timer.Stop()
+						}
 						return
 					case <-endpoint.local.CertificateChanges():
-						l.reportAvailable()
+					case <-expiry:
+					}
+					if timer != nil {
+						timer.Stop()
+					}
+					l.reportAvailable()
+					select {
+					case renew <- struct{}{}:
+					default:
 					}
 				}
 			}()
@@ -300,7 +322,7 @@ func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.Wa
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		if err := l.runRenewLoop(leaseCtx); err != nil {
+		if err := l.runRenewLoop(leaseCtx, renew); err != nil {
 			l.runLeaseReportError(leaseCtx, errCh, err)
 		}
 	}()

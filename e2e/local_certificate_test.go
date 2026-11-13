@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -104,5 +105,79 @@ func TestLocalTenantCertificateWrongHostnameFailsReady(t *testing.T) {
 	publicURL := "https://" + net.JoinHostPort(hostnameErr.Host, strconv.Itoa(h.sniPort))
 	if _, ok := tenantGet(h.sniAddr, h.certificate, publicURL); ok {
 		t.Fatal("invalid manual certificate fell back to relay signing")
+	}
+}
+
+func TestLocalCertificateExpiryWithdrawsCanonical(t *testing.T) {
+	h := newHarness(t)
+	h.waitForPublicURL()
+	id, err := identity.Generate("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostname, err := utils.LocalTLSLeaseHostname(id.Name, id.Address, "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	certFile, keyFile := writeTenantCertificate(t, hostname)
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf.NotAfter = time.Now().Add(30 * time.Second).Truncate(time.Second)
+	der, err := x509.CreateCertificate(rand.Reader, leaf, leaf, leaf.PublicKey, pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	exposure, ready := namespaceService(t, h, id, marker, sdk.WithTLSCertificate(certFile, keyFile))
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	published := false
+	for !published {
+		for _, lease := range h.server.PublicLeases() {
+			if lease.CanonicalHostname == hostname && lease.CanonicalReady {
+				published = true
+			}
+		}
+		if !published {
+			select {
+			case <-tick.C:
+			case <-ctx.Done():
+				t.Fatal("relay did not receive canonical readiness through lease renewal")
+			}
+		}
+	}
+	// Expiry must arrive as a lifecycle event without a request, reconnect,
+	// certificate reload, or a caller querying Relays to repair its snapshot.
+	for {
+		select {
+		case update := <-exposure.Updates():
+			if update.State != sdk.RelayReady || update.PublicURL != "" || update.LegacyURL != ready.LegacyURL {
+				continue
+			}
+			if status := exposure.Relays()[0]; status.PublicURL != "" || status.LegacyURL != ready.LegacyURL {
+				t.Fatalf("snapshot disagrees with expiry event: %+v", status)
+			}
+			for _, lease := range h.server.PublicLeases() {
+				if lease.CanonicalHostname == hostname && lease.CanonicalReady {
+					t.Fatal("relay still advertises the expired canonical")
+				}
+			}
+			if body, ok := tenantGet(h.sniAddr, h.certificate, ready.LegacyURL); !ok || body != marker {
+				t.Fatalf("expiry removed the separate legacy endpoint: %q, %v", body, ok)
+			}
+			return
+		case <-ctx.Done():
+			t.Fatal("no canonical withdrawal event at certificate expiry")
+		}
 	}
 }

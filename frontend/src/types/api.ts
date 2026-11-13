@@ -26,6 +26,9 @@ export interface LeaseMetadata {
 }
 
 export interface Lease {
+  namespace?: string;
+  legacy_canonical_hostname?: string;
+  canonical_ready?: boolean;
   name?: string;
   address: string;
   expires_at: string;

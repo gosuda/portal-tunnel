@@ -305,6 +305,16 @@ refusals are also available in `RelayStatus.CertificateError`, without disabling
 live legacy URLs or an already valid canonical certificate. The exposure remains
 open for policy recovery or another compatible relay.
 
+Certificate installation and expiry update the same SDK status used by
+`Relays()`, `Updates()`, `WaitReady()`, and JSON lifecycle records. The records
+include `legacy_url` separately from the usable canonical `public_url`.
+For `local-tls-v1` public leases, `canonical_ready` reports usable local material;
+`ready` continues to count reverse transport connections. The tunnel reports
+`local_tls_not_after` through authenticated lease renewal on certificate changes,
+and the relay withdraws `canonical_ready` at that expiry even without another
+renewal. This is an owner-reported availability hint, not certificate validation
+or identity proof. Friendly and legacy URLs remain separate compatibility origins.
+
 **Go source compatibility:** direct users of `portal/keyless.Client` must
 replace `RelayCertPool()` with `TenantCertPool()`. The returned snapshot trusts
 the tenant certificate, not the relay control API. Use `TenantTLSConfig()` for

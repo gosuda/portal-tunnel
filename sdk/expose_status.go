@@ -25,28 +25,11 @@ func (e *Exposure) Relays() []RelayStatus {
 	e.mu.RLock()
 	relays := make([]RelayStatus, 0, len(e.statuses))
 	for _, status := range e.statuses {
-		relays = append(relays, e.currentRelayStatusLocked(status))
+		relays = append(relays, status)
 	}
 	e.mu.RUnlock()
 	slices.SortFunc(relays, compareRelayStatusRelays)
 	return relays
-}
-
-// Re-evaluate certificate validity at read time, including idle connections
-// whose certificate may have expired since the last transport status event.
-func (e *Exposure) currentRelayStatusLocked(status RelayStatus) RelayStatus {
-	listener := e.relayListeners[status.RelayURL]
-	if listener == nil {
-		return status
-	}
-	lease, ok := listener.leaseSnapshot()
-	if !ok {
-		return status
-	}
-	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && !endpoint.local.Ready() {
-		status.PublicURL = ""
-	}
-	return status
 }
 
 func compareRelayStatusRelays(a, b RelayStatus) int {
@@ -361,6 +344,7 @@ func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Even
 		Str("relay_url", status.RelayURL).
 		Str("state", string(status.State)).
 		Str("public_url", status.PublicURL).
+		Str("legacy_url", status.LegacyURL).
 		Bool("deselected", status.Deselected)
 	if status.State == RelayReady && !status.Deselected && status.AliasURL != "" {
 		event = event.Str("alias_url", status.AliasURL)
@@ -380,7 +364,6 @@ func (e *Exposure) readyRelays(matches func(RelayStatus) bool, requireLocal bool
 	allTerminal := len(e.statuses) > 0
 	var terminalErr error
 	for _, status := range e.statuses {
-		status = e.currentRelayStatusLocked(status)
 		if matches(status) {
 			ready = append(ready, status)
 		}

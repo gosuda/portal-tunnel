@@ -30,6 +30,7 @@ type leaseRecord struct {
 	Namespace               string
 	LegacyCanonicalHostname string
 	CanonicalHostname       string
+	localTLSNotAfter        time.Time
 	Metadata                types.LeaseMetadata
 	Overlay                 bool
 	pinnedChain             []byte

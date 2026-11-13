@@ -168,10 +168,13 @@ type DiscoveryAnnounceResponse struct {
 }
 
 type RenewRequest struct {
-	AccessToken string        `json:"access_token"`
-	TTL         int           `json:"ttl,omitempty"` // Non-positive values default to 120 seconds; maximum 600.
-	ReportedIP  string        `json:"reported_ip,omitempty"`
-	Metadata    LeaseMetadata `json:"metadata"`
+	// LocalTLSNotAfter reports the installed canonical leaf's validity bound.
+	// Zero withdraws canonical readiness; it never changes routing or TLS policy.
+	LocalTLSNotAfter time.Time     `json:"local_tls_not_after,omitzero"`
+	AccessToken      string        `json:"access_token"`
+	TTL              int           `json:"ttl,omitempty"` // Non-positive values default to 120 seconds; maximum 600.
+	ReportedIP       string        `json:"reported_ip,omitempty"`
+	Metadata         LeaseMetadata `json:"metadata"`
 	// RepinsChain says the tenant re-pins the relay certificate chain by itself.
 	// A relay asks a lease without it to register again when it serves a
 	// certificate the chain pinned at registration no longer verifies. Relays

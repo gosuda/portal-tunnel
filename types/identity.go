@@ -147,6 +147,9 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 }
 
 type Lease struct {
+	// CanonicalReady describes Local TLS material, independently of Ready's
+	// reverse transport count. Legacy namespaces do not use this field.
+	CanonicalReady          bool          `json:"canonical_ready,omitempty"`
 	Namespace               string        `json:"namespace,omitempty"`
 	LegacyCanonicalHostname string        `json:"legacy_canonical_hostname,omitempty"`
 	Name                    string        `json:"name,omitempty"`

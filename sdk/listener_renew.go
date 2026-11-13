@@ -140,7 +140,7 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 	return transport.DialQUICBackhaul(ctx, dialAddr, tlsCfg, lease.accessToken)
 }
 
-func (l *listener) runRenewLoop(ctx context.Context) error {
+func (l *listener) runRenewLoop(ctx context.Context, renew <-chan struct{}) error {
 	const wakeThreshold = 10 * time.Second
 
 	for {
@@ -149,10 +149,17 @@ func (l *listener) runRenewLoop(ctx context.Context) error {
 			return err
 		}
 
-		elapsed, err := sleepUntilRenew(ctx, interval)
-		if err != nil {
-			return err
+		before := time.Now().Round(0)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-renew:
+		case <-timer.C:
 		}
+		timer.Stop()
+		elapsed := time.Since(before)
 
 		if elapsed > interval+wakeThreshold {
 			log.Info().
@@ -168,16 +175,6 @@ func (l *listener) runRenewLoop(ctx context.Context) error {
 		}
 		l.reportAvailable()
 	}
-}
-
-func sleepUntilRenew(ctx context.Context, interval time.Duration) (time.Duration, error) {
-	before := time.Now().Round(0)
-	if interval > 0 {
-		if !utils.SleepOrDone(ctx, interval) {
-			return 0, ctx.Err()
-		}
-	}
-	return time.Since(before), nil
 }
 
 func (l *listener) renewLeaseWithRetry(ctx context.Context) error {
@@ -241,12 +238,17 @@ func (l *listener) renewLease(ctx context.Context) error {
 }
 
 func (l *listener) requestLeaseRenewal(requestCtx context.Context, lease listenerSnapshot) (types.RenewResponse, error) {
+	var localTLSNotAfter time.Time
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && endpoint.local.Ready() {
+		localTLSNotAfter = endpoint.local.CertificateExpiry()
+	}
 	resp, err := l.api.renew(requestCtx, types.RenewRequest{
-		AccessToken: lease.accessToken,
-		TTL:         int(defaultLeaseTTL / time.Second),
-		ReportedIP:  utils.ResolvePublicIP(requestCtx),
-		Metadata:    l.metadataSnapshot(),
-		RepinsChain: true,
+		LocalTLSNotAfter: localTLSNotAfter,
+		AccessToken:      lease.accessToken,
+		TTL:              int(defaultLeaseTTL / time.Second),
+		ReportedIP:       utils.ResolvePublicIP(requestCtx),
+		Metadata:         l.metadataSnapshot(),
+		RepinsChain:      true,
 	})
 	if err != nil {
 		if staleLeaseError(err) {

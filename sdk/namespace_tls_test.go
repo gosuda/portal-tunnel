@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -46,13 +45,17 @@ func TestCanonicalBindingCoversSiblingNonceAndExporter(t *testing.T) {
 	}
 }
 
-func TestRelaySnapshotsHideUnavailableCanonical(t *testing.T) {
+func TestCanonicalWithdrawalUpdatesSnapshotsAndWaiters(t *testing.T) {
 	const relay = "https://relay.example"
 	const legacy = "https://legacy.relay.example"
 	e := &Exposure{
-		statuses:       map[string]RelayStatus{relay: {RelayURL: relay, State: RelayReady, PublicURL: "https://service.address.relay.example", LegacyURL: legacy}},
-		relayListeners: map[string]*listener{relay: {lease: utils.NewSnapshot(listenerSnapshot{accessToken: "token", tenantTLS: &namespaceTLS{local: &localtls.Client{}}})}},
+		statuses:     map[string]RelayStatus{relay: {RelayURL: relay, State: RelayReady, PublicURL: "https://service.address.relay.example", LegacyURL: legacy}},
+		done:         make(chan struct{}),
+		updates:      make(chan RelayStatus, 1),
+		stateChanged: make(chan struct{}),
 	}
+	changed := e.stateChanged
+	e.setRelayStatus(relay, listenerStatus{state: RelayReady, legacyURL: legacy})
 	status := e.Relays()[0]
 	if status.PublicURL != "" || status.State != RelayReady || status.LegacyURL != legacy {
 		t.Fatalf("unavailable canonical status: %+v", status)
@@ -60,5 +63,18 @@ func TestRelaySnapshotsHideUnavailableCanonical(t *testing.T) {
 	ready, _, err := e.readyRelays(func(status RelayStatus) bool { return status.State == RelayReady && status.PublicURL != "" }, true)
 	if err != nil || len(ready) != 0 {
 		t.Fatalf("unavailable canonical marked ready: %+v, %v", ready, err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("canonical withdrawal did not wake readiness waiters")
+	}
+	select {
+	case update := <-e.Updates():
+		if !relayStatusEqual(update, status) {
+			t.Fatalf("update = %+v, snapshot = %+v", update, status)
+		}
+	default:
+		t.Fatal("canonical withdrawal did not publish an update")
 	}
 }
