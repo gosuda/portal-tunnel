@@ -102,6 +102,31 @@ func TestAutomaticCertificateReadiness(t *testing.T) {
 	}
 }
 
+func TestIssuancePolicyDoesNotInvalidateUsableCertificate(t *testing.T) {
+	const hostname = "tenant.test.example"
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "tenant.pem"), filepath.Join(dir, "tenant.key")
+	certPEM := writeLocalPair(t, certFile, keyFile, hostname)
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := newLocalPin(certPEM, keyPEM, hostname)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{pin: pin}
+	denied := &types.APIRequestError{StatusCode: http.StatusForbidden, Code: types.APIErrorCodeTenantIssuanceNotApproved}
+	client.setIssuanceError(&certificateRetryError{error: denied})
+	if !client.Ready() || !errors.Is(client.IssuanceError(), &types.APIRequestError{Code: denied.Code}) {
+		t.Fatalf("usable certificate or policy diagnosis lost: %v", client.IssuanceError())
+	}
+	client.setIssuanceError(&types.APIRequestError{StatusCode: http.StatusServiceUnavailable, Code: types.APIErrorCodeFeatureUnavailable})
+	if !client.Ready() || client.IssuanceError() != nil {
+		t.Fatalf("transient CA failure became a policy denial: %v", client.IssuanceError())
+	}
+}
+
 func TestCertificateIssuanceLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "certificate.lock")
 	first, err := lockCertificate(path)

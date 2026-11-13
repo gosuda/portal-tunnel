@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -122,7 +123,11 @@ drainENS:
 	for {
 		select {
 		case command := <-m.ensCommands:
-			state.pendingENS[command.hostname] = command
+			if command.ready != nil {
+				command.ready <- errLeaseDNSPending
+			} else {
+				state.pendingENS[command.hostname] = command
+			}
 		default:
 			break drainENS
 		}
@@ -131,14 +136,11 @@ drainENS:
 
 func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *maintenanceLoopState) error {
 	var err error
-	for hostname, command := range state.pendingENS {
+	for _, command := range state.pendingENS {
 		if commandErr := m.applyENSCommand(ctx, command); commandErr != nil {
 			err = errors.Join(err, commandErr)
 		} else {
-			delete(state.pendingENS, hostname)
-			if !command.remove {
-				clear(state.lastPublicIPs)
-			}
+			m.finishENSCommand(state, command)
 		}
 	}
 	return err
@@ -228,6 +230,10 @@ func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
 }
 
 func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *maintenanceLoopState, command ensDNSCommand) {
+	if command.ready != nil {
+		command.ready <- m.checkLeaseDNS(state, command.hostname)
+		return
+	}
 	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
 	err := m.applyENSCommand(syncCtx, command)
 	cancel()
@@ -235,9 +241,20 @@ func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *ma
 		state.pendingENS[command.hostname] = command
 		log.Warn().Err(err).Str("hostname", command.hostname).Msg("apply ENS dns command")
 	} else {
-		delete(state.pendingENS, command.hostname)
-		if !command.remove {
-			clear(state.lastPublicIPs)
-		}
+		m.finishENSCommand(state, command)
+	}
+}
+
+func (m *Manager) finishENSCommand(state *maintenanceLoopState, command ensDNSCommand) {
+	delete(state.pendingENS, command.hostname)
+	if command.remove {
+		return
+	}
+	clear(state.lastPublicIPs)
+	if !m.cfg.ENSGaslessEnabled && utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
+		_, parent, _ := strings.Cut(command.hostname, ".")
+		// The new child republished the shared parent. An old withdrawal
+		// intent must not outlive the newly registered DNS owner.
+		delete(state.pendingENS, parent)
 	}
 }

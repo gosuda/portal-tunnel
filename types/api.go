@@ -79,10 +79,8 @@ const UnnamedServiceLabel = "default"
 
 type RegisterChallengeRequest struct {
 	Namespace string `json:"namespace,omitempty"`
-	// CanonicalOnly requests only the identity-bound hostname, without acquiring a friendly alias.
-	CanonicalOnly bool `json:"canonical_only,omitempty"`
-	Cache         bool `json:"cache,omitempty"`
-	CacheTTL      int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	Cache     bool   `json:"cache,omitempty"`
+	CacheTTL  int    `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
 	// AllowCanonicalFallback permits registration to continue without the friendly alias.
 	AllowCanonicalFallback bool          `json:"allow_canonical_fallback,omitempty"`
 	Identity               Identity      `json:"identity"`
@@ -197,11 +195,14 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	Namespaces      []string           `json:"namespaces,omitempty"`
-	Cache           *StaticCacheLimits `json:"cache,omitempty"`
-	ProtocolVersion string             `json:"protocol_version"`
-	ReleaseVersion  string             `json:"release_version"`
-	ENS             ENSStatus          `json:"ens"`
+	Namespaces []string `json:"namespaces,omitempty"`
+	// TenantCertificateIssuance is independent of manual Local TLS support.
+	// Nil means that the relay predates issuance capability reporting.
+	TenantCertificateIssuance *bool              `json:"tenant_certificate_issuance,omitempty"`
+	Cache                     *StaticCacheLimits `json:"cache,omitempty"`
+	ProtocolVersion           string             `json:"protocol_version"`
+	ReleaseVersion            string             `json:"release_version"`
+	ENS                       ENSStatus          `json:"ens"`
 }
 
 type ENSStatus struct {

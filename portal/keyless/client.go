@@ -31,10 +31,9 @@ var (
 
 // ClientConfig contains the lease-scoped inputs for a tenant TLS client.
 type ClientConfig struct {
-	RelayURL            string
-	Hostname            string
-	AlternativeHostname string
-	AccessToken         string
+	RelayURL    string
+	Hostname    string
+	AccessToken string
 }
 
 // Client owns one tenant TLS engine and atomically replaces certificate/signer material.

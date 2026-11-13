@@ -68,16 +68,17 @@ type listenerConfig struct {
 }
 
 type listenerStatus struct {
-	state     RelayState
-	failure   RelayFailure
-	approval  RelayApproval
-	err       error
-	publicURL string
-	legacyURL string
-	aliasURL  string
-	udpAddr   string
-	tcpAddr   string
-	version   string
+	state          RelayState
+	failure        RelayFailure
+	approval       RelayApproval
+	certificateErr error
+	err            error
+	publicURL      string
+	legacyURL      string
+	aliasURL       string
+	udpAddr        string
+	tcpAddr        string
+	version        string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -308,7 +309,7 @@ func (l *listener) reportAvailable() {
 		return
 	}
 	state := RelayConnecting
-	if l.readySessions.Load() > 0 && l.publicURLForLease(lease) != "" {
+	if l.readySessions.Load() > 0 && lease.hostname != "" {
 		state = RelayReady
 	}
 	if state == RelayConnecting && lease.approval != "" {
@@ -319,14 +320,19 @@ func (l *listener) reportAvailable() {
 	if l.datagram != nil && l.datagram.Connected() {
 		udpAddr = lease.udpAddr
 	}
+	var certificateErr error
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+		certificateErr = endpoint.local.IssuanceError()
+	}
 	l.report(listenerStatus{
-		state:     state,
-		publicURL: l.publicURLForLease(lease),
-		legacyURL: l.leaseURL(lease.legacyHostname),
-		aliasURL:  l.aliasURLForLease(lease),
-		udpAddr:   udpAddr,
-		tcpAddr:   lease.tcpAddr,
-		version:   l.api.relayReleaseVersion(),
+		certificateErr: certificateErr,
+		state:          state,
+		publicURL:      l.publicURLForLease(lease),
+		legacyURL:      l.leaseURL(lease.legacyHostname),
+		aliasURL:       l.aliasURLForLease(lease),
+		udpAddr:        udpAddr,
+		tcpAddr:        lease.tcpAddr,
+		version:        l.api.relayReleaseVersion(),
 	})
 }
 

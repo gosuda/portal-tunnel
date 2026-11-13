@@ -44,9 +44,6 @@ func (e *Exposure) currentRelayStatusLocked(status RelayStatus) RelayStatus {
 	}
 	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && !endpoint.local.Ready() {
 		status.PublicURL = ""
-		if status.State == RelayReady {
-			status.State = RelayConnecting
-		}
 	}
 	return status
 }
@@ -166,6 +163,7 @@ func mergeRelayScalarFieldsLocked(previous RelayStatus, update listenerStatus, r
 		status.Failure = RelayFailureNone
 	}
 	status.Approval = update.approval
+	status.CertificateError = update.certificateErr
 	if update.version != "" {
 		status.Version = update.version
 	}
@@ -204,9 +202,13 @@ func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayS
 }
 
 func (e *Exposure) announceRelayStatusChange(previous, status RelayStatus) {
-	advertised := (previous.State != RelayReady || previous.PublicURL != status.PublicURL) && status.State == RelayReady && status.PublicURL != ""
+	publicURL := status.PublicURL
+	if publicURL == "" {
+		publicURL = status.LegacyURL
+	}
+	advertised := (previous.State != RelayReady || previous.PublicURL != status.PublicURL) && status.State == RelayReady && publicURL != ""
 	if advertised {
-		message := "service ready at " + status.PublicURL
+		message := "service ready at " + publicURL
 		if status.AliasURL != "" {
 			message += " (short URL: " + status.AliasURL + ")"
 		}
@@ -279,7 +281,11 @@ func relayStatusEqual(a, b RelayStatus) bool {
 	if a.Err != nil && b.Err != nil {
 		errorsEqual = a.Err.Error() == b.Err.Error()
 	}
-	return a.RelayURL == b.RelayURL &&
+	certErrorsEqual := a.CertificateError == nil && b.CertificateError == nil
+	if a.CertificateError != nil && b.CertificateError != nil {
+		certErrorsEqual = a.CertificateError.Error() == b.CertificateError.Error()
+	}
+	return certErrorsEqual && a.RelayURL == b.RelayURL &&
 		a.PublicURL == b.PublicURL &&
 		a.LegacyURL == b.LegacyURL &&
 		a.AliasURL == b.AliasURL &&
@@ -370,7 +376,7 @@ func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Even
 	return event
 }
 
-func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}, error) {
+func (e *Exposure) readyRelays(matches func(RelayStatus) bool, requireLocal bool) ([]RelayStatus, <-chan struct{}, error) {
 	e.mu.RLock()
 	ready := make([]RelayStatus, 0, len(e.statuses))
 	allTerminal := len(e.statuses) > 0
@@ -382,6 +388,8 @@ func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <
 		}
 		if status.State == RelayFailed && status.Failure == RelayFailureTerminal && status.Err != nil {
 			terminalErr = errors.Join(terminalErr, fmt.Errorf("relay %s: %w", status.RelayURL, status.Err))
+		} else if requireLocal && status.PublicURL == "" && status.CertificateError != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("relay %s: %w", status.RelayURL, status.CertificateError))
 		} else {
 			allTerminal = false
 		}
@@ -411,23 +419,25 @@ func (e *Exposure) Updates() <-chan RelayStatus {
 }
 
 // WaitReady waits until at least one relay can accept tenant connections.
-// If every current relay has failed terminally, it returns their errors. The
+// With require-local, it waits for a usable canonical Local TLS URL and
+// returns errors if all current relays failed or refuse automatic issuance. The
 // exposure stays open, and callers may add relays or continue discovery.
 func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
 	if e == nil {
 		return nil, net.ErrClosed
 	}
+	requireLocal := e.options.TLSRequireLocal
 	return e.waitReady(ctx, func(status RelayStatus) bool {
-		return status.State == RelayReady
-	})
+		return status.State == RelayReady && (!requireLocal || status.PublicURL != "")
+	}, requireLocal)
 }
 
-func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool) ([]RelayStatus, error) {
+func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool, requireLocal bool) ([]RelayStatus, error) {
 	if ctx == nil {
 		return nil, errPortalSDKContextIsNil
 	}
 	for {
-		ready, changed, terminalErr := e.readyRelays(matches)
+		ready, changed, terminalErr := e.readyRelays(matches, requireLocal)
 		if len(ready) > 0 {
 			return ready, nil
 		}
@@ -489,7 +499,7 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error)
 	}
 	return e.waitReady(ctx, func(status RelayStatus) bool {
 		return status.State != RelayFailed && status.UDPAddr != ""
-	})
+	}, false)
 }
 
 // WaitTCPReady waits until at least one relay has allocated a public TCP
@@ -500,5 +510,5 @@ func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
 	}
 	return e.waitReady(ctx, func(status RelayStatus) bool {
 		return status.State != RelayFailed && status.TCPAddr != ""
-	})
+	}, false)
 }

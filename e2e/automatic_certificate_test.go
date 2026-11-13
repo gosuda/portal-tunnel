@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -18,7 +19,9 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestAutomaticTenantCertificate(t *testing.T) {
@@ -187,6 +190,18 @@ func TestAutomaticTenantCertificate(t *testing.T) {
 		<-tick.C
 	}
 
+	// Disabling issuance does not remove an already usable canonical origin.
+	restart(false)
+	deadline = time.Now().Add(45 * time.Second)
+	for {
+		if _, err := get(); err == nil {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("valid canonical certificate not served after issuance disabled: %v", err)
+		}
+		<-tick.C
+	}
+
 	// Expired persisted material plus an issuer outage must leave only the
 	// separate compatibility endpoints usable, never downgrade this hostname.
 	nearExpiry.NotAfter = time.Now().Add(-time.Minute)
@@ -219,6 +234,25 @@ func TestAutomaticTenantCertificate(t *testing.T) {
 		}
 		<-tick.C
 	}
+	strictCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if ready, err := h.exposure.WaitReady(strictCtx); !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceDisabled}) {
+		t.Fatalf("require-local readiness = %+v, %v; want disabled issuer error", ready, err)
+	}
+
+	id, err := identity.Generate("optional-tls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	optional, optionalStatus := namespaceService(t, h, id, marker, sdk.WithAutomaticTLS(t.TempDir(), false))
+	if optionalStatus.PublicURL != "" || optionalStatus.LegacyURL == "" || optionalStatus.AliasURL == "" ||
+		!optionalStatus.Active() || !errors.Is(optionalStatus.CertificateError, &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceDisabled}) {
+		t.Fatalf("optional automatic TLS readiness = %+v", optionalStatus)
+	}
+	if len(optional.ActiveRelays()) != 1 || h.get(optionalStatus.AliasURL) != marker || h.get(optionalStatus.LegacyURL) != marker {
+		t.Fatal("optional automatic TLS did not preserve active legacy routes")
+	}
+
 	// Do not let hostname/expiry verification hide a forbidden Keyless fallback.
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", h.sniAddr, &tls.Config{ServerName: origin.Hostname(), InsecureSkipVerify: true})
 	if err == nil {

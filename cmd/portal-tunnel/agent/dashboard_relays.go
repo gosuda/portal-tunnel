@@ -51,7 +51,7 @@ func (m agentDashboardModel) openRelayTunnelURL(tunnelID, relayURL string) (tea.
 		m.selectRelay(relayURL)
 	}
 	_, relay, ok := m.selectedTunnelRelay()
-	publicURL := relayDashboardPublicURL(cmp.Or(relay.AliasURL, relay.PublicURL))
+	publicURL := relayDashboardPublicURL(relayDashboardEndpoint(relay))
 	if !ok || publicURL == "" {
 		return m, nil
 	}
@@ -125,10 +125,17 @@ func relayDashboardVersion(relay AgentRelayStatus) string {
 }
 
 func relayDashboardURL(relay AgentRelayStatus) string {
-	if publicURL := relayDashboardPublicURL(cmp.Or(relay.AliasURL, relay.PublicURL)); publicURL != "" {
+	if publicURL := relayDashboardPublicURL(relayDashboardEndpoint(relay)); publicURL != "" {
 		return publicURL
 	}
 	return relayDashboardRelayLabel(relay.RelayURL)
+}
+
+func relayDashboardEndpoint(relay AgentRelayStatus) string {
+	if relay.State == sdk.RelayReady {
+		return cmp.Or(relay.AliasURL, relay.PublicURL, relay.LegacyURL)
+	}
+	return cmp.Or(relay.AliasURL, relay.PublicURL)
 }
 
 func relayDashboardPublicURL(rawURL string) string {
@@ -176,6 +183,8 @@ func relayDashboardMode(relay AgentRelayStatus) string {
 		return "refused"
 	case relay.State == sdk.RelayFailed:
 		return "failed"
+	case relay.State == sdk.RelayReady && relay.PublicURL == "" && relay.CertificateError != "":
+		return "legacy TLS"
 	case relay.State == sdk.RelayReady:
 		return "direct"
 	case relay.State == sdk.RelayConnecting:

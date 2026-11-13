@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ var (
 	errTenantCertificateNotValid     = errors.New("tenant certificate is not currently valid")
 	errLocalHostnameIsRequired       = errors.New("local TLS hostname is required")
 	errLocalClientIsUnavailable      = errors.New("local TLS certificate is unavailable")
+	errLocalCertificateReloadBusy    = errors.New("tenant certificate reload already in progress")
 )
 
 // ClientConfig contains the lease-scoped inputs for a tenant TLS client.
@@ -32,7 +34,10 @@ type ClientConfig struct {
 	Hostname       string
 	AccessToken    string
 	CertificateDir string
-	NextProtos     []string
+	// IssuanceDisabled is the relay's initial capability report. The issuer
+	// is still checked so a subsequent policy change can take effect.
+	IssuanceDisabled bool
+	NextProtos       []string
 	// InstalledCertificates receives best-effort installed local public leaf DER.
 	// Delivery never blocks TLS activation; the receiver owns its lifecycle.
 	InstalledCertificates chan<- []byte
@@ -57,6 +62,8 @@ type Client struct {
 
 	refreshMu             sync.Mutex
 	ready                 chan struct{}
+	changes               chan struct{}
+	issuanceErr           error
 	installedCertificates chan<- []byte
 }
 
@@ -112,6 +119,10 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 			return nil, err
 		}
 		client.ready = make(chan struct{})
+		client.changes = make(chan struct{}, 1)
+		if config.IssuanceDisabled && client.pin == nil {
+			client.issuanceErr = &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceDisabled, Message: "automatic tenant certificate issuance is disabled on this relay"}
+		}
 		if client.pin != nil {
 			close(client.ready)
 		}
@@ -160,12 +171,16 @@ func (c *Client) SetAccessToken(token string) {
 // It never issues certificates. Invalid replacements
 // leave the previous generation intact; existing connections are not restarted.
 func (c *Client) RefreshChain(ctx context.Context) (bool, error) {
-	return c.refreshChain(ctx, nil)
+	changed, err := c.refreshChain(ctx, nil)
+	if c.automatic != nil && (errors.Is(err, errAutomaticCertificateMissing) || errors.Is(err, errLocalCertificateReloadBusy) || (errors.Is(err, os.ErrNotExist) && c.pinned() == nil)) {
+		return false, nil
+	}
+	return changed, err
 }
 
 func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, error) {
 	if !c.refreshMu.TryLock() {
-		return false, errAutomaticCertificateBusy
+		return false, errLocalCertificateReloadBusy
 	}
 	defer c.refreshMu.Unlock()
 	if stale != nil && c.pinned() != stale {
@@ -194,7 +209,43 @@ func (c *Client) refreshChain(ctx context.Context, stale *pinnedChain) (bool, er
 	}
 	c.pin = next
 	c.publishInstalled(next)
+	c.notifyCertificateChange()
 	return true, nil
+}
+
+// CertificateChanges notifies the lease owner after a certificate or issuance
+// status change. The owner reads the current snapshot after receiving a signal.
+func (c *Client) CertificateChanges() <-chan struct{} { return c.changes }
+
+// IssuanceError reports actionable issuance policy refusals, not transport
+// errors or transient ACME failures.
+func (c *Client) IssuanceError() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.issuanceErr
+}
+
+func (c *Client) setIssuanceError(err error) {
+	var policyErr error
+	if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceDisabled}) {
+		policyErr = &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceDisabled, Message: "automatic tenant certificate issuance is disabled on this relay"}
+	} else if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceNotApproved}) {
+		policyErr = &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceNotApproved, Message: "this service is not approved for automatic tenant certificate issuance"}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if (c.issuanceErr == nil && policyErr == nil) || (policyErr != nil && errors.Is(c.issuanceErr, policyErr)) {
+		return
+	}
+	c.issuanceErr = policyErr
+	c.notifyCertificateChange()
+}
+
+func (c *Client) notifyCertificateChange() {
+	select {
+	case c.changes <- struct{}{}:
+	default:
+	}
 }
 
 // TerminateConn captures local material for one ordinary crypto/tls connection.

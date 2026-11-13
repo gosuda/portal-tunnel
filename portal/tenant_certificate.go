@@ -41,7 +41,7 @@ func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if s.acmeManager == nil || !s.config().TenantCertificates {
-		writeAPIErrorResponse(w, errFeatureUnavailable)
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeTenantIssuanceDisabled, "automatic tenant certificate issuance is disabled on this relay")
 		return
 	}
 	record, err := s.registry.admitLeaseByToken(r.Header.Get(types.HeaderAccessToken), false)
@@ -57,7 +57,7 @@ func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request,
 	// Free registration is not a public CA issuance grant. Local development
 	// certificates consume no public quota and retain automatic issuance.
 	if !utils.IsLocalRelayHost(s.identity.Name) && !slices.Contains(approved, record.ServiceKey()) {
-		writeAPIErrorResponse(w, errUnauthorized)
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTenantIssuanceNotApproved, "this service is not approved for automatic tenant certificate issuance")
 		return
 	}
 	request, ok := utils.DecodeJSONRequest[types.TenantCertificateRequest](w, r, 16<<10)

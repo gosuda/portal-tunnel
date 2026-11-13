@@ -54,10 +54,10 @@ func TestRelaySnapshotsHideUnavailableCanonical(t *testing.T) {
 		relayListeners: map[string]*listener{relay: {lease: utils.NewSnapshot(listenerSnapshot{accessToken: "token", tenantTLS: &namespaceTLS{local: &localtls.Client{}}})}},
 	}
 	status := e.Relays()[0]
-	if status.PublicURL != "" || status.State != RelayConnecting || status.LegacyURL != legacy {
+	if status.PublicURL != "" || status.State != RelayReady || status.LegacyURL != legacy {
 		t.Fatalf("unavailable canonical status: %+v", status)
 	}
-	ready, _, err := e.readyRelays(func(status RelayStatus) bool { return status.State == RelayReady })
+	ready, _, err := e.readyRelays(func(status RelayStatus) bool { return status.State == RelayReady && status.PublicURL != "" }, true)
 	if err != nil || len(ready) != 0 {
 		t.Fatalf("unavailable canonical marked ready: %+v, %v", ready, err)
 	}

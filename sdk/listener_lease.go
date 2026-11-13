@@ -277,8 +277,13 @@ func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.Wa
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				if endpoint.local.WaitReady(leaseCtx) == nil {
-					l.reportAvailable()
+				for {
+					select {
+					case <-leaseCtx.Done():
+						return
+					case <-endpoint.local.CertificateChanges():
+						l.reportAvailable()
+					}
 				}
 			}()
 		}

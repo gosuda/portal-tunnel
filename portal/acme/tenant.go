@@ -95,6 +95,13 @@ func (m *Manager) ObtainTenantCertificate(ctx context.Context, csr *x509.Certifi
 	if m == nil {
 		return nil, errACMEManagerIsNil
 	}
+	// Maintenance also provisions relay certificates, so wait for the DNS
+	// owner before acquiring issuanceMu.
+	if csr != nil && len(csr.DNSNames) == 1 && !utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		if err := m.waitLeaseDNS(ctx, csr.DNSNames[0]); err != nil {
+			return nil, err
+		}
+	}
 	if !m.issuanceMu.TryLock() {
 		return nil, ErrTenantIssuerBusy
 	}

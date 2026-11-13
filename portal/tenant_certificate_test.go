@@ -72,8 +72,8 @@ func TestTenantCertificateEndpointRequiresOptInAndAuthentication(t *testing.T) {
 		server.HandleTenantCertificate(response, req, nil)
 		return response
 	}
-	if got := request("", "{}").Code; got != http.StatusServiceUnavailable {
-		t.Fatalf("disabled status=%d", got)
+	if got := request("", "{}"); got.Code != http.StatusServiceUnavailable || !strings.Contains(got.Body.String(), types.APIErrorCodeTenantIssuanceDisabled) {
+		t.Fatalf("disabled status=%d body=%s", got.Code, got.Body.String())
 	}
 	server.cfg.Swap(ServerConfig{TenantCertificates: true})
 	if got := request("", "{}").Code; got != http.StatusForbidden {
@@ -135,18 +135,18 @@ func TestPublicTenantCertificateRequiresExplicitApproval(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := func(approved []types.ServiceIdentityKey) int {
+		request := func(approved []types.ServiceIdentityKey) *httptest.ResponseRecorder {
 			req := httptest.NewRequest(http.MethodPost, types.PathV1TenantCertificate, strings.NewReader("{}"))
 			req.Header.Set(types.HeaderAccessToken, registration.AccessToken)
 			response := httptest.NewRecorder()
 			server.HandleTenantCertificate(response, req, approved)
-			return response.Code
+			return response
 		}
-		if got := request(nil); got != http.StatusForbidden {
-			t.Fatalf("free registration allowed issuance: %d", got)
+		if got := request(nil); got.Code != http.StatusForbidden || !strings.Contains(got.Body.String(), types.APIErrorCodeTenantIssuanceNotApproved) {
+			t.Fatalf("issuance approval refusal = %d %s", got.Code, got.Body.String())
 		}
-		if got := request([]types.ServiceIdentityKey{owner.ServiceKey()}); got != http.StatusBadRequest {
-			t.Fatalf("explicit grant did not reach CSR validation: %d", got)
+		if got := request([]types.ServiceIdentityKey{owner.ServiceKey()}); got.Code != http.StatusBadRequest {
+			t.Fatalf("explicit grant did not reach CSR validation: %d", got.Code)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -226,10 +227,23 @@ func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
 	return record.syncENSGaslessDNS(ctx, s.acmeManager)
 }
 
+// dnsAddressParent is shared by Local TLS services using the same wallet.
+// It is not a routed hostname unless an unnamed lease owns it.
+func (r *leaseRecord) dnsAddressParent() string {
+	if r == nil || r.Namespace != types.LocalTLSNamespaceV1 {
+		return ""
+	}
+	_, parent, _ := strings.Cut(r.CanonicalHostname, ".")
+	return parent
+}
+
 func (s *Server) isDNSHostnameOwnedLocked(hostname string, now time.Time) bool {
 	for _, current := range s.registry.records {
 		if current == nil || current.isExpired(now) {
 			continue
+		}
+		if current.dnsAddressParent() == hostname && (s.acmeManager == nil || !s.acmeManager.ENSStatus().Enabled) {
+			return true
 		}
 		for _, currentHostname := range current.hostnames() {
 			if currentHostname == hostname {
@@ -249,7 +263,11 @@ func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
 	defer registry.mu.RUnlock()
 	now := time.Now()
 
-	for _, hostname := range record.hostnames() {
+	hostnames := record.hostnames()
+	if parent := record.dnsAddressParent(); parent != "" && !s.acmeManager.ENSStatus().Enabled && parent != record.LegacyCanonicalHostname {
+		hostnames = append(hostnames, parent)
+	}
+	for _, hostname := range hostnames {
 		if s.isDNSHostnameOwnedLocked(hostname, now) {
 			continue
 		}

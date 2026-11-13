@@ -57,9 +57,9 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 	return r.enforceRefuseChallengeBudgetLocked(len(held), issued)
 }
 
-func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, canonicalOnly bool, namespace string) (string, string, error) {
+func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, namespace string) (string, string, error) {
 	var publicHostname string
-	if leaseIdentity.Name != "" && !canonicalOnly {
+	if leaseIdentity.Name != "" {
 		var err error
 		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
@@ -123,7 +123,7 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	if err != nil {
 		return nil, "", err
 	}
-	publicHostname, canonicalHostname, err := r.resolveRegisterHostnames(leaseIdentity, req.CanonicalOnly, req.Namespace)
+	publicHostname, canonicalHostname, err := r.resolveRegisterHostnames(leaseIdentity, req.Namespace)
 	if err != nil {
 		return nil, "", err
 	}

@@ -112,6 +112,9 @@ type RelayStatus struct {
 	State      RelayState
 	Failure    RelayFailure
 	Err        error
+	// CertificateError describes an automatic issuance policy refusal. A live
+	// legacy endpoint or an already valid local certificate can still work.
+	CertificateError error
 	// Approval is set while the relay refuses this lease's reverse connection.
 	// State stays RelayConnecting and no endpoint field is set, because nothing
 	// routes. Empty means no refusal was reported, and it never means approved:
@@ -216,7 +219,8 @@ func WithTLSCertificate(certFile, keyFile string) Option {
 // WithAutomaticTLS obtains and renews tenant certificates through the relay.
 // The tunnel generates and persists private keys in directory. New canonical
 // hostnames never fall back to Keyless. requireLocal additionally rejects old
-// relays without namespace support; false retains their legacy URLs.
+// relays without namespace support and waits for canonical readiness; false
+// allows a live legacy endpoint to satisfy WaitReady while issuance is pending.
 // This is local-key ownership, not independent authentication of the relay.
 func WithAutomaticTLS(directory string, requireLocal bool) Option {
 	return func(opts *options) {

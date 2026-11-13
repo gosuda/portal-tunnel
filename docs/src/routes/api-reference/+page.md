@@ -263,7 +263,9 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `invalid_request` | request shape or value is invalid |
 | `method_not_allowed` | endpoint does not accept the method |
 | `unauthorized` | credential is missing, expired, or invalid |
-| `feature_unavailable` | feature is disabled or not configured |
+| `feature_unavailable` | feature is unavailable; automatic tenant ACME errors may be temporary |
+| `tenant_issuance_disabled` | the relay does not offer automatic tenant certificate issuance |
+| `tenant_issuance_not_approved` | the service lacks explicit approval for automatic tenant certificate issuance |
 | `rate_limited` | request was throttled |
 | `hostname_conflict` | canonical hostname is inconsistently bound; routing fails closed |
 | `lease_not_found` | lease token or identity has no active lease |
@@ -287,16 +289,21 @@ before registering with any relay. Missing, malformed, mismatched, expired,
 or unsupported certificate material returns an error immediately. It never
 falls back to relay-backed signing.
 
-The certificate must cover every canonical hostname and friendly alias assigned
-by a selected relay. A coverage failure stops that relay's listener and appears
-in `Exposure.Relays()` with `RelayFailureTerminal` and an error wrapping
-`keyless.ErrLocalCertificate`; covered relays remain usable. Ordinary network
-failures remain retryable. Discovery applies its existing terminal-failure
+The certificate must cover only the exact Local TLS canonical hostname assigned
+by a selected relay. Friendly and legacy URLs still use Keyless. A coverage
+failure stops that relay's listener and appears in `Exposure.Relays()` with
+`RelayFailureTerminal` and an error wrapping `localtls.ErrLocalCertificate`;
+covered relays remain usable. Ordinary network failures remain retryable. Discovery applies its existing terminal-failure
 backoff policy and can select other relays.
 
-`Exposure.WaitReady` returns the current errors if all selected relays have
-failed terminally. It does not close the exposure or stop discovery; callers
-can add a compatible relay and wait again.
+`Exposure.WaitReady` reports when a relay can route traffic. With automatic TLS
+and no require-local option, an existing legacy URL can be ready while the new
+canonical `PublicURL` remains empty. With require-local, `WaitReady` requires a
+usable canonical certificate. If every selected relay has failed terminally or
+refuses the required issuance, it returns the current errors. Issuance policy
+refusals are also available in `RelayStatus.CertificateError`, without disabling
+live legacy URLs or an already valid canonical certificate. The exposure remains
+open for policy recovery or another compatible relay.
 
 **Go source compatibility:** direct users of `portal/keyless.Client` must
 replace `RelayCertPool()` with `TenantCertPool()`. The returned snapshot trusts

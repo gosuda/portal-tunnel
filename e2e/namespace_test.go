@@ -53,7 +53,7 @@ func namespaceService(t *testing.T, h *harness, id types.Identity, body string, 
 	if err != nil || len(ready) != 1 {
 		t.Fatalf("namespace readiness = %+v, %v", ready, err)
 	}
-	for ready[0].PublicURL == "" {
+	for ready[0].PublicURL == "" && ready[0].CertificateError == nil {
 		select {
 		case <-ctx.Done():
 			t.Fatalf("canonical URL not ready: %+v", exposure.Relays())

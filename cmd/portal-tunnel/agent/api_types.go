@@ -57,14 +57,15 @@ type AgentTunnelStatus struct {
 }
 
 type AgentRelayStatus struct {
-	RelayURL  string           `json:"relay_url"`
-	LegacyURL string           `json:"legacy_url,omitempty"`
-	PublicURL string           `json:"public_url,omitempty"`
-	AliasURL  string           `json:"alias_url,omitempty"`
-	TCPAddr   string           `json:"tcp_addr,omitempty"`
-	Version   string           `json:"version,omitempty"`
-	State     sdk.RelayState   `json:"state"`
-	Failure   sdk.RelayFailure `json:"failure,omitempty"`
+	RelayURL         string           `json:"relay_url"`
+	LegacyURL        string           `json:"legacy_url,omitempty"`
+	PublicURL        string           `json:"public_url,omitempty"`
+	AliasURL         string           `json:"alias_url,omitempty"`
+	TCPAddr          string           `json:"tcp_addr,omitempty"`
+	Version          string           `json:"version,omitempty"`
+	State            sdk.RelayState   `json:"state"`
+	Failure          sdk.RelayFailure `json:"failure,omitempty"`
+	CertificateError string           `json:"certificate_error,omitempty"`
 	// Approval is pending or refused while the relay refuses this tunnel's
 	// lease. Empty never means approved.
 	Approval sdk.RelayApproval `json:"approval,omitempty"`

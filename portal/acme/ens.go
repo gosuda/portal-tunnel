@@ -17,6 +17,7 @@ import (
 var (
 	errHostnameIsRequired   = errors.New("hostname is required")
 	errACMEManagerIsStopped = errors.New("acme manager is stopped")
+	errLeaseDNSPending      = errors.New("lease address DNS is not ready for tenant issuance")
 )
 
 const (
@@ -29,6 +30,7 @@ type ensDNSCommand struct {
 	hostname string
 	address  string
 	remove   bool
+	ready    chan error
 }
 
 func newENSStatus(cfg Config, dns dnsProvider) types.ENSStatus {
@@ -140,15 +142,26 @@ func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address strin
 	return m.queueENSCommand(ctx, ensDNSCommand{hostname: hostname, address: address})
 }
 
+// isLeaseAddressParent recognizes the address-only legacy hostname directly
+// under this relay root, not other legacy hostnames.
+func (m *Manager) isLeaseAddressParent(hostname string) bool {
+	label, _, found := strings.Cut(hostname, ".")
+	if !found {
+		return false
+	}
+	parent, err := utils.CanonicalLeaseHostname("", label, m.cfg.BaseDomain)
+	return err == nil && parent == hostname
+}
+
 func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) error {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
-	if !m.cfg.ENSGaslessEnabled && !utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
+	hostname = utils.NormalizeHostname(hostname)
+	if !m.cfg.ENSGaslessEnabled && !utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) && !m.isLeaseAddressParent(hostname) {
 		return nil
 	}
-	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" {
 		return nil
 	}
@@ -159,6 +172,45 @@ func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) erro
 		return nil
 	}
 	return m.queueENSCommand(ctx, ensDNSCommand{hostname: hostname, remove: true})
+}
+
+// waitLeaseDNS gates external DNS-01 on the existing serialized address owner.
+// The queued check follows registration's address command without writing DNS.
+func (m *Manager) waitLeaseDNS(ctx context.Context, hostname string) error {
+	if m.cfg.ENSGaslessEnabled || m.dns == nil || m.dns.Name() == TypeEmbedded {
+		return nil
+	}
+	ready := make(chan error, 1)
+	if err := m.queueENSCommand(ctx, ensDNSCommand{hostname: hostname, ready: ready}); err != nil {
+		return err
+	}
+	select {
+	case err := <-ready:
+		return err
+	case <-m.stopCh:
+		return errACMEManagerIsStopped
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) checkLeaseDNS(state *maintenanceLoopState, hostname string) error {
+	_, parent, _ := strings.Cut(hostname, ".")
+	// Tracking may precede failed writes; pending operations are not proof
+	// that an address was published successfully.
+	for _, name := range []string{hostname, parent} {
+		if _, pending := state.pendingENS[name]; pending {
+			return errLeaseDNSPending
+		}
+	}
+	tracked, err := m.trackedENSGaslessHostnames()
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(tracked, hostname) || !slices.Contains(tracked, parent) {
+		return errLeaseDNSPending
+	}
+	return nil
 }
 
 func (m *Manager) queueENSCommand(ctx context.Context, command ensDNSCommand) error {
@@ -182,17 +234,47 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		return m.applyENSCommandRemove(ctx, command)
 	}
 	if command.hostname != m.cfg.BaseDomain {
-		if err := m.ensureENSCommandAddresses(ctx, command); err != nil {
+		publicIPs, err := utils.ResolvePublicIPs(ctx)
+		if err != nil {
+			return fmt.Errorf("detect public ip: %w", err)
+		}
+		if !m.cfg.ENSGaslessEnabled && utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
+			// An exact child suppresses wildcard answers for its address parent.
+			// Publish the parent before the child to keep legacy URLs working.
+			_, parent, _ := strings.Cut(command.hostname, ".")
+			for _, name := range []string{parent, command.hostname} {
+				// Track before DNS writes so a partial update can be withdrawn.
+				if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string { return append(hostnames, name) }); err != nil {
+					return err
+				}
+				if err := m.ensureLeaseAddressRecords(ctx, name, publicIPs); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := m.ensureLeaseAddressRecords(ctx, command.hostname, publicIPs); err != nil {
 			return err
 		}
-	}
-	if !m.cfg.ENSGaslessEnabled && utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
-		return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string { return append(hostnames, command.hostname) })
 	}
 	return m.applyENSCommandStoreGaslessTXT(ctx, command)
 }
 
 func (m *Manager) applyENSCommandRemove(ctx context.Context, command ensDNSCommand) error {
+	if !m.cfg.ENSGaslessEnabled && m.isLeaseAddressParent(command.hostname) {
+		tracked, err := m.trackedENSGaslessHostnames()
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(tracked, command.hostname) {
+			return nil
+		}
+		for _, name := range tracked {
+			if strings.HasSuffix(name, "."+command.hostname) && utils.IsLocalTLSHostname(name, m.cfg.BaseDomain) {
+				return fmt.Errorf("wait for canonical DNS removal before withdrawing %s", command.hostname)
+			}
+		}
+	}
 	if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
 		return err
 	}
@@ -204,19 +286,15 @@ func (m *Manager) applyENSCommandRemove(ctx context.Context, command ensDNSComma
 	})
 }
 
-func (m *Manager) ensureENSCommandAddresses(ctx context.Context, command ensDNSCommand) error {
-	publicIPs, err := utils.ResolvePublicIPs(ctx)
-	if err != nil {
-		return fmt.Errorf("detect public ip: %w", err)
-	}
+func (m *Manager) ensureLeaseAddressRecords(ctx context.Context, hostname string, publicIPs []string) error {
 	var addressErr error
 	for _, publicIP := range publicIPs {
-		if err := m.dns.EnsureAddressRecord(ctx, command.hostname, publicIP); err != nil {
+		if err := m.dns.EnsureAddressRecord(ctx, hostname, publicIP); err != nil {
 			addressErr = errors.Join(addressErr, err)
 		}
 	}
 	if addressErr != nil {
-		return fmt.Errorf("ensure ens gasless address records for %s: %w", command.hostname, addressErr)
+		return fmt.Errorf("ensure lease address records for %s: %w", hostname, addressErr)
 	}
 	return nil
 }
@@ -248,8 +326,19 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 
 func (m *Manager) withdrawTrackedENSHosts(ctx context.Context, cleanupErr error) error {
 	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
+		// Withdraw address parents last. A failed child withdrawal must
+		// leave its parent tracked and resolving across another restart.
+		slices.SortStableFunc(hostnames, func(a, b string) int {
+			return strings.Count(b, ".") - strings.Count(a, ".")
+		})
 		remaining := hostnames[:0]
 		for _, hostname := range hostnames {
+			if m.isLeaseAddressParent(hostname) && slices.ContainsFunc(remaining, func(name string) bool {
+				return strings.HasSuffix(name, "."+hostname)
+			}) {
+				remaining = append(remaining, hostname)
+				continue
+			}
 			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
 				remaining = append(remaining, hostname)
 				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
@@ -270,9 +359,23 @@ func (m *Manager) syncTrackedENSGaslessHostAddressRecords(ctx context.Context, p
 	if err != nil {
 		return err
 	}
+	// Retry parent updates first, including after a partially completed command.
+	slices.SortStableFunc(hostnames, func(a, b string) int {
+		return strings.Count(a, ".") - strings.Count(b, ".")
+	})
 	var syncErr error
+	failedParents := make(map[string]bool)
 	for _, hostname := range hostnames {
+		if utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
+			_, parent, _ := strings.Cut(hostname, ".")
+			if failedParents[parent] {
+				continue
+			}
+		}
 		if err := m.dns.EnsureAddressRecord(ctx, hostname, publicIP); err != nil {
+			if m.isLeaseAddressParent(hostname) {
+				failedParents[hostname] = true
+			}
 			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ens gasless address record for %s: %w", hostname, err))
 		}
 	}

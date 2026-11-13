@@ -38,13 +38,14 @@ var errRelayIncompatible = errors.New("relay is incompatible")
 type apiClient struct {
 	relayURL *url.URL
 
-	mu             sync.RWMutex
-	http           *http.Client
-	transport      *http.Transport
-	tls            *tls.Config
-	releaseVersion string
-	cache          *types.StaticCacheLimits
-	namespaces     []string
+	mu               sync.RWMutex
+	http             *http.Client
+	transport        *http.Transport
+	tls              *tls.Config
+	releaseVersion   string
+	cache            *types.StaticCacheLimits
+	namespaces       []string
+	issuanceDisabled bool
 }
 
 func (c *apiClient) resetTransport() {
@@ -58,6 +59,7 @@ func (c *apiClient) resetTransport() {
 	c.tls = nil
 	c.cache = nil
 	c.namespaces = nil
+	c.issuanceDisabled = false
 }
 
 func (c *apiClient) initHTTPTransport(ctx context.Context) error {
@@ -96,6 +98,7 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 	c.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
 	c.cache = domainResp.Cache
 	c.namespaces = slices.Clone(domainResp.Namespaces)
+	c.issuanceDisabled = domainResp.TenantCertificateIssuance != nil && !*domainResp.TenantCertificateIssuance
 	c.http = httpClient
 	c.transport = httpTransport
 	c.tls = tlsConfig

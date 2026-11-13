@@ -372,10 +372,9 @@ func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterR
 		legacyHostname = resp.LegacyCanonicalHostname
 	}
 	legacy, err := keyless.NewClient(ctx, keyless.ClientConfig{
-		AlternativeHostname: resp.Hostname,
-		RelayURL:            l.api.relayURL.String(),
-		Hostname:            legacyHostname,
-		AccessToken:         resp.AccessToken,
+		RelayURL:    l.api.relayURL.String(),
+		Hostname:    legacyHostname,
+		AccessToken: resp.AccessToken,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
@@ -383,9 +382,12 @@ func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterR
 	}
 	var tenantTLS tenantTLSClient = legacy
 	if resp.Namespace == types.LocalTLSNamespaceV1 {
+		l.api.mu.RLock()
+		issuanceDisabled := l.api.issuanceDisabled
+		l.api.mu.RUnlock()
 		local, localErr := localtls.NewClient(ctx, localtls.ClientConfig{
 			RelayURL: l.api.relayURL.String(), Hostname: resp.CanonicalHostname,
-			AccessToken: resp.AccessToken, CertificateDir: l.tlsStateDir,
+			AccessToken: resp.AccessToken, CertificateDir: l.tlsStateDir, IssuanceDisabled: issuanceDisabled,
 			CertFile: l.tlsCertFile, KeyFile: l.tlsKeyFile,
 			InstalledCertificates: observer.Events(),
 		})

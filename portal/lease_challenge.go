@@ -45,7 +45,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	if err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
-	if _, _, err := r.resolveRegisterHostnames(challenge.Request.Identity, challenge.Request.CanonicalOnly, challenge.Request.Namespace); err != nil {
+	if _, _, err := r.resolveRegisterHostnames(challenge.Request.Identity, challenge.Request.Namespace); err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
 	r.mu.Lock()

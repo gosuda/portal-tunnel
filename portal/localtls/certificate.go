@@ -171,12 +171,13 @@ func (a *automaticSource) maintainCertificate(ctx context.Context, c *Client) {
 		// deadline to CA/DNS work or bypass the worker's retry backoff.
 		_, err := a.acquire(issueCtx)
 		if err == nil {
-			_, err = c.RefreshChain(issueCtx)
+			_, err = c.refreshChain(issueCtx, nil)
 		}
 		cancel()
 		if ctx.Err() != nil {
 			return
 		}
+		c.setIssuanceError(err)
 		if err != nil {
 			log.Warn().Err(err).Str("hostname", c.hostname).Msg("tenant certificate issuance or renewal failed; retaining current TLS material")
 			delay = backoff
