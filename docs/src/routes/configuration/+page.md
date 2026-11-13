@@ -415,9 +415,17 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 
 ### Lease
 
+Tunnel-owned TLS flags and their defaults are listed in the
+[CLI reference](/cli-reference#advanced-flags). Automatic mode uses `--tls-auto`
+and persistent `--tls-state-dir`; manual mode uses `--tls-cert` plus `--tls-key`.
+The [Local TLS agent example](#local-tls-services) below lists the corresponding
+TOML keys and relative-path rules. Public automatic issuance also needs the
+relay's `TENANT_CERTIFICATES`, explicit service approval, and
+`TENANT_ISSUANCE_STATE_DIR`; see [issuance admission](#public-tenant-issuance-admission).
+
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--name` | | string | | Request a short URL without the Ethereum address (single DNS label, maximum 63 ASCII characters); applies to new identities. When omitted for a new identity, an address-only canonical hostname (<address>.<relay-domain>) is used |
+| `--name` | | string | | Select a service and request its friendly alias; up to 63 ASCII characters after normalization. Overrides a legacy saved name without rewriting the signing identity |
 | `--description` | | string | | Service description metadata |
 | `--tags` | | string | | Service tags metadata (comma-separated) |
 | `--owner` | | string | | Service owner metadata |
@@ -578,7 +586,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Stable tunnel ID used by the agent dashboard |
-| `name` | string | Name used when creating a new identity; an existing identity keeps its saved name |
+| `name` | string | Selects this service under the signing key, overriding any legacy saved name without rewriting the identity file; omitted uses the saved name or an unnamed service |
 | `max_active_relays` | int | Auto-selected relay limit; defaults to `3`; explicit relays remain included |
 | `ban_mitm` | bool | Ban on suspected TLS termination; defaults to warning-only |
 | `target` | string | Local TCP target, equivalent to the `portal expose <target>` argument |
@@ -589,6 +597,13 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `overlay` | bool | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
+| `tls_auto` | bool | Obtain and renew exact canonical certificates through the relay; defaults to `false` |
+| `tls_state_dir` | string | Automatic certificate/key directory; requires `tls_auto`; defaults to resolved `identity_path` plus `.tls`; must be explicit with `identity_json` |
+| `tls_require_local` | bool | Require namespace support and, in automatic mode, usable canonical readiness; defaults to `false`; requires automatic or manual Local TLS; manual mode already rejects legacy-only relays |
+| `tls_cert`, `tls_key` | string | Manual certificate-chain and matching private-key PEM files; supply both; cannot be combined with `tls_auto` |
+| `tls_monitor_state_dir` | string | Opt into warning-only CT/CAA observations and persist public evidence; omitted disables monitoring |
+| `tls_monitor_baseline` | string | Operator-maintained CAA/SPKI baseline JSON; requires `tls_monitor_state_dir`; omitted leaves CAA unconfigured |
+| `tls_monitor_dns_resolver` | string | Independent DNS resolver IP:port; requires `tls_monitor_state_dir`; defaults to `1.1.1.1:53` when monitoring is enabled |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
 | `auth` | string | Application login provider: `siwe`, `credential`, `oidc`, `saml`, or `email`; cannot be combined with TCP or UDP |
@@ -670,30 +685,75 @@ x402_endpoints = ["https://rpc.nano.to", "https://rainstorm.city/api"]
 
 For a task-oriented walkthrough, see [Portal Agent](/portal-agent).
 
+#### Local TLS services
+
+All TLS file, state-directory, and monitor-baseline paths above resolve relative
+to `config.toml`. Automatic and manual Local TLS select the negotiated
+`<service>.<address>.<relay-root>` namespace. Canonical handshakes require usable
+local material; friendly and legacy URLs retain their separate Keyless policy.
+Local TLS cannot be combined with raw TCP or UDP in the agent HTTP path.
+Monitoring cannot be combined with raw TCP; the agent does not support relay cache.
+
+Two services can share a signing identity while retaining separate leases,
+targets, and per-hostname leaf keys:
+
+```toml
+[[tunnels]]
+id = "blog"
+name = "blog"
+target = "3000"
+identity_path = "identity.json"
+tls_auto = true
+tls_require_local = true
+
+[[tunnels]]
+id = "api"
+name = "api"
+target = "4000"
+identity_path = "identity.json"
+tls_auto = true
+tls_require_local = true
+```
+
+Explicit names do not rewrite the shared identity file. Automatic mode requires
+relay operator [issuance admission](#public-tenant-issuance-admission); it
+persists and reuses each hostname's key across restart and renewal. Protect and
+back up this state. Deleting it loses the leaf key and can require a new CA order.
+Without `tls_require_local`, older relays may still provide legacy URLs.
+Canonical certificate failure never changes that hostname to Keyless.
+
+For manual mode, set `tls_cert` and `tls_key` instead of `tls_auto` and
+`tls_state_dir`. Only the exact assigned canonical DNS SAN is allowed. Missing,
+expired, corrupt, mismatched, wildcard, or sibling-SAN material is rejected.
+Successful checks reload replaced files at most hourly during lease renewal;
+restart for immediate reload. An invalid replacement leaves the previous usable
+pair installed, but expiry still withdraws canonical readiness. Manual mode
+does not issue or automatically renew certificates.
+
+See [CLI Local TLS](/cli-reference#tunnel-owned-local-tls) for hostname and
+migration rules, and [certificate monitoring](/keyless-tls#certificate-monitoring)
+for the optional baseline, evidence format, and observation limits.
+
 ### `identity.json`
 
 Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors. `portal expose` treats `--identity-path` as a direct JSON file path. `relay-server` treats `IDENTITY_PATH` as a state directory and stores this file at `IDENTITY_PATH/identity.json`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Human-readable label for this identity |
+| `name` | string | Optional legacy service-name default; new tunnel identity files omit it, and an explicit service name overrides it without rewriting the file |
 | `address` | string | Derived EVM address used for SIWE and identity ownership |
 | `public_key` | string | Compressed secp256k1 public key hex |
 | `private_key` | string | secp256k1 private key hex; keep secret |
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
 
-When `--name` is omitted, the service does not claim a friendly public name and
-publishes an address-only canonical hostname (`<address>.<relay-domain>`).
-When `--name` is provided and available, share the short URL
-`https://<name>.<relay-domain>/`, which has no Ethereum address. Portal also
-publishes the identity-bound canonical hostname (`<name>-<address>.<relay-domain>`).
-If another identity owns the short name, the CLI continues with only the
-identity-bound URL. The short URL reaches the live origin; opt-in relay caching
-uses the canonical hostname.
-An existing identity file or `--identity-json` supplies the saved name as well
-as the key. `--name` applies only when creating a new identity; it does not
-rename an existing one. Use a separate `--identity-path` for a new identity.
+The file or `--identity-json` supplies the signing key. Explicit `--name` or
+agent `name` selects a service without changing the persisted identity. Omitting
+the name retains an old file's saved default; new files store no service name.
+Distinct explicit service names can share one key and retain independent leases
+and targets. Use a separate identity path when a different signing key is wanted.
+See [Identity Names](/cli-reference#identity-names) for friendly, Local TLS, and
+legacy canonical hostnames and the reserved unnamed-service label.
 
 When `mnemonic` is present, Portal derives the private key at `derivation_path`
 and preserves the mnemonic form when rewriting `identity.json`. The same

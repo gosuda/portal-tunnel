@@ -42,6 +42,8 @@ default HTTPS path fits an application.
 
 This article explains that design. The [Security Model](/security-model) is the
 canonical reference for current guarantees and mode-specific exceptions.
+For the separate, tunnel-owned Local TLS service namespace and automatic or
+manual certificate setup, see the [CLI guide](/cli-reference#tunnel-owned-local-tls).
 External browser and standards context was reviewed on 10 October 2026.
 
 ## Where an ordinary edge tunnel sees plaintext

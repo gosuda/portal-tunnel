@@ -456,7 +456,7 @@ Common fields:
 | Field | Description |
 |-------|-------------|
 | `id` | Stable local tunnel ID used by the dashboard and control API |
-| `name` | Public lease name, used as the subdomain label |
+| `name` | Selects this service under the signing key; overrides a legacy saved name without rewriting the identity file |
 | `target` | Local TCP target, equivalent to `portal expose <target>` |
 | `http_routes` | Routed HTTP mappings; cannot be combined with `target`, `serve`, `tcp`, or `udp` |
 | `serve` | Static site directory or HTML file; relative to the config file's directory |
@@ -466,6 +466,9 @@ Common fields:
 | `overlay` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | Tunnel identity JSON path |
 | `identity_json` | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
+| `tls_auto`, `tls_state_dir`, `tls_require_local` | Automatic canonical Local TLS, persistent material, and strict namespace/readiness selection; see [Local TLS configuration](/configuration#local-tls-services) |
+| `tls_cert`, `tls_key` | Manual exact canonical certificate/key pair, instead of automatic issuance |
+| `tls_monitor_state_dir`, `tls_monitor_baseline`, `tls_monitor_dns_resolver` | Optional warning-only CT/CAA observation; see [monitoring](/keyless-tls#certificate-monitoring) |
 | `udp`, `udp_addr` | UDP transport settings |
 | `tcp` | Dedicated raw TCP port setting |
 | `ban_mitm` | Ban relays when the TLS self-probe detects termination; defaults to warning-only |
@@ -513,12 +516,14 @@ If `identity_path` is omitted:
 - a single tunnel uses `<state_dir>/identity.json`
 - multiple tunnels use `<state_dir>/<tunnel-id>/identity.json`
 
-An existing identity file or `identity_json` supplies its saved name and key;
-`tunnels.name` is used only when creating a new identity.
-
-Reusing an identity keeps the same tunnel address and lease identity across
-restarts. Use separate identity paths when two tunnels should have separate
-lease identities.
+An existing identity file or `identity_json` supplies the signing key. An
+explicit `tunnels.name` selects a service without rewriting that identity.
+When omitted, a legacy saved name remains the default; new identity files do
+not store service names. Reuse the same key and explicit name for stable lease
+identity across restarts. Distinct explicit names under one key have independent
+leases and targets; separate identity paths are needed only for different keys.
+See [Local TLS configuration](/configuration#local-tls-services) for a shared-key
+agent example, certificate state paths, and automatic/manual mode constraints.
 
 ## Local Control API
 

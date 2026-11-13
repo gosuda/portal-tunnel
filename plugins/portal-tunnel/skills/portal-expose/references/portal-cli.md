@@ -1,6 +1,6 @@
 # Portal CLI reference for app deployment
 
-Last checked against `gosuda/portal-tunnel` release `v2.7.3` (commit `e10679a5`) on 2026-11-08. Prefer the behavior of the installed Portal version and the repository's current `docs/src/routes/cli-reference/+page.md` and `docs/src/routes/portal-agent/+page.md` when they differ from this snapshot.
+This reference follows the repository's current CLI and agent contracts. Check the installed Portal version's help before using newer options. The full references are `docs/src/routes/cli-reference/+page.md` and `docs/src/routes/portal-agent/+page.md`.
 
 ## Installation
 
@@ -30,7 +30,7 @@ Installation changes user or system paths. Obtain approval before running it. A 
 
 `portal expose` defaults `--identity-path` to `identity.json` in the process working directory. That file is created automatically and contains private key material. Always pass an absolute path outside the repository. The `IDENTITY_PATH` environment variable sets the same flag, and the same variable name means the identity directory for `relay-server`; on a host that runs both, prefer the explicit flag.
 
-An existing identity file supplies the saved public name as well as the key. `--name` applies only when a new identity is created and never renames an existing one, so use one identity file per public name.
+An existing identity file supplies the signing key. Explicit `--name` selects a service without rewriting that file; omitting it keeps a legacy saved name or an unnamed service. Distinct explicit service names may share a signing key while retaining independent leases and targets.
 
 Web app:
 
@@ -103,7 +103,7 @@ The flag is `--description`, not `--desc`. Environment variables in the third co
 | `--ban-mitm` | `false` | `BAN_MITM` | Ban a relay when the self-probe detects TLS termination |
 | `--identity-path` | `identity.json` | `IDENTITY_PATH` | Identity file, created when missing |
 | `--identity-json` | | `IDENTITY_JSON` | In-memory identity JSON; wins over the file |
-| `--name` | none | | Request the short URL `<name>.<relay-host>`, normalized to one DNS label of at most 63 ASCII characters; applies only to a new identity. The relay grants the short URL only when no other identity owns the name; the identity-bound URL, which carries the address, is always published. Omitted, the service is address-only (`<address>.<relay-host>`) with no short URL |
+| `--name` | none | | Select a service and request `<name>.<relay-host>`; up to 63 normalized ASCII characters. Overrides a legacy saved name without changing the key file. Alias ownership is independent of canonical registration; Local TLS canonical readiness additionally needs usable certificate material |
 | `--description`, `--tags`, `--owner`, `--thumbnail` | | | Public listing metadata; `--tags` is comma-separated |
 | `--hide` | `false` | | Keep the service out of relay listings |
 | `--http-route` | | | `PATH=UPSTREAM [METHOD[,METHOD...]:AMOUNT]`, repeatable |

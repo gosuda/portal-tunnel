@@ -131,8 +131,8 @@ runtime does not provide.
 
 ## Keyless Signing
 
-For relay-hosted names, the SDK terminates tenant TLS 1.3 with a `keyless_tls`
-t13server backed by the relay's `/v1/sign` endpoint. The SDK generates the
+For friendly aliases and legacy canonical names, the SDK terminates tenant TLS
+1.3 with a `keyless_tls` t13server backed by the relay's `/v1/sign` endpoint. The SDK generates the
 ephemeral key material and derives the session keys; the relay supplies
 certificate signatures without receiving those traffic secrets.
 

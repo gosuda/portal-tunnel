@@ -102,7 +102,7 @@ accepted in the same command; advanced flags do not require a configuration file
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--name` | string | | Request a short URL without the Ethereum address (one DNS label, at most 63 ASCII characters); applies to new identities. When omitted for a new identity, an address-only canonical hostname (<address>.<relay-domain>) is used |
+| `--name` | string | | Select this service under the signing identity and request its friendly alias; one normalized DNS label, at most 63 ASCII characters. Overrides a legacy saved name without rewriting the identity file |
 | `--relays` | string | registry | Additional relay API URLs, comma-separated |
 | `--discovery` | bool | `true` | Include registry relays and relay discovery expansion |
 | `--overlay` | bool | `false` | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; retains direct fallback |
@@ -132,6 +132,11 @@ accepted in the same command; advanced flags do not require a configuration file
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--tls-auto` | bool | `false` | Obtain and renew exact canonical certificates through an approved relay; enables the Local TLS service namespace |
+| `--tls-state-dir` | path | identity path plus `.tls` | Persistent automatic certificate/key storage; requires `--tls-auto`; must be explicit with `--identity-json` |
+| `--tls-require-local` | bool | `false` | Require namespace support; in automatic mode also require usable canonical readiness. Requires automatic or manual Local TLS; manual mode already rejects legacy-only relays |
+| `--tls-cert` | path | | Manual certificate chain PEM; requires `--tls-key`; only the exact service canonical DNS SAN is allowed |
+| `--tls-key` | path | | Matching manual private key PEM; requires `--tls-cert` |
 | `--tls-monitor-state-dir` | path | disabled | Opt into evaluation-only, warning-only [certificate monitoring](/keyless-tls#certificate-monitoring); persist evidence and send hostname queries to independent DNS and CertSpotter |
 | `--tls-monitor-baseline` | path | unconfigured | Operator-managed CAA/SPKI baseline JSON; requires `--tls-monitor-state-dir` |
 | `--tls-monitor-dns-resolver` | IP:port | `1.1.1.1:53` when enabled | Resolver for monitoring; requires `--tls-monitor-state-dir`; bracket IPv6 addresses |
@@ -171,26 +176,72 @@ why endpoint policy and network routing are separate, and
 
 ### Identity Names
 
-When `--name` is omitted for a new identity, the service does not claim a
-friendly public name and publishes an address-only canonical hostname
-(`<address>.<relay-domain>`). An existing identity keeps using its saved name
-instead.
-When `--name` is provided and available, share the short URL
-`https://<name>.<relay-domain>/`, which has no Ethereum address. Portal also
-publishes the identity-bound canonical hostname (`<name>-<address>.<relay-domain>`).
-If another identity owns the short name, the CLI continues with only the
-identity-bound URL. The short URL reaches the live origin; opt-in relay caching
-uses the canonical hostname.
-A name longer than 22 characters does not fit beside the address in one DNS
-label, so its canonical hostname uses a 21-character hash of the name instead:
-`<name-hash>--<address>.<relay-domain>`. Names shaped like a canonical label
-(40 hexadecimal characters, alone or after a hyphen) are rejected.
-An existing identity file or `--identity-json` supplies the saved name as well
-as the key. `--name` applies only when creating a new identity; it does not
-rename an existing one. Use a separate `--identity-path` for a new identity.
+The identity file supplies the reusable signing key. An explicit `--name`
+selects a service without rewriting that file, including when the file already
+exists or the key comes from `--identity-json`. New identity files store no
+service name. When the option is omitted, a legacy file's saved name remains
+the compatibility default; otherwise the service is unnamed. Use distinct
+explicit names to serve independent targets under one signing key.
+
+| Endpoint | Hostname | TLS and cache policy |
+|---|---|---|
+| Friendly alias, if available | `<name>.<relay-root>` | Keyless, HTTP/1.1, live origin only |
+| Negotiated Local TLS canonical | `<service>.<40-lowercase-hex-address>.<relay-root>` | Tunnel-owned exact certificate, HTTP/1.1 and HTTP/2, never relay cached |
+| Legacy canonical | `<address>.<relay-root>`, `<name>-<address>.<relay-root>`, or `<name-hash>--<address>.<relay-root>` | Existing Keyless and eligible opt-in cache behavior |
+
+Local TLS uses `default` for an unnamed service; an explicitly named `default`
+is rejected only in that namespace. Its service label can use all 63 octets.
+Legacy names longer than 22 characters use a 21-character name hash to fit the
+address into one label. Canonical-shaped service labels are rejected in both
+modes. Depth is relative to the configured relay root, which may contain
+multiple labels. A friendly alias collision does not prevent canonical service
+registration.
+
+### Tunnel-owned Local TLS
+
+```bash
+portal expose 3000 --name blog --identity-path identity.json \
+  --tls-auto --tls-require-local
+```
+
+Automatic issuance needs a relay with tenant issuance enabled and, for public
+CA orders, explicit approval for this service plus shared durable issuance
+budget state. See [relay configuration](/configuration#public-tenant-issuance-admission).
+Without `--tls-require-local`, an older relay may still provide legacy URLs, and
+a compatible relay's legacy URL can become ready while canonical issuance is
+pending. The new canonical hostname itself never falls back to Keyless.
+
+Certificate/key bundles persist per hostname in `--tls-state-dir`, defaulting
+to the identity file path plus `.tls`. With `--identity-json`, supply this
+directory explicitly. Renewals reuse the stored leaf key. Issuance failure
+keeps a still-valid certificate; expiry withdraws canonical readiness and
+rejects new canonical TLS handshakes. Friendly and legacy endpoints stay separate.
+
+For manual material, replace `--tls-auto` with `--tls-cert chain.pem --tls-key
+key.pem`. Files must form a currently valid pair with exactly the assigned
+canonical hostname as the only DNS SAN, without wildcard or sibling identities.
+Pin the intended relay with `--relays <url> --discovery=false`. Files reload
+during lease certificate checks, at most hourly after a successful check;
+restart for immediate reload. Invalid replacements retain the previous usable
+pair. Manual mode does not obtain or automatically renew certificates.
+
+Moving to a new canonical is an explicit origin migration: update links,
+callbacks, allowed origins, cookies, and browser storage as appropriate.
+There is no automatic redirect. The separate legacy URLs remain supported
+with no removal date currently specified. Local key ownership does not remove
+the relay's DNS issuance authority or give ordinary browser JavaScript native
+exporter verification; see the [security model](/security-model#local-tls-service-namespace).
 
 ### Constraints
 
+- Automatic and manual Local TLS cannot be combined, and neither can be used
+  with raw TCP, UDP, or relay static cache in the CLI/agent HTTP path.
+- `--tls-state-dir` requires `--tls-auto`. `--tls-require-local` requires
+  `--tls-auto` or a complete manual certificate/key pair; manual mode already
+  rejects legacy-only relays.
+- Certificate monitoring requires `--tls-monitor-state-dir`; its baseline and
+  resolver options alone are invalid. Monitoring cannot be used with raw TCP,
+  relay static cache, or browser/WASM exposures.
 - Choose one of `<target>`, `--serve`, or `--http-route`.
 - `--serve` cannot be combined with `--tcp` or `--udp`.
 - `--cache` requires `--serve` and cannot be combined with `--ban-mitm`.
@@ -242,7 +293,8 @@ Fields on `event=relay_status` records:
 | `state` | `connecting`, `ready`, or `failed` |
 | `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
 | `approval` | Present while the relay refuses this lease: `pending` (not approved yet) or `refused` (denied or banned). `state` is `connecting` and `public_url` is empty. Its absence does not mean approved |
-| `public_url` | Identity-bound canonical URL; usable only while `state` is `ready`, even if a retained lease keeps this field set while reconnecting |
+| `public_url` | Identity-bound canonical URL; usable only when nonempty and `state` is `ready`. Local TLS keeps it empty before usable material exists and withdraws it on expiry |
+| `legacy_url` | Separate one-label canonical compatibility URL for a Local TLS lease; use only while `state` is `ready` and not deselected |
 | `alias_url` | Short `<name>.<relay-domain>` URL without an Ethereum address; prefer this for sharing when present. Present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |
 | `deselected` | `true` on the removal notification for a relay that left the membership set; a previously advertised relay URL must be retracted |
 
@@ -253,6 +305,10 @@ snapshot should use the SDK's `Relays()`, not the lossy event stream.
 
 A `connecting` record retracts readiness until a subsequent `ready`
 record, and never reports an `alias_url`.
+For Local TLS, a `ready` record may have an empty `public_url` and a usable
+`legacy_url` or `alias_url`. Retract a previously advertised canonical when a
+later record empties `public_url`, even if `state` remains `ready` for the
+separate compatibility endpoint.
 
 On a `manual` relay, a waiting tunnel logs `waiting for relay approval` once,
 not on every retry, and needs no restart after approval:

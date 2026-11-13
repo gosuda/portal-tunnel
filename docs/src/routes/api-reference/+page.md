@@ -101,6 +101,7 @@ Detailed contracts: [SDK API](/api-reference/sdk) and
 | `POST` | `/sdk/cache` | lease token header | `StaticCacheManifest` JSON | `StaticCacheStatus` |
 | `PUT` | `/sdk/cache` | lease token header | manifest and file bytes as multipart | `StaticCacheStatus` |
 | `DELETE` | `/sdk/cache` | lease token header | none | `StaticCacheStatus` |
+| `POST` | `/v1/tenant-certificate` | lease token header | `TenantCertificateRequest` | `TenantCertificateResponse` |
 
 ### Admin
 
@@ -189,10 +190,19 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `address` | `string` |
 | `expires_at`, `first_seen_at`, `last_seen_at` | `string` |
 | `hostname`, `canonical_hostname` | `string` |
+| `namespace` | `string`, optional; `local-tls-v1` selects the new canonical policy |
+| `legacy_canonical_hostname` | `string`, optional; separate compatibility origin |
+| `canonical_ready` | `boolean`, optional; Local TLS material availability, not reverse transport count |
 | `udp_enabled`, `tcp_enabled` | `boolean` |
 | `tcp_addr` | `string` |
 | `metadata` | `LeaseMetadata` |
 | `ready` | `number` |
+
+For `local-tls-v1`, only advertise the canonical as usable when
+`canonical_ready` is true and `ready` is positive. Otherwise use an available
+friendly or legacy URL as a separate origin. For legacy namespaces, `ready`
+retains its existing meaning. The hostname fields identify routes even while
+their endpoints are unavailable.
 
 `PolicyLease` extends `Lease` with:
 
@@ -283,11 +293,29 @@ Timestamps are JSON-encoded Go `time.Time` values.
 
 ## Go Tenant TLS API
 
+`sdk.WithAutomaticTLS(stateDir, requireLocal)` opts into exact per-hostname
+CSR issuance, persistence, and renewal. `stateDir` is required at the SDK level;
+the CLI/agent resolve their identity-based defaults before calling it. Private
+leaf keys stay in that directory and are reused across restarts and renewals.
+With `requireLocal = false`, an older relay may provide legacy URLs. With it
+enabled, legacy-only relays are rejected and `WaitReady` waits for a usable
+canonical certificate. Public issuance needs relay opt-in, explicit service
+approval, and durable shared budgets; see the
+[issuance endpoint contract](/api-reference/sdk#tenant-certificate).
+
 `sdk.WithTLSCertificate(certFile, keyFile)` selects manual local signing for
 native, uncached HTTPS exposures. `sdk.Expose` reads and validates the pair
 before registering with any relay. Missing, malformed, mismatched, expired,
 or unsupported certificate material returns an error immediately. It never
 falls back to relay-backed signing.
+
+Automatic and manual modes are mutually exclusive, require the native runtime,
+and reject raw TCP. The CLI/agent additionally reject UDP and relay cache with
+Local TLS. At the lease-protocol level any cache opt-in remains on the separate
+legacy canonical; the new canonical is never cache eligible. Manual mode requires
+a namespace-capable relay. `sdk.RunHTTP` enables canonical HTTP/2 with an actual
+HTTP consumer; raw `Expose`/`Proxy` callers retain HTTP/1.1 and do not gain h2
+translation.
 
 The certificate must cover only the exact Local TLS canonical hostname assigned
 by a selected relay. Friendly and legacy URLs still use Keyless. A coverage
