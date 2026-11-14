@@ -214,9 +214,6 @@ func (m agentDashboardModel) addTunnelX402Config(routes []tunnel.HTTPRoute) (gat
 	if x402Network != "" && !hasPaidRoute {
 		return gateway.X402Config{}, fmt.Errorf("X402 Network requires paid routes")
 	}
-	if strings.HasPrefix(x402Network, "casper:") && x402Asset == "" {
-		return gateway.X402Config{}, fmt.Errorf("casper payments require X402 Asset")
-	}
 	return gateway.X402Config{
 		PayTo: payTo, Testnet: x402Testnet, Network: x402Network,
 		Asset: x402Asset, Endpoints: x402Endpoints,
