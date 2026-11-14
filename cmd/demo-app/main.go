@@ -232,7 +232,7 @@ func exposeRunUDPDemo(ctx context.Context, cfg demoConfig) (*sdk.Exposure, error
 }
 
 func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, opts ...sdk.Option) (*sdk.Exposure, error) {
-	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.relayURLs)...)
+	explicitRelayURLs, err := types.NormalizeRelayURLs(cfg.relayURLs)
 	if err != nil {
 		return nil, err
 	}

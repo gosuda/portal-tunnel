@@ -843,8 +843,16 @@ func (l *listener) claimReverseSession(ctx context.Context, conn net.Conn, tenan
 }
 
 func (l *listener) isAlternateReverseEndpoint(rawURL string) bool {
+	if l.api == nil || l.api.relayURL == nil {
+		return false
+	}
 	endpoint, err := url.Parse(strings.TrimSpace(rawURL))
-	return err == nil && l.api != nil && l.api.relayURL != nil && (!strings.EqualFold(endpoint.Scheme, l.api.relayURL.Scheme) || !strings.EqualFold(endpoint.Host, l.api.relayURL.Host))
+	if err != nil {
+		return false
+	}
+	schemeMatches := strings.EqualFold(endpoint.Scheme, l.api.relayURL.Scheme)
+	hostMatches := strings.EqualFold(endpoint.Host, l.api.relayURL.Host)
+	return !schemeMatches || !hostMatches
 }
 
 func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoint) error {
