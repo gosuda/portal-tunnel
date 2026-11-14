@@ -154,7 +154,7 @@ func applyValidateServerConfigRelayURLs(cfg ServerConfig) (ServerConfig, error) 
 	if types.PortalRootHost(selfRelayURL) == "" {
 		return ServerConfig{}, errRootHostIsRequired
 	}
-	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
+	bootstraps, err := types.NormalizeRelayURLs(cfg.Bootstraps...)
 	if err != nil {
 		return ServerConfig{}, fmt.Errorf("normalize bootstraps: %w", err)
 	}
@@ -206,7 +206,9 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.SNIPort == 0 {
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
 	}
-	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
+	if cfg.SNIPort <= 0 {
+		cfg.SNIPort = 443
+	}
 	cfg.SNIListenAddr = cmp.Or(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
 	return cfg, nil
 }

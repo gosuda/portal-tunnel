@@ -26,6 +26,24 @@ func TestNormalizeRelayURLPreservesParseErrors(t *testing.T) {
 	}
 }
 
+func TestNormalizeRelayURLs(t *testing.T) {
+	t.Parallel()
+
+	got, err := NormalizeRelayURLs("https://a.example.com, https://b.example.com", "https://a.example.com", "https://c.example.com/relay")
+	if err != nil {
+		t.Fatalf("NormalizeRelayURLs() unexpected error: %v", err)
+	}
+	want := []string{"https://a.example.com", "https://b.example.com", "https://c.example.com"}
+	if len(got) != len(want) {
+		t.Fatalf("NormalizeRelayURLs() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("NormalizeRelayURLs()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestHostnameMatchesPattern(t *testing.T) {
 	t.Parallel()
 

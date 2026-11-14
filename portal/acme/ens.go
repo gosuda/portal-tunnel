@@ -383,7 +383,7 @@ func (m *Manager) trackedENSGaslessHostnames() ([]string, error) {
 	if _, err := utils.ReadJSONFileIfExists(path, &hostnames); err != nil {
 		return nil, err
 	}
-	return utils.NormalizeChildHostnames(hostnames, m.cfg.BaseDomain), nil
+	return normalizeChildHostnames(hostnames, m.cfg.BaseDomain), nil
 }
 
 func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []string) error {
@@ -397,7 +397,7 @@ func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []strin
 		return err
 	}
 	if update != nil {
-		hostnames = utils.NormalizeChildHostnames(update(hostnames), m.cfg.BaseDomain)
+		hostnames = normalizeChildHostnames(update(hostnames), m.cfg.BaseDomain)
 	}
 	if len(hostnames) == 0 {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -406,4 +406,25 @@ func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []strin
 		return nil
 	}
 	return utils.WriteJSONFile(path, hostnames, 0o600)
+}
+
+func normalizeChildHostnames(inputs []string, baseDomain string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+	baseDomain = types.NormalizeBaseDomain(baseDomain)
+	var out []string
+	seen := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		hostname := types.NormalizeHostname(input)
+		if hostname == "" || hostname == baseDomain || !types.HostnameMatchesBaseDomain(hostname, baseDomain) {
+			continue
+		}
+		if _, ok := seen[hostname]; ok {
+			continue
+		}
+		seen[hostname] = struct{}{}
+		out = append(out, hostname)
+	}
+	return out
 }

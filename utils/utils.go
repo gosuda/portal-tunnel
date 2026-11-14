@@ -12,8 +12,6 @@ import (
 	"path"
 	"strings"
 	"time"
-
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (
@@ -53,21 +51,6 @@ func TrimHexPrefix(raw string) string {
 	return raw
 }
 
-func NormalizeChildHostnames(inputs []string, baseDomain string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-
-	baseDomain = types.NormalizeBaseDomain(baseDomain)
-	return normalizeUniqueStrings(inputs, func(input string) string {
-		hostname := types.NormalizeHostname(input)
-		if hostname == "" || hostname == baseDomain || !types.HostnameMatchesBaseDomain(hostname, baseDomain) {
-			return ""
-		}
-		return hostname
-	})
-}
-
 func NormalizeURLPath(raw string) string {
 	clean := path.Clean(strings.TrimSpace(raw))
 	if clean == "." || clean == "" {
@@ -84,22 +67,6 @@ func NormalizeURLPath(raw string) string {
 		clean = strings.TrimSuffix(clean, "/")
 	}
 	return clean
-}
-
-func NormalizeRelayURLs(inputs ...string) ([]string, error) {
-	out := make([]string, 0, len(inputs))
-
-	for _, input := range inputs {
-		for _, part := range SplitCSV(input) {
-			normalized, err := types.NormalizeRelayURL(part)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, normalized)
-		}
-	}
-
-	return normalizeUniqueStrings(out, strings.TrimSpace), nil
 }
 
 func NormalizeTargetAddr(raw string) (string, error) {
@@ -196,35 +163,4 @@ func RandomID(prefix string) string {
 		panic(err)
 	}
 	return prefix + hex.EncodeToString(buf)
-}
-
-func normalizeUniqueStrings(inputs []string, normalize func(string) string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(inputs))
-	seen := make(map[string]struct{}, len(inputs))
-	for _, input := range inputs {
-		normalized := normalize(input)
-		if normalized == "" {
-			continue
-		}
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		out = append(out, normalized)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func IntOrDefault(v, fallback int) int {
-	if v > 0 {
-		return v
-	}
-	return fallback
 }
