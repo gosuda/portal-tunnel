@@ -95,15 +95,20 @@ func buildWitnessedPGNSProof(t *testing.T, zone string, leaf pgns.PortalLeafReco
 		t.Fatalf("MarshalCanonical: %v", err)
 	}
 	smt := pgns.NewSparseMerkleTree()
-	if err := smt.Set(leaf); err != nil {
-		t.Fatalf("smt.Set: %v", err)
-	}
+	smt.Put(pgns.SMTKey(leaf.FQDN), rawLeaf)
 	proof, err := smt.Prove(pgns.SMTKey(leaf.FQDN))
 	if err != nil {
 		t.Fatalf("smt.Prove: %v", err)
 	}
+	proofBytes, err := proof.MarshalBinary()
+	if err != nil {
+		t.Fatalf("proof.MarshalBinary: %v", err)
+	}
 	smtRoot := smt.Root()
-	batchBytes := pgns.MarshalCanonicalBatch([]pgns.LeafTx{{TxType: pgns.TxTypeCreate, Leaf: leaf}})
+	batchBytes, err := pgns.CanonicalBatchBytes([]pgns.LeafTx{{TxType: pgns.TxTypeCreate, Leaf: leaf}})
+	if err != nil {
+		t.Fatalf("CanonicalBatchBytes: %v", err)
+	}
 	recHash := pgns.EpochRecordHash(0, cpTime, smtRoot, batchBytes)
 	logRoot, _, err := pgns.ComputeAppendLogRoot(0, recHash, nil)
 	if err != nil {
@@ -128,7 +133,7 @@ func buildWitnessedPGNSProof(t *testing.T, zone string, leaf pgns.PortalLeafReco
 	return &types.PGNSRegistrationProof{
 		Zone:           zone,
 		Leaf:           rawLeaf,
-		InclusionProof: proof.MarshalBinary(),
+		InclusionProof: proofBytes,
 		Checkpoint:     pgns.FormatSignedCheckpoint(body, cosigs),
 	}
 }
@@ -318,7 +323,10 @@ func TestLeaseRegistryPGNSColdRecoveryPreemption(t *testing.T) {
 	hotPriv, _ := privKeyFromIdentity(t, hotID)
 	recoveryID := newTestLeaseIdentity(t, "cold")
 	_, recPub33 := privKeyFromIdentity(t, recoveryID)
-	recHash := pgns.RecoveryKeyHash(recPub33)
+	recHash, err := pgns.RecoveryKeyHash(recPub33)
+	if err != nil {
+		t.Fatalf("RecoveryKeyHash: %v", err)
+	}
 	now := uint64(time.Now().UTC().Unix())
 
 	appFQDN := "myapp.app." + zone
