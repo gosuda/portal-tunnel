@@ -164,22 +164,19 @@ func dialEndpointTLS(ctx context.Context, host, port, serverName string) (*tls.C
 	return tlsConn, nil
 }
 
-// endpointProxy is the REST client's proxy rule. Tests replace it because
-// http.ProxyFromEnvironment reads the environment only once per process.
-var endpointProxy = http.ProxyFromEnvironment
-
 // dialEndpointTCP follows the proxy environment the REST client uses:
-// HTTP(S)_PROXY and NO_PROXY route the endpoint through an HTTP CONNECT
-// tunnel or a SOCKS5 proxy, everything else dials directly. Local
-// relay hosts never consult a proxy: their trust bootstrap pins the chain the
-// dialed peer presents, so a proxy in between would define that trust.
+// HTTP(S)_PROXY, whose value may name an http, https, socks5 or socks5h
+// proxy, and NO_PROXY route the endpoint through that proxy, everything else
+// dials directly. Local relay hosts never consult a proxy: their trust
+// bootstrap pins the chain the dialed peer presents, so a proxy in between
+// would define that trust.
 func dialEndpointTCP(ctx context.Context, host, port string) (net.Conn, error) {
 	address := net.JoinHostPort(host, port)
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	var proxyURL *url.URL
 	if !types.IsLocalRelayHost(host) {
 		var proxyErr error
-		proxyURL, proxyErr = endpointProxy(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
+		proxyURL, proxyErr = http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
 		if proxyErr != nil {
 			return nil, fmt.Errorf("resolve proxy for relay endpoint: %w", proxyErr)
 		}
@@ -216,7 +213,12 @@ func dialSocksProxy(ctx context.Context, dialer *net.Dialer, proxyURL *url.URL, 
 	if !ok {
 		return nil, fmt.Errorf("socks dialer for relay endpoint does not support contexts")
 	}
-	rawConn, err := contextDialer.DialContext(ctx, "tcp", address)
+	// The forward dialer bounds only the TCP connect; x/net's socks client
+	// applies this deadline to its handshake reads and clears it before
+	// returning, so the endpoint TLS handshake above stays unbounded by it.
+	dialCtx, cancel := context.WithTimeout(ctx, proxyEstablishTimeout)
+	defer cancel()
+	rawConn, err := contextDialer.DialContext(dialCtx, "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("dial relay endpoint through proxy: %w", err)
 	}
@@ -230,7 +232,7 @@ func dialConnectTunnel(ctx context.Context, dialer *net.Dialer, proxyURL *url.UR
 	if err != nil {
 		return nil, fmt.Errorf("dial relay endpoint proxy: %w", err)
 	}
-	connectDeadline := time.Now().Add(5 * time.Second)
+	connectDeadline := time.Now().Add(proxyEstablishTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(connectDeadline) {
 		connectDeadline = ctxDeadline
 	}
@@ -279,7 +281,15 @@ func dialConnectTunnel(ctx context.Context, dialer *net.Dialer, proxyURL *url.UR
 	return proxyConn, nil
 }
 
-const maxProxyResponseHeaderBytes = 1 << 20
+const (
+	// proxyEstablishTimeout bounds proxied connection setup — the proxy-side
+	// handshakes and the CONNECT or SOCKS exchange. The SOCKS wrap covers the
+	// proxy dial too; the CONNECT path dials the proxy first under the
+	// dialer's own 5 s timeout, so a tunnel establishment spans at most two
+	// of these budgets.
+	proxyEstablishTimeout       = 5 * time.Second
+	maxProxyResponseHeaderBytes = 1 << 20
+)
 
 func proxyDialAddress(proxyURL *url.URL) string {
 	if proxyURL.Port() != "" {

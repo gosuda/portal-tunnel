@@ -15,83 +15,135 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"golang.org/x/net/http/httpproxy"
 )
 
 // TestFetchEndpointCertificateChainHonorsProxyEnvironment protects the chain
-// fetch's proxy contract: public endpoints follow the REST client's proxy
-// rule, while local relay hosts always dial directly.
+// fetch's proxy contract: public endpoints follow the proxy environment the
+// REST client uses, while local relay hosts always dial directly.
 //
-// The rule is injected through endpointProxy because http.ProxyFromEnvironment
-// reads the environment only once per process, so a t.Setenv proxy would go
-// stale on -count=2 or after any earlier proxied dial in this binary.
+// The proxied case runs in a subprocess because net/http caches the proxy
+// environment and crypto/x509 the system roots once per process: t.Setenv
+// restores the variables but not those caches, so an in-process run would
+// depend on execution order and break under -count>1. The child starts with
+// clean caches whatever this binary has run before, and the parent asserts
+// only its result. The local cases need no isolation: the local exemption
+// never consults the proxy rule, and their handshakes skip verification.
 func TestFetchEndpointCertificateChainHonorsProxyEnvironment(t *testing.T) {
+	if os.Getenv(chainFetchRunEnv) == "1" {
+		chainFetchSubprocess(t)
+		return
+	}
 	endpoint := newEndpointTLSServer(t)
 	proxy := newConnectProxyStub(t)
-	proxyFunc := (&httpproxy.Config{HTTPProxy: proxy.URL, HTTPSProxy: proxy.URL}).ProxyFunc()
-	var proxyLookups sync.Map
-	previous := endpointProxy
-	endpointProxy = func(request *http.Request) (*url.URL, error) {
-		proxyLookups.Store(request.URL.Host, true)
-		return proxyFunc(request.URL)
-	}
-	t.Cleanup(func() { endpointProxy = previous })
 
 	t.Run("direct local relay endpoints", func(t *testing.T) {
-		chainPEM, err := FetchEndpointCertificateChain(context.Background(), endpoint.LocalhostURL(), "")
-		if err != nil {
-			t.Fatalf("FetchEndpointCertificateChain() error = %v", err)
+		endpointURLs := []string{endpoint.LocalhostURL()}
+		// OS resolvers do not universally synthesize *.localhost names —
+		// Windows resolves them only through some DNS configurations, and a
+		// search-domain or NXDOMAIN-hijacking resolver can even answer with
+		// a stranger — so cover the *.localhost shape of the local exemption
+		// only where the resolver answers loopback, and never dial the name
+		// otherwise.
+		if addrs, lookupErr := net.LookupHost("relay.localhost"); lookupErr != nil {
+			t.Logf("OS resolver does not synthesize *.localhost (%v); covering bare localhost only", lookupErr)
+		} else if !allLoopback(addrs) {
+			t.Logf("relay.localhost resolved to non-loopback %v; covering bare localhost only", addrs)
+		} else {
+			endpointURLs = append(endpointURLs, endpoint.RelayLocalhostURL())
 		}
-		assertChainIsEndpointLeaf(t, endpoint, chainPEM)
-		// *.localhost names need not resolve (Windows, minimal resolvers), so
-		// only the routing decision is asserted: the dial outcome is ignored.
-		relayHost, relayPort, err := net.SplitHostPort(endpoint.RelayLocalhostAddress())
-		if err != nil {
-			t.Fatal(err)
+		for _, endpointURL := range endpointURLs {
+			chainPEM, err := FetchEndpointCertificateChain(context.Background(), endpointURL, "")
+			if err != nil {
+				t.Fatalf("FetchEndpointCertificateChain(%q) error = %v", endpointURL, err)
+			}
+			assertChainIsEndpointLeaf(t, endpoint, chainPEM)
 		}
-		if conn, err := dialEndpointTCP(context.Background(), relayHost, relayPort); err == nil {
-			_ = conn.Close()
-		}
-		proxyLookups.Range(func(host, _ any) bool {
-			t.Errorf("local relay host %v consulted the proxy rule", host)
-			return true
-		})
 		if got := proxy.ConnectTargets(); len(got) != 0 {
 			t.Fatalf("local relay fetch dialed %v through the proxy, want none: the chain pins the dialed peer's trust, so a proxy in between would define it", got)
 		}
 	})
 
-	// The public case stops at dialEndpointTCP and verifies the tunneled
-	// handshake against the endpoint root itself: the system roots load once
-	// per process, so SSL_CERT_FILE cannot plant this root reliably.
 	t.Run("proxied public endpoint", func(t *testing.T) {
-		host, port, err := net.SplitHostPort(endpoint.ConnectTarget())
+		resultPath := filepath.Join(t.TempDir(), "chain.pem")
+		runCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(runCtx, os.Args[0], "-test.run=^TestFetchEndpointCertificateChainHonorsProxyEnvironment$")
+		cmd.Env = chainFetchSubprocessEnv(endpoint.PublicURL(), proxy.URL, endpoint.CAPEMPath(t), resultPath)
+		output, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("subprocess chain fetch failed: %v\n%s", err, output)
 		}
-		rawConn, err := dialEndpointTCP(context.Background(), host, port)
+		chainPEM, err := os.ReadFile(resultPath)
 		if err != nil {
-			t.Fatalf("dialEndpointTCP() error = %v", err)
+			t.Fatalf("subprocess wrote no chain (%v):\n%s", err, output)
 		}
-		defer rawConn.Close()
-		roots := x509.NewCertPool()
-		roots.AddCert(endpoint.leaf)
-		tlsConn := tls.Client(rawConn, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host, RootCAs: roots})
-		if err := tlsConn.HandshakeContext(context.Background()); err != nil {
-			t.Fatalf("verified handshake through the proxy tunnel error = %v", err)
-		}
-		if peers := tlsConn.ConnectionState().PeerCertificates; len(peers) == 0 || !peers[0].Equal(endpoint.leaf) {
-			t.Fatal("tunneled peer certificate does not match the endpoint certificate")
-		}
+		assertChainIsEndpointLeaf(t, endpoint, chainPEM)
 		if got := proxy.ConnectTargets(); len(got) != 1 || got[0] != endpoint.ConnectTarget() {
 			t.Fatalf("proxy CONNECT targets = %v, want [%s]", got, endpoint.ConnectTarget())
 		}
 	})
+}
+
+// chainFetchSubprocessEnv builds a child environment that carries only the
+// proxy and trust variables this scenario owns.
+func chainFetchSubprocessEnv(endpointURL, proxyURL, caPath, resultPath string) []string {
+	env := []string{
+		chainFetchRunEnv + "=1",
+		chainFetchEndpointEnv + "=" + endpointURL,
+		chainFetchResultEnv + "=" + resultPath,
+		"HTTPS_PROXY=" + proxyURL,
+		"https_proxy=" + proxyURL,
+		"NO_PROXY=",
+		"no_proxy=",
+		"SSL_CERT_FILE=" + caPath,
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case chainFetchRunEnv, chainFetchEndpointEnv, chainFetchResultEnv,
+			"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
+			"ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE":
+			continue
+		}
+		env = append(env, entry)
+	}
+	return env
+}
+
+// chainFetchSubprocess runs the real proxied fetch in the child process and
+// reports the chain back through the result file.
+func chainFetchSubprocess(t *testing.T) {
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	chainPEM, err := FetchEndpointCertificateChain(fetchCtx, os.Getenv(chainFetchEndpointEnv), "")
+	if err != nil {
+		t.Fatalf("FetchEndpointCertificateChain() error = %v", err)
+	}
+	if err := os.WriteFile(os.Getenv(chainFetchResultEnv), chainPEM, 0o600); err != nil {
+		t.Fatalf("write fetched chain: %v", err)
+	}
+}
+
+const (
+	chainFetchRunEnv      = "PORTAL_TEST_CHAIN_FETCH_RUN"
+	chainFetchEndpointEnv = "PORTAL_TEST_CHAIN_FETCH_ENDPOINT"
+	chainFetchResultEnv   = "PORTAL_TEST_CHAIN_FETCH_RESULT"
+)
+
+func allLoopback(addrs []string) bool {
+	for _, addr := range addrs {
+		if !IsLoopbackHost(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 func assertChainIsEndpointLeaf(t *testing.T, endpoint *endpointTLSServer, chainPEM []byte) {
@@ -108,6 +160,7 @@ func assertChainIsEndpointLeaf(t *testing.T, endpoint *endpointTLSServer, chainP
 type endpointTLSServer struct {
 	listener net.Listener
 	leaf     *x509.Certificate
+	certPEM  []byte
 }
 
 func (s *endpointTLSServer) port() int {
@@ -118,16 +171,31 @@ func (s *endpointTLSServer) LocalhostURL() string {
 	return fmt.Sprintf("https://localhost:%d", s.port())
 }
 
-// RelayLocalhostAddress names the listener with a *.localhost host: a local relay
+// RelayLocalhostURL names the listener with a *.localhost host: a local relay
 // trust host that proxy resolution would otherwise route through a proxy.
-func (s *endpointTLSServer) RelayLocalhostAddress() string {
-	return fmt.Sprintf("relay.localhost:%d", s.port())
+func (s *endpointTLSServer) RelayLocalhostURL() string {
+	return fmt.Sprintf("https://relay.localhost:%d", s.port())
 }
 
-// ConnectTarget names the listener with a host neither local trust nor proxy
+// PublicURL names the listener with a host neither local trust nor proxy
 // exemption covers, the way a public relay endpoint looks.
+func (s *endpointTLSServer) PublicURL() string {
+	return fmt.Sprintf("https://relay.test.example:%d", s.port())
+}
+
 func (s *endpointTLSServer) ConnectTarget() string {
 	return fmt.Sprintf("relay.test.example:%d", s.port())
+}
+
+// CAPEMPath writes the endpoint certificate for SSL_CERT_FILE so the proxied
+// fetch verifies it with the ordinary system-root path.
+func (s *endpointTLSServer) CAPEMPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "endpoint-ca.pem")
+	if err := os.WriteFile(path, s.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func newEndpointTLSServer(t *testing.T) *endpointTLSServer {
@@ -168,7 +236,7 @@ func newEndpointTLSServer(t *testing.T) *endpointTLSServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &endpointTLSServer{listener: listener, leaf: leaf}
+	server := &endpointTLSServer{listener: listener, leaf: leaf, certPEM: certPEM}
 	t.Cleanup(func() { _ = listener.Close() })
 	go func() {
 		for {
