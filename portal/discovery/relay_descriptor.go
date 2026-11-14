@@ -11,7 +11,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -117,7 +116,7 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 // signer address, and rejects inconsistent or incomplete entries.
 func checkNormalizeRelayDescriptorAddrs(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
 	if desc.APIHTTPSAddr != "" {
-		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
+		normalized, err := types.NormalizeRelayURL(desc.APIHTTPSAddr)
 		if err != nil {
 			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
 		}

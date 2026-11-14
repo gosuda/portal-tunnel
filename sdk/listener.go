@@ -173,7 +173,7 @@ type listener struct {
 func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
 
-	entryRelayURL, err := utils.NormalizeRelayURL(relayURL)
+	entryRelayURL, err := types.NormalizeRelayURL(relayURL)
 	if err != nil {
 		cancel()
 		return nil, err

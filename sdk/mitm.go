@@ -266,7 +266,7 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse ingress relay url: %w", err)
 	}
-	if utils.IsLocalRelayHost(entryRelayURL.Hostname()) {
+	if types.IsLocalRelayHost(entryRelayURL.Hostname()) {
 		dialHost = entryRelayURL.Host
 	}
 	return utils.EnsurePort(dialHost), nil

@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/net/publicsuffix"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -54,7 +55,7 @@ type tenantOrderReservation struct {
 // journal. It may create the journal, but never reserves an order or takes the
 // issuance lock: another replica issuing a certificate is not a config error.
 func (cfg Config) ValidateTenantIssuanceState() error {
-	if utils.IsLocalRelayHost(cfg.BaseDomain) {
+	if types.IsLocalRelayHost(cfg.BaseDomain) {
 		return nil
 	}
 	if cfg.TenantIssuanceStateDir == "" {

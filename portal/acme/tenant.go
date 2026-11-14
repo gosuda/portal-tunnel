@@ -19,7 +19,7 @@ import (
 
 	"github.com/go-acme/lego/v4/certificate"
 
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (
@@ -51,7 +51,7 @@ func ParseTenantCSR(encoded string, allowed []string) (*x509.CertificateRequest,
 		return nil, errTenantCSRNames
 	}
 	for _, name := range csr.DNSNames {
-		if name == "" || strings.Contains(name, "*") || name != utils.NormalizeHostname(name) || !slices.Contains(allowed, name) {
+		if name == "" || strings.Contains(name, "*") || name != types.NormalizeHostname(name) || !slices.Contains(allowed, name) {
 			return nil, errTenantCSRNames
 		}
 	}
@@ -95,7 +95,7 @@ func (m *Manager) TenantIssuanceConfigured() bool {
 	if m == nil {
 		return false
 	}
-	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return true
 	}
 	_, err := os.Stat(filepath.Join(m.cfg.KeyDir, accountKeyFileName))
@@ -112,7 +112,7 @@ func (m *Manager) ObtainTenantCertificate(ctx context.Context, csr *x509.Certifi
 	}
 	// Maintenance also provisions relay certificates, so wait for the DNS
 	// owner before acquiring issuanceMu.
-	if csr != nil && len(csr.DNSNames) == 1 && !utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if csr != nil && len(csr.DNSNames) == 1 && !types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		if err := m.waitLeaseDNS(ctx, csr.DNSNames[0]); err != nil {
 			return nil, err
 		}
@@ -124,7 +124,7 @@ func (m *Manager) ObtainTenantCertificate(ctx context.Context, csr *x509.Certifi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		material := m.TLSMaterial()
 		if material == nil {
 			return nil, errRelayCertificateIsNotLoaded

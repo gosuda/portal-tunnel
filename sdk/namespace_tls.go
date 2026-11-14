@@ -11,7 +11,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var errTLSNameOutsideLease = errors.New("TLS server name is outside this service lease")
@@ -41,7 +41,7 @@ func (c *namespaceTLS) TerminateConn(ctx context.Context, conn net.Conn, binding
 		_ = conn.Close()
 		return nil, err
 	}
-	hostname := utils.NormalizeHostname(hello.ServerName)
+	hostname := types.NormalizeHostname(hello.ServerName)
 	if hostname == c.hostname {
 		return c.local.TerminateConn(ctx, buffered, binding)
 	}

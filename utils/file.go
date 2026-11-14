@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // DefaultStaticIndex is the SPA entry file served for a directory and for any
@@ -122,7 +124,7 @@ func StaticSiteRequestPath(prefix, urlPath string) (string, bool) {
 		return "", false
 	}
 
-	p := NormalizeURLPath(urlPath)
+	p := types.NormalizeURLPath(urlPath)
 	if prefix != "/" {
 		switch {
 		case p == prefix:

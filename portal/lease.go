@@ -93,7 +93,7 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 
 	return &leaseRegistry{
 		records:        make([]*leaseRecord, 0),
-		rootHostname:   utils.NormalizeHostname(rootHostname),
+		rootHostname:   types.NormalizeHostname(rootHostname),
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
@@ -273,7 +273,7 @@ func matchLookupHostnames(record *leaseRecord, host string) (bool, bool) {
 		if hostname == host {
 			return true, false
 		}
-		if !wildcard && utils.HostnameMatchesPattern(hostname, host) {
+		if !wildcard && types.HostnameMatchesPattern(hostname, host) {
 			wildcard = true
 		}
 	}
@@ -281,7 +281,7 @@ func matchLookupHostnames(record *leaseRecord, host string) (bool, bool) {
 }
 
 func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
-	host = utils.NormalizeHostname(host)
+	host = types.NormalizeHostname(host)
 	if host == "" {
 		return nil, false
 	}
@@ -290,7 +290,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	defer r.mu.RUnlock()
 
 	now := time.Now()
-	localTLS := utils.IsLocalTLSHostname(host, r.rootHostname)
+	localTLS := types.IsLocalTLSHostname(host, r.rootHostname)
 	var wildcard *leaseRecord
 	for _, record := range r.records {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {

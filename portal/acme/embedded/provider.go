@@ -20,7 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (
@@ -84,7 +84,7 @@ type Provider struct {
 // New binds the UDP and TCP listeners and starts serving the zone before it
 // returns.
 func New(cfg Config) (*Provider, error) {
-	baseDomain := utils.NormalizeBaseDomain(cfg.BaseDomain)
+	baseDomain := types.NormalizeBaseDomain(cfg.BaseDomain)
 	if baseDomain == "" {
 		return nil, errEmbeddedDNSBaseDomainRequired
 	}
@@ -311,7 +311,7 @@ func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, ds
 	if p == nil {
 		return "", "", "", errEmbeddedDNSProviderIsNil
 	}
-	if utils.NormalizeBaseDomain(baseDomain) != p.baseDomain {
+	if types.NormalizeBaseDomain(baseDomain) != p.baseDomain {
 		return "", "", "", fmt.Errorf("domain %q is not embedded dns zone %q", baseDomain, p.baseDomain)
 	}
 	return "pending", p.key.ToDS(dns.SHA256).String(),
@@ -319,14 +319,14 @@ func (p *Provider) EnsureDNSSEC(_ context.Context, baseDomain string) (state, ds
 }
 
 func (p *Provider) zoneHostname(name string) (string, error) {
-	name = utils.NormalizeHostname(name)
+	name = types.NormalizeHostname(name)
 	if name == "" {
 		return "", errRecordNameIsRequired
 	}
 	if _, valid := dns.IsDomainName(dns.Fqdn(name)); !valid {
 		return "", fmt.Errorf("invalid dns record name %q", name)
 	}
-	if !utils.HostnameMatchesBaseDomain(name, p.baseDomain) {
+	if !types.HostnameMatchesBaseDomain(name, p.baseDomain) {
 		return "", fmt.Errorf("hostname %q is outside embedded dns zone %q", name, p.baseDomain)
 	}
 	return dns.Fqdn(name), nil

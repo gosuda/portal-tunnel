@@ -27,7 +27,7 @@ func normalizeOptionalName(raw string) (string, error) {
 	if trimmed == "" {
 		return "", nil
 	}
-	return utils.NormalizeServiceName(trimmed)
+	return types.NormalizeServiceName(trimmed)
 }
 
 // NormalizeIdentity returns the canonical comparison form of a wire identity:

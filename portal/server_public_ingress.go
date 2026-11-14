@@ -7,7 +7,7 @@ import (
 	"github.com/gosuda/keyless_tls/relay/l4"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
@@ -23,8 +23,8 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	helloSpan := clientHello.HandshakeMessage
-	serverName := utils.NormalizeHostname(clientHello.ServerName)
-	localTLS := utils.IsLocalTLSHostname(serverName, s.registry.rootHostname)
+	serverName := types.NormalizeHostname(clientHello.ServerName)
+	localTLS := types.IsLocalTLSHostname(serverName, s.registry.rootHostname)
 	relayAPI := serverName == "" || serverName == s.identity.Name
 	if !localTLS && (relayAPI || s.registry.cache.Has(serverName)) {
 		select {

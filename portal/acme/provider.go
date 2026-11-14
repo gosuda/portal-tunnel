@@ -10,6 +10,7 @@ import (
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -35,7 +36,7 @@ type dnsProvider interface {
 }
 
 func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil, nil
 	}
 	_, _, manual, err := m.manualCertificateOverride()

@@ -61,7 +61,7 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 func prepareChannelBindingClient(conn net.Conn, hostname string) ([]byte, string, [types.TLSChannelBindingNonceSize]byte, error) {
 	var nonce [types.TLSChannelBindingNonceSize]byte
 	var expectedAddr string
-	e, err := utils.ExtractCanonicalHostnameAddress(hostname)
+	e, err := types.ExtractCanonicalHostnameAddress(hostname)
 	if err != nil {
 		_ = conn.Close()
 		return nil, "", nonce, err
@@ -155,8 +155,8 @@ func readChannelBindingAnswer(ctx context.Context, conn net.Conn) ([]byte, []byt
 // Portal hostname, and enforces identity-bound TLS channel binding (#653)
 // before returning the connection for application traffic.
 func DialCanonicalTLS(ctx context.Context, addr, hostname string, baseTLSConfig *tls.Config) (net.Conn, error) {
-	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
-	if _, err := utils.ExtractCanonicalHostnameAddress(normalizedHost); err != nil {
+	normalizedHost := types.NormalizeHostWithoutPort(hostname)
+	if _, err := types.ExtractCanonicalHostnameAddress(normalizedHost); err != nil {
 		return nil, err
 	}
 	tlsConf := buildDialCanonicalTLSConfig(normalizedHost, baseTLSConfig)

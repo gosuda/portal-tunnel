@@ -39,7 +39,7 @@ func newENSStatus(cfg Config, dns dnsProvider) types.ENSStatus {
 		provider = dns.Name()
 	}
 	return types.ENSStatus{
-		Enabled:  cfg.ENSGaslessEnabled && !utils.IsLocalRelayHost(cfg.BaseDomain),
+		Enabled:  cfg.ENSGaslessEnabled && !types.IsLocalRelayHost(cfg.BaseDomain),
 		Provider: provider,
 		Address:  strings.TrimSpace(cfg.ENSGaslessAddress),
 	}
@@ -89,7 +89,7 @@ func ensDNSSECVerified(state string) bool {
 }
 
 func (m *Manager) syncENSGasless(ctx context.Context) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || !m.cfg.ENSGaslessEnabled || types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
@@ -120,18 +120,18 @@ func (m *Manager) syncENSDNSSEC(ctx context.Context) error {
 // SyncLeaseHostname maintains exact canonical address records even without ENS.
 // It shares the serialized DNS lifecycle and durable tracking used by ENS aliases.
 func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address string) error {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
-	if !m.cfg.ENSGaslessEnabled && !utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
+	if !m.cfg.ENSGaslessEnabled && !types.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
-	hostname = utils.NormalizeHostname(hostname)
+	hostname = types.NormalizeHostname(hostname)
 	if hostname == "" {
 		return errHostnameIsRequired
 	}
-	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+	if !types.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
 	}
 
@@ -154,18 +154,18 @@ func (m *Manager) isLeaseAddressParent(hostname string) bool {
 }
 
 func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) error {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
-	hostname = utils.NormalizeHostname(hostname)
-	if !m.cfg.ENSGaslessEnabled && !utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) && !m.isLeaseAddressParent(hostname) {
+	hostname = types.NormalizeHostname(hostname)
+	if !m.cfg.ENSGaslessEnabled && !types.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) && !m.isLeaseAddressParent(hostname) {
 		return nil
 	}
 	if hostname == "" {
 		return nil
 	}
-	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+	if !types.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
 	if hostname == m.cfg.BaseDomain {
@@ -238,7 +238,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
 		}
-		if utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
+		if types.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
 			// An exact child suppresses wildcard answers for its address parent.
 			// Publish the parent before the child to keep legacy URLs working.
 			_, parent, _ := strings.Cut(command.hostname, ".")
@@ -271,7 +271,7 @@ func (m *Manager) applyENSCommandRemove(ctx context.Context, command ensDNSComma
 			return nil
 		}
 		for _, name := range tracked {
-			if strings.HasSuffix(name, "."+command.hostname) && utils.IsLocalTLSHostname(name, m.cfg.BaseDomain) {
+			if strings.HasSuffix(name, "."+command.hostname) && types.IsLocalTLSHostname(name, m.cfg.BaseDomain) {
 				return fmt.Errorf("wait for canonical DNS removal before withdrawing %s", command.hostname)
 			}
 		}
@@ -313,7 +313,7 @@ func (m *Manager) applyENSCommandStoreGaslessTXT(ctx context.Context, command en
 	})
 }
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 	var cleanupErr error
@@ -367,7 +367,7 @@ func (m *Manager) syncTrackedENSGaslessHostAddressRecords(ctx context.Context, p
 	var syncErr error
 	failedParents := make(map[string]bool)
 	for _, hostname := range hostnames {
-		if utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
+		if types.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
 			_, parent, _ := strings.Cut(hostname, ".")
 			if failedParents[parent] {
 				continue

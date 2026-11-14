@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"strings"
 	"testing"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestLocalTLSNamespace(t *testing.T) {
@@ -15,14 +17,14 @@ func TestLocalTLSNamespace(t *testing.T) {
 				t.Fatal(err)
 			}
 			label := cmp.Or(name, "default")
-			if host != label+"."+address+"."+root || !IsLocalTLSHostname(host, root) {
+			if host != label+"."+address+"."+root || !types.IsLocalTLSHostname(host, root) {
 				t.Fatalf("unexpected host %q", host)
 			}
-			if got, err := ExtractCanonicalHostnameAddress(host); err != nil || got != "0x"+address {
+			if got, err := types.ExtractCanonicalHostnameAddress(host); err != nil || got != "0x"+address {
 				t.Fatalf("extract %q: %q, %v", host, got, err)
 			}
 			for _, invalid := range []string{"extra." + host, label + "." + root, address + "." + root, label + ".0x" + address + "." + root, label + "." + address + ".other." + root} {
-				if IsLocalTLSHostname(invalid, root) {
+				if types.IsLocalTLSHostname(invalid, root) {
 					t.Fatalf("accepted noncanonical %q under %q", invalid, root)
 				}
 			}
@@ -45,14 +47,14 @@ func TestCanonicalAddressWithHexadecimalRelayRoot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, err := ExtractCanonicalHostnameAddress(host); err != nil || got != owner {
+			if got, err := types.ExtractCanonicalHostnameAddress(host); err != nil || got != owner {
 				t.Fatalf("extract %q = %q, %v; want %q", host, got, err, owner)
 			}
 		}
 	}
 	for _, service := range []string{strings.Repeat("a", 40), "blog-" + strings.Repeat("a", 40)} {
 		host := service + "." + strings.Repeat("b", 40) + "." + root
-		if IsLocalTLSHostname(host, root) {
+		if types.IsLocalTLSHostname(host, root) {
 			t.Fatalf("ambiguous legacy-shaped service accepted: %q", host)
 		}
 	}

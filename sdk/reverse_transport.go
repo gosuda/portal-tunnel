@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -84,7 +85,7 @@ func reverseMuxEnded(mux *transport.ReverseMux) bool {
 }
 
 func validatePublicReverseHostname(host string) error {
-	if utils.IsLocalOnlyRelayHost(host) {
+	if types.IsLocalOnlyRelayHost(host) {
 		return fmt.Errorf("overlay gateway host %q is local-only", host)
 	}
 	if addr, err := netip.ParseAddr(host); err == nil && !utils.IsPublicIP(addr) {

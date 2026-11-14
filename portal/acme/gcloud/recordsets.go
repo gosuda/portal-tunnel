@@ -7,6 +7,7 @@ import (
 	"google.golang.org/api/dns/v1"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -117,7 +118,7 @@ func recordTTL(recordSets []*dns.ResourceRecordSet) int64 {
 }
 
 func fqdn(name string) string {
-	normalized := utils.NormalizeHostname(name)
+	normalized := types.NormalizeHostname(name)
 	if normalized == "" {
 		return ""
 	}

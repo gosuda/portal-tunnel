@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awsroute53 "github.com/aws/aws-sdk-go-v2/service/route53"
 
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func newClient(ctx context.Context, cfg Config) (*awsroute53.Client, error) {
@@ -55,7 +55,7 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 		return "", errRoute53ClientIsNil
 	}
 
-	candidates := utils.DomainCandidates(domain)
+	candidates := types.DomainCandidates(domain)
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("invalid base domain for hosted zone lookup: %q", domain)
 	}
@@ -135,7 +135,7 @@ func listFindHostedZoneIDZonesByName(ctx context.Context, client *awsroute53.Cli
 			if hostedZone.Config != nil && hostedZone.Config.PrivateZone {
 				continue
 			}
-			zoneName := utils.NormalizeHostname(aws.ToString(hostedZone.Name))
+			zoneName := types.NormalizeHostname(aws.ToString(hostedZone.Name))
 			zoneID := normalizeZoneID(aws.ToString(hostedZone.Id))
 			if zoneName == "" || zoneID == "" {
 				continue

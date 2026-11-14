@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func resolveRelayEndpoint(relayURL string) (string, string, error) {
-	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
+	normalizedRelayURL, err := types.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return "", "", err
 	}

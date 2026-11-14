@@ -13,11 +13,10 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
-	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
+	normalizedHost := types.NormalizeHostWithoutPort(hostname)
 	buf := make([]byte, 0, len(types.TLSChannelBindingDomain)+1+len(normalizedHost)+1+len(nonce)+len(exported))
 	buf = append(buf, types.TLSChannelBindingDomain...)
 	buf = append(buf, 0)
@@ -48,7 +47,7 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 	if lease, ok := l.leaseSnapshot(); ok {
 		hostname = lease.hostname
 		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
-			if sni := utils.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
+			if sni := types.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
 				if sni != lease.hostname && sni != lease.legacyHostname {
 					_ = conn.Close()
 					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
@@ -137,7 +136,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		if lease, ok := m.listener.leaseSnapshot(); ok {
 			if conn, ok := conn.(*tls.Conn); ok {
 				_, canonical := lease.tenantTLS.(*namespaceTLS)
-				canChannelBind = canonical && utils.NormalizeHostname(conn.ConnectionState().ServerName) == lease.hostname
+				canChannelBind = canonical && types.NormalizeHostname(conn.ConnectionState().ServerName) == lease.hostname
 			}
 		}
 	}

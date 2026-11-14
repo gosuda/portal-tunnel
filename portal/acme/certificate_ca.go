@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-acme/lego/v4/lego"
 
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // NormalizeCADirURL validates an optional ACME CA directory URL and defaults
@@ -55,7 +55,7 @@ func caDirectoryDigest(caDirURL string) string {
 }
 
 func (m *Manager) certificateFiles() (certFile, keyFile string) {
-	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return certificateFilePaths(m.cfg.KeyDir, lego.LEDirectoryProduction)
 	}
 	return certificateFilePaths(m.cfg.KeyDir, m.cfg.CADirURL)

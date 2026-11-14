@@ -22,7 +22,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/route53"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // Credential caches in the AWS SDK suppress caller cancellation. Restore it at
@@ -100,7 +100,7 @@ func challengeHostedZone(ctx context.Context, client *awsroute53.Client, cfg *ro
 	if cfg.HostedZoneID != "" {
 		return normalizeZoneID(cfg.HostedZoneID), nil
 	}
-	for _, candidate := range utils.DomainCandidates(name) {
+	for _, candidate := range types.DomainCandidates(name) {
 		input := &awsroute53.ListHostedZonesByNameInput{DNSName: aws.String(candidate)}
 		for {
 			out, err := client.ListHostedZonesByName(ctx, input)
@@ -109,11 +109,11 @@ func challengeHostedZone(ctx context.Context, client *awsroute53.Client, cfg *ro
 			}
 			for _, zone := range out.HostedZones {
 				private := zone.Config != nil && zone.Config.PrivateZone
-				if utils.NormalizeHostname(aws.ToString(zone.Name)) == candidate && private == cfg.PrivateZone {
+				if types.NormalizeHostname(aws.ToString(zone.Name)) == candidate && private == cfg.PrivateZone {
 					return normalizeZoneID(aws.ToString(zone.Id)), nil
 				}
 			}
-			if !out.IsTruncated || utils.NormalizeHostname(aws.ToString(out.NextDNSName)) != candidate {
+			if !out.IsTruncated || types.NormalizeHostname(aws.ToString(out.NextDNSName)) != candidate {
 				break
 			}
 			input.DNSName, input.HostedZoneId = out.NextDNSName, out.NextHostedZoneId

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func (s *Server) Wait() error {
@@ -73,7 +73,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
-	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
+	if baseDomain := types.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
 		return nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name

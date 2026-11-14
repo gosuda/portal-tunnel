@@ -25,7 +25,7 @@ func (r *leaseRegistry) tenantCertificateNames(record *leaseRecord) ([]string, e
 	if blocked, ok := r.blocked[current.ServiceKey()]; ok {
 		return nil, blocked.refusal
 	}
-	if current.Namespace != types.LocalTLSNamespaceV1 || !utils.IsLocalTLSHostname(current.CanonicalHostname, r.rootHostname) {
+	if current.Namespace != types.LocalTLSNamespaceV1 || !types.IsLocalTLSHostname(current.CanonicalHostname, r.rootHostname) {
 		return nil, errUnauthorized
 	}
 	if current.reverse == nil {
@@ -56,7 +56,7 @@ func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request,
 	}
 	// Free registration is not a public CA issuance grant. Local development
 	// certificates consume no public quota and retain automatic issuance.
-	if !utils.IsLocalRelayHost(s.identity.Name) && !slices.Contains(approved, record.ServiceKey()) {
+	if !types.IsLocalRelayHost(s.identity.Name) && !slices.Contains(approved, record.ServiceKey()) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTenantIssuanceNotApproved, "this service is not approved for automatic tenant certificate issuance")
 		return
 	}

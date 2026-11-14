@@ -12,6 +12,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -70,7 +71,7 @@ func parseRedirectTarget(portalURL string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
 	}
-	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
+	hasHTTPSOrigin := target.Scheme == "https" && types.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
 		return nil, errHTTPRedirectRequiresPortalURLAbsolute
 	}
@@ -127,11 +128,11 @@ func applyValidateServerConfigACME(cfg ServerConfig) (ServerConfig, error) {
 }
 
 func applyValidateServerConfigRelayURLs(cfg ServerConfig) (ServerConfig, error) {
-	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
+	selfRelayURL, err := types.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {
 		return ServerConfig{}, fmt.Errorf("normalize portal url: %w", err)
 	}
-	if utils.PortalRootHost(selfRelayURL) == "" {
+	if types.PortalRootHost(selfRelayURL) == "" {
 		return ServerConfig{}, errRootHostIsRequired
 	}
 	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
@@ -178,7 +179,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg = next
 	if cfg.TenantCertificates {
 		issuanceConfig := cfg.ACME
-		issuanceConfig.BaseDomain = utils.PortalRootHost(cfg.PortalURL)
+		issuanceConfig.BaseDomain = types.PortalRootHost(cfg.PortalURL)
 		if err := issuanceConfig.ValidateTenantIssuanceState(); err != nil {
 			return ServerConfig{}, fmt.Errorf("TENANT_CERTIFICATES requires usable TENANT_ISSUANCE_STATE_DIR: %w", err)
 		}
@@ -195,7 +196,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 // leaves SNI_PORT unset: the explicit PORTAL_URL port when the canonical
 // origin names one, otherwise 443.
 func DefaultSNIPort(portalURL string) int {
-	normalized, err := utils.NormalizeRelayURL(portalURL)
+	normalized, err := types.NormalizeRelayURL(portalURL)
 	if err != nil {
 		return 443
 	}

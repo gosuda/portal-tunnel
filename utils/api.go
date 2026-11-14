@@ -2,7 +2,6 @@ package utils
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,32 +70,6 @@ func RequireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	}
 	MethodNotAllowedError().Write(w)
 	return false
-}
-
-// PublicURLForPath resolves a public absolute URL from request forwarding headers.
-func PublicURLForPath(r *http.Request, path string) string {
-	if r == nil {
-		return ""
-	}
-	scheme, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
-	scheme = strings.ToLower(strings.TrimSpace(scheme))
-	if scheme == "" {
-		if r.TLS != nil {
-			scheme = "https"
-		} else {
-			scheme = "http"
-		}
-	}
-	host, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Host"), ",")
-	host = strings.TrimSpace(host)
-	host = cmp.Or(host, strings.TrimSpace(r.Host))
-	if host == "" {
-		return path
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return scheme + "://" + host + path
 }
 
 func ResolveAPIURL(baseURL *url.URL, path string) *url.URL {

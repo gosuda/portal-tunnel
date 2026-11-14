@@ -114,8 +114,8 @@ func (s *Server) apiHandler(base http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := utils.NormalizeHostWithoutPort(r.Host)
-		if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
+		host := types.NormalizeHostWithoutPort(r.Host)
+		if r.TLS != nil && r.TLS.ServerName != "" && types.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
 			s.serveCachedSite(w, r, host)
 			return
 		}
@@ -234,7 +234,7 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
-	host := utils.NormalizeHostname(announceURL.Hostname())
+	host := types.NormalizeHostname(announceURL.Hostname())
 	if s.rejectAnnounceSelf(w, desc, host) {
 		return
 	}
@@ -262,12 +262,12 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 
 func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescriptor, host string) bool {
 	cfg := s.config()
-	if selfURL, err := utils.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
+	if selfURL, err := types.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
 			fmt.Sprintf("self-announce rejected: %q matches receiving relay url", desc.APIHTTPSAddr))
 		return true
 	}
-	if host != "" && host == utils.NormalizeHostname(s.identity.Name) {
+	if host != "" && host == types.NormalizeHostname(s.identity.Name) {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
 			fmt.Sprintf("self-announce rejected: host %q matches receiving relay host", host))
 		return true

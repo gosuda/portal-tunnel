@@ -61,7 +61,7 @@ func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, n
 	var publicHostname string
 	if leaseIdentity.Name != "" {
 		var err error
-		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
+		publicHostname, err = types.LeaseHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
 			return "", "", err
 		}

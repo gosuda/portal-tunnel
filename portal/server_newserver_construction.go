@@ -64,7 +64,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	identityPath := filepath.Join(validated.StateDir, types.RelayIdentityFilename)
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(validated.PortalURL))
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, types.PortalRootHost(validated.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}

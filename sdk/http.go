@@ -129,7 +129,7 @@ func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Ser
 					r.TLS = &state.connection
 				}
 			}
-			if strictAuthority && r.TLS.ServerName != "" && utils.NormalizeHostWithoutPort(r.Host) != utils.NormalizeHostname(r.TLS.ServerName) {
+			if strictAuthority && r.TLS.ServerName != "" && types.NormalizeHostWithoutPort(r.Host) != types.NormalizeHostname(r.TLS.ServerName) {
 				http.Error(w, "authority does not match TLS server name", http.StatusMisdirectedRequest)
 				return
 			}

@@ -72,7 +72,7 @@ func ParseHTTPRoute(value string) (HTTPRoute, error) {
 	if len(fields) == 0 || len(fields) > 2 {
 		return HTTPRoute{}, fmt.Errorf("expected an upstream and optional payment amount")
 	}
-	route := HTTPRoute{Prefix: utils.NormalizeURLPath(prefix), Upstream: fields[0]}
+	route := HTTPRoute{Prefix: types.NormalizeURLPath(prefix), Upstream: fields[0]}
 	if len(fields) == 2 {
 		var err error
 		route, err = parseConfigRoutePayment(route, fields[1])

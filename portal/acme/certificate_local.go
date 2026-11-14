@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -101,7 +102,7 @@ func localDevelopmentCertificateReusable(cert *x509.Certificate, domains []strin
 }
 
 func localDevelopmentDomains(baseHost string) []string {
-	baseHost = utils.NormalizeBaseDomain(baseHost)
+	baseHost = types.NormalizeBaseDomain(baseHost)
 	domains := []string{"localhost", "*.localhost", "127.0.0.1", "::1"}
 	if baseHost != "" && baseHost != "localhost" {
 		domains = append(domains, baseHost)

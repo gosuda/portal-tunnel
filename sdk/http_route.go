@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk/staticsite"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -86,7 +87,7 @@ func (h *HTTPRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // It returns an empty prefix and nil handler when no route matches. The handler
 // applies the same upstream path rewriting as ServeHTTP.
 func (h *HTTPRoutes) Match(path string) (string, http.Handler) {
-	path = utils.NormalizeURLPath(path)
+	path = types.NormalizeURLPath(path)
 	for _, route := range h.routes {
 		if route.prefix != "/" && path != route.prefix && !strings.HasPrefix(path, route.prefix+"/") {
 			continue
@@ -115,7 +116,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	if !strings.HasPrefix(prefix, "/") {
 		return nil, fmt.Errorf("http route prefix %q must start with /", prefix)
 	}
-	prefix = utils.NormalizeURLPath(prefix)
+	prefix = types.NormalizeURLPath(prefix)
 
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
 		return &httpRoute{
@@ -148,13 +149,13 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 		return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
 	}
 	upstream.Fragment = ""
-	upstream.Path = utils.NormalizeURLPath(upstream.Path)
+	upstream.Path = types.NormalizeURLPath(upstream.Path)
 
 	return &httpRoute{
 		prefix:         prefix,
 		upstream:       upstream,
 		upstreamPath:   upstream.Path,
-		upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
+		upstreamDomain: types.NormalizeHostname(upstream.Hostname()),
 	}, nil
 }
 
@@ -176,7 +177,7 @@ func (r *httpRoute) baseHandler() http.Handler {
 }
 
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
-	path := utils.NormalizeURLPath(pr.In.URL.Path)
+	path := types.NormalizeURLPath(pr.In.URL.Path)
 	rawPath := pr.In.URL.RawPath
 	if r.prefix != "/" {
 		switch path {
@@ -235,7 +236,7 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 }
 
 func (r *httpRoute) mapPublicPath(raw string) string {
-	raw = utils.NormalizeURLPath(raw)
+	raw = types.NormalizeURLPath(raw)
 	if r.prefix != "/" && (raw == r.prefix || strings.HasPrefix(raw, r.prefix+"/")) {
 		return raw
 	}
@@ -306,7 +307,7 @@ func (r *httpRoute) rewriteProxyCookies(header http.Header, publicHost string) {
 	if host, port, err := net.SplitHostPort(publicDomain); err == nil && port != "" {
 		publicDomain = host
 	}
-	publicDomain = utils.NormalizeHostname(strings.Trim(publicDomain, "[]"))
+	publicDomain = types.NormalizeHostname(strings.Trim(publicDomain, "[]"))
 	header.Del("Set-Cookie")
 	for _, value := range values {
 		header.Add("Set-Cookie", r.rewriteProxyCookiesValue(value, publicDomain))
@@ -325,9 +326,9 @@ func (r *httpRoute) rewriteProxyCookiesValue(value, publicDomain string) string 
 			changed = true
 		}
 	}
-	domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
+	domain := types.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
 	rewriteDomain := domain != "" && domain != publicDomain &&
-		(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain))
+		(domain == r.upstreamDomain || types.IsLocalRelayHost(domain))
 	if rewriteDomain {
 		cookie.Domain = ""
 		changed = true

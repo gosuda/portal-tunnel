@@ -230,9 +230,9 @@ func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registe
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, errRelayReturnedMismatchedLeaseIdentity
 	}
-	resp.Hostname = utils.NormalizeHostname(resp.Hostname)
-	resp.CanonicalHostname = utils.NormalizeHostname(resp.CanonicalHostname)
-	resp.LegacyCanonicalHostname = utils.NormalizeHostname(resp.LegacyCanonicalHostname)
+	resp.Hostname = types.NormalizeHostname(resp.Hostname)
+	resp.CanonicalHostname = types.NormalizeHostname(resp.CanonicalHostname)
+	resp.LegacyCanonicalHostname = types.NormalizeHostname(resp.LegacyCanonicalHostname)
 	if resp.Namespace != registerReq.Namespace {
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, fmt.Errorf("%w: unexpected hostname namespace", errRelayIncompatible)
@@ -267,7 +267,7 @@ func aliasHostnameMatches(hostname, name, canonicalHostname string) bool {
 	if hostname == "" {
 		return true
 	}
-	label, err := utils.NormalizeDNSLabel(name)
+	label, err := types.NormalizeDNSLabel(name)
 	if err != nil || label == "" {
 		return false
 	}

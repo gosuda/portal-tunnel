@@ -10,7 +10,7 @@ import (
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func upsertTXTRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, name, value string) error {
@@ -76,7 +76,7 @@ func upsertRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, 
 		return errHostedZoneIDIsRequired
 	}
 
-	fqdn := utils.NormalizeHostname(name)
+	fqdn := types.NormalizeHostname(name)
 	if !strings.HasSuffix(fqdn, ".") {
 		fqdn += "."
 	}
@@ -122,7 +122,7 @@ func getRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneID, 
 	if client == nil {
 		return nil, errRoute53ClientIsNil
 	}
-	fqdn := utils.NormalizeHostname(name)
+	fqdn := types.NormalizeHostname(name)
 	if !strings.HasSuffix(fqdn, ".") {
 		fqdn += "."
 	}
