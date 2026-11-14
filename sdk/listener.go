@@ -23,7 +23,6 @@ import (
 
 	"github.com/gosuda/keyless_tls/relay/l4"
 	"github.com/quic-go/quic-go"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
@@ -423,11 +422,26 @@ func (l *listener) runCloseCleanup() error {
 		l.cancel()
 	}
 	lease := l.clearLease("")
-	l.drainCloseAccepted()
+drainLoop:
+	for {
+		select {
+		case conn := <-l.accepted:
+			if conn != nil {
+				_ = conn.Close()
+			}
+		default:
+			break drainLoop
+		}
+	}
 	if l.datagram != nil {
 		l.datagram.Close("listener closed")
 	}
-	unregisterErr := l.unregisterCloseLease(lease)
+	var unregisterErr error
+	if lease != nil && lease.hostname != "" && l.identity.Key() != "" && lease.accessToken != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		unregisterErr = l.api.unregister(ctx, lease.accessToken)
+		cancel()
+	}
 	var tenantErr error
 	if lease != nil && lease.tenantTLS != nil {
 		tenantErr = lease.tenantTLS.Close()
@@ -437,28 +451,6 @@ func (l *listener) runCloseCleanup() error {
 		l.api.resetTransport()
 	}
 	return errors.Join(unregisterErr, tenantErr)
-}
-
-func (l *listener) drainCloseAccepted() {
-	for {
-		select {
-		case conn := <-l.accepted:
-			if conn != nil {
-				_ = conn.Close()
-			}
-		default:
-			return
-		}
-	}
-}
-
-func (l *listener) unregisterCloseLease(lease *listenerSnapshot) error {
-	if lease != nil && lease.hostname != "" && l.identity.Key() != "" && lease.accessToken != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return l.api.unregister(ctx, lease.accessToken)
-	}
-	return nil
 }
 
 type listenerSnapshot struct {
@@ -643,22 +635,15 @@ func (l *listener) runStaticCache(ctx context.Context) {
 			return
 		}
 		if err := syncer.Sync(ctx, l.api.httpClient(), lease.accessToken); err != nil && ctx.Err() == nil {
-			if l.runStaticCacheSync(ctx, err) {
-				return
+			log.Warn().Err(err).Str("relay_url", l.api.relayURL.String()).Msg("static cache population skipped; origin tunnel remains available")
+			if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok && (apiErr.StatusCode == http.StatusServiceUnavailable || apiErr.IsRateLimited()) {
+				delay := cmp.Or(apiErr.RetryAfter, time.Second)
+				if !utils.SleepOrDone(ctx, delay) {
+					return
+				}
 			}
 		}
 	}
-}
-
-func (l *listener) runStaticCacheSync(ctx context.Context, syncErr error) bool {
-	log.Warn().Err(syncErr).Str("relay_url", l.api.relayURL.String()).Msg("static cache population skipped; origin tunnel remains available")
-	if apiErr, ok := errors.AsType[*types.APIRequestError](syncErr); ok && (apiErr.StatusCode == http.StatusServiceUnavailable || apiErr.IsRateLimited()) {
-		delay := cmp.Or(apiErr.RetryAfter, time.Second)
-		if !utils.SleepOrDone(ctx, delay) {
-			return true
-		}
-	}
-	return false
 }
 
 func (l *listener) runLease(ctx context.Context) error {
@@ -860,24 +845,20 @@ func (l *listener) validateReverseEndpointTransport(endpoint types.ReverseEndpoi
 		if alternate {
 			return fmt.Errorf("relay reverse endpoint %s does not match the relay URL", endpoint.URL)
 		}
-		return l.validateDirectReverseEndpoint(endpoint)
+		if endpoint.Gateway != nil {
+			return errRelayReturnedGatewayMetadataDirectReverse
+		}
+		if l.overlay {
+			l.warnOverlayDirect.Do(func() {
+				log.Warn().
+					Str("relay_url", l.api.relayURL.String()).
+					Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
+			})
+		}
+		return nil
 	}
 
 	return l.validateOverlayReverseEndpoint(endpoint)
-}
-
-func (l *listener) validateDirectReverseEndpoint(endpoint types.ReverseEndpoint) error {
-	if endpoint.Gateway != nil {
-		return errRelayReturnedGatewayMetadataDirectReverse
-	}
-	if l.overlay {
-		l.warnOverlayDirect.Do(func() {
-			log.Warn().
-				Str("relay_url", l.api.relayURL.String()).
-				Msg("overlay requested but the relay serves a direct reverse endpoint; continuing without overlay forwarding")
-		})
-	}
-	return nil
 }
 
 func (l *listener) validateOverlayReverseEndpoint(endpoint types.ReverseEndpoint) error {
@@ -1087,21 +1068,6 @@ func (l *listener) renewLease(ctx context.Context) error {
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	resp, err := l.requestLeaseRenewal(requestCtx, lease)
-	if err != nil {
-		return err
-	}
-
-	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
-		return err
-	}
-	if l.lease == nil {
-		return errLeaseRefreshRequired
-	}
-	return l.applyRenewedLease(ctx, lease, resp)
-}
-
-func (l *listener) requestLeaseRenewal(requestCtx context.Context, lease listenerSnapshot) (types.RenewResponse, error) {
 	var localTLSNotAfter time.Time
 	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && endpoint.local.Ready() {
 		localTLSNotAfter = endpoint.local.CertificateExpiry()
@@ -1116,11 +1082,18 @@ func (l *listener) requestLeaseRenewal(requestCtx context.Context, lease listene
 	})
 	if err != nil {
 		if staleLeaseError(err) {
-			return types.RenewResponse{}, errLeaseRefreshRequired
+			return errLeaseRefreshRequired
 		}
-		return types.RenewResponse{}, err
+		return err
 	}
-	return resp, nil
+
+	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
+		return err
+	}
+	if l.lease == nil {
+		return errLeaseRefreshRequired
+	}
+	return l.applyRenewedLease(ctx, lease, resp)
 }
 
 func (l *listener) applyRenewedLease(ctx context.Context, lease listenerSnapshot, resp types.RenewResponse) error {
@@ -1332,14 +1305,18 @@ func (l *listener) waitRetry(ctx context.Context, operation string, err error, r
 		Str("address", l.identity.Address).
 		Logger()
 	if reverseSessionSlot > 0 {
-		return waitRetryLogAndSleep(ctx, logger.With().Int("reverse_session_slot", reverseSessionSlot).Logger(), err, retries, retryWait)
+		logger = logger.With().Int("reverse_session_slot", reverseSessionSlot).Logger()
 	}
-	return waitRetryLogAndSleep(ctx, logger, err, retries, retryWait)
-}
 
-func waitRetryLogAndSleep(ctx context.Context, logger zerolog.Logger, err error, retries int, retryWait time.Duration) bool {
 	if retries == 1 {
-		if transport := waitRetryExhaustedTransport(err); transport != "" {
+		var transport string
+		switch {
+		case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortExhausted}):
+			transport = "tcp"
+		case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUDPPortExhausted}):
+			transport = "udp"
+		}
+		if transport != "" {
 			logger.Warn().
 				Err(err).
 				Str("transport", transport).
@@ -1361,17 +1338,6 @@ func waitRetryLogAndSleep(ctx context.Context, logger zerolog.Logger, err error,
 		Msg("operation failed; retrying")
 
 	return utils.SleepOrDone(ctx, retryWait)
-}
-
-func waitRetryExhaustedTransport(err error) string {
-	switch {
-	case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTCPPortExhausted}):
-		return "tcp"
-	case errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeUDPPortExhausted}):
-		return "udp"
-	default:
-		return ""
-	}
 }
 
 type bufferedConn struct {
