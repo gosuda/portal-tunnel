@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0
+	filippo.io/edwards25519 v1.2.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.14
@@ -20,7 +21,7 @@ require (
 	github.com/go-acme/lego/v4 v4.34.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/gosuda/keyless_tls v0.0.5
-	github.com/gosuda/x402-facilitator v0.0.6-0.20260927130422-df0de5fd1d71
+	github.com/gosuda/x402-facilitator v0.0.6-0.20261103015628-ea89b985eda9
 	github.com/hashicorp/yamux v0.1.2
 	github.com/hetznercloud/hcloud-go/v2 v2.40.0
 	github.com/miekg/dns v1.1.72
@@ -46,7 +47,6 @@ require (
 require (
 	cloud.google.com/go/auth v0.20.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/PuerkitoBio/purell v1.1.1 // indirect
 	github.com/PuerkitoBio/urlesc v0.0.0-20170810143723-de5bf2ad4578 // indirect
