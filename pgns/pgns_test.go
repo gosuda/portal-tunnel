@@ -411,12 +411,19 @@ func TestValidateTransitionAllTxTypesAndAttacks(t *testing.T) {
 	fqdn := "myapp.app." + testZone
 
 	// 1. Create with valid PoW passes; low PoW fails.
-	createTx := makeSignedCreateTx(t, fqdn, hot, now, coldHash, 8) // check failure below real 24 first via VerifyPoW test? Wait: real ValidateTransition enforces D=24!
-	// Wait: mining D=24 in Go test takes ~2^24 hashes (~1s). Let's verify PoW=24 rejects low nonce and mine/cache ONE frozen D=24 create tx if needed, OR test D=18 *.id (250k hashes ~10ms) + verify Reclaim/Create transitions cleanly!
-	// Even better: D=18 takes ~5ms, and let's mine one D=24 tx in Test (takes ~0.5-1.5s) or use exact test vector? Mining once in unit test takes <1s on Go sha256! Wait — let's check both D=18 (*.id) and D=24 (*.app)!
-	badCreate := createTx
-	if err := ValidateTransition(nil, badCreate, now, testZone); !errors.Is(err, ErrInvalidPoW) && !VerifyPoW(TxTypeCreate, func() []byte { b, _ := badCreate.Leaf.MarshalCanonical(); return b }(), badCreate.PoWNonce, PoWDifficultyApp) {
-		// expected failure when nonce doesn't reach 24 bits!
+	badCreate := makeSignedCreateTx(t, fqdn, hot, now, coldHash, 8)
+	rawBadLeaf, err := badCreate.Leaf.MarshalCanonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for VerifyPoW(TxTypeCreate, rawBadLeaf, badCreate.PoWNonce, PoWDifficultyApp) {
+		badCreate.PoWNonce++
+		if err := badCreate.SignOwner(hot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ValidateTransition(nil, badCreate, now, testZone); !errors.Is(err, ErrInvalidPoW) {
+		t.Fatalf("expected ErrInvalidPoW for sub-threshold Create PoW, got %v", err)
 	}
 
 	// Self-certifying *.id Create (PoW D=18, very fast!).
