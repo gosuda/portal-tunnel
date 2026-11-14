@@ -1,7 +1,3 @@
-// Package embedded serves the relay base domain from an authoritative DNS
-// server running inside the relay process, removing the need for external
-// DNS provider APIs. The relay becomes authoritative for its delegated
-// namespace after a one-time NS delegation at the parent zone.
 package embedded
 
 import (
@@ -12,18 +8,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/go-acme/lego/v4/challenge"
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/utils"
+	"github.com/miekg/dns"
+	"github.com/rs/zerolog/log"
+	"maps"
 	"net"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/miekg/dns"
-	"github.com/rs/zerolog/log"
-
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -420,4 +417,241 @@ func (p *Provider) verifyDelegatedPath(ip net.IP) {
 		Str("expected", ip.String()).
 		Dur("elapsed", elapsed).
 		Msg("dns self-check resolved a different address")
+}
+func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
+	if p == nil {
+		return nil, errEmbeddedDNSProviderIsNil
+	}
+	return dnsrecord.NewChallengeProvider(ctx, dns01.DefaultPropagationTimeout, dns01.DefaultPollingInterval, p.presentTXT), nil
+}
+
+func (p *Provider) presentTXT(ctx context.Context, fqdn, value string) (dnsrecord.Cleanup, error) {
+	name, err := p.zoneHostname(fqdn)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if slices.Contains(p.txt[name], value) {
+		return nil, nil
+	}
+	p.txt[name] = append(p.txt[name], value)
+	p.bumpSerialLocked()
+	return func(ctx context.Context) error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		values := p.txt[name]
+		idx := slices.Index(values, value)
+		if idx < 0 {
+			return nil
+		}
+		values = slices.Delete(values, idx, idx+1)
+		if len(values) == 0 {
+			delete(p.txt, name)
+		} else {
+			p.txt[name] = values
+		}
+		p.bumpSerialLocked()
+		return nil
+	}, nil
+}
+
+// ServeDNS answers from one signed zone snapshot; it never performs recursion.
+func (p *Provider) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Compress = true
+	question := dns.Question{Name: ".", Qtype: dns.TypeNone}
+	wildcard := false
+	if len(r.Question) == 1 {
+		question = r.Question[0]
+	}
+	if r.Opcode != dns.OpcodeQuery {
+		m.Rcode = dns.RcodeNotImplemented
+	} else if len(r.Question) != 1 {
+		m.Rcode = dns.RcodeFormatError
+	} else {
+		wildcard = p.answerQuery(m, r, question)
+	}
+	p.writeResponse(w, r, m)
+	event := log.Debug()
+	if m.Rcode == dns.RcodeServerFailure {
+		event = log.Warn()
+	}
+	event.
+		Str("qname", question.Name).
+		Str("qtype", dns.TypeToString[question.Qtype]).
+		Str("rcode", dns.RcodeToString[m.Rcode]).
+		Int("answers", len(m.Answer)).
+		Bool("wildcard", wildcard).
+		Str("remote", w.RemoteAddr().String()).
+		Str("transport", w.LocalAddr().Network()).
+		Msg("embedded dns query")
+}
+
+func (p *Provider) answerQuery(m *dns.Msg, r *dns.Msg, question dns.Question) bool {
+	name := dns.CanonicalName(question.Name)
+	if question.Qclass != dns.ClassINET || !dns.IsSubDomain(p.zone, name) {
+		m.Rcode = dns.RcodeRefused
+		return false
+	}
+	if question.Qtype == dns.TypeANY {
+		m.Authoritative = true
+		m.Rcode = dns.RcodeNotImplemented
+		return false
+	}
+	z, err := p.signedZone(time.Now())
+	if err != nil {
+		m.Rcode = dns.RcodeServerFailure
+		log.Error().Err(err).Msg("sign embedded dns zone")
+		return false
+	}
+	m.Authoritative = true
+	edns := r.IsEdns0()
+	return p.answer(m, z, name, question.Qtype, edns != nil && edns.Do())
+}
+
+func (p *Provider) answer(m *dns.Msg, z *signedZone, name string, qtype uint16, do bool) bool {
+	source, sets, exists, nextCloser := p.answerResolveSource(z, name)
+	if exists {
+		if qtype == dns.TypeRRSIG {
+			answerRRSIGSets(m, sets, name)
+		} else {
+			m.Answer = appendRRSet(m.Answer, sets[qtype], name, do)
+		}
+	} else if len(z.records["*."+p.zone][dns.TypeA].records) != 0 || len(z.records["*."+p.zone][dns.TypeAAAA].records) != 0 {
+		m.Rcode = dns.RcodeNameError
+	} else {
+		m.Rcode = dns.RcodeRefused
+		return false
+	}
+	if len(m.Answer) == 0 {
+		m.Ns = appendRRSet(m.Ns, z.records[p.zone][dns.TypeSOA], "", do)
+	}
+	if do {
+		p.answerProofs(m, z, source, nextCloser)
+	}
+	if qtype == dns.TypeNS && name == p.zone {
+		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeA], "", do)
+		m.Extra = appendRRSet(m.Extra, z.records[p.nsName][dns.TypeAAAA], "", do)
+	}
+	return exists && source != name
+}
+
+func (p *Provider) answerResolveSource(z *signedZone, name string) (string, map[uint16]signedRRSet, bool, string) {
+	sets, exists := z.records[name]
+	if exists {
+		return name, sets, true, ""
+	}
+	closest := name
+	var nextCloser string
+	for z.records[closest] == nil {
+		nextCloser = closest
+		closest = parentName(closest)
+	}
+	source := "*." + closest
+	sets, exists = z.records[source]
+	return source, sets, exists, nextCloser
+}
+
+func answerRRSIGSets(m *dns.Msg, sets map[uint16]signedRRSet, name string) {
+	types := slices.Collect(maps.Keys(sets))
+	slices.Sort(types)
+	for _, typ := range types {
+		sig := dns.Copy(sets[typ].signature)
+		sig.Header().Name = name
+		m.Answer = append(m.Answer, sig)
+	}
+}
+
+func (p *Provider) answerProofs(m *dns.Msg, z *signedZone, source, nextCloser string) {
+	proofs := make(map[string]bool)
+	addProof := func(set signedRRSet) {
+		owner := set.records[0].Header().Name
+		if !proofs[owner] {
+			m.Ns = appendRRSet(m.Ns, set, "", true)
+			proofs[owner] = true
+		}
+	}
+	if nextCloser != "" {
+		addProof(z.denial(nextCloser))
+	}
+	if len(m.Answer) == 0 {
+		addProof(z.denial(source))
+	}
+}
+
+func (p *Provider) writeResponse(w dns.ResponseWriter, query, m *dns.Msg) {
+	size := dns.MaxMsgSize
+	if strings.HasPrefix(w.LocalAddr().Network(), "udp") {
+		size = udpResponseSize(query)
+	}
+	if edns := query.IsEdns0(); edns != nil {
+		if edns.Version() != 0 {
+			m.Rcode = dns.RcodeBadVers
+			m.Answer, m.Ns, m.Extra = nil, nil, nil
+		}
+		m.SetEdns0(uint16(udpResponseSize(query)), edns.Do())
+	}
+	m.Truncate(size)
+	if err := w.WriteMsg(m); err != nil {
+		log.Debug().Err(err).Msg("write embedded dns response")
+	}
+}
+
+func udpResponseSize(query *dns.Msg) int {
+	size := dns.MinMsgSize
+	if edns := query.IsEdns0(); edns != nil {
+		if advertised := int(edns.UDPSize()); advertised > size {
+			size = advertised
+		}
+	}
+	return size
+}
+
+func (p *Provider) aRR(name string, ip net.IP) *dns.A {
+	return &dns.A{
+		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: recordTTL},
+		A:   append(net.IP(nil), ip...),
+	}
+}
+
+func (p *Provider) aaaaRR(name string, ip net.IP) *dns.AAAA {
+	return &dns.AAAA{
+		Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: recordTTL},
+		AAAA: append(net.IP(nil), ip...),
+	}
+}
+
+func (p *Provider) nsRR() *dns.NS {
+	return &dns.NS{
+		Hdr: dns.RR_Header{Name: p.zone, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: recordTTL},
+		Ns:  p.nsName,
+	}
+}
+
+func (p *Provider) soaRRLocked() *dns.SOA {
+	return &dns.SOA{
+		Hdr:     dns.RR_Header{Name: p.zone, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: recordTTL},
+		Ns:      p.nsName,
+		Mbox:    "hostmaster." + p.zone,
+		Serial:  p.serial,
+		Refresh: soaRefresh,
+		Retry:   soaRetry,
+		Expire:  soaExpire,
+		Minttl:  recordTTL,
+	}
+}
+
+func (p *Provider) txtRR(name, value string) *dns.TXT {
+	return &dns.TXT{
+		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: recordTTL},
+		Txt: []string{value},
+	}
 }
