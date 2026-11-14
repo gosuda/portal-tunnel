@@ -653,7 +653,19 @@ func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
 		return
 	}
 	authenticated = true
-	s.noteBackhaulConnected(conn, lease)
+	sourceAddr := netip.Addr{}
+	if remote := conn.RemoteAddr(); remote != nil {
+		if addrPort, err := netip.ParseAddrPort(remote.String()); err == nil {
+			sourceAddr = addrPort.Addr().Unmap()
+		}
+	}
+	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
+	log.Info().
+		Str("component", "quic-backhaul-listener").
+		Str("address", lease.Address).
+		Str("lease_name", lease.Name).
+		Str("remote_addr", conn.RemoteAddr().String()).
+		Msg("quic backhaul connected")
 }
 
 func (s *Server) haltRelayTransports(ctx context.Context) []*leaseRecord {
@@ -1033,21 +1045,6 @@ func (s *Server) RelayIdentity() identity.RelayIdentity {
 	return s.identity
 }
 
-func (s *Server) rejectBackhaulLease(control *transport.QUICBackhaulControl, admitErr error) {
-	code, reason := types.APIErrorCodeInvalidRequest, "invalid control message"
-	switch {
-	case errors.Is(admitErr, errLeaseNotFound):
-		code, reason = types.APIErrorCodeLeaseNotFound, "lease not found"
-	case errors.Is(admitErr, errLeaseRejected), errors.Is(admitErr, errLeaseDenied):
-		code, reason = types.APIErrorCodeLeaseRejected, "lease rejected"
-	case errors.Is(admitErr, errUnauthorized):
-		code, reason = types.APIErrorCodeUnauthorized, "unauthorized"
-	case errors.Is(admitErr, errTransportMismatch):
-		code, reason = types.APIErrorCodeTransportMismatch, "transport mismatch"
-	}
-	_ = control.Reject(code, reason)
-}
-
 func (s *Server) admitBackhaulLease(ctx context.Context, conn *quic.Conn) (*leaseRecord, bool) {
 	control, err := transport.AcceptQUICBackhaulControl(ctx, conn)
 	if err != nil {
@@ -1056,7 +1053,18 @@ func (s *Server) admitBackhaulLease(ctx context.Context, conn *quic.Conn) (*leas
 	}
 	lease, err := s.registry.admitLeaseByToken(control.AccessToken, true)
 	if err != nil {
-		s.rejectBackhaulLease(control, err)
+		code, reason := types.APIErrorCodeInvalidRequest, "invalid control message"
+		switch {
+		case errors.Is(err, errLeaseNotFound):
+			code, reason = types.APIErrorCodeLeaseNotFound, "lease not found"
+		case errors.Is(err, errLeaseRejected), errors.Is(err, errLeaseDenied):
+			code, reason = types.APIErrorCodeLeaseRejected, "lease rejected"
+		case errors.Is(err, errUnauthorized):
+			code, reason = types.APIErrorCodeUnauthorized, "unauthorized"
+		case errors.Is(err, errTransportMismatch):
+			code, reason = types.APIErrorCodeTransportMismatch, "transport mismatch"
+		}
+		_ = control.Reject(code, reason)
 		return nil, false
 	}
 	if err := lease.datagram.BindBackhaul(conn); err != nil {
@@ -1068,22 +1076,6 @@ func (s *Server) admitBackhaulLease(ctx context.Context, conn *quic.Conn) (*leas
 		return nil, false
 	}
 	return lease, true
-}
-
-func (s *Server) noteBackhaulConnected(conn *quic.Conn, lease *leaseRecord) {
-	sourceAddr := netip.Addr{}
-	if remote := conn.RemoteAddr(); remote != nil {
-		if addrPort, err := netip.ParseAddrPort(remote.String()); err == nil {
-			sourceAddr = addrPort.Addr().Unmap()
-		}
-	}
-	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
-	log.Info().
-		Str("component", "quic-backhaul-listener").
-		Str("address", lease.Address).
-		Str("lease_name", lease.Name).
-		Str("remote_addr", conn.RemoteAddr().String()).
-		Msg("quic backhaul connected")
 }
 
 type backhaulPendingSources struct {
@@ -1350,47 +1342,6 @@ func (s *Server) newQUICBackhaulListener(apiTLS *tls.Config) (*quic.Listener, er
 	return transport.ListenQUICBackhaul(s.config().SNIListenAddr, apiTLS.GetCertificate)
 }
 
-func (s *Server) dispatchRunQUICBackhaulListener(ctx context.Context, conn *quic.Conn, pending chan struct{}, sources *backhaulPendingSources, handlers *sync.WaitGroup) {
-	if !sources.acquire(conn.RemoteAddr()) {
-		_ = conn.CloseWithError(1, "backhaul authentication busy")
-		return
-	}
-	select {
-	case pending <- struct{}{}:
-		remote := conn.RemoteAddr()
-		authCtx, authCancel := context.WithTimeout(ctx, quicBackhaulAuthTimeout)
-		handlers.Go(func() {
-			defer authCancel()
-			defer sources.release(remote)
-			defer func() { <-pending }()
-			s.handleQUICBackhaulConn(authCtx, conn)
-		})
-	default:
-		sources.release(conn.RemoteAddr())
-		_ = conn.CloseWithError(1, "backhaul authentication busy")
-	}
-}
-
-func quicBackhaulListenerStopped(ctx context.Context, err error) bool {
-	if err == nil {
-		return false
-	}
-	return ctx.Err() != nil || errors.Is(err, quic.ErrServerClosed) || errors.Is(err, net.ErrClosed)
-}
-
-func (s *Server) pollRunQUICBackhaulListener(ctx context.Context, pending chan struct{}, sources *backhaulPendingSources, handlers *sync.WaitGroup) error {
-	for {
-		conn, err := s.quicBackhaul.Accept(ctx)
-		if quicBackhaulListenerStopped(ctx, err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		s.dispatchRunQUICBackhaulListener(ctx, conn, pending, sources, handlers)
-	}
-}
-
 func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
 	if s.quicBackhaul == nil {
 		return nil
@@ -1403,7 +1354,34 @@ func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
 	}()
 	pending := make(chan struct{}, quicBackhaulPendingLimit)
 	sources := newBackhaulPendingSources()
-	return s.pollRunQUICBackhaulListener(ctx, pending, sources, &handlers)
+
+	for {
+		conn, err := s.quicBackhaul.Accept(ctx)
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, quic.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		if !sources.acquire(conn.RemoteAddr()) {
+			_ = conn.CloseWithError(1, "backhaul authentication busy")
+			continue
+		}
+		select {
+		case pending <- struct{}{}:
+			remote := conn.RemoteAddr()
+			authCtx, authCancel := context.WithTimeout(ctx, quicBackhaulAuthTimeout)
+			handlers.Go(func() {
+				defer authCancel()
+				defer sources.release(remote)
+				defer func() { <-pending }()
+				s.handleQUICBackhaulConn(authCtx, conn)
+			})
+		default:
+			sources.release(conn.RemoteAddr())
+			_ = conn.CloseWithError(1, "backhaul authentication busy")
+		}
+	}
 }
 
 func relayDiscoveryRefreshStopped(ctx context.Context, err error) bool {
