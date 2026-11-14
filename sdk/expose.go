@@ -421,7 +421,8 @@ func validateExposeConfig(cfg options) error {
 	if err := cfg.Metadata.Validate(); err != nil {
 		return err
 	}
-	if cfg.Replica && (cfg.UDPEnabled || cfg.TCPEnabled || cfg.Overlay || cfg.Cache != nil) {
+	hasExclusiveTransport := cfg.UDPEnabled || cfg.TCPEnabled || cfg.Overlay || cfg.Cache != nil
+	if cfg.Replica && hasExclusiveTransport {
 		return errReplicaRequiresDirectHTTP
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM

@@ -922,7 +922,8 @@ func clampRegisterStartedAt(requested time.Time, issuedAt time.Time) time.Time {
 
 func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, served *acme.TLSMaterial) (*leaseRecord, string, error) {
 	leaseIdentity := req.Identity
-	if req.Replica && (req.UDPEnabled || req.TCPEnabled || req.Cache || req.Overlay) {
+	hasExclusiveTransport := req.UDPEnabled || req.TCPEnabled || req.Cache || req.Overlay
+	if req.Replica && hasExclusiveTransport {
 		return nil, "", errReplicaMode
 	}
 	if err := req.Metadata.Validate(); err != nil {
