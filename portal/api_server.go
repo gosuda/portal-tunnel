@@ -281,11 +281,14 @@ func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescr
 // facilitator metadata is owned by the application that mounts the
 // facilitator (cmd/relay-server); this report stays x402-blind.
 func (s *Server) DomainReport() types.DomainResponse {
+	issuance := s.config().TenantCertificates && s.acmeManager.TenantIssuanceConfigured()
 	return types.DomainResponse{
-		Cache:           s.registry.cache.Limits(),
-		ProtocolVersion: types.SDKVersion,
-		ReleaseVersion:  types.ReleaseVersion,
-		ENS:             s.acmeManager.ENSStatus(),
+		TenantCertificateIssuance: &issuance,
+		Namespaces:                []string{types.LocalTLSNamespaceV1},
+		Cache:                     s.registry.cache.Limits(),
+		ProtocolVersion:           types.SDKVersion,
+		ReleaseVersion:            types.ReleaseVersion,
+		ENS:                       s.acmeManager.ENSStatus(),
 	}
 }
 

@@ -70,9 +70,17 @@ type RegisterRequest struct {
 	ReportedIP    string `json:"reported_ip,omitempty"`
 }
 
+// LocalTLSNamespaceV1 is explicitly negotiated before issuing two-label tenant
+// hostnames. An absent namespace retains the legacy URL and TLS contract.
+const LocalTLSNamespaceV1 = "local-tls-v1"
+
+// UnnamedServiceLabel is reserved only in the new Local TLS namespace.
+const UnnamedServiceLabel = "default"
+
 type RegisterChallengeRequest struct {
-	Cache    bool `json:"cache,omitempty"`
-	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	Namespace string `json:"namespace,omitempty"`
+	Cache     bool   `json:"cache,omitempty"`
+	CacheTTL  int    `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
 	// AllowCanonicalFallback permits registration to continue without the friendly alias.
 	AllowCanonicalFallback bool          `json:"allow_canonical_fallback,omitempty"`
 	Identity               Identity      `json:"identity"`
@@ -101,16 +109,18 @@ type ReverseEndpoint struct {
 }
 
 type RegisterResponse struct {
-	Identity          Identity        `json:"identity"`
-	Hostname          string          `json:"hostname"`
-	CanonicalHostname string          `json:"canonical_hostname"`
-	ExpiresAt         time.Time       `json:"expires_at"`
-	AccessToken       string          `json:"access_token"`
-	ReverseEndpoint   ReverseEndpoint `json:"reverse_endpoint"`
-	UDPAddr           string          `json:"udp_addr,omitempty"`
-	UDPEnabled        bool            `json:"udp_enabled,omitempty"`
-	TCPAddr           string          `json:"tcp_addr,omitempty"`
-	TCPEnabled        bool            `json:"tcp_enabled,omitempty"`
+	Namespace               string          `json:"namespace,omitempty"`
+	LegacyCanonicalHostname string          `json:"legacy_canonical_hostname,omitempty"`
+	Identity                Identity        `json:"identity"`
+	Hostname                string          `json:"hostname"`
+	CanonicalHostname       string          `json:"canonical_hostname"`
+	ExpiresAt               time.Time       `json:"expires_at"`
+	AccessToken             string          `json:"access_token"`
+	ReverseEndpoint         ReverseEndpoint `json:"reverse_endpoint"`
+	UDPAddr                 string          `json:"udp_addr,omitempty"`
+	UDPEnabled              bool            `json:"udp_enabled,omitempty"`
+	TCPAddr                 string          `json:"tcp_addr,omitempty"`
+	TCPEnabled              bool            `json:"tcp_enabled,omitempty"`
 }
 
 // MaxDiscoveryResponseBytes is the decoded-byte budget for both discovery
@@ -158,10 +168,13 @@ type DiscoveryAnnounceResponse struct {
 }
 
 type RenewRequest struct {
-	AccessToken string        `json:"access_token"`
-	TTL         int           `json:"ttl,omitempty"` // Non-positive values default to 120 seconds; maximum 600.
-	ReportedIP  string        `json:"reported_ip,omitempty"`
-	Metadata    LeaseMetadata `json:"metadata"`
+	// LocalTLSNotAfter reports the installed canonical leaf's validity bound.
+	// Zero withdraws canonical readiness; it never changes routing or TLS policy.
+	LocalTLSNotAfter time.Time     `json:"local_tls_not_after,omitzero"`
+	AccessToken      string        `json:"access_token"`
+	TTL              int           `json:"ttl,omitempty"` // Non-positive values default to 120 seconds; maximum 600.
+	ReportedIP       string        `json:"reported_ip,omitempty"`
+	Metadata         LeaseMetadata `json:"metadata"`
 	// RepinsChain says the tenant re-pins the relay certificate chain by itself.
 	// A relay asks a lease without it to register again when it serves a
 	// certificate the chain pinned at registration no longer verifies. Relays
@@ -185,10 +198,14 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	Cache           *StaticCacheLimits `json:"cache,omitempty"`
-	ProtocolVersion string             `json:"protocol_version"`
-	ReleaseVersion  string             `json:"release_version"`
-	ENS             ENSStatus          `json:"ens"`
+	Namespaces []string `json:"namespaces,omitempty"`
+	// TenantCertificateIssuance is independent of manual Local TLS support.
+	// Nil means that the relay predates issuance capability reporting.
+	TenantCertificateIssuance *bool              `json:"tenant_certificate_issuance,omitempty"`
+	Cache                     *StaticCacheLimits `json:"cache,omitempty"`
+	ProtocolVersion           string             `json:"protocol_version"`
+	ReleaseVersion            string             `json:"release_version"`
+	ENS                       ENSStatus          `json:"ens"`
 }
 
 type ENSStatus struct {

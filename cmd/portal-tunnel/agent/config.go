@@ -179,6 +179,11 @@ func (cfg *Config) normalize(configPath string) error {
 		}
 		t.Serve = resolveAgentPath(configDir, t.Serve)
 		t.SAMLMetadataFile = resolveAgentPath(configDir, t.SAMLMetadataFile)
+		t.TLSCert = resolveAgentPath(configDir, t.TLSCert)
+		t.TLSKey = resolveAgentPath(configDir, t.TLSKey)
+		t.TLSStateDir = resolveAgentPath(configDir, t.TLSStateDir)
+		t.TLSMonitorStateDir = resolveAgentPath(configDir, t.TLSMonitorStateDir)
+		t.TLSMonitorBaseline = resolveAgentPath(configDir, t.TLSMonitorBaseline)
 		if t.IdentityPath != "" {
 			t.IdentityPath = resolveAgentPath(configDir, t.IdentityPath)
 		}

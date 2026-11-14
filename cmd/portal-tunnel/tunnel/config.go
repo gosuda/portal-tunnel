@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -18,9 +19,17 @@ import (
 // holds what was set and nothing else; nil and zero values stand for defaults
 // that Spec fills in. The TOML keys are those of the agent config.
 type Config struct {
-	Name         string `toml:"name,omitempty"`
-	IdentityPath string `toml:"identity_path,omitempty"`
-	IdentityJSON string `toml:"identity_json,omitempty"`
+	TLSMonitorStateDir    string `toml:"tls_monitor_state_dir,omitempty"`
+	TLSMonitorBaseline    string `toml:"tls_monitor_baseline,omitempty"`
+	TLSMonitorDNSResolver string `toml:"tls_monitor_dns_resolver,omitempty"`
+	TLSAuto               bool   `toml:"tls_auto,omitempty"`
+	TLSStateDir           string `toml:"tls_state_dir,omitempty"`
+	TLSRequireLocal       bool   `toml:"tls_require_local,omitempty"`
+	TLSCert               string `toml:"tls_cert,omitempty"`
+	TLSKey                string `toml:"tls_key,omitempty"`
+	Name                  string `toml:"name,omitempty"`
+	IdentityPath          string `toml:"identity_path,omitempty"`
+	IdentityJSON          string `toml:"identity_json,omitempty"`
 
 	TargetAddr          string      `toml:"target,omitempty"`
 	Serve               string      `toml:"serve,omitempty"`
@@ -153,7 +162,12 @@ func (c Config) Spec() (Spec, error) {
 		return Spec{}, err
 	}
 	spec := Spec{
-		Identity: IdentitySpec{Name: c.Name, Path: c.IdentityPath, JSON: c.IdentityJSON},
+		TLSCert:         c.TLSCert,
+		TLSAuto:         c.TLSAuto,
+		TLSStateDir:     c.TLSStateDir,
+		TLSRequireLocal: c.TLSRequireLocal,
+		TLSKey:          c.TLSKey,
+		Identity:        IdentitySpec{Name: c.Name, Path: c.IdentityPath, JSON: c.IdentityJSON},
 		Relays: RelaySpec{
 			URLs:      c.RelayURLs,
 			Discovery: c.Discovery == nil || *c.Discovery,
@@ -167,13 +181,28 @@ func (c Config) Spec() (Spec, error) {
 	if c.UDPEnabled {
 		spec.Transport.UDP = &UDPConfig{Target: c.UDPAddr}
 	}
+	if c.TLSMonitorStateDir != "" || c.TLSMonitorBaseline != "" || c.TLSMonitorDNSResolver != "" {
+		spec.CertificateMonitor = &certmonitor.MonitorConfig{
+			StateDir:     c.TLSMonitorStateDir,
+			BaselineFile: c.TLSMonitorBaseline,
+			DNSResolver:  c.TLSMonitorDNSResolver,
+		}
+	}
 	spec.HTTP = buildConfigSpecHTTP(c)
+	if spec.TLSAuto && spec.TLSStateDir == "" {
+		if spec.Identity.JSON == "" && spec.Identity.Path != "" {
+			spec.TLSStateDir = spec.Identity.Path + ".tls"
+		}
+	}
 	return spec, spec.Validate()
 }
 
 func buildConfigSpecHTTP(c Config) *HTTPConfig {
 	auth := c.AuthConfig
-	if c.Serve == "" && len(c.HTTPRoutes) == 0 && auth.IsZero() && c.Cache == nil && len(c.StripRequestHeaders) == 0 {
+	localTLS := c.TLSAuto || c.TLSCert != ""
+	httpRouting := c.Serve != "" || len(c.HTTPRoutes) != 0
+	httpPolicy := !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) != 0
+	if !localTLS && !httpRouting && !httpPolicy {
 		return nil
 	}
 	httpConfig := &HTTPConfig{

@@ -32,16 +32,21 @@ var errSignerCloseFailed = errors.New("signer close failed")
 func TestNewClientHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	client, err := NewClient(ctx, ClientConfig{
-		RelayURL: "https://127.0.0.1:1",
-		Hostname: "tenant.example",
-	})
-	if client != nil {
-		_ = client.Close()
-		t.Fatal("NewClient returned a client after cancellation")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("NewClient() error = %v, want context.Canceled", err)
+	for name, config := range map[string]ClientConfig{
+		"relay": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config.RelayURL = "https://127.0.0.1:1"
+			config.Hostname = "tenant.example"
+			client, err := NewClient(ctx, config)
+			if client != nil {
+				_ = client.Close()
+				t.Fatal("NewClient returned a client after cancellation")
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("NewClient() error = %v, want context.Canceled", err)
+			}
+		})
 	}
 }
 

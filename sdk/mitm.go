@@ -22,7 +22,6 @@ var (
 	errListenerIsNotRegistered                            = errors.New("listener is not registered")
 	errListenerHostnameIsUnavailable                      = errors.New("listener hostname is unavailable")
 	errListenerRelayMaterialsAreUnavailable               = errors.New("listener relay materials are unavailable")
-	errListenerRelayCertificatePoolUnavailable            = errors.New("listener relay certificate pool is unavailable")
 	errTLSConnectionIsRequired                            = errors.New("tls connection is required")
 	errTLSConnectionDoesNotSupportKeying                  = errors.New("tls connection does not support keying material export")
 	errTunnelDidNotAnswerChannelBinding                   = errors.New("tunnel did not answer channel binding")
@@ -112,6 +111,12 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	lease, ok := l.leaseSnapshot()
 	if !ok {
 		return mitmProbeReport{}, errListenerIsNotRegistered
+	}
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+		// Probe the relay-owned certificate path even before local issuance is
+		// ready. The canonical hostname uses independent local TLS material.
+		lease.hostname = lease.legacyHostname
+		lease.tenantTLS = endpoint.legacy
 	}
 	if lease.hostname == "" {
 		return mitmProbeReport{}, errListenerHostnameIsUnavailable
@@ -228,15 +233,7 @@ func probeTLSConfig(lease listenerSnapshot) (*tls.Config, error) {
 	if lease.tenantTLS == nil {
 		return nil, errListenerRelayMaterialsAreUnavailable
 	}
-	relayPool := lease.tenantTLS.RelayCertPool()
-	if relayPool == nil {
-		return nil, errListenerRelayCertificatePoolUnavailable
-	}
-	return &tls.Config{
-		ServerName: lease.hostname,
-		RootCAs:    relayPool,
-		MinVersion: tls.VersionTLS13,
-	}, nil
+	return lease.tenantTLS.TenantTLSConfig(), nil
 }
 
 func dialProbeTLS(probeCtx context.Context, dialAddr string, probeTLSConf *tls.Config) (net.Conn, *tls.Conn, func() bool, error) {

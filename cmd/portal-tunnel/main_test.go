@@ -195,3 +195,51 @@ func TestExposeRefusesExplicitIdentityProofWithoutIdentityHeaders(t *testing.T) 
 		}
 	}
 }
+
+func TestExposeLocalTLSCertificates(t *testing.T) {
+	spec, err := exposeSpec(t, "--tls-cert", "cert.pem", "--tls-key", "key.pem", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSCert != "cert.pem" || spec.TLSKey != "key.pem" {
+		t.Fatalf("certificate paths = %q, %q", spec.TLSCert, spec.TLSKey)
+	}
+	if _, err := exposeSpec(t, "--tls-cert", "cert.pem", "3000"); err == nil {
+		t.Fatal("unpaired certificate flag accepted")
+	}
+}
+
+func TestExposeAutomaticTLS(t *testing.T) {
+	spec, err := exposeSpec(t, "--tls-auto", "--tls-require-local", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.TLSAuto || !spec.TLSRequireLocal || spec.TLSStateDir != "identity.json.tls" {
+		t.Fatalf("automatic TLS options = %+v", spec)
+	}
+	if _, err := exposeSpec(t, "--tls-state-dir", "certs", "3000"); err == nil {
+		t.Fatal("state directory silently enabled automatic TLS")
+	}
+	if _, err := exposeSpec(t, "--tls-auto", "--identity-json", "{}", "3000"); err == nil {
+		t.Fatal("in-memory identity silently chose a persistence directory")
+	}
+}
+
+func TestExposeCertificateMonitoring(t *testing.T) {
+	spec, err := exposeSpec(t, "--tls-monitor-state-dir", "evidence", "--tls-monitor-baseline", "baseline.json", "--tls-monitor-dns-resolver", "9.9.9.9:53", "3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor := spec.CertificateMonitor
+	if monitor == nil || monitor.StateDir != "evidence" || monitor.BaselineFile != "baseline.json" || monitor.DNSResolver != "9.9.9.9:53" {
+		t.Fatalf("certificate monitoring options = %+v", monitor)
+	}
+	for _, args := range [][]string{
+		{"--tls-monitor-baseline", "baseline.json", "3000"},
+		{"--tls-monitor-dns-resolver", "9.9.9.9:53", "3000"},
+	} {
+		if _, err := exposeSpec(t, args...); err == nil {
+			t.Fatalf("portal expose %v silently enabled monitoring without a state directory", args)
+		}
+	}
+}

@@ -182,8 +182,8 @@ func TestENSGaslessLeaseRemovalDoesNotRunWhenDisabled(t *testing.T) {
 		t.Fatalf("seed A record: %v", err)
 	}
 
-	if err := manager.DeleteENSGaslessHostname(ctx, host); err != nil {
-		t.Fatalf("DeleteENSGaslessHostname(): %v", err)
+	if err := manager.DeleteLeaseHostname(ctx, host); err != nil {
+		t.Fatalf("DeleteLeaseHostname(): %v", err)
 	}
 	if !zone.hasARecord(host) {
 		t.Fatalf("untracked A record for %s was deleted", host)

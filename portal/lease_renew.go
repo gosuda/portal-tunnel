@@ -91,6 +91,9 @@ func (r *leaseRegistry) refreshRenewRecordLocked(record *leaseRecord, req types.
 		record.ReportedIP = reportedIP
 	}
 	record.Metadata = req.Metadata.Copy()
+	if record.Namespace == types.LocalTLSNamespaceV1 {
+		record.localTLSNotAfter = req.LocalTLSNotAfter
+	}
 	r.cache.Renew(record.cacheLeaseLocked())
 	return record.Identity, record.id, record.Overlay, expiresAt
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/go-acme/lego/v4/challenge"
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -71,4 +73,39 @@ func (m *Manager) syncDNSEnsureAddressRecords(ctx context.Context, publicIPs []s
 		}
 	}
 	return syncErr
+}
+
+// dnsChallengeProvider stops lego's context-free propagation loop at the next
+// poll after cancellation. Keep issuance synchronous: releasing issuanceMu while
+// lego is still using the DNS provider would allow overlapping orders/cleanup.
+// Provider publication uses the order context and cleanup has a separate bounded
+// lifetime. Lego's in-flight DNS lookups still use their own timeouts, so this is
+// not a hard deadline for the entire order. See the TLS configuration docs.
+type dnsChallengeProvider struct {
+	challenge.Provider
+	ctx context.Context
+}
+
+func (p dnsChallengeProvider) Timeout() (time.Duration, time.Duration) {
+	timeout, interval := dns01.DefaultPropagationTimeout, dns01.DefaultPollingInterval
+	if provider, ok := p.Provider.(challenge.ProviderTimeout); ok {
+		timeout, interval = provider.Timeout()
+	}
+	// Lego sleeps before its first check and between checks without a context.
+	// Bound those sleeps even when the provider's polling interval is configured.
+	if interval <= 0 {
+		interval = dns01.DefaultPollingInterval
+	}
+	return timeout, min(interval, 5*time.Second)
+}
+
+func (p dnsChallengeProvider) checkPropagation(_, fqdn, value string, check dns01.PreCheckFunc) (bool, error) {
+	if err := p.ctx.Err(); err != nil {
+		return true, err
+	}
+	ready, err := check(fqdn, value)
+	if ctxErr := p.ctx.Err(); ctxErr != nil {
+		return true, ctxErr
+	}
+	return ready, err
 }

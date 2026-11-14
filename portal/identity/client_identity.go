@@ -35,13 +35,19 @@ func LoadExisting(path, rawJSON string) (types.Identity, error) {
 	return Parse(data)
 }
 
-// LoadOrCreate returns the client identity for the expose flags. A raw JSON
-// payload is an in-memory source and wins; otherwise an existing identity
-// file at path is parsed as-is; a new identity is generated only when no
-// source exists, using name (empty name produces an unnamed default service)
-// and persisted when a path is configured.
-func LoadOrCreate(name, path, rawJSON string) (types.Identity, error) {
-	name = strings.TrimSpace(name)
+// LoadOrCreate selects a service without changing its persisted signing key.
+// An omitted name retains an old file's name for compatibility. New files store
+// the reusable key identity without a service name.
+func LoadOrCreate(name, path, rawJSON string) (result types.Identity, err error) {
+	name, err = normalizeOptionalName(name)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	defer func() {
+		if err == nil && name != "" {
+			result.Name = name
+		}
+	}()
 	path = strings.TrimSpace(path)
 	if raw := strings.TrimSpace(rawJSON); raw != "" {
 		return Parse([]byte(raw))
@@ -60,7 +66,7 @@ func LoadOrCreate(name, path, rawJSON string) (types.Identity, error) {
 		}
 	}
 
-	generated, err := Generate(name)
+	generated, err := Generate("")
 	if err != nil {
 		return types.Identity{}, err
 	}

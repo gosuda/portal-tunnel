@@ -62,7 +62,7 @@ func (p *Provider) Name() string {
 	return "route53"
 }
 
-func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
+func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
 	if p == nil {
 		return nil, errRoute53ProviderIsNil
 	}
@@ -77,11 +77,10 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 	cfg.Region = p.awsRegion()
 	cfg.HostedZoneID = p.cfg.HostedZoneID
 
-	provider, err := route53.NewDNSProviderConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create route53 lego provider: %w", err)
-	}
-	return provider, nil
+	return dnsrecord.NewChallengeProvider(ctx, cfg.PropagationTimeout, cfg.PollingInterval,
+		func(ctx context.Context, name, value string) (dnsrecord.Cleanup, error) {
+			return presentChallenge(ctx, cfg, name, value)
+		}), nil
 }
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {

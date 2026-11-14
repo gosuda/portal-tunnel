@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/go-acme/lego/v4/challenge"
@@ -51,15 +52,21 @@ type dnsRecord struct {
 }
 
 type zonesResult struct {
+	Info    resultInfo `json:"result_info"`
 	Errors  []apiError `json:"errors"`
 	Result  []zone     `json:"result"`
 	Success bool       `json:"success"`
 }
 
 type recordsResult struct {
+	Info    resultInfo  `json:"result_info"`
 	Errors  []apiError  `json:"errors"`
 	Result  []dnsRecord `json:"result"`
 	Success bool        `json:"success"`
+}
+
+type resultInfo struct {
+	TotalPages int `json:"total_pages"`
 }
 
 type recordResult struct {
@@ -90,7 +97,7 @@ func (p *Provider) Name() string {
 	return "cloudflare"
 }
 
-func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
+func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
 	if p == nil {
 		return nil, errCloudflareProviderIsNil
 	}
@@ -100,12 +107,61 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 
 	cfg := cloudflare.NewDefaultConfig()
 	cfg.AuthToken = p.token
-
-	provider, err := cloudflare.NewDNSProviderConfig(cfg)
-	if err != nil {
+	// Keep lego's configuration validation, including its minimum TXT TTL.
+	if _, err := cloudflare.NewDNSProviderConfig(cfg); err != nil {
 		return nil, fmt.Errorf("create cloudflare lego provider: %w", err)
 	}
-	return provider, nil
+	return dnsrecord.NewChallengeProvider(ctx, cfg.PropagationTimeout, cfg.PollingInterval,
+		func(ctx context.Context, fqdn, value string) (dnsrecord.Cleanup, error) {
+			zoneID, err := p.findZoneID(ctx, cfg.HTTPClient, fqdn)
+			if err != nil {
+				return nil, err
+			}
+			return presentChallenge(ctx, cfg.HTTPClient, p.token, zoneID, fqdn, value, cfg.TTL)
+		}), nil
+}
+
+func presentChallenge(ctx context.Context, client *http.Client, token, zoneID, fqdn, value string, ttl int) (dnsrecord.Cleanup, error) {
+	name := utils.NormalizeHostname(fqdn)
+	existing, err := listDNSRecords(ctx, client, token, zoneID, name, "TXT")
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range existing {
+		if strings.EqualFold(rec.Name, name) && strings.EqualFold(rec.Type, "TXT") && dnsrecord.TXTContent(rec.Content) == value {
+			return nil, nil
+		}
+	}
+	var recordID string
+	cleanup := func(ctx context.Context) error {
+		records, err := listDNSRecords(ctx, client, token, zoneID, name, "TXT")
+		if err != nil {
+			return err
+		}
+		for _, rec := range records {
+			if recordID != "" && rec.ID != recordID {
+				continue
+			}
+			if !strings.EqualFold(rec.Name, name) || !strings.EqualFold(rec.Type, "TXT") || dnsrecord.TXTContent(rec.Content) != value {
+				continue
+			}
+			if err := deleteDNSRecord(ctx, client, token, zoneID, rec.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	endpoint := fmt.Sprintf("%s/zones/%s/dns_records", apiBase, zoneID)
+	body := map[string]any{"type": "TXT", "name": name, "content": `"` + value + `"`, "ttl": ttl}
+	var out recordResult
+	if err := utils.HTTPDoJSON(ctx, client, http.MethodPost, endpoint, body, cloudflareHeaders(token), &out); err != nil {
+		return cleanup, err
+	}
+	if !out.Success {
+		return cleanup, wrapErrors(out.Errors)
+	}
+	recordID = out.Result.ID
+	return cleanup, nil
 }
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
@@ -120,7 +176,7 @@ func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicI
 		return err
 	}
 
-	zoneID, err := p.findZoneID(ctx, baseDomain)
+	zoneID, err := p.findZoneID(ctx, nil, baseDomain)
 	if err != nil {
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
@@ -145,7 +201,7 @@ func (p *Provider) EnsureAddressRecord(ctx context.Context, name, publicIP strin
 		return err
 	}
 
-	zoneID, err := p.findZoneID(ctx, name)
+	zoneID, err := p.findZoneID(ctx, nil, name)
 	if err != nil {
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
@@ -167,7 +223,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 		return err
 	}
 
-	zoneID, err := p.findZoneID(ctx, name)
+	zoneID, err := p.findZoneID(ctx, nil, name)
 	if err != nil {
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
@@ -182,7 +238,7 @@ func (p *Provider) DeleteAddressRecords(ctx context.Context, name string) error 
 }
 
 func deleteAddressRecordsCloudflare(ctx context.Context, token, zoneID, name, recordType string) error {
-	records, err := listDNSRecords(ctx, token, zoneID, name, recordType)
+	records, err := listDNSRecords(ctx, nil, token, zoneID, name, recordType)
 	if err != nil {
 		return fmt.Errorf("list %s records %s: %w", recordType, name, err)
 	}
@@ -191,7 +247,7 @@ func deleteAddressRecordsCloudflare(ctx context.Context, token, zoneID, name, re
 		if !strings.EqualFold(record.Name, name) || !strings.EqualFold(record.Type, recordType) {
 			continue
 		}
-		if err := deleteDNSRecord(ctx, token, zoneID, record.ID); err != nil {
+		if err := deleteDNSRecord(ctx, nil, token, zoneID, record.ID); err != nil {
 			errs = append(errs, fmt.Errorf("delete %s record %s: %w", recordType, name, err))
 		}
 	}
@@ -210,7 +266,7 @@ func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) erro
 		return err
 	}
 
-	zoneID, err := p.findZoneID(ctx, name)
+	zoneID, err := p.findZoneID(ctx, nil, name)
 	if err != nil {
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
@@ -232,12 +288,12 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 		return err
 	}
 
-	zoneID, err := p.findZoneID(ctx, name)
+	zoneID, err := p.findZoneID(ctx, nil, name)
 	if err != nil {
 		return fmt.Errorf("find cloudflare zone: %w", err)
 	}
 
-	records, err := listDNSRecords(ctx, p.token, zoneID, name, "TXT")
+	records, err := listDNSRecords(ctx, nil, p.token, zoneID, name, "TXT")
 	if err != nil {
 		return err
 	}
@@ -245,7 +301,7 @@ func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix strin
 		if !strings.EqualFold(record.Name, name) || !strings.HasPrefix(strings.TrimSpace(record.Content), matchPrefix) {
 			continue
 		}
-		if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
+		if err := deleteDNSRecord(ctx, nil, p.token, zoneID, record.ID); err != nil {
 			return fmt.Errorf("delete TXT record %s: %w", name, err)
 		}
 	}
@@ -264,7 +320,7 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 		return "", "", "", err
 	}
 
-	zoneID, err := p.findZoneID(ctx, baseDomain)
+	zoneID, err := p.findZoneID(ctx, nil, baseDomain)
 	if err != nil {
 		return "", "", "", fmt.Errorf("find cloudflare zone: %w", err)
 	}
@@ -294,27 +350,18 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 	return state, dsRecord, message, nil
 }
 
-func (p *Provider) findZoneID(ctx context.Context, domain string) (string, error) {
+func (p *Provider) findZoneID(ctx context.Context, client *http.Client, domain string) (string, error) {
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
-	if zoneID, ok := lookupFindZoneIDCache(p.zones.Load(), candidates); ok {
-		return zoneID, nil
-	}
-	return searchFindZoneIDCandidates(ctx, p, candidates, domain)
+	return searchFindZoneIDCandidates(ctx, p, client, candidates, domain)
 }
 
-func lookupFindZoneIDCache(cached map[string]string, candidates []string) (string, bool) {
+func searchFindZoneIDCandidates(ctx context.Context, p *Provider, client *http.Client, candidates []string, domain string) (string, error) {
 	for _, candidate := range candidates {
-		if zoneID := cached[candidate]; zoneID != "" {
-			return zoneID, true
+		if zoneID := p.zones.Load()[candidate]; zoneID != "" {
+			return zoneID, nil
 		}
-	}
-	return "", false
-}
-
-func searchFindZoneIDCandidates(ctx context.Context, p *Provider, candidates []string, domain string) (string, error) {
-	for _, candidate := range candidates {
-		zoneID, err := fetchFindZoneIDCandidate(ctx, p, candidate)
+		zoneID, err := fetchFindZoneIDCandidate(ctx, p, client, candidate)
 		if err != nil {
 			return "", err
 		}
@@ -325,8 +372,8 @@ func searchFindZoneIDCandidates(ctx context.Context, p *Provider, candidates []s
 	return "", fmt.Errorf("no cloudflare zone found for %s", domain)
 }
 
-func fetchFindZoneIDCandidate(ctx context.Context, p *Provider, candidate string) (string, error) {
-	zones, err := listZones(ctx, p.token, candidate)
+func fetchFindZoneIDCandidate(ctx context.Context, p *Provider, client *http.Client, candidate string) (string, error) {
+	zones, err := listZones(ctx, client, p.token, candidate)
 	if err != nil {
 		return "", err
 	}
@@ -351,7 +398,7 @@ func fetchFindZoneIDCandidate(ctx context.Context, p *Provider, candidate string
 }
 
 func ensureDNSRecord(ctx context.Context, token, zoneID, name, recordType, content string) error {
-	records, err := listDNSRecords(ctx, token, zoneID, name, recordType)
+	records, err := listDNSRecords(ctx, nil, token, zoneID, name, recordType)
 	if err != nil {
 		return err
 	}
@@ -370,7 +417,7 @@ func ensureDNSRecord(ctx context.Context, token, zoneID, name, recordType, conte
 }
 
 func ensureTXTRecord(ctx context.Context, token, zoneID, name, value string) error {
-	records, err := listDNSRecords(ctx, token, zoneID, name, "TXT")
+	records, err := listDNSRecords(ctx, nil, token, zoneID, name, "TXT")
 	if err != nil {
 		return err
 	}
@@ -385,37 +432,51 @@ func ensureTXTRecord(ctx context.Context, token, zoneID, name, value string) err
 	return createDNSRecord(ctx, token, zoneID, "TXT", name, value)
 }
 
-func listZones(ctx context.Context, token, name string) ([]zone, error) {
+func listZones(ctx context.Context, client *http.Client, token, name string) ([]zone, error) {
 	u, _ := url.Parse(apiBase + "/zones")
 	q := u.Query()
 	q.Set("name", name)
-	u.RawQuery = q.Encode()
-
-	var out zonesResult
-	if err := utils.HTTPDoJSON(ctx, nil, http.MethodGet, u.String(), nil, cloudflareHeaders(token), &out); err != nil {
-		return nil, err
+	q.Set("per_page", "50")
+	var zones []zone
+	for page := 1; ; page++ {
+		q.Set("page", strconv.Itoa(page))
+		u.RawQuery = q.Encode()
+		var out zonesResult
+		if err := utils.HTTPDoJSON(ctx, client, http.MethodGet, u.String(), nil, cloudflareHeaders(token), &out); err != nil {
+			return nil, err
+		}
+		if !out.Success {
+			return nil, wrapErrors(out.Errors)
+		}
+		zones = append(zones, out.Result...)
+		if page >= out.Info.TotalPages {
+			return zones, nil
+		}
 	}
-	if !out.Success {
-		return nil, wrapErrors(out.Errors)
-	}
-	return out.Result, nil
 }
 
-func listDNSRecords(ctx context.Context, token, zoneID, name, recordType string) ([]dnsRecord, error) {
+func listDNSRecords(ctx context.Context, client *http.Client, token, zoneID, name, recordType string) ([]dnsRecord, error) {
 	u, _ := url.Parse(fmt.Sprintf("%s/zones/%s/dns_records", apiBase, zoneID))
 	q := u.Query()
 	q.Set("name", name)
 	q.Set("type", recordType)
-	u.RawQuery = q.Encode()
-
-	var out recordsResult
-	if err := utils.HTTPDoJSON(ctx, nil, http.MethodGet, u.String(), nil, cloudflareHeaders(token), &out); err != nil {
-		return nil, err
+	q.Set("per_page", "100")
+	var records []dnsRecord
+	for page := 1; ; page++ {
+		q.Set("page", strconv.Itoa(page))
+		u.RawQuery = q.Encode()
+		var out recordsResult
+		if err := utils.HTTPDoJSON(ctx, client, http.MethodGet, u.String(), nil, cloudflareHeaders(token), &out); err != nil {
+			return nil, err
+		}
+		if !out.Success {
+			return nil, wrapErrors(out.Errors)
+		}
+		records = append(records, out.Result...)
+		if page >= out.Info.TotalPages {
+			return records, nil
+		}
 	}
-	if !out.Success {
-		return nil, wrapErrors(out.Errors)
-	}
-	return out.Result, nil
 }
 
 func getDNSSEC(ctx context.Context, token, zoneID string) (dnssecDetails, error) {
@@ -491,11 +552,11 @@ func updateDNSRecord(ctx context.Context, token, zoneID, recordID, recordType, n
 	return nil
 }
 
-func deleteDNSRecord(ctx context.Context, token, zoneID, recordID string) error {
+func deleteDNSRecord(ctx context.Context, client *http.Client, token, zoneID, recordID string) error {
 	endpoint := fmt.Sprintf("%s/zones/%s/dns_records/%s", apiBase, zoneID, recordID)
 
 	var out recordResult
-	if err := utils.HTTPDoJSON(ctx, nil, http.MethodDelete, endpoint, nil, cloudflareHeaders(token), &out); err != nil {
+	if err := utils.HTTPDoJSON(ctx, client, http.MethodDelete, endpoint, nil, cloudflareHeaders(token), &out); err != nil {
 		return err
 	}
 	if !out.Success {

@@ -8,7 +8,7 @@ import (
 
 	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
+
 	"google.golang.org/api/dns/v1"
 	"google.golang.org/api/option"
 
@@ -16,17 +16,20 @@ import (
 )
 
 func newRuntimeConfig(ctx context.Context, cfg Config) (runtimeConfig, error) {
-	creds, err := google.FindDefaultCredentials(ctx, dns.NdevClouddnsReadwriteScope)
+	creds, err := defaultCredentials(ctx)
 	if err != nil {
 		return runtimeConfig{}, fmt.Errorf("load gcloud credentials: %w", err)
 	}
 
 	projectID := strings.TrimSpace(cfg.ProjectID)
 	projectID = cmp.Or(projectID, strings.TrimSpace(creds.ProjectID))
-	if projectID == "" && metadata.OnGCE() {
+	if projectID == "" && metadata.NewClient(nil).OnGCEWithContext(ctx) {
 		if detected, err := metadata.ProjectIDWithContext(ctx); err == nil {
 			projectID = strings.TrimSpace(detected)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return runtimeConfig{}, err
 	}
 	if projectID == "" {
 		return runtimeConfig{}, errGcloudProjectIDIsRequired
@@ -50,46 +53,42 @@ func (p *Provider) newService(ctx context.Context, domain string) (*dns.Service,
 		return nil, runtimeConfig{}, nil, fmt.Errorf("create gcloud dns service: %w", err)
 	}
 
-	zone, err := p.findManagedZone(ctx, service, runtimeCfg.ProjectID, domain, runtimeCfg.ManagedZone)
+	zone, err := p.findManagedZone(ctx, service, runtimeCfg.ProjectID, domain, runtimeCfg.ManagedZone, false)
 	if err != nil {
 		return nil, runtimeConfig{}, nil, err
 	}
 	return service, runtimeCfg, zone, nil
 }
 
-func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, projectID, domain, explicit string) (*dns.ManagedZone, error) {
+func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, projectID, domain, explicit string, allowPrivate bool) (*dns.ManagedZone, error) {
 	if service == nil {
 		return nil, errGcloudDNSServiceIsNil
 	}
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
 
-	if zoneName, candidate, ok := lookupFindManagedZoneCache(p.zones.Load(), candidates); ok {
-		return &dns.ManagedZone{Name: zoneName, DnsName: fqdn(candidate)}, nil
-	}
-
 	if trimmed := strings.TrimSpace(explicit); trimmed != "" {
 		zone, err := service.ManagedZones.Get(projectID, trimmed).Context(ctx).Do()
 		if err != nil {
 			return nil, fmt.Errorf("get gcloud managed zone %q: %w", trimmed, err)
 		}
-		if err := validateManagedZone(zone, domain, trimmed); err != nil {
+		if err := validateManagedZone(zone, domain, trimmed, allowPrivate); err != nil {
 			return nil, err
 		}
-		if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" {
+		if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" && isPublicZone(zone) {
 			p.cacheFindManagedZoneEntry(zoneDomain, zone.Name)
 		}
 		return zone, nil
 	}
 
-	return p.resolveFindManagedZoneCandidates(ctx, service, projectID, domain, candidates)
+	return p.resolveFindManagedZoneCandidates(ctx, service, projectID, domain, candidates, allowPrivate)
 }
 
-func validateManagedZone(zone *dns.ManagedZone, domain, explicit string) error {
+func validateManagedZone(zone *dns.ManagedZone, domain, explicit string, allowPrivate bool) error {
 	if zone == nil {
 		return fmt.Errorf("gcloud managed zone %q is nil", explicit)
 	}
-	if !isPublicZone(zone) {
+	if !isPublicZone(zone) && !allowPrivate {
 		return fmt.Errorf("gcloud managed zone %q is not public", explicit)
 	}
 	if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain == "" || !utils.HostnameMatchesBaseDomain(domain, zoneDomain) {
@@ -106,18 +105,9 @@ func isPublicZone(zone *dns.ManagedZone) bool {
 	return visibility == "" || visibility == "public"
 }
 
-func lookupFindManagedZoneCache(zones map[string]string, candidates []string) (string, string, bool) {
-	for _, candidate := range candidates {
-		if zoneName := zones[candidate]; zoneName != "" {
-			return zoneName, candidate, true
-		}
-	}
-	return "", "", false
-}
-
-func matchFindManagedZoneCandidate(zoneList []*dns.ManagedZone, candidate string) *dns.ManagedZone {
+func matchFindManagedZoneCandidate(zoneList []*dns.ManagedZone, candidate string, allowPrivate bool) *dns.ManagedZone {
 	for _, zone := range zoneList {
-		if !isPublicZone(zone) || utils.NormalizeHostname(zone.DnsName) != candidate {
+		if (!isPublicZone(zone) && !allowPrivate) || utils.NormalizeHostname(zone.DnsName) != candidate {
 			continue
 		}
 		return zone
@@ -125,13 +115,16 @@ func matchFindManagedZoneCandidate(zoneList []*dns.ManagedZone, candidate string
 	return nil
 }
 
-func searchFindManagedZoneCandidates(ctx context.Context, service *dns.Service, projectID string, candidates []string) (*dns.ManagedZone, string, error) {
+func (p *Provider) searchFindManagedZoneCandidates(ctx context.Context, service *dns.Service, projectID string, candidates []string, allowPrivate bool) (*dns.ManagedZone, string, error) {
 	for _, candidate := range candidates {
+		if zoneName := p.zones.Load()[candidate]; zoneName != "" && !allowPrivate {
+			return &dns.ManagedZone{Name: zoneName, DnsName: fqdn(candidate)}, candidate, nil
+		}
 		out, err := service.ManagedZones.List(projectID).DnsName(fqdn(candidate)).Context(ctx).Do()
 		if err != nil {
 			return nil, "", fmt.Errorf("list gcloud managed zones: %w", err)
 		}
-		if matched := matchFindManagedZoneCandidate(out.ManagedZones, candidate); matched != nil {
+		if matched := matchFindManagedZoneCandidate(out.ManagedZones, candidate, allowPrivate); matched != nil {
 			return matched, candidate, nil
 		}
 	}
@@ -147,15 +140,15 @@ func (p *Provider) cacheFindManagedZoneEntry(key, value string) {
 	})
 }
 
-func (p *Provider) resolveFindManagedZoneCandidates(ctx context.Context, service *dns.Service, projectID, domain string, candidates []string) (*dns.ManagedZone, error) {
-	zone, candidate, err := searchFindManagedZoneCandidates(ctx, service, projectID, candidates)
+func (p *Provider) resolveFindManagedZoneCandidates(ctx context.Context, service *dns.Service, projectID, domain string, candidates []string, allowPrivate bool) (*dns.ManagedZone, error) {
+	zone, candidate, err := p.searchFindManagedZoneCandidates(ctx, service, projectID, candidates, allowPrivate)
 	if err != nil {
 		return nil, err
 	}
 	if zone == nil {
 		return nil, fmt.Errorf("no gcloud public managed zone found for %s", domain)
 	}
-	if zone.Name != "" {
+	if zone.Name != "" && isPublicZone(zone) {
 		p.cacheFindManagedZoneEntry(candidate, zone.Name)
 	}
 	return zone, nil

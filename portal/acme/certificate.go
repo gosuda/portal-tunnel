@@ -6,12 +6,14 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
@@ -141,17 +143,30 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 
 func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
-	user, registrationFile, err := m.newClientLoadUser(email)
+	user, registrationFile, err := m.newClientLoadUser(email, true)
 	if err != nil {
 		return nil, err
 	}
 	return m.newClientWithLoadedUser(ctx, user, registrationFile)
 }
 
-func (m *Manager) newClientLoadUser(email string) (*acmeUser, string, error) {
+func (m *Manager) newClientLoadUser(email string, createKey bool) (*acmeUser, string, error) {
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
 	registrationFile := registrationFilePath(m.cfg.KeyDir, m.cfg.CADirURL)
-	accountKey, err := loadOrCreateAccountKey(accountKeyFile)
+	var accountKey crypto.PrivateKey
+	var err error
+	if createKey {
+		accountKey, err = loadOrCreateAccountKey(accountKeyFile)
+	} else {
+		var accountKeyPEM []byte
+		accountKeyPEM, err = os.ReadFile(accountKeyFile)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, "", ErrTenantIssuanceDisabled
+		}
+		if err == nil {
+			accountKey, err = parseAccountKeyPEM(accountKeyPEM)
+		}
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("load acme account key: %w", err)
 	}
@@ -173,7 +188,7 @@ func (m *Manager) newClientLoadUser(email string) (*acmeUser, string, error) {
 }
 
 func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, registrationFile string) (*lego.Client, error) {
-	client, err := m.newClientBuildWithUser(user)
+	client, err := m.newClientBuildWithUser(ctx, user)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +196,8 @@ func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, r
 	if err != nil {
 		return nil, fmt.Errorf("create dns challenge provider: %w", err)
 	}
-	if err := client.Challenge.SetDNS01Provider(challengeProvider); err != nil {
+	provider := dnsChallengeProvider{Provider: challengeProvider, ctx: ctx}
+	if err := client.Challenge.SetDNS01Provider(provider, dns01.WrapPreCheck(provider.checkPropagation)); err != nil {
 		return nil, fmt.Errorf("set dns01 provider: %w", err)
 	}
 	if err := m.newClientRegisterUser(client, user, registrationFile); err != nil {
@@ -190,10 +206,11 @@ func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, r
 	return client, nil
 }
 
-func (m *Manager) newClientBuildWithUser(user *acmeUser) (*lego.Client, error) {
+func (m *Manager) newClientBuildWithUser(ctx context.Context, user *acmeUser) (*lego.Client, error) {
 	clientConfig := lego.NewConfig(user)
 	clientConfig.CADirURL = m.cfg.CADirURL
 	clientConfig.Certificate.KeyType = certcrypto.RSA2048
+	clientConfig.HTTPClient.Transport = acmeRequestTransport{ctx: ctx, transport: clientConfig.HTTPClient.Transport}
 	client, err := lego.NewClient(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create acme client: %w", err)
@@ -222,3 +239,14 @@ func (m *Manager) newClientRegisterUser(client *lego.Client, user *acmeUser, reg
 func (u *acmeUser) GetEmail() string                        { return u.Email }
 func (u *acmeUser) GetRegistration() *registration.Resource { return u.Registration }
 func (u *acmeUser) GetPrivateKey() crypto.PrivateKey        { return u.Key }
+
+// acmeRequestTransport binds lego's context-free order API to the operation
+// lifetime, including account registration and order-finalization requests.
+type acmeRequestTransport struct {
+	ctx       context.Context
+	transport http.RoundTripper
+}
+
+func (t acmeRequestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.transport.RoundTrip(req.WithContext(t.ctx))
+}

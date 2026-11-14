@@ -12,7 +12,7 @@ that upgrades from ordinary HTTP into the reverse transport.
 
 ## Flow
 
-1. `GET /sdk/domain` checks relay compatibility, optional ENS support, and optional relay-owned Sui x402 control-plane facilitator support.
+1. `GET /sdk/domain` checks relay compatibility, hostname namespace and tenant issuance capabilities, optional ENS support, and optional relay-owned Sui x402 control-plane facilitator support.
 2. `POST /sdk/register/challenge` creates a SIWE challenge for the requested identity.
 3. The SDK signs the returned `siwe_message`.
 4. `POST /sdk/register` exchanges the signature for a lease `access_token` and
@@ -40,6 +40,7 @@ as terminal for that relay.
 | `POST` | `/sdk/cache` | lease token header | `StaticCacheManifest` JSON | `StaticCacheStatus` |
 | `PUT` | `/sdk/cache` | lease token header | manifest and file bytes as multipart | `StaticCacheStatus` |
 | `DELETE` | `/sdk/cache` | lease token header | none | `StaticCacheStatus` |
+| `POST` | `/v1/tenant-certificate` | lease token header | `TenantCertificateRequest` | `TenantCertificateResponse` |
 
 ## Domain
 
@@ -49,6 +50,8 @@ as terminal for that relay.
 |-------|------|-------|
 | `protocol_version` | `string` | SDK tunnel protocol version |
 | `release_version` | `string` | relay software release |
+| `namespaces` | `string[]` | optional; includes `local-tls-v1` when new canonical Local TLS is supported |
+| `tenant_certificate_issuance` | `boolean` | optional; whether automatic tenant issuance is enabled; independent of manual Local TLS support. An absent field means an older relay did not report this capability |
 | `cache` | `StaticCacheLimits` | optional; advertised when static caching is enabled |
 | `ens` | `ENSStatus` | gasless ENS status |
 | `x402` | `X402FacilitatorInfo` | relay-owned Sui x402 control-plane facilitator status |
@@ -78,6 +81,7 @@ which are configured locally by the tunnel process.
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `identity` | `Identity` | yes | `name` and `address` |
+| `namespace` | `string` | no | `local-tls-v1` requests the new Local TLS canonical; omitted keeps legacy hostname policy. Unknown values are rejected |
 | `allow_canonical_fallback` | `boolean` | no | allow canonical-only registration when the friendly alias is unavailable; defaults to `false` for protocol-10 compatibility |
 | `metadata` | `LeaseMetadata` | no | public lease metadata |
 | `overlay` | `boolean` | no | prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to `false` |
@@ -89,6 +93,9 @@ which are configured locally by the tunnel process.
 | `cache_ttl` | `number` | no | Requested offline seconds; `0` uses relay policy, positive values are clamped |
 
 Cache opt-in is incompatible with raw TCP/UDP leases.
+For `local-tls-v1`, protocol-level cache opt-in still names only the separate
+legacy canonical. The new canonical never becomes cache eligible. The CLI/agent
+reject combining Local TLS modes with relay cache entirely.
 
 `RegisterChallengeResponse`:
 
@@ -114,6 +121,8 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 | Field | Type | Notes |
 |-------|------|-------|
 | `identity` | `Identity` | normalized lease identity |
+| `namespace` | `string` | optional; must match the negotiated request namespace |
+| `legacy_canonical_hostname` | `string` | separate one-label compatibility hostname when `namespace` is `local-tls-v1` |
 | `hostname` | `string` | friendly hostname; empty when a client that allows canonical fallback finds the friendly name owned by another identity |
 | `canonical_hostname` | `string` | relay-derived identity-bound hostname used by the SDK |
 | `expires_at` | `string` | lease expiry |
@@ -122,24 +131,35 @@ Cache opt-in is incompatible with raw TCP/UDP leases.
 | `udp_addr`, `tcp_addr` | `string` | omitted when transport is disabled |
 | `udp_enabled`, `tcp_enabled` | `boolean` | active transport flags |
 
-The SDK uses the returned `canonical_hostname`; it does not derive or accept a
-client-supplied address suffix. The canonical label ends with all 40 lowercase
-hexadecimal characters of the SIWE-authenticated Ethereum address. A normalized
-name of at most 22 characters precedes it with one hyphen
-(`<name>-<address>`); a longer name is replaced by a 21-character hash of the
-name followed by two hyphens (`<name-hash>--<address>`, derivation in the
-architecture page). The current SDK allows canonical fallback.
-`RelayStatus.PublicURL` reports the canonical hostname. `RelayStatus.AliasURL`
-reports the returned `hostname` when the relay granted the friendly alias, and
-is empty after canonical fallback or for an unnamed service. Both stay set while
-the lease is held, including while reverse sessions reconnect; a failed relay
-clears `AliasURL`. While the relay is ready, prefer `AliasURL` for user-facing
-links and sharing, falling back to `PublicURL` when it is empty. Keep `PublicURL`
-for identity-bound origins, diagnostics, and opt-in relay caching. Do not derive
-the short URL by removing the address suffix: another identity may own that name.
-A protocol-10 client that omits the capability receives `hostname_conflict`
-instead of a canonical-only registration when its friendly hostname is already
-owned by another identity.
+The SDK validates the returned namespace and identity-bound hostname. Both
+peers must negotiate `local-tls-v1` before using
+`<service>.<40-lowercase-hex-address>.<relay-root>`. The service label supports
+63 octets; unnamed services use reserved `default`, and an explicitly named
+`default` is rejected only in the new namespace. The canonical does not depend
+on acquiring a friendly alias. Its exact-host certificate and TLS endpoint
+belong to the tunnel; there is no Keyless or relay cache fallback.
+
+An absent namespace keeps legacy one-label canonical derivation: `<address>`,
+`<name>-<address>` for names up to 22 characters, or
+`<name-hash>--<address>` for longer names, under the relay root. Local TLS
+clients keep this route in `legacy_canonical_hostname`; old clients and relays
+continue using legacy URLs. Hostname depth is relative to the configured root.
+
+`RelayStatus.PublicURL` is the canonical URL, empty for a negotiated Local TLS
+endpoint without usable local material. `LegacyURL` is its separate compatibility
+origin. `AliasURL` is the granted friendly hostname, empty for unnamed services
+or an alias collision. A connecting status retracts readiness even if endpoint
+fields are retained; only nonempty URLs on a ready status are usable.
+Certificate expiry withdraws
+`PublicURL` through the same status/event path while the other origins can stay
+ready. Prefer `AliasURL` for friendly sharing, then an available `PublicURL` or
+`LegacyURL` as an explicit origin choice. Never infer aliases by stripping labels.
+
+The current SDK permits canonical-only registration when an alias is occupied;
+the new namespace permits this independently of `allow_canonical_fallback`.
+Legacy protocol clients that omit that capability receive `hostname_conflict`
+instead. No automatic redirects, cookie migration, or legacy URL removal date
+are introduced. Relay caching remains limited to eligible legacy origins.
 
 `ReverseEndpoint`:
 
@@ -187,9 +207,18 @@ for the delegated capability and gateway-to-ingress protocol flow.
 | `reported_ip` | `string` | no |
 | `metadata` | `LeaseMetadata` | no |
 | `repins_chain` | `boolean` | no |
+| `local_tls_not_after` | `string` | no; installed canonical leaf expiry as RFC 3339; absent or zero withdraws material readiness |
 
 Renewal uses the same 120-second default and 600-second maximum as registration.
 A rejected TTL leaves the existing lease unchanged.
+
+For a Local TLS lease, certificate changes wake the existing authenticated
+renewal path. The relay records `local_tls_not_after` and derives the public
+lease's `canonical_ready` from it and lease validity. This expires without
+waiting for another renewal. `ready` remains the reverse transport count, so a
+usable canonical needs both positive `ready` and true `canonical_ready`.
+The reported bound is an availability hint from the authenticated service,
+not proof of certificate validity or an authorization to change TLS policy.
 
 `repins_chain` says the SDK re-pins the relay certificate chain by itself. A
 renewal without it is answered with `lease_not_found` and the lease is not
@@ -221,6 +250,38 @@ when another gateway or the direct path is available.
 | `access_token` | `string` | yes |
 
 `/sdk/unregister` returns `{}` on success.
+
+## Tenant Certificate
+
+`POST /v1/tenant-certificate` uses
+`X-Portal-Access-Token: <lease access_token>` and the normal JSON envelope.
+The reverse capability and admin bearer token cannot replace the lease token.
+
+Request: `TenantCertificateRequest` contains `csr_pem`, a signed PEM certificate
+request with an ECDSA P-256 public key. The request body is limited to 16 KiB.
+The CSR must contain exactly the active lease's canonical DNS SAN. Wildcards,
+friendly aliases, sibling services, IP/email/URI identities, and extra
+extensions are rejected. A common name, if present, must match that same SAN.
+No private key is uploaded.
+
+Success: `TenantCertificateResponse` contains `certificate_pem`, the PEM chain
+for that CSR. The SDK checks the matching local key, exact hostname, validity,
+and trust before activating and persisting it. Tenant trust stays separate from
+relay control-plane trust. Issuance does not make a pending canonical URL ready
+until usable material is installed and reverse transport is available.
+
+The relay must enable `TENANT_CERTIFICATES`. Public CA issuance also requires
+an explicitly approved service identity and shared durable issuance state;
+automatic registration mode alone does not approve issuance. Local development
+CA issuance consumes no public quota and is exempt from service approval.
+Ownership and lease validity are checked again before returning the chain.
+
+Disabled issuance returns `503 tenant_issuance_disabled`; lack of approval
+returns `403 tenant_issuance_not_approved`. A busy issuer or exhausted order
+budget returns `429 rate_limited` with `Retry-After`. Other issuance failures
+return `503 feature_unavailable`. Existing live-lease authorization failures
+use the shared error codes. See [issuance admission](/configuration#public-tenant-issuance-admission)
+for durable accounting, limits, and operational constraints.
 
 ## Static Cache
 

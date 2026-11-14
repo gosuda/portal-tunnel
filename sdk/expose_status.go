@@ -1,8 +1,10 @@
 package sdk
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"slices"
 	"strings"
@@ -88,6 +90,18 @@ func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owne
 			e.mu.Unlock()
 			return
 		}
+		// Listener reports can wait behind other producers. Resolve canonical
+		// availability here, where updates are serialized, rather than trusting
+		// material that was usable when a report was constructed.
+		lease, registered := owner.leaseSnapshot()
+		endpoint, local := lease.tenantTLS.(*namespaceTLS)
+		if registered && local {
+			update.publicURL = ""
+			if update.state == RelayReady && endpoint.local.Ready() {
+				update.publicURL = owner.leaseURL(lease.hostname)
+			}
+			update.certificateErr = endpoint.local.IssuanceError()
+		}
 	}
 	if e.statuses == nil {
 		e.statuses = make(map[string]RelayStatus)
@@ -145,6 +159,7 @@ func mergeRelayScalarFieldsLocked(previous RelayStatus, update listenerStatus, r
 		status.Failure = RelayFailureNone
 	}
 	status.Approval = update.approval
+	status.CertificateError = update.certificateErr
 	if update.version != "" {
 		status.Version = update.version
 	}
@@ -159,15 +174,18 @@ func mergeRelayScalarFieldsLocked(previous RelayStatus, update listenerStatus, r
 func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayStatus {
 	if update.state == RelayFailed {
 		status.AliasURL = ""
+		status.LegacyURL = ""
 	}
 	if update.state == RelayConnecting {
 		status.PublicURL = ""
+		status.LegacyURL = ""
 		status.AliasURL = ""
 		status.UDPAddr = ""
 		status.TCPAddr = ""
 	}
-	if update.publicURL != "" || update.state == RelayReady {
+	if update.publicURL != "" || update.legacyURL != "" || update.aliasURL != "" || update.state == RelayReady {
 		status.PublicURL = update.publicURL
+		status.LegacyURL = update.legacyURL
 		status.AliasURL = update.aliasURL
 	}
 	if update.udpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
@@ -180,9 +198,10 @@ func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayS
 }
 
 func (e *Exposure) announceRelayStatusChange(previous, status RelayStatus) {
-	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
+	publicURL := cmp.Or(status.PublicURL, status.LegacyURL)
+	advertised := (previous.State != RelayReady || previous.PublicURL != status.PublicURL) && status.State == RelayReady && publicURL != ""
 	if advertised {
-		message := "service ready at " + status.PublicURL
+		message := "service ready at " + publicURL
 		if status.AliasURL != "" {
 			message += " (short URL: " + status.AliasURL + ")"
 		}
@@ -255,8 +274,13 @@ func relayStatusEqual(a, b RelayStatus) bool {
 	if a.Err != nil && b.Err != nil {
 		errorsEqual = a.Err.Error() == b.Err.Error()
 	}
-	return a.RelayURL == b.RelayURL &&
+	certErrorsEqual := a.CertificateError == nil && b.CertificateError == nil
+	if a.CertificateError != nil && b.CertificateError != nil {
+		certErrorsEqual = a.CertificateError.Error() == b.CertificateError.Error()
+	}
+	return certErrorsEqual && a.RelayURL == b.RelayURL &&
 		a.PublicURL == b.PublicURL &&
+		a.LegacyURL == b.LegacyURL &&
 		a.AliasURL == b.AliasURL &&
 		a.UDPAddr == b.UDPAddr &&
 		a.TCPAddr == b.TCPAddr &&
@@ -332,6 +356,7 @@ func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Even
 		Str("relay_url", status.RelayURL).
 		Str("state", string(status.State)).
 		Str("public_url", status.PublicURL).
+		Str("legacy_url", status.LegacyURL).
 		Bool("deselected", status.Deselected)
 	if status.State == RelayReady && !status.Deselected && status.AliasURL != "" {
 		event = event.Str("alias_url", status.AliasURL)
@@ -345,21 +370,32 @@ func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Even
 	return event
 }
 
-func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}) {
+func (e *Exposure) readyRelays(matches func(RelayStatus) bool, requireLocal bool) ([]RelayStatus, <-chan struct{}, error) {
 	e.mu.RLock()
 	ready := make([]RelayStatus, 0, len(e.statuses))
+	allTerminal := len(e.statuses) > 0
+	var terminalErr error
 	for _, status := range e.statuses {
-		if !matches(status) {
-			continue
+		if matches(status) {
+			ready = append(ready, status)
 		}
-		ready = append(ready, status)
+		if status.State == RelayFailed && status.Failure == RelayFailureTerminal && status.Err != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("relay %s: %w", status.RelayURL, status.Err))
+		} else if requireLocal && status.PublicURL == "" && status.CertificateError != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("relay %s: %w", status.RelayURL, status.CertificateError))
+		} else {
+			allTerminal = false
+		}
 	}
 	changed := e.stateChanged
 	e.mu.RUnlock()
 	slices.SortFunc(ready, func(a, b RelayStatus) int {
 		return strings.Compare(a.RelayURL, b.RelayURL)
 	})
-	return ready, changed
+	if !allTerminal {
+		terminalErr = nil
+	}
+	return ready, changed, terminalErr
 }
 
 // Updates reports relay lifecycle changes. Relays is the authoritative
@@ -376,26 +412,33 @@ func (e *Exposure) Updates() <-chan RelayStatus {
 }
 
 // WaitReady waits until at least one relay can accept tenant connections.
+// With require-local, it waits for a usable canonical Local TLS URL and
+// returns errors if all current relays failed or refuse automatic issuance. The
+// exposure stays open, and callers may add relays or continue discovery.
 func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
 	if e == nil {
 		return nil, net.ErrClosed
 	}
+	requireLocal := e.options.TLSRequireLocal
 	return e.waitReady(ctx, func(status RelayStatus) bool {
-		return status.State == RelayReady
-	})
+		return status.State == RelayReady && (!requireLocal || status.PublicURL != "")
+	}, requireLocal)
 }
 
-func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool) ([]RelayStatus, error) {
+func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool, requireLocal bool) ([]RelayStatus, error) {
 	if ctx == nil {
 		return nil, errPortalSDKContextIsNil
 	}
 	for {
-		ready, changed := e.readyRelays(matches)
+		ready, changed, terminalErr := e.readyRelays(matches, requireLocal)
 		if len(ready) > 0 {
 			return ready, nil
 		}
 		if e.closed() {
 			return nil, net.ErrClosed
+		}
+		if terminalErr != nil {
+			return nil, terminalErr
 		}
 		select {
 		case <-ctx.Done():
@@ -449,7 +492,7 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error)
 	}
 	return e.waitReady(ctx, func(status RelayStatus) bool {
 		return status.State != RelayFailed && status.UDPAddr != ""
-	})
+	}, false)
 }
 
 // WaitTCPReady waits until at least one relay has allocated a public TCP
@@ -460,5 +503,5 @@ func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
 	}
 	return e.waitReady(ctx, func(status RelayStatus) bool {
 		return status.State != RelayFailed && status.TCPAddr != ""
-	})
+	}, false)
 }

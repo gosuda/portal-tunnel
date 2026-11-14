@@ -46,7 +46,7 @@ func (p *Provider) Name() string {
 	return "hetzner"
 }
 
-func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
+func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
 	if p == nil {
 		return nil, errHetznerProviderIsNil
 	}
@@ -55,13 +55,92 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 	}
 
 	cfg := legohetzner.NewDefaultConfig()
-	cfg.APIToken = p.apiToken
+	client := hcloud.NewClient(
+		hcloud.WithToken(p.apiToken),
+		hcloud.WithHTTPClient(cfg.HTTPClient),
+		hcloud.WithPollOpts(hcloud.PollOpts{BackoffFunc: hcloud.ConstantBackoff(cfg.PollingInterval)}),
+	)
+	return dnsrecord.NewChallengeProvider(ctx, cfg.PropagationTimeout, cfg.PollingInterval,
+		func(ctx context.Context, fqdn, value string) (dnsrecord.Cleanup, error) {
+			zone, err := p.findZone(ctx, client, fqdn)
+			if err != nil {
+				return nil, err
+			}
+			return presentChallenge(ctx, client, zone, fqdn, value, cfg.TTL, cfg.PropagationTimeout)
+		}), nil
+}
 
-	provider, err := legohetzner.NewDNSProviderConfig(cfg)
+func presentChallenge(ctx context.Context, client *hcloud.Client, zone *hcloud.Zone, fqdn, value string, ttl int, timeout time.Duration) (dnsrecord.Cleanup, error) {
+	name, err := dnsrecord.RelativeName("hetzner", fqdn, zone.Name)
 	if err != nil {
-		return nil, fmt.Errorf("create hetzner lego provider: %w", err)
+		return nil, err
 	}
-	return provider, nil
+	existing, _, err := client.Zone.GetRRSetByNameAndType(ctx, zone, name, hcloud.ZoneRRSetTypeTXT)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		for _, rec := range existing.Records {
+			if txtContent(rec.Value) == value {
+				return nil, nil
+			}
+		}
+	}
+	desired := []hcloud.ZoneRRSetRecord{{Value: zoneutil.FormatTXTRecord(value)}}
+	var pending *hcloud.Action
+	cleanup := func(ctx context.Context) error {
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+		// An accepted asynchronous write can outlive its request context. Finish
+		// observing it before removal so a late completion cannot recreate TXT.
+		if pending != nil {
+			if err := waitAction(ctx, client, pending); err != nil {
+				var actionErr hcloud.ActionError
+				if !errors.As(err, &actionErr) {
+					return err
+				}
+			}
+		}
+		rrset, _, err := client.Zone.GetRRSetByNameAndType(ctx, zone, name, hcloud.ZoneRRSetTypeTXT)
+		if err != nil || rrset == nil {
+			return err
+		}
+		for _, rec := range rrset.Records {
+			if txtContent(rec.Value) != value {
+				continue
+			}
+			action, _, err := client.Zone.RemoveRRSetRecords(ctx, rrset, hcloud.ZoneRRSetRemoveRecordsOpts{Records: []hcloud.ZoneRRSetRecord{rec}})
+			if err != nil {
+				return err
+			}
+			return waitAction(ctx, client, action)
+		}
+		return nil
+	}
+	if existing == nil {
+		result, _, err := client.Zone.CreateRRSet(ctx, zone, hcloud.ZoneRRSetCreateOpts{
+			Name: name, Type: hcloud.ZoneRRSetTypeTXT, TTL: &ttl, Records: desired,
+		})
+		if err != nil {
+			return cleanup, err
+		}
+		pending = result.Action
+	} else {
+		// Keep the existing TTL, including a nil TTL inherited from the zone.
+		pending, _, err = client.Zone.AddRRSetRecords(ctx, existing, hcloud.ZoneRRSetAddRecordsOpts{Records: desired, TTL: existing.TTL})
+		if err != nil {
+			return cleanup, err
+		}
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	return cleanup, waitAction(ctx, client, pending)
 }
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
@@ -211,23 +290,14 @@ func (p *Provider) findZone(ctx context.Context, client *hcloud.Client, domain s
 	}
 	domain = utils.NormalizeHostname(domain)
 	candidates := utils.DomainCandidates(domain)
-	if zoneName, ok := lookupFindZoneCache(p.zones.Load(), candidates); ok {
-		return &hcloud.Zone{Name: zoneName}, nil
-	}
 	return searchFindZoneCandidates(ctx, p, client, candidates, domain)
-}
-
-func lookupFindZoneCache(cached map[string]string, candidates []string) (string, bool) {
-	for _, candidate := range candidates {
-		if zoneName := cached[candidate]; zoneName != "" {
-			return zoneName, true
-		}
-	}
-	return "", false
 }
 
 func searchFindZoneCandidates(ctx context.Context, p *Provider, client *hcloud.Client, candidates []string, domain string) (*hcloud.Zone, error) {
 	for _, candidate := range candidates {
+		if zoneName := p.zones.Load()[candidate]; zoneName != "" {
+			return &hcloud.Zone{Name: zoneName}, nil
+		}
 		zone, err := fetchFindZoneCandidate(ctx, p, client, candidate)
 		if err != nil {
 			return nil, err

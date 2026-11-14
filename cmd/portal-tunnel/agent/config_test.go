@@ -56,6 +56,8 @@ relays = ["https://relay.example.com"]
 discovery = false
 overlay = true
 identity_path = "/absolute/identity.json"
+tls_cert = "cert.pem"
+tls_key = "key.pem"
 ban_mitm = true
 max_active_relays = 5
 description = "described"
@@ -72,6 +74,12 @@ auth_oidc_client_secret = "client-secret"
 
 [[tunnels]]
 id = "sso"
+tls_auto = true
+tls_state_dir = "certs"
+tls_require_local = true
+tls_monitor_state_dir = "evidence"
+tls_monitor_baseline = "baseline.json"
+tls_monitor_dns_resolver = "9.9.9.9:53"
 target = "localhost:3001"
 auth = "saml"
 auth_allowed_wallets = ["@example.com"]
@@ -335,7 +343,8 @@ func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 		credential := key == "identity_json" || slices.ContainsFunc([]string{"secret", "token", "key", "password"}, func(word string) bool {
 			return strings.Contains(key, word)
 		})
-		if !field.IsExported() || key == "" || key == "-" || !credential {
+		// tls_key stores a file path, not private key bytes.
+		if !field.IsExported() || key == "" || key == "-" || key == "tls_key" || !credential {
 			continue
 		}
 		found++
@@ -366,4 +375,100 @@ func tunnelConfigKeys(typ reflect.Type) []string {
 		}
 	}
 	return keys
+}
+
+func TestLocalTLSCertificateConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := "[[tunnels]]\nid = \"web\"\ntarget = \"3000\"\ntls_cert = \"certs/tenant.pem\"\ntls_key = \"certs/tenant.key\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := reloaded.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSCert != filepath.Join(dir, "certs", "tenant.pem") || spec.TLSKey != filepath.Join(dir, "certs", "tenant.key") {
+		t.Fatalf("certificate paths after restart = %q, %q", spec.TLSCert, spec.TLSKey)
+	}
+}
+
+func TestAutomaticTLSConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	data := "[[tunnels]]\nid = \"web\"\ntarget = \"3000\"\nidentity_path = \"identity.json\"\ntls_auto = true\ntls_require_local = true\ntls_state_dir = \"certs\"\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.TLSAuto || !spec.TLSRequireLocal || spec.TLSStateDir != filepath.Join(dir, "certs") {
+		t.Fatalf("persisted automatic TLS options = %+v", spec)
+	}
+	cfg.Tunnels[0].TLSStateDir = ""
+	spec, err = cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSStateDir != filepath.Join(dir, "identity.json")+".tls" {
+		t.Fatalf("identity-scoped default = %q", spec.TLSStateDir)
+	}
+}
+
+func TestCertificateMonitoringConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	data := `[[tunnels]]
+id = "web"
+target = "3000"
+tls_monitor_state_dir = "evidence"
+tls_monitor_baseline = "baseline.json"
+tls_monitor_dns_resolver = "9.9.9.9:53"
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor := spec.CertificateMonitor
+	if monitor == nil || monitor.StateDir != filepath.Join(dir, "evidence") || monitor.BaselineFile != filepath.Join(dir, "baseline.json") || monitor.DNSResolver != "9.9.9.9:53" {
+		t.Fatalf("persisted monitoring configuration = %+v", monitor)
+	}
 }

@@ -2,14 +2,19 @@ package sdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -352,5 +357,125 @@ func checkMetadataRejectsOversize(t *testing.T, fixture *exposureMetadataFixture
 	}
 	if fixture.exposure.metadata.Description != "" || fixture.exposure.metadata.Tags[0] != "updated" || fixture.ln.metadataSnapshot().Tags[0] != "updated" {
 		t.Fatal("rejected metadata update changed exposure or listener metadata")
+	}
+}
+
+func TestExposeRejectsInvalidLocalTLSOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+	}{
+		{"certificate only", []Option{WithTLSCertificate("cert.pem", "")}},
+		{"key only", []Option{WithTLSCertificate("", "key.pem")}},
+		{"raw TCP", []Option{WithTLSCertificate("cert.pem", "key.pem"), WithTCP()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Expose(t.Context(), types.Identity{}, []string{"https://relay.example"}, tc.opts...)
+			if err == nil || !strings.Contains(err.Error(), "TLS") {
+				t.Fatalf("expected local TLS option error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestExposeRejectsInvalidAutomaticTLSOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+	}{
+		{"missing state", []Option{WithAutomaticTLS("", false)}},
+		{"blank state", []Option{WithAutomaticTLS(" ", true)}},
+		{"manual files", []Option{WithAutomaticTLS("state", false), WithTLSCertificate("cert.pem", "key.pem")}},
+		{"raw TCP", []Option{WithAutomaticTLS("state", true), WithTCP()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Expose(t.Context(), types.Identity{}, []string{"https://relay.example"}, tc.opts...)
+			if err == nil || !strings.Contains(err.Error(), "TLS") {
+				t.Fatalf("expected automatic TLS option error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestExposeRejectsInvalidCertificateFiles(t *testing.T) {
+	clientIdentity, err := identity.Generate("local-tls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	corrupt := filepath.Join(dir, "corrupt.pem")
+	if err := os.WriteFile(corrupt, []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{filepath.Join(dir, "missing.pem"), corrupt} {
+		t.Run(filepath.Base(file), func(t *testing.T) {
+			exposure, err := Expose(t.Context(), clientIdentity, []string{"https://127.0.0.1:1"}, WithTLSCertificate(file, file))
+			if exposure != nil {
+				_ = exposure.Close()
+				t.Fatal("Expose started with invalid manual certificate files")
+			}
+			if !errors.Is(err, localtls.ErrLocalCertificate) {
+				t.Fatalf("Expose() = %v, want local certificate error before relay registration", err)
+			}
+		})
+	}
+}
+
+func TestTerminalRelayErrorsPreserveTransportRetries(t *testing.T) {
+	for _, tc := range []struct {
+		err      error
+		terminal bool
+	}{
+		{fmt.Errorf("manual TLS: %w", localtls.ErrLocalCertificate), true},
+		{context.Canceled, false},
+		{context.DeadlineExceeded, false},
+		{io.EOF, false},
+		{&net.OpError{Op: "dial", Net: "tcp", Err: io.EOF}, false},
+	} {
+		if got := isTerminalRelayError(tc.err); got != tc.terminal {
+			t.Fatalf("isTerminalRelayError(%v) = %v, want %v", tc.err, got, tc.terminal)
+		}
+	}
+}
+
+func TestWaitReadyOnlyReturnsFailuresWhenAllRelaysAreTerminal(t *testing.T) {
+	const badRelay, otherRelay = "https://bad.example", "https://other.example"
+	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 1)}
+	readyCtx, readyCancel := context.WithTimeout(t.Context(), time.Second)
+	defer readyCancel()
+	exposure.setRelayStatus(badRelay, listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: localtls.ErrLocalCertificate})
+	if _, err := exposure.WaitReady(readyCtx); !errors.Is(err, localtls.ErrLocalCertificate) {
+		t.Fatalf("terminal relay returned %v", err)
+	}
+	exposure.syncRelayStatuses([]string{badRelay, otherRelay})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := exposure.WaitReady(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("connecting relay was discarded: %v", err)
+	}
+	exposure.setRelayStatus(otherRelay, listenerStatus{state: RelayReady, publicURL: "https://tenant.other.example"})
+	ready, err := exposure.WaitReady(readyCtx)
+	if err != nil || len(ready) != 1 || ready[0].RelayURL != otherRelay {
+		t.Fatalf("healthy relay was discarded: %v, %v", ready, err)
+	}
+}
+
+func TestExposeRejectsInvalidCertificateMonitoringOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+	}{
+		{"missing state", []Option{WithCertificateMonitoring("", "", "")}},
+		{"blank state", []Option{WithCertificateMonitoring(" ", "", "")}},
+		{"invalid resolver", []Option{WithCertificateMonitoring("evidence", "", "dns.example:53")}},
+		{"relay cache", []Option{WithCertificateMonitoring("evidence", "", ""), WithStaticRelayCache(".", time.Hour)}},
+		{"raw TCP", []Option{WithCertificateMonitoring("evidence", "", ""), WithTCP()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Expose(t.Context(), types.Identity{}, []string{"https://relay.example"}, tc.opts...)
+			if err == nil || errors.Is(err, errPortalSDKIdentityMustIncludeAddress) {
+				t.Fatalf("expected certificate monitoring option error, got %v", err)
+			}
+		})
 	}
 }

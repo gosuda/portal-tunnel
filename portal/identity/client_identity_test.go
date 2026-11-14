@@ -27,7 +27,7 @@ func TestLoadOrCreatePersistsAndReloads(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("identity file not written: %v", err)
 	}
-	if reloaded := mustLoadOrCreate(t, "ignored", path, ""); reloaded.PrivateKey != created.PrivateKey || reloaded.Name != created.Name {
+	if reloaded := mustLoadOrCreate(t, "svc", path, ""); reloaded.PrivateKey != created.PrivateKey || reloaded.Name != created.Name {
 		t.Fatalf("reloaded identity mismatch: %+v", reloaded)
 	}
 }
@@ -42,7 +42,7 @@ func TestLoadOrCreatePersistsAndReloadsUnnamed(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("identity file not written: %v", err)
 	}
-	if reloaded := mustLoadOrCreate(t, "ignored", path, ""); reloaded.PrivateKey != created.PrivateKey || reloaded.Name != "" {
+	if reloaded := mustLoadOrCreate(t, "", path, ""); reloaded.PrivateKey != created.PrivateKey || reloaded.Name != "" {
 		t.Fatalf("reloaded identity mismatch: %+v", reloaded)
 	}
 }
@@ -76,16 +76,50 @@ func TestLoadOrCreateWithoutPathStaysEphemeral(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreateNameOnlyAppliesWhenGenerating(t *testing.T) {
+func TestLoadOrCreateSharedKeyIndependentServices(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
-	first := mustLoadOrCreate(t, "stored-name", path, "")
-
-	reloaded := mustLoadOrCreate(t, "new-name", path, "")
-	if reloaded.Name != first.Name || reloaded.PrivateKey != first.PrivateKey {
-		t.Fatalf("existing identity changed: %+v", reloaded)
+	first := mustLoadOrCreate(t, "blog", path, "")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := mustLoadOrCreate(t, "api", path, "")
+	if second.Name != "api" || first.Name != "blog" || second.PrivateKey != first.PrivateKey || second.Address != first.Address {
+		t.Fatal("sibling services must share ownership, not service names")
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != string(original) {
+		t.Fatal("service selection modified signing identity")
+	}
+	if got := mustLoadOrCreate(t, "", path, ""); got.Name != "" {
+		t.Fatal("new key file persisted mutable service name")
 	}
 }
 
+func TestLoadOrCreatePreservesLegacyName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.json")
+	legacy := mustGenerate(t, "legacy")
+	raw := mustMarshal(t, legacy)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadOrCreate(t, "", path, ""); got.Name != "legacy" {
+		t.Fatal("legacy default name lost")
+	}
+	if got := mustLoadOrCreate(t, "api", path, ""); got.Name != "api" || got.PrivateKey != legacy.PrivateKey {
+		t.Fatal("explicit service did not reuse legacy key")
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != string(raw) {
+		t.Fatal("legacy file changed")
+	}
+}
 func TestLoadOrCreateRejectsInvalidExistingName(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
 	raw := withJSONField(t, mustMarshal(t, mustGenerate(t, "valid")), "name", "!!!")

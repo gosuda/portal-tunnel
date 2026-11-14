@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"time"
 
@@ -10,7 +11,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -137,7 +140,7 @@ func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, err
 	return transport.DialQUICBackhaul(ctx, dialAddr, tlsCfg, lease.accessToken)
 }
 
-func (l *listener) runRenewLoop(ctx context.Context) error {
+func (l *listener) runRenewLoop(ctx context.Context, renew <-chan struct{}) error {
 	const wakeThreshold = 10 * time.Second
 
 	for {
@@ -146,10 +149,17 @@ func (l *listener) runRenewLoop(ctx context.Context) error {
 			return err
 		}
 
-		elapsed, err := sleepUntilRenew(ctx, interval)
-		if err != nil {
-			return err
+		before := time.Now().Round(0)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-renew:
+		case <-timer.C:
 		}
+		timer.Stop()
+		elapsed := time.Since(before)
 
 		if elapsed > interval+wakeThreshold {
 			log.Info().
@@ -163,17 +173,8 @@ func (l *listener) runRenewLoop(ctx context.Context) error {
 		if err := l.renewLeaseWithRetry(ctx); err != nil {
 			return err
 		}
+		l.reportAvailable()
 	}
-}
-
-func sleepUntilRenew(ctx context.Context, interval time.Duration) (time.Duration, error) {
-	before := time.Now().Round(0)
-	if interval > 0 {
-		if !utils.SleepOrDone(ctx, interval) {
-			return 0, ctx.Err()
-		}
-	}
-	return time.Since(before), nil
 }
 
 func (l *listener) renewLeaseWithRetry(ctx context.Context) error {
@@ -237,12 +238,17 @@ func (l *listener) renewLease(ctx context.Context) error {
 }
 
 func (l *listener) requestLeaseRenewal(requestCtx context.Context, lease listenerSnapshot) (types.RenewResponse, error) {
+	var localTLSNotAfter time.Time
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && endpoint.local.Ready() {
+		localTLSNotAfter = endpoint.local.CertificateExpiry()
+	}
 	resp, err := l.api.renew(requestCtx, types.RenewRequest{
-		AccessToken: lease.accessToken,
-		TTL:         int(defaultLeaseTTL / time.Second),
-		ReportedIP:  utils.ResolvePublicIP(requestCtx),
-		Metadata:    l.metadataSnapshot(),
-		RepinsChain: true,
+		LocalTLSNotAfter: localTLSNotAfter,
+		AccessToken:      lease.accessToken,
+		TTL:              int(defaultLeaseTTL / time.Second),
+		ReportedIP:       utils.ResolvePublicIP(requestCtx),
+		Metadata:         l.metadataSnapshot(),
+		RepinsChain:      true,
 	})
 	if err != nil {
 		if staleLeaseError(err) {
@@ -269,7 +275,7 @@ func (l *listener) applyRenewedLease(ctx context.Context, lease listenerSnapshot
 	}
 	if lease.tenantTLS != nil {
 		lease.tenantTLS.SetAccessToken(resp.AccessToken)
-		if !time.Now().Before(lease.chainCheckedAt.Add(defaultChainCheckInterval)) && l.refreshRelayChain(ctx, lease.tenantTLS) {
+		if !time.Now().Before(lease.chainCheckedAt.Add(defaultChainCheckInterval)) && l.refreshTenantChain(ctx, lease.tenantTLS) {
 			checkedAt := time.Now()
 			_, _ = l.lease.UpdateIf(func(current listenerSnapshot) (listenerSnapshot, bool) {
 				if current.tenantTLS != lease.tenantTLS {
@@ -283,7 +289,7 @@ func (l *listener) applyRenewedLease(ctx context.Context, lease listenerSnapshot
 	return nil
 }
 
-func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Client) bool {
+func (l *listener) refreshTenantChain(ctx context.Context, tenantTLS tenantTLSClient) bool {
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	changed, err := tenantTLS.RefreshChain(checkCtx)
@@ -294,14 +300,14 @@ func (l *listener) refreshRelayChain(ctx context.Context, tenantTLS *keyless.Cli
 				Err(err).
 				Str("relay_url", l.api.relayURL.String()).
 				Str("address", l.identity.Address).
-				Msg("relay certificate check failed; keeping the pinned chain")
+				Msg("tenant certificate check failed; keeping the pinned chain")
 		}
 		return false
 	case changed:
 		log.Info().
 			Str("relay_url", l.api.relayURL.String()).
 			Str("address", l.identity.Address).
-			Msg("relay certificate renewed; presenting the new chain")
+			Msg("tenant certificate renewed; presenting the new chain")
 	}
 	return true
 }
@@ -317,19 +323,35 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		TCPEnabled:             l.tcpEnabled,
 		StartedAt:              l.startedAt,
 	}
+	if l.tlsStateDir != "" || l.tlsCertFile != "" {
+		registerReq.Namespace = types.LocalTLSNamespaceV1
+	}
 	l.cache.ConfigureRegistration(&registerReq)
 	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))
 	if err != nil {
 		return err
 	}
+	if resp.Namespace != types.LocalTLSNamespaceV1 && (l.tlsRequireLocal || l.tlsCertFile != "") {
+		_ = l.api.unregister(context.Background(), resp.AccessToken)
+		return fmt.Errorf("%w: relay does not support the required Local TLS namespace", errRelayIncompatible)
+	}
 	if err := l.confirmNewRegistration(resp); err != nil {
 		return err
 	}
-	tenantTLS, err := l.dialRegistrationTLS(ctx, resp)
+	var observer *certmonitor.CertificateObserver
+	if l.certificateMonitor != nil {
+		observer, err = certmonitor.StartCertificateObserver(resp.CanonicalHostname, *l.certificateMonitor)
+		if err != nil {
+			_ = l.api.unregister(context.Background(), resp.AccessToken)
+			return err
+		}
+	}
+	tenantTLS, err := l.dialRegistrationTLS(ctx, resp, observer)
 	if err != nil {
+		observer.Close()
 		return err
 	}
-	return l.storeRegistrationLease(ctx, resp, tenantTLS)
+	return l.storeRegistrationLease(ctx, resp, tenantTLS, observer)
 }
 
 func (l *listener) confirmNewRegistration(resp types.RegisterResponse) error {
@@ -347,15 +369,40 @@ func (l *listener) confirmNewRegistration(resp types.RegisterResponse) error {
 	return nil
 }
 
-func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse) (*keyless.Client, error) {
-	tenantTLS, err := keyless.NewClient(ctx, keyless.ClientConfig{
+func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse, observer *certmonitor.CertificateObserver) (tenantTLSClient, error) {
+	legacyHostname := resp.CanonicalHostname
+	if resp.Namespace == types.LocalTLSNamespaceV1 {
+		legacyHostname = resp.LegacyCanonicalHostname
+	}
+	legacy, err := keyless.NewClient(ctx, keyless.ClientConfig{
 		RelayURL:    l.api.relayURL.String(),
-		Hostname:    resp.CanonicalHostname,
+		Hostname:    legacyHostname,
 		AccessToken: resp.AccessToken,
 	})
 	if err != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return nil, err
+	}
+	var tenantTLS tenantTLSClient = legacy
+	if resp.Namespace == types.LocalTLSNamespaceV1 {
+		l.api.mu.RLock()
+		issuanceDisabled := l.api.issuanceDisabled
+		l.api.mu.RUnlock()
+		local, localErr := localtls.NewClient(ctx, localtls.ClientConfig{
+			RelayURL: l.api.relayURL.String(), Hostname: resp.CanonicalHostname,
+			AccessToken: resp.AccessToken, CertificateDir: l.tlsStateDir, IssuanceDisabled: issuanceDisabled,
+			CertFile: l.tlsCertFile, KeyFile: l.tlsKeyFile,
+			InstalledCertificates: observer.Events(),
+		})
+		if localErr != nil {
+			_ = legacy.Close()
+			_ = l.api.unregister(context.Background(), resp.AccessToken)
+			return nil, localErr
+		}
+		if l.http2Enabled.Load() {
+			local.SetNextProtos([]string{"h2", "http/1.1"})
+		}
+		tenantTLS = &namespaceTLS{local: local, legacy: legacy, hostname: resp.CanonicalHostname, legacyHostname: legacyHostname, aliasHostname: resp.Hostname}
 	}
 	if ctx.Err() != nil {
 		_ = l.api.unregister(context.Background(), resp.AccessToken)
@@ -365,21 +412,27 @@ func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterR
 	return tenantTLS, nil
 }
 
-func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS *keyless.Client) error {
+func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS tenantTLSClient, observer *certmonitor.CertificateObserver) error {
 	next := listenerSnapshot{
-		hostname:       resp.CanonicalHostname,
-		aliasHostname:  resp.Hostname,
-		udpAddr:        resp.UDPAddr,
-		tcpAddr:        resp.TCPAddr,
-		accessToken:    resp.AccessToken,
-		reverse:        resp.ReverseEndpoint,
-		expiresAt:      resp.ExpiresAt,
-		tenantTLS:      tenantTLS,
-		chainCheckedAt: time.Now(),
+		hostname:            resp.CanonicalHostname,
+		legacyHostname:      resp.LegacyCanonicalHostname,
+		aliasHostname:       resp.Hostname,
+		udpAddr:             resp.UDPAddr,
+		tcpAddr:             resp.TCPAddr,
+		accessToken:         resp.AccessToken,
+		reverse:             resp.ReverseEndpoint,
+		expiresAt:           resp.ExpiresAt,
+		tenantTLS:           tenantTLS,
+		certificateObserver: observer,
+		chainCheckedAt:      time.Now(),
 	}
 	oldLease := l.lease.Swap(next)
+	if l.http2Enabled.Load() {
+		l.enableHTTP2()
+	}
 	if oldLease.tenantTLS != nil {
 		_ = oldLease.tenantTLS.Close()
+		oldLease.certificateObserver.Close()
 	}
 	if err := ctx.Err(); err != nil {
 		lease := l.clearLease("registration canceled")
@@ -389,6 +442,7 @@ func (l *listener) storeRegistrationLease(ctx context.Context, resp types.Regist
 			}
 			if lease.tenantTLS != nil {
 				_ = lease.tenantTLS.Close()
+				lease.certificateObserver.Close()
 			}
 		}
 		return err

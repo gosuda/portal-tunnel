@@ -87,7 +87,7 @@ func registerIdentityAuthFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *expo
 	env.Bool(fs, &flags.banMITM, "ban-mitm", false, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	env.String(fs, &cfg.IdentityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	env.String(fs, &cfg.IdentityJSON, "identity-json", "", "identity json payload kept in memory; takes precedence over --identity-path", "IDENTITY_JSON")
-	fs.StringVar(&cfg.Name, "name", "", "Request a short URL without the Ethereum address (single DNS label, maximum 63 ASCII characters); applies to new identities; omitted for the address-only default service")
+	fs.StringVar(&cfg.Name, "name", "", "Select a service and request a short URL (single DNS label, maximum 63 ASCII characters); overrides the identity's saved name without changing the file; omitted uses a legacy saved name or the unnamed default service")
 	fs.StringVar(&cfg.Description, "description", "", "Service description metadata")
 	fs.StringVar(&flags.tags, "tags", "", "Service tags metadata (comma-separated)")
 	fs.StringVar(&cfg.Owner, "owner", "", "Service owner metadata")
@@ -132,6 +132,14 @@ func registerPaymentTransportFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *
 }
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
+	fs.BoolVar(&cfg.TLSAuto, "tls-auto", false, "Obtain and renew exact service.address certificates; canonical TLS never falls back to Keyless")
+	fs.StringVar(&cfg.TLSStateDir, "tls-state-dir", "", "Persistent certificate/key directory for --tls-auto (default identity path plus .tls; required with --identity-json)")
+	fs.BoolVar(&cfg.TLSRequireLocal, "tls-require-local", false, "Require relay support for the Local TLS namespace; reject legacy-only relays")
+	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "Tenant certificate chain PEM file; requires --tls-key and never falls back to relay signing")
+	fs.StringVar(&cfg.TLSKey, "tls-key", "", "Tenant private key PEM file; requires --tls-cert")
+	fs.StringVar(&cfg.TLSMonitorStateDir, "tls-monitor-state-dir", "", "Enable evaluation-only certificate monitoring and persist evidence here; sends hostname queries to public DNS and CertSpotter")
+	fs.StringVar(&cfg.TLSMonitorBaseline, "tls-monitor-baseline", "", "Operator-managed CAA/SPKI baseline JSON file; requires --tls-monitor-state-dir")
+	fs.StringVar(&cfg.TLSMonitorDNSResolver, "tls-monitor-dns-resolver", "", "Independent DNS resolver IP:port (default 1.1.1.1:53); requires --tls-monitor-state-dir")
 	env := cli.NewEnv(os.Environ())
 	registerIdentityAuthFlags(fs, cfg, flags, env)
 	registerPaymentTransportFlags(fs, cfg, flags, env)

@@ -92,7 +92,7 @@ func (r *leaseRegistry) collectPublicLeasesLocked(now time.Time) []types.Lease {
 		if !r.includePublicLeaseLocked(record, now) {
 			continue
 		}
-		leases = append(leases, r.publicLease(record))
+		leases = append(leases, r.publicLease(record, now))
 	}
 	return leases
 }
@@ -120,7 +120,7 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 		identityKey := record.ServiceKey()
 		serializedIdentityKey := identityKey.String()
 		leases = append(leases, types.PolicyLease{
-			Lease:       r.publicLease(record),
+			Lease:       r.publicLease(record, now),
 			IdentityKey: serializedIdentityKey,
 			BPS:         r.bps.IdentityBPS(identityKey),
 			ClientIP:    clientIP,
@@ -158,18 +158,21 @@ func (r *leaseRegistry) deleteRecord(i int) {
 	r.records = r.records[:last]
 }
 
-func (r *leaseRegistry) publicLease(record *leaseRecord) types.Lease {
+func (r *leaseRegistry) publicLease(record *leaseRecord, now time.Time) types.Lease {
 	lease := types.Lease{
-		Name:              record.Name,
-		Address:           record.Address,
-		ExpiresAt:         record.ExpiresAt,
-		FirstSeenAt:       record.FirstSeenAt,
-		LastSeenAt:        record.LastSeenAt,
-		Hostname:          record.Hostname,
-		CanonicalHostname: record.CanonicalHostname,
-		UDPEnabled:        record.datagram != nil,
-		TCPEnabled:        record.tcpPort > 0,
-		Metadata:          record.Metadata.Copy(),
+		Namespace:               record.Namespace,
+		LegacyCanonicalHostname: record.LegacyCanonicalHostname,
+		Name:                    record.Name,
+		Address:                 record.Address,
+		ExpiresAt:               record.ExpiresAt,
+		FirstSeenAt:             record.FirstSeenAt,
+		LastSeenAt:              record.LastSeenAt,
+		Hostname:                record.Hostname,
+		CanonicalHostname:       record.CanonicalHostname,
+		CanonicalReady:          record.Namespace == types.LocalTLSNamespaceV1 && now.Before(record.localTLSNotAfter) && now.Before(record.ExpiresAt),
+		UDPEnabled:              record.datagram != nil,
+		TCPEnabled:              record.tcpPort > 0,
+		Metadata:                record.Metadata.Copy(),
 	}
 	if record.tcpPort > 0 {
 		lease.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort)

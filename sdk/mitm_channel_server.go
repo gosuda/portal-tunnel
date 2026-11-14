@@ -3,6 +3,7 @@ package sdk
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -46,6 +47,15 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 	hostname := ""
 	if lease, ok := l.leaseSnapshot(); ok {
 		hostname = lease.hostname
+		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+			if sni := utils.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
+				if sni != lease.hostname && sni != lease.legacyHostname {
+					_ = conn.Close()
+					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
+				}
+				hostname = sni
+			}
+		}
 	}
 	if hostname == "" {
 		_ = conn.Close()
@@ -107,6 +117,11 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	if conn == nil {
 		return conn, false, nil
 	}
+	// HTTP/2 framing starts immediately after ALPN. Native channel binding
+	// uses the HTTP/1.1/raw path, never an h2 application stream.
+	if conn, ok := conn.(*tls.Conn); ok && conn.ConnectionState().NegotiatedProtocol == "h2" {
+		return conn, false, nil
+	}
 
 	exportFn, ok := probeExporter(conn)
 	if !ok {
@@ -118,6 +133,14 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	m.mu.Unlock()
 
 	canChannelBind := m.listener != nil && m.listener.cache == nil
+	if m.listener != nil && m.listener.cache != nil {
+		if lease, ok := m.listener.leaseSnapshot(); ok {
+			if conn, ok := conn.(*tls.Conn); ok {
+				_, canonical := lease.tenantTLS.(*namespaceTLS)
+				canChannelBind = canonical && utils.NormalizeHostname(conn.ConnectionState().ServerName) == lease.hostname
+			}
+		}
+	}
 	if !hasPending && !canChannelBind {
 		return conn, false, nil
 	}

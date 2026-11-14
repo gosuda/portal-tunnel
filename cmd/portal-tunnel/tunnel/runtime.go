@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
@@ -20,6 +21,14 @@ import (
 )
 
 var (
+	errTLSAutomaticWithFiles                   = errors.New("tls_auto cannot be combined with tls_cert or tls_key")
+	errTLSAutomaticStateRequired               = errors.New("tls_auto requires tls_state_dir when no file-backed identity is configured")
+	errTLSStateWithoutAutomatic                = errors.New("tls_state_dir requires tls_auto")
+	errTLSRequireLocalWithoutMode              = errors.New("tls_require_local requires tls_auto or local certificate files")
+	errTLSCertificatePairRequired              = errors.New("tls_cert and tls_key must be configured together")
+	errLocalTLSWithRawTCP                      = errors.New("local TLS certificates cannot be combined with raw TCP")
+	errLocalTLSWithRelayCache                  = errors.New("local TLS certificates cannot be combined with relay cache")
+	errCertificateMonitorModeUnsupported       = errors.New("TLS certificate monitoring cannot be combined with relay cache or raw TCP")
 	errTunnelTargetIsRequired                  = errors.New("tunnel target is required")
 	errHTTPTunnelCannotCombinedTCPOr           = errors.New("HTTP tunnel cannot be combined with TCP or UDP")
 	errStaticServingCannotCombinedTargetOr     = errors.New("static serving cannot be combined with a target or HTTP routes")
@@ -38,11 +47,17 @@ var (
 
 // Spec is the resolved description of one tunnel that the runtime is built from.
 type Spec struct {
-	Identity  IdentitySpec
-	Relays    RelaySpec
-	Metadata  types.LeaseMetadata
-	Transport TransportSpec
-	HTTP      *HTTPConfig
+	CertificateMonitor *certmonitor.MonitorConfig
+	TLSAuto            bool
+	TLSStateDir        string
+	TLSRequireLocal    bool
+	TLSCert            string
+	TLSKey             string
+	Identity           IdentitySpec
+	Relays             RelaySpec
+	Metadata           types.LeaseMetadata
+	Transport          TransportSpec
+	HTTP               *HTTPConfig
 }
 
 type IdentitySpec struct {
@@ -171,6 +186,38 @@ func validateStripRequestHeaders(spec Spec) error {
 }
 
 func (spec Spec) Validate() error {
+	if spec.CertificateMonitor != nil {
+		if spec.Transport.TCP || (spec.HTTP != nil && spec.HTTP.Cache != nil) {
+			return errCertificateMonitorModeUnsupported
+		}
+		if err := spec.CertificateMonitor.Validate(); err != nil {
+			return err
+		}
+	}
+	if (spec.TLSCert == "") != (spec.TLSKey == "") {
+		return errTLSCertificatePairRequired
+	}
+	if spec.TLSAuto {
+		if spec.TLSCert != "" {
+			return errTLSAutomaticWithFiles
+		}
+		if spec.TLSStateDir == "" {
+			return errTLSAutomaticStateRequired
+		}
+	} else if spec.TLSStateDir != "" {
+		return errTLSStateWithoutAutomatic
+	}
+	if spec.TLSRequireLocal && !spec.TLSAuto && spec.TLSCert == "" {
+		return errTLSRequireLocalWithoutMode
+	}
+	if spec.TLSCert != "" || spec.TLSAuto {
+		if spec.Transport.TCP {
+			return errLocalTLSWithRawTCP
+		}
+		if spec.HTTP != nil && spec.HTTP.Cache != nil {
+			return errLocalTLSWithRelayCache
+		}
+	}
 	target := strings.TrimSpace(spec.Transport.Target)
 	if spec.HTTP == nil {
 		if target == "" {
@@ -240,7 +287,14 @@ func buildExposedRoutes(spec Spec) ([]gateway.ExposedHTTPRoute, error) {
 func buildExposureOptions(spec Spec) []sdk.Option {
 	opts := []sdk.Option{
 		sdk.WithMITMProtection(spec.Relays.BanMITM),
+		sdk.WithTLSCertificate(spec.TLSCert, spec.TLSKey),
 		sdk.WithMetadata(spec.Metadata),
+	}
+	if spec.TLSAuto {
+		opts = append(opts, sdk.WithAutomaticTLS(spec.TLSStateDir, spec.TLSRequireLocal))
+	}
+	if monitor := spec.CertificateMonitor; monitor != nil {
+		opts = append(opts, sdk.WithCertificateMonitoring(monitor.StateDir, monitor.BaselineFile, monitor.DNSResolver))
 	}
 	if spec.Transport.UDP != nil {
 		opts = append(opts, sdk.WithUDP())
@@ -342,7 +396,7 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 func (runtime *Runtime) publicHosts() []appauth.PublicHost {
 	var hosts []appauth.PublicHost
 	for _, relay := range runtime.Exposure.Relays() {
-		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
+		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.LegacyURL}, appauth.PublicHost{URL: relay.AliasURL, Since: relay.AliasSince})
 	}
 	return hosts
 }
