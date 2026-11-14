@@ -60,6 +60,9 @@ func newLocalPin(certPEM, keyPEM []byte, hostname string) (*pinnedChain, error) 
 	exactDNSName := len(leaf.DNSNames) == 1 && leaf.DNSNames[0] == hostname
 	hasOtherNames := len(leaf.IPAddresses) != 0 || len(leaf.EmailAddresses) != 0 || len(leaf.URIs) != 0
 	if hostname != "" && (!exactDNSName || hasOtherNames) {
+		if err := leaf.VerifyHostname(hostname); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrLocalCertificate, err)
+		}
 		return nil, fmt.Errorf("%w: certificate must contain only the exact service DNS name", ErrLocalCertificate)
 	}
 	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: hostname, Roots: roots, Intermediates: intermediates}); err != nil {
