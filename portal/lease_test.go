@@ -1139,7 +1139,7 @@ func checkUnnamedHostnames(t *testing.T, leasedIdentity types.Identity, resp typ
 	t.Helper()
 	expectedCanonical, err := namespace.LegacyHostname("", leasedIdentity.Address, "example.com")
 	if err != nil {
-		t.Fatalf("CanonicalLeaseHostname error = %v", err)
+		t.Fatalf("LegacyHostname error = %v", err)
 	}
 	if resp.Hostname != "" {
 		t.Fatalf("RegisterResponse hostname = %q, want empty friendly hostname for unnamed service", resp.Hostname)
