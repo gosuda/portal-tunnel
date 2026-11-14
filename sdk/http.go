@@ -509,31 +509,28 @@ func (r *httpRoute) rewriteProxyCookies(header http.Header, publicHost string) {
 	publicDomain = utils.NormalizeHostname(strings.Trim(publicDomain, "[]"))
 	header.Del("Set-Cookie")
 	for _, value := range values {
-		header.Add("Set-Cookie", r.rewriteProxyCookiesValue(value, publicDomain))
-	}
-}
-
-func (r *httpRoute) rewriteProxyCookiesValue(value, publicDomain string) string {
-	cookie, err := http.ParseSetCookie(value)
-	if err != nil {
-		return value
-	}
-	changed := false
-	if cookie.Path != "" {
-		if rewritten := r.mapPublicPath(cookie.Path); rewritten != cookie.Path {
-			cookie.Path = rewritten
+		cookie, err := http.ParseSetCookie(value)
+		if err != nil {
+			header.Add("Set-Cookie", value)
+			continue
+		}
+		changed := false
+		if cookie.Path != "" {
+			if rewritten := r.mapPublicPath(cookie.Path); rewritten != cookie.Path {
+				cookie.Path = rewritten
+				changed = true
+			}
+		}
+		domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
+		matchesDomain := domain == r.upstreamDomain || utils.IsLocalRelayHost(domain)
+		if domain != "" && domain != publicDomain && matchesDomain {
+			cookie.Domain = ""
 			changed = true
 		}
+		if changed {
+			header.Add("Set-Cookie", cookie.String())
+		} else {
+			header.Add("Set-Cookie", value)
+		}
 	}
-	domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
-	rewriteDomain := domain != "" && domain != publicDomain &&
-		(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain))
-	if rewriteDomain {
-		cookie.Domain = ""
-		changed = true
-	}
-	if changed {
-		return cookie.String()
-	}
-	return value
 }
