@@ -66,6 +66,7 @@ export const guidesNavigation: NavSection[] = [
 			{ title: 'Wallet and ENS', href: '/wallet-and-ens' },
 			{ title: 'Application Authentication', href: '/siwe-authentication' },
 			{ title: 'Deployment', href: '/deployment' },
+			{ title: 'Relay Replacement', href: '/relay-replacement' },
 			{ title: 'Configuration', href: '/configuration' }
 		]
 	}

@@ -167,7 +167,7 @@ func exposeServePaymentExposure(ctx context.Context, cfg paymentConfig, metadata
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
 	}
-	explicitRelayURLs, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.relayURLs)...)
+	explicitRelayURLs, err := types.NormalizeRelayURLs(cfg.relayURLs)
 	if err != nil {
 		return nil, err
 	}

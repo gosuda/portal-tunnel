@@ -170,6 +170,13 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `PGNS_WITNESSES` | `""` | string | Comma-separated PGNS witness public keys formatted as `name=hex_ed25519_pubkey` for offline `/sdk/register` proof verification |
 | `PGNS_WITNESS_THRESHOLD` | `0` | int | Required PGNS witness cosignature quorum threshold (`0` defaults to all configured `PGNS_WITNESSES`) |
 
+`TUNNEL_SOURCE_CIDRS` limits tunnel registration and renewal, not discovery
+announces. With `DISCOVERY=true`, announces share the global pre-auth budget
+with registration and can delay registrations from allowed networks. Keep
+discovery disabled on a restricted relay unless needed; see
+[Discovery and registration capacity](/self-hosting#discovery-and-registration-capacity)
+for the effect and limits of budget tuning.
+
 ### IVNP overlay
 
 `IVNP_CONFIG` now points to a JSON object using the fields of IVNP's

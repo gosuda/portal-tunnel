@@ -138,7 +138,7 @@ func (c *Config) Normalize() error {
 	}
 	c.StripRequestHeaders = slices.Clone(c.StripRequestHeaders)
 	c.normalizePGNS()
-	relays, err := utils.NormalizeRelayURLs(c.RelayURLs...)
+	relays, err := types.NormalizeRelayURLs(c.RelayURLs...)
 	if err != nil {
 		return err
 	}

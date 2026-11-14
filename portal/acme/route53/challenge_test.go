@@ -160,7 +160,16 @@ func TestChallengeCancellation(t *testing.T) {
 	for _, phase := range []string{"lookup", "write", "poll", "credentials", "assume_role", "metadata", "nested_metadata"} {
 		t.Run(phase, func(t *testing.T) {
 			started, canceled := make(chan struct{}), make(chan struct{})
+			metadataPhase := phase == "metadata" || phase == "nested_metadata"
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Finish the IMDSv2 token exchange before testing metadata
+				// cancellation. Canceling token retrieval can trigger an
+				// IMDSv1 fallback request instead of ending the operation.
+				if metadataPhase && r.Method == http.MethodPut && r.URL.Path == "/latest/api/token" {
+					w.Header().Set("X-Aws-Ec2-Metadata-Token-Ttl-Seconds", "21600")
+					io.WriteString(w, "test-imds-token")
+					return
+				}
 				blocked := phase == "credentials" || phase == "assume_role" || phase == "metadata" || phase == "nested_metadata" || phase == "lookup" ||
 					phase == "write" && r.Method == http.MethodPost ||
 					phase == "poll" && strings.Contains(r.URL.Path, "/change/")

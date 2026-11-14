@@ -413,7 +413,10 @@ func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, namespace st
 	now := time.Now()
 	var selected *leaseRecord
 	for _, record := range r.records {
-		if record == nil || !record.replica || record.ServiceKey() != key || record.Namespace != namespace {
+		if record == nil || !record.replica {
+			continue
+		}
+		if record.ServiceKey() != key || record.Namespace != namespace {
 			continue
 		}
 		unready := requireReady && record.reverse.ReadyCount() == 0
@@ -1214,7 +1217,10 @@ func (r *leaseRegistry) joinRegisterReplicasLocked(record *leaseRecord, identity
 	}
 	replicas := 0
 	for _, existing := range r.records {
-		if existing == nil || existing.isExpired(now) || existing.reverse == nil || existing.ServiceKey() != identityKey {
+		if existing == nil || existing.reverse == nil || existing.isExpired(now) {
+			continue
+		}
+		if existing.ServiceKey() != identityKey {
 			continue
 		}
 		if req.Replica {
@@ -1253,7 +1259,10 @@ func (r *leaseRegistry) assignAliasEpochLocked(record *leaseRecord, identityKey 
 
 func (r *leaseRegistry) checkRegisterHostnameLocked(record *leaseRecord, identityKey types.ServiceIdentityKey, req types.RegisterChallengeRequest, now time.Time) error {
 	for _, existing := range r.records {
-		if existing == nil || existing.isExpired(now) || existing.ServiceKey() == identityKey || !existing.isPublicEntry() {
+		if existing == nil || !existing.isPublicEntry() || existing.isExpired(now) {
+			continue
+		}
+		if existing.ServiceKey() == identityKey {
 			continue
 		}
 		if existing.CanonicalHostname == record.CanonicalHostname {
@@ -1331,6 +1340,22 @@ func (r *leaseRegistry) recordPGNSWatermarkLocked(pgnsLeaf pgns.PortalLeafRecord
 	}
 }
 
+func (r *leaseRegistry) validateRegisterLocked(record *leaseRecord, pgnsLeaf *pgns.PortalLeafRecord, identityKey types.ServiceIdentityKey, req types.RegisterChallengeRequest, now time.Time) error {
+	if err := r.joinRegisterReplicasLocked(record, identityKey, req, now); err != nil {
+		return err
+	}
+	if pgnsLeaf != nil {
+		if err := r.checkPGNSConflictLocked(record, pgnsLeaf, identityKey, now); err != nil {
+			return err
+		}
+	} else {
+		if err := r.checkRegisterHostnameLocked(record, identityKey, req, now); err != nil {
+			return err
+		}
+	}
+	return r.checkRegisterCapacityLocked(record, now)
+}
+
 func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, *leaseRecord, types.RegisterResponse, error) {
 	return r.register(req, sourceAddr, reportedIP, self, descriptors, served, nil)
 }
@@ -1364,25 +1389,7 @@ func (r *leaseRegistry) register(req types.RegisterChallengeRequest, sourceAddr 
 
 	r.mu.Lock()
 	now := time.Now()
-	if err := r.joinRegisterReplicasLocked(record, identityKey, req, now); err != nil {
-		r.mu.Unlock()
-		r.rollbackRecord(record)
-		return nil, nil, types.RegisterResponse{}, err
-	}
-	if pgnsLeaf != nil {
-		if err := r.checkPGNSConflictLocked(record, pgnsLeaf, identityKey, now); err != nil {
-			r.mu.Unlock()
-			r.rollbackRecord(record)
-			return nil, nil, types.RegisterResponse{}, err
-		}
-	} else {
-		if err := r.checkRegisterHostnameLocked(record, identityKey, req, now); err != nil {
-			r.mu.Unlock()
-			r.rollbackRecord(record)
-			return nil, nil, types.RegisterResponse{}, err
-		}
-	}
-	if err := r.checkRegisterCapacityLocked(record, now); err != nil {
+	if err := r.validateRegisterLocked(record, pgnsLeaf, identityKey, req, now); err != nil {
 		r.mu.Unlock()
 		r.rollbackRecord(record)
 		return nil, nil, types.RegisterResponse{}, err

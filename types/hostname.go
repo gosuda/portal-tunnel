@@ -115,6 +115,36 @@ func NormalizeRelayURL(raw string) (string, error) {
 	return canonicalRelayURL(parsed), nil
 }
 
+// NormalizeRelayURLs normalizes a list of relay URLs or comma-separated URL
+// strings, dropping duplicates and preserving first-seen order.
+func NormalizeRelayURLs(inputs ...string) ([]string, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	var out []string
+	seen := make(map[string]struct{})
+	for _, input := range inputs {
+		for _, part := range strings.Split(input, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			normalized, err := NormalizeRelayURL(part)
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := seen[normalized]; !ok {
+				seen[normalized] = struct{}{}
+				out = append(out, normalized)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
 func parseNormalizeRelayURLCandidate(trimmed string) (*url.URL, error) {
 	parsed, err := url.Parse(trimmed)
 	if err != nil {

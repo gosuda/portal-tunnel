@@ -258,6 +258,11 @@ rejected (`relay sdk protocol version mismatch`). Upgrade relays and the tunnel
 clients that dial them together: a relay upgraded first rejects every older
 client until the clients catch up (`portal update`).
 
+For replacement within a compatible protocol version, see
+[Relay Replacement with External Infrastructure](/relay-replacement). It
+describes explicit dual registration, externally managed connection draining,
+policy responsibilities, and the current configuration limits.
+
 ## Running Behind an Existing Reverse Proxy
 
 Portal expects to own public `443/tcp`. On a host that already serves other

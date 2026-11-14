@@ -23,7 +23,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -357,7 +356,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err != nil {
 		return nil, err
 	}
-	relayURLs, err := utils.NormalizeRelayURLs(relays...)
+	relayURLs, err := types.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +508,7 @@ func (e *Exposure) runDiscoveryLoop(exposureCtx context.Context) {
 }
 
 func (e *Exposure) applyRelays(relays []string) error {
-	relayURLs, err := utils.NormalizeRelayURLs(relays...)
+	relayURLs, err := types.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return err
 	}

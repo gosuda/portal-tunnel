@@ -292,6 +292,28 @@ but `relay-server config --env-file .env` names it beforehand.
 - A relay from before this setting ignores it and accepts every network, so
   recheck the version after a downgrade.
 
+### Discovery and registration capacity
+
+For a relay that accepts tunnels only from your networks, keep `DISCOVERY=false`
+(the default) unless you also need relay discovery. `TUNNEL_SOURCE_CIDRS` does
+not restrict `POST /discovery/announce`: other relays may announce from outside
+your tunnel networks.
+
+With discovery enabled, announces and tunnel registration share the global
+pre-auth budget, although each source address has its own source bucket.
+Outside announces can exhaust that global budget and make an allowed tunnel's
+challenge or registration receive `429` with `Retry-After`. The SDK retries,
+but new registrations and re-registrations after a restart can be delayed.
+The source allowlist still rejects unauthorized registration; it does not
+reserve registration capacity. Lease renewal does not consume this pre-auth
+budget, so exhaustion alone does not interrupt already registered tunnels.
+
+If you need both features, monitor pre-auth rejections and size
+`PREAUTH_GLOBAL_PER_MINUTE` and `PREAUTH_GLOBAL_BURST` for the combined work.
+Higher limits increase the work the relay accepts; they do not isolate
+discovery traffic or guarantee registration capacity under sustained load.
+Separate discovery and registration budgets are not currently provided.
+
 ## Optional: Enable TCP/UDP Tunneling
 
 To relay raw TCP or UDP traffic (game servers, databases, etc.), enable the transports and set a port range:
