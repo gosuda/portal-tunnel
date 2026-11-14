@@ -154,6 +154,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--x402-asset` | string | | wCSPR CEP-18 contract hash required by Casper |
 | `--x402-endpoint` | string | | Optional Sui RPC, Casper facilitator, or Nano RPC endpoint; repeatable |
 | `--x402-facilitator-token` | string | `CSPR_CLOUD_API_KEY` | Casper facilitator authorization token; prefer the environment variable so the secret is not exposed in the process arguments |
+| `--x402-option` | string | | Network-specific option in `KEY=VALUE` form passed to the x402-facilitator paywall, such as `nano_claims_file=/var/lib/portal/claims.jsonl` or `nano_require_binding=true`; repeatable; an unsupported option is an error |
 | `--strip-request-header` | string | | Client request header removed before routed HTTP forwards it upstream; repeatable; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (`Host`, `X-Forwarded-*`) are always rewritten after stripping; requires `--http-route` or `--auth` |
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
 | `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
@@ -274,7 +275,9 @@ exporter verification; see the [security model](/security-model#local-tls-servic
   facilitator also requires `CSPR_CLOUD_API_KEY`. Nano requires
   `--x402-network nano:mainnet` and a `nano_` pay-to address; repeat
   `--x402-endpoint` for at least two RPC nodes or omit it for the public
-  defaults.
+  defaults. `--x402-option nano_claims_file=PATH` keeps spent blocks spent
+  across restarts, and `--x402-option nano_require_binding=true` requires a
+  payer signature.
 
 ### Application-Owned Tunnel Lifetime
 

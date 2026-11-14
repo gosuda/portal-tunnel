@@ -1,135 +1,25 @@
 package gateway
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
-
-	x402http "github.com/gosuda/x402-facilitator/resource/http"
-	facilitatortypes "github.com/gosuda/x402-facilitator/types"
 )
 
-const (
-	nanoTestPayTo        = "nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3"
-	nanoTestOtherPeer    = "nano_1111111111111111111111111111111111111111111111111111hifc8npp"
-	nanoTestRawFor001XNO = "10000000000000000000000000000"
-)
+// Per-network payment, conversion and claim tests live with the payment
+// owner (x402-facilitator resource/paywall). These tests cover only how the
+// tunnel composes its routes with the paywall.
 
-func newNanoRPCNode(t *testing.T, ledger map[string]map[string]any) *httptest.Server {
-	t.Helper()
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Action string `json:"action"`
-			Hash   string `json:"hash"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Action != "block_info" {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		block, ok := ledger[req.Hash]
-		if !ok {
-			block = map[string]any{"error": "Block not found"}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(block)
-	}))
-	t.Cleanup(node.Close)
-	return node
-}
-
-func nanoSendBlock(destination, amount, confirmed string) map[string]any {
-	return map[string]any{
-		"block_account": nanoTestOtherPeer,
-		"amount":        amount,
-		"confirmed":     confirmed,
-		"subtype":       "send",
-		"contents": map[string]any{
-			"type":            "state",
-			"link_as_account": destination,
-		},
-	}
-}
-func newNanoPaymentFixture(t *testing.T, ledger map[string]map[string]any) (http.Handler, facilitatortypes.PaymentRequirements, *atomic.Int32) {
-	t.Helper()
-	nodeA := newNanoRPCNode(t, ledger)
-	nodeB := newNanoRPCNode(t, ledger)
-
-	var upstreamHits atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		upstreamHits.Add(1)
-		_, _ = io.WriteString(w, "paid content")
-	}))
-	t.Cleanup(upstream.Close)
-
-	handler, err := ComposeHTTPRoutes([]ExposedHTTPRoute{
-		{Prefix: "/paid", Upstream: upstream.URL, Amount: "0.01"},
-		{Prefix: "/also-paid", Upstream: upstream.URL, Amount: "0.01"},
-	}, X402Config{
-		Network:   "nano:mainnet",
-		PayTo:     strings.ToUpper(nanoTestPayTo[:1]) + nanoTestPayTo[1:],
-		Endpoints: []string{nodeA.URL, nodeB.URL},
-	})
-	if err != nil {
-		t.Fatalf("ComposeHTTPRoutes() error = %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://example.com/paid/item", nil))
-	if rec.Code != http.StatusPaymentRequired {
-		t.Fatalf("unpaid status = %d, want 402", rec.Code)
-	}
-	accepted := decodeNanoPaymentFixtureChallenge(t, rec)
-	return handler, accepted, &upstreamHits
-}
-
-func decodeNanoPaymentFixtureChallenge(t *testing.T, rec *httptest.ResponseRecorder) facilitatortypes.PaymentRequirements {
-	t.Helper()
-	rawChallenge, err := base64.StdEncoding.DecodeString(rec.Header().Get(x402http.HeaderPaymentRequired))
-	if err != nil {
-		t.Fatalf("decode challenge: %v", err)
-	}
-	var challenge struct {
-		Accepts []facilitatortypes.PaymentRequirements `json:"accepts"`
-	}
-	if err := json.Unmarshal(rawChallenge, &challenge); err != nil {
-		t.Fatalf("unmarshal challenge: %v", err)
-	}
-	if len(challenge.Accepts) != 1 {
-		t.Fatalf("accepts = %d, want 1", len(challenge.Accepts))
-	}
-	accepted := challenge.Accepts[0]
-	if accepted.Scheme != "exact" || accepted.Network != "nano:mainnet" || accepted.Asset != "XNO" ||
-		accepted.Amount != nanoTestRawFor001XNO || accepted.PayTo != nanoTestPayTo {
-		t.Fatalf("accepted = %+v, want exact nano:mainnet XNO %s to %s", accepted, nanoTestRawFor001XNO, nanoTestPayTo)
-	}
-	return accepted
-}
-
-func payNanoPath(t *testing.T, handler http.Handler, accepted facilitatortypes.PaymentRequirements, path, blockHash string) *httptest.ResponseRecorder {
-	t.Helper()
-	raw, err := json.Marshal(facilitatortypes.PaymentPayload{
-		X402Version: int(facilitatortypes.X402VersionV2),
-		Accepted:    accepted,
-		Payload:     map[string]any{"blockHash": blockHash},
-	})
-	if err != nil {
-		t.Fatalf("marshal payment: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "https://example.com"+path, nil)
-	req.Header.Set(x402http.HeaderPaymentSignature, base64.StdEncoding.EncodeToString(raw))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	return rec
-}
+const nanoTestPayTo = "nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3"
 
 func checkPrepareRouted(t *testing.T, handler http.Handler, path, method string, status int) {
 	t.Helper()
-	body, err := json.Marshal(x402PreparePaymentRequest{Path: path, Method: method})
+	body, err := json.Marshal(map[string]string{"path": path, "method": method})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,99 +27,6 @@ func checkPrepareRouted(t *testing.T, handler http.Handler, path, method string,
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "https://tenant.example"+X402PreparePath, strings.NewReader(string(body))))
 	if rec.Code != status {
 		t.Fatalf("status = %d, body = %q; want %d", rec.Code, rec.Body.String(), status)
-	}
-}
-
-func TestComposeHTTPRoutesNanoPayment(t *testing.T) {
-	t.Parallel()
-	const (
-		paidHash        = "ECCB8CB65CD3106EDA8CE9AA893FEAD497A91BCA903890CBD7A5C59F06AB9113"
-		underpaidHash   = "1111111111111111111111111111111111111111111111111111111111111111"
-		wrongPayeeHash  = "2222222222222222222222222222222222222222222222222222222222222222"
-		unconfirmedHash = "3333333333333333333333333333333333333333333333333333333333333333"
-	)
-	ledger := map[string]map[string]any{
-		paidHash:        nanoSendBlock(nanoTestPayTo, nanoTestRawFor001XNO, "true"),
-		underpaidHash:   nanoSendBlock(nanoTestPayTo, "9999999999999999999999999999", "true"),
-		wrongPayeeHash:  nanoSendBlock(nanoTestOtherPeer, nanoTestRawFor001XNO, "true"),
-		unconfirmedHash: nanoSendBlock(nanoTestPayTo, nanoTestRawFor001XNO, "false"),
-	}
-	handler, accepted, upstreamHits := newNanoPaymentFixture(t, ledger)
-	checkNanoPaymentRejectsInvalid(t, handler, accepted, upstreamHits)
-	checkNanoPaymentAcceptsValid(t, handler, accepted, upstreamHits, paidHash)
-	checkNanoPaymentRejectsReplay(t, handler, accepted, upstreamHits, paidHash)
-}
-
-func checkNanoPaymentRejectsInvalid(t *testing.T, handler http.Handler, accepted facilitatortypes.PaymentRequirements, upstreamHits *atomic.Int32) {
-	t.Helper()
-	for name, hash := range map[string]string{
-		"underpaid":   "1111111111111111111111111111111111111111111111111111111111111111",
-		"wrong payee": "2222222222222222222222222222222222222222222222222222222222222222",
-		"unconfirmed": "3333333333333333333333333333333333333333333333333333333333333333",
-		"unknown":     strings.Repeat("4", 64),
-	} {
-		if rec := payNanoPath(t, handler, accepted, "/paid/item", hash); rec.Code != http.StatusPaymentRequired {
-			t.Fatalf("%s payment status = %d, want 402", name, rec.Code)
-		}
-	}
-	if hits := upstreamHits.Load(); hits != 0 {
-		t.Fatalf("upstream reached %d times before a valid payment", hits)
-	}
-}
-
-func checkNanoPaymentAcceptsValid(t *testing.T, handler http.Handler, accepted facilitatortypes.PaymentRequirements, upstreamHits *atomic.Int32, paidHash string) {
-	t.Helper()
-	rec := payNanoPath(t, handler, accepted, "/paid/item", strings.ToLower(paidHash))
-	if rec.Code != http.StatusOK || rec.Body.String() != "paid content" {
-		t.Fatalf("paid status = %d body = %q, want 200 paid content", rec.Code, rec.Body.String())
-	}
-	if rec.Header().Get(x402http.HeaderPaymentResponse) == "" {
-		t.Fatal("paid response is missing the settlement receipt")
-	}
-	if hits := upstreamHits.Load(); hits != 1 {
-		t.Fatalf("upstream hits = %d, want 1", hits)
-	}
-}
-
-func checkNanoPaymentRejectsReplay(t *testing.T, handler http.Handler, accepted facilitatortypes.PaymentRequirements, upstreamHits *atomic.Int32, paidHash string) {
-	t.Helper()
-	for _, path := range []string{"/paid/item", "/also-paid/item"} {
-		if rec := payNanoPath(t, handler, accepted, path, paidHash); rec.Code != http.StatusPaymentRequired {
-			t.Fatalf("replayed payment on %s status = %d, want 402", path, rec.Code)
-		}
-	}
-	if hits := upstreamHits.Load(); hits != 1 {
-		t.Fatalf("replayed payment reached upstream: hits = %d", hits)
-	}
-}
-
-func TestComposeHTTPRoutesRejectsInvalidNanoContract(t *testing.T) {
-	t.Parallel()
-	tests := map[string]struct {
-		amount    string
-		payTo     string
-		endpoints []string
-	}{
-		"bad checksum":       {amount: "0.01", payTo: nanoTestPayTo[:len(nanoTestPayTo)-1] + "1"},
-		"not a nano address": {amount: "0.01", payTo: "0x1234"},
-		"sub-raw amount":     {amount: "0." + strings.Repeat("0", 30) + "1", payTo: nanoTestPayTo},
-		"zero amount":        {amount: "0", payTo: nanoTestPayTo},
-		"malformed amount":   {amount: "1e-3", payTo: nanoTestPayTo},
-		"one rpc endpoint":   {amount: "0.01", payTo: nanoTestPayTo, endpoints: []string{"http://127.0.0.1:1", " http://127.0.0.1:1 "}},
-	}
-	for name, tt := range tests {
-		_, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{
-			Prefix:   "/paid",
-			Upstream: "http://127.0.0.1:1",
-			Amount:   tt.amount,
-		}}, X402Config{
-			Network:   "nano:mainnet",
-			PayTo:     tt.payTo,
-			Endpoints: tt.endpoints,
-		})
-		if err == nil {
-			t.Errorf("%s: ComposeHTTPRoutes() error = nil, want rejection", name)
-		}
 	}
 }
 
@@ -247,6 +44,7 @@ func TestComposeHTTPRoutesPaymentFollowsSelectedRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 	checkSelectedRouteResponses(t, handler)
 	checkSelectedRoutePrepare(t, handler)
 }
@@ -305,31 +103,99 @@ func TestComposeHTTPRoutesRejectsUnpaidMethods(t *testing.T) {
 	}
 }
 
-func TestComposeHTTPRoutesAcceptsLegacyXRBNanoPayTo(t *testing.T) {
+func TestComposeHTTPRoutesUnpaidGatewayPassesHelperPaths(t *testing.T) {
 	t.Parallel()
-	legacy := "xrb_" + nanoTestPayTo[len("nano_"):]
-	handler, err := ComposeHTTPRoutes([]ExposedHTTPRoute{
-		{Prefix: "/paid", Upstream: "http://127.0.0.1:1", Amount: "0.01"},
-	}, X402Config{Network: "nano:mainnet", PayTo: legacy})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.URL.Path)
+	}))
+	t.Cleanup(upstream.Close)
+	gw, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: upstream.URL}}, X402Config{})
 	if err != nil {
-		t.Fatalf("ComposeHTTPRoutes() error = %v, want legacy xrb_ pay-to accepted", err)
+		t.Fatal(err)
 	}
+	defer gw.Close()
+	for _, path := range []string{X402ClientPath, X402PreparePath} {
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://tenant.example"+path, nil))
+		if rec.Code != http.StatusOK || rec.Body.String() != path {
+			t.Fatalf("%s: status %d body %q; want the upstream", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestComposeHTTPRoutesPaidGatewayServesClient(t *testing.T) {
+	t.Parallel()
+	gw, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: "http://127.0.0.1:1", Amount: "0.01"}},
+		X402Config{Network: "nano:mainnet", PayTo: nanoTestPayTo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://example.com/paid/item", nil))
-	if rec.Code != http.StatusPaymentRequired {
-		t.Fatalf("unpaid status = %d, want 402", rec.Code)
+	gw.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://tenant.example"+X402ClientPath, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "javascript") {
+		t.Fatalf("client.js: status %d type %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	rawChallenge, err := base64.StdEncoding.DecodeString(rec.Header().Get(x402http.HeaderPaymentRequired))
+}
+
+func TestComposeHTTPRoutesRejectsInvalidPayment(t *testing.T) {
+	t.Parallel()
+	for name, contract := range map[string]X402Config{
+		"unsupported network": {Network: "eip155:8453", PayTo: "0x1"},
+		"invalid pay-to":      {Network: "nano:mainnet", PayTo: "0x1"},
+	} {
+		if gw, err := ComposeHTTPRoutes([]ExposedHTTPRoute{{Prefix: "/", Upstream: "http://127.0.0.1:1", Amount: "0.01"}}, contract); err == nil {
+			_ = gw.Close()
+			t.Errorf("%s: ComposeHTTPRoutes() error = nil", name)
+		}
+	}
+}
+
+func TestHTTPGatewayCloseIsNilSafe(t *testing.T) {
+	t.Parallel()
+	var gw *HTTPGateway
+	if err := gw.Close(); err != nil {
+		t.Fatalf("nil Close() = %v", err)
+	}
+}
+
+// Network options reach the facilitator's paywall unchanged: a known option
+// takes effect, an unknown one is refused instead of silently dropped.
+func TestComposeHTTPRoutesPassesX402Options(t *testing.T) {
+	t.Parallel()
+	routes := []ExposedHTTPRoute{{Prefix: "/", Upstream: "http://127.0.0.1:1", Amount: "0.01"}}
+	path := filepath.Join(t.TempDir(), "claims.jsonl")
+	gw, err := ComposeHTTPRoutes(routes, X402Config{Network: "nano:mainnet", PayTo: nanoTestPayTo, Options: map[string]string{"nano_claims_file": path}})
 	if err != nil {
-		t.Fatalf("decode challenge: %v", err)
+		t.Fatalf("ComposeHTTPRoutes() error = %v", err)
 	}
-	var challenge struct {
-		Accepts []facilitatortypes.PaymentRequirements `json:"accepts"`
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("claim log not created: %v", err)
 	}
-	if err := json.Unmarshal(rawChallenge, &challenge); err != nil {
-		t.Fatalf("unmarshal challenge: %v", err)
+	if err := gw.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
 	}
-	if len(challenge.Accepts) != 1 || challenge.Accepts[0].PayTo != nanoTestPayTo {
-		t.Fatalf("accepts = %+v, want one requirement paid to canonical %s", challenge.Accepts, nanoTestPayTo)
+	if gw, err := ComposeHTTPRoutes(routes, X402Config{Network: "nano:mainnet", PayTo: nanoTestPayTo, Options: map[string]string{"nano_claim_file": path}}); err == nil {
+		_ = gw.Close()
+		t.Fatal("ComposeHTTPRoutes() accepted an unknown x402 option")
+	}
+}
+
+func TestX402ConfigNormalizeAndParseOption(t *testing.T) {
+	t.Parallel()
+	got := X402Config{Options: map[string]string{" nano_require_binding ": " true ", " ": "x"}}.Normalize()
+	if len(got.Options) != 1 || got.Options["nano_require_binding"] != "true" {
+		t.Fatalf("Normalize().Options = %v", got.Options)
+	}
+	if empty := (X402Config{Options: map[string]string{}}).Normalize(); empty.Options != nil {
+		t.Fatalf("empty options normalized to %v, want nil", empty.Options)
+	}
+	if key, value, err := ParseX402Option(" nano_claims_file = /a=b "); err != nil || key != "nano_claims_file" || value != "/a=b" {
+		t.Fatalf("ParseX402Option() = %q, %q, %v", key, value, err)
+	}
+	for _, raw := range []string{"novalue", "=x", " = x"} {
+		if _, _, err := ParseX402Option(raw); err == nil {
+			t.Errorf("ParseX402Option(%q) error = nil", raw)
+		}
 	}
 }

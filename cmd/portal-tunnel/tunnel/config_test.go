@@ -108,9 +108,6 @@ func TestConfigSpecModes(t *testing.T) {
 			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "oidc", []string{"alice@example.com"}
 			c.OIDCIssuerURL, c.OIDCClientID, c.SAMLEntityID = "https://accounts.google.com", "client-123", "urn:portal"
 		}},
-		{name: "casper payment without asset", edit: func(c *Config) {
-			c.HTTPRoutes, c.PayTo, c.Network = routes, "account-hash-1", "casper:casper-test"
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg Config
