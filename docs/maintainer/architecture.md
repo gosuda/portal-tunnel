@@ -59,7 +59,7 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
 
 - `cmd/portal-tunnel/agent/dashboard`: owns the terminal UI of the agent:
   panes, input handling, and rendering. It reads tunnel state through the
-  exported agent surface (`agent.Manager`, status types) and applies changes
+  control client (`agent.Status`, status types) and applies changes
   through the same control API any client uses. `dashboard.RunDashboard` is
   the only entry; the agent package owns tunnel lifecycle and never imports
   the dashboard.

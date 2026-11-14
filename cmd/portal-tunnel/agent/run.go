@@ -24,7 +24,7 @@ var (
 func Run(ctx context.Context, cfg Config) error {
 	runtimeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	manager := NewManager(cfg, "")
+	manager := newManager(cfg, "")
 	creds, err := prepareAgentCredentials(cfg)
 	if err != nil {
 		return err
@@ -39,7 +39,7 @@ func Run(ctx context.Context, cfg Config) error {
 type agentControlServer struct {
 	listener     net.Listener
 	server       *http.Server
-	manager      *Manager
+	manager      *manager
 	shutdown     context.CancelFunc
 	endpointPath string
 	listenAddr   string
@@ -51,7 +51,7 @@ type agentCredentials struct {
 	auth     *walletAuthenticator
 }
 
-func (m *Manager) openControlServer(runtimeCtx context.Context, cancel context.CancelFunc, creds agentCredentials) (*agentControlServer, error) {
+func (m *manager) openControlServer(runtimeCtx context.Context, cancel context.CancelFunc, creds agentCredentials) (*agentControlServer, error) {
 	endpointPath := filepath.Join(creds.stateDir, endpointFilename)
 	listener, listenAddr, localhostAuthority, err := listenAgentControl(runtimeCtx, m.cfg.Agent.ControlAddr)
 	if err != nil {

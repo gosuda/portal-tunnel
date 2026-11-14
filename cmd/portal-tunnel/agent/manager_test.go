@@ -27,7 +27,7 @@ func testTunnel(id string) TunnelConfig {
 	return TunnelConfig{ID: id, Config: tunnel.Config{TargetAddr: "127.0.0.1:3000", RelayURLs: []string{unreachableRelay}, Discovery: &discovery}}
 }
 
-func testManager(t *testing.T, tunnels ...TunnelConfig) (*Manager, string) {
+func testManager(t *testing.T, tunnels ...TunnelConfig) (*manager, string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -42,10 +42,10 @@ func testManager(t *testing.T, tunnels ...TunnelConfig) (*Manager, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewManager(loaded, DefaultControlAddr), path
+	return newManager(loaded, DefaultControlAddr), path
 }
 
-func startManager(t *testing.T, m *Manager) {
+func startManager(t *testing.T, m *manager) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.Start(ctx)
@@ -71,7 +71,7 @@ func eventually(t *testing.T, what string, condition func() bool) {
 	}
 }
 
-func tunnelStatus(t *testing.T, m *Manager, id string) AgentTunnelStatus {
+func tunnelStatus(t *testing.T, m *manager, id string) AgentTunnelStatus {
 	t.Helper()
 	for _, status := range m.Snapshot().Tunnels {
 		if status.ID == id {
@@ -137,7 +137,7 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 	}
 }
 
-func marshalTunnelStatus(t *testing.T, m *Manager) []byte {
+func marshalTunnelStatus(t *testing.T, m *manager) []byte {
 	t.Helper()
 	data, err := json.Marshal(m.Snapshot())
 	if err != nil {
@@ -187,7 +187,7 @@ func TestTunnelStatusOIDCProviderCheck(t *testing.T) {
 	}
 }
 
-func callControl(t *testing.T, m *Manager, method, path, body string) (int, string) {
+func callControl(t *testing.T, m *manager, method, path, body string) (int, string) {
 	t.Helper()
 	handler := &controlHandler{manager: m, token: "test-token", authority: "127.0.0.1:4018", localhostAuthority: "localhost:4018"}
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -274,7 +274,7 @@ type addTunnelRejection struct {
 	want string
 }
 
-func checkAddTunnelRejection(t *testing.T, m *Manager, path, secret string, tc addTunnelRejection) {
+func checkAddTunnelRejection(t *testing.T, m *manager, path, secret string, tc addTunnelRejection) {
 	t.Helper()
 	fileBefore, err := os.ReadFile(path)
 	if err != nil {
