@@ -297,6 +297,8 @@ This applies during startup, after readiness, and while reconnecting or failed.
 Cancellation during startup exits successfully. An unexpected stdin read error
 also requests shutdown and logs a warning. Existing shutdown timeouts apply;
 unregister has a five-second timeout per relay, not a five-second process deadline.
+Shutdown errors remain visible as a nonzero exit status. For example, if the relay
+is offline, unregister may fail even though EOF successfully stops the tunnel.
 
 Normal application exit or a forced kill closes its pipe handles. This stops
 Portal only if no other process retains a writer: prevent writer inheritance

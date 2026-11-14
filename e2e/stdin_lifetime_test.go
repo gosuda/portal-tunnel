@@ -138,7 +138,14 @@ func TestPortalExposeStdinLifetime(t *testing.T) {
 			return r["event"] == "relay_status" && r["state"] == "connecting"
 		}, 30*time.Second)
 		process.stdin.Close()
-		process.waitExit(t)
+		// The relay is offline, so best-effort unregister can fail and remain
+		// visible in the exit status. EOF must still terminate the process.
+		process.waitOutputClosed(t)
+		select {
+		case <-process.done:
+		case <-time.After(20 * time.Second):
+			t.Fatal("portal did not exit while the relay was offline")
+		}
 	})
 	t.Run("failed", func(t *testing.T) {
 		// An incompatible relay is a permanent SDK failure, without retries.
