@@ -1,9 +1,13 @@
 package acme
 
 import (
+	"bytes"
+	"crypto"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +20,159 @@ import (
 	"github.com/go-acme/lego/v4/acme"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
+	"github.com/go-jose/go-jose/v4"
 )
+
+// accountTestCA accepts real lego account requests and verifies the EAB against
+// the account's public key. It does not replace the ACME transport or DNS provider.
+func accountTestCA(t *testing.T, required bool) *httptest.Server {
+	t.Helper()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		base := "https://" + r.Host
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Replay-Nonce", "dGVzdC1hY21lLW5vbmNl")
+		switch r.URL.Path {
+		case "/directory", "/other-directory":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"newNonce": base + "/nonce", "newAccount": base + "/account", "newOrder": base + "/order",
+				"revokeCert": base + "/revoke", "keyChange": base + "/key",
+				"meta": map[string]any{"externalAccountRequired": required},
+			})
+		case "/nonce":
+			w.WriteHeader(http.StatusNoContent)
+		case "/account":
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			outer, err := jose.ParseSigned(string(data), []jose.SignatureAlgorithm{jose.ES256})
+			if err != nil || len(outer.Signatures) != 1 || outer.Signatures[0].Protected.JSONWebKey == nil {
+				t.Errorf("invalid ACME account JWS: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			key := outer.Signatures[0].Protected.JSONWebKey
+			payload, err := outer.Verify(key.Key)
+			var account acme.Account
+			if err != nil || json.Unmarshal(payload, &account) != nil || !account.TermsOfServiceAgreed {
+				t.Errorf("invalid signed account: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if required || len(account.ExternalAccountBinding) != 0 {
+				binding, err := jose.ParseSigned(string(account.ExternalAccountBinding), []jose.SignatureAlgorithm{jose.HS256})
+				valid := false
+				if err == nil && len(binding.Signatures) == 1 {
+					boundKey, verifyErr := binding.Verify([]byte("test-only-eab-secret-for-account-binding!"))
+					var bound jose.JSONWebKey
+					if verifyErr == nil && json.Unmarshal(boundKey, &bound) == nil {
+						got, _ := bound.Thumbprint(crypto.SHA256)
+						want, _ := key.Thumbprint(crypto.SHA256)
+						header := binding.Signatures[0].Protected
+						valid = bytes.Equal(got, want) && header.KeyID == "test-kid" && header.ExtraHeaders[jose.HeaderKey("url")] == base+"/account"
+					}
+				}
+				if !valid {
+					w.Header().Set("Content-Type", "application/problem+json")
+					w.WriteHeader(http.StatusUnauthorized)
+					_ = json.NewEncoder(w).Encode(acme.ProblemDetails{Type: "urn:ietf:params:acme:error:unauthorized", Detail: "invalid external account binding"})
+					return
+				}
+			}
+			w.Header().Set("Location", base+"/accounts/1")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(acme.Account{Status: acme.StatusValid, Orders: base + "/orders"})
+		default:
+			t.Errorf("unexpected ACME request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	trusted := filepath.Join(t.TempDir(), "directory.pem")
+	if err := os.WriteFile(trusted, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LEGO_CA_CERTIFICATES", trusted)
+	return server
+}
+
+func TestACMEAccountRegistration(t *testing.T) {
+	hmac := base64.RawURLEncoding.EncodeToString([]byte("test-only-eab-secret-for-account-binding!"))
+	for _, tc := range []struct {
+		name, kid, hmac, wantError string
+		required                   bool
+	}{
+		{name: "non-EAB CA without settings"},
+		{name: "required EAB", required: true, kid: "test-kid", hmac: hmac},
+		{name: "padded HMAC", required: true, kid: "test-kid", hmac: base64.URLEncoding.EncodeToString([]byte("test-only-eab-secret-for-account-binding!"))},
+		{name: "optional EAB", kid: "test-kid", hmac: hmac},
+		{name: "trimmed credentials", required: true, kid: " test-kid ", hmac: " " + hmac + " "},
+		{name: "required credentials absent", required: true, wantError: "ACME_EAB_KID and ACME_EAB_HMAC"},
+		{name: "KID alone", kid: "test-kid", wantError: "ACME_EAB_KID and ACME_EAB_HMAC"},
+		{name: "HMAC alone", hmac: hmac, wantError: "ACME_EAB_KID and ACME_EAB_HMAC"},
+		{name: "malformed HMAC", required: true, kid: "test-kid", hmac: "not!base64url", wantError: "could not decode hmac key"},
+		{name: "rejected HMAC", required: true, kid: "test-kid", hmac: base64.RawURLEncoding.EncodeToString([]byte("wrong-eab-secret-for-account-binding!")), wantError: "invalid external account binding"},
+		{name: "optional EAB rejected", kid: "test-kid", hmac: base64.RawURLEncoding.EncodeToString([]byte("wrong-eab-secret-for-account-binding!")), wantError: "invalid external account binding"},
+		{name: "rejected KID", required: true, kid: "wrong-kid", hmac: hmac, wantError: "invalid external account binding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := accountTestCA(t, tc.required)
+			cfg := Config{BaseDomain: "portal.example.com", KeyDir: t.TempDir(), DNSProvider: TypeCloudflare, CloudflareToken: "test-token", CADirURL: ca.URL + "/directory", EABKID: tc.kid, EABHMAC: tc.hmac}
+			manager, err := NewManager(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = manager.newClient(t.Context())
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("registration error = %v, want %q", err, tc.wantError)
+				}
+				if tc.hmac != "" && strings.Contains(err.Error(), strings.TrimSpace(tc.hmac)) {
+					t.Fatal("registration error exposed the HMAC secret")
+				}
+				if _, statErr := os.Stat(registrationFilePath(cfg.KeyDir, cfg.CADirURL)); !os.IsNotExist(statErr) {
+					t.Fatalf("failed registration persisted account state: %v", statErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A restart and the tenant CSR consumer must reuse the selected CA's
+			// persisted account after its one-time EAB credentials are removed.
+			cfg.EABKID, cfg.EABHMAC = "", ""
+			restarted, err := NewManager(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := restarted.newClient(t.Context()); err != nil {
+				t.Fatalf("reuse registered account without EAB: %v", err)
+			}
+			user, path, err := restarted.newClientLoadUser("acme@portal.example.com", false)
+			if err != nil || user.Registration == nil || user.Registration.URI != ca.URL+"/accounts/1" {
+				t.Fatalf("tenant account did not load the selected CA registration: %v", err)
+			}
+			if _, err := restarted.newClientWithLoadedUser(t.Context(), user, path); err != nil {
+				t.Fatalf("tenant account without EAB: %v", err)
+			}
+			if tc.required {
+				cfg.CADirURL = ca.URL + "/other-directory"
+				other, err := NewManager(cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := other.newClient(t.Context()); err == nil || !strings.Contains(err.Error(), "ACME_EAB_KID and ACME_EAB_HMAC") {
+					t.Fatalf("another directory reused the previous CA account: %v", err)
+				}
+				if _, err := restarted.newClient(t.Context()); err != nil {
+					t.Fatalf("switching directories lost the original account: %v", err)
+				}
+			}
+		})
+	}
+}
 
 func TestCertificateCoversDomains(t *testing.T) {
 	t.Parallel()
@@ -402,33 +558,5 @@ func TestLocalDevelopmentCertificateIgnoresTheConfiguredCA(t *testing.T) {
 	wantCert, wantKey := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
 	if certFile != wantCert || keyFile != wantKey {
 		t.Fatalf("EnsureCertificate() = %q, %q; want the legacy %q, %q", certFile, keyFile, wantCert, wantKey)
-	}
-}
-
-func TestNewClientRefusesDirectoriesRequiringExternalAccountBinding(t *testing.T) {
-	directory := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		base := "https://" + r.Host
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"newNonce":   base + "/nonce",
-			"newAccount": base + "/account",
-			"newOrder":   base + "/order",
-			"revokeCert": base + "/revoke",
-			"keyChange":  base + "/key",
-			"meta":       map[string]any{"externalAccountRequired": true},
-		})
-	}))
-	t.Cleanup(directory.Close)
-	trusted := filepath.Join(t.TempDir(), "directory.pem")
-	if err := os.WriteFile(trusted, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: directory.Certificate().Raw}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("LEGO_CA_CERTIFICATES", trusted)
-
-	manager, err := NewManager(Config{BaseDomain: "portal.example.com", KeyDir: t.TempDir(), DNSProvider: TypeRoute53, CADirURL: directory.URL})
-	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
-	}
-	if _, err := manager.newClient(t.Context()); err == nil || !strings.Contains(err.Error(), "external account binding") {
-		t.Fatalf("newClient() error = %v; want one saying the directory requires external account binding", err)
 	}
 }

@@ -39,6 +39,8 @@ type Config struct {
 	BaseDomain             string
 	KeyDir                 string
 	CADirURL               string
+	EABKID                 string `json:"-"`
+	EABHMAC                string `json:"-"`
 	DNSProvider            string
 	ENSGaslessEnabled      bool
 	ENSGaslessAddress      string
@@ -84,6 +86,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, err
 	}
 	cfg.CADirURL = caDirURL
+	cfg.EABKID = strings.TrimSpace(cfg.EABKID)
+	cfg.EABHMAC = strings.TrimSpace(cfg.EABHMAC)
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
 	if cfg.DNSProvider == "" {
 		cfg.DNSProvider = TypeEmbedded
