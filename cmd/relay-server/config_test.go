@@ -56,6 +56,32 @@ func TestDefaultIdentityBPSConfiguration(t *testing.T) {
 	}
 }
 
+func TestConfigReportRedactsEABCredentials(t *testing.T) {
+	const kid = "test-eab-account-id"
+	const hmac = "test-eab-hmac-secret"
+	cfg, env, err := resolveAppConfig(nil, []string{"ACME_EAB_KID=" + kid, "ACME_EAB_HMAC=" + hmac})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Relay.ACME.EABKID != kid || cfg.Relay.ACME.EABHMAC != hmac {
+		t.Fatal("EAB environment settings did not reach the ACME config")
+	}
+	var report strings.Builder
+	writeConfigReport(&report, cfg, nil, "", env)
+	if strings.Contains(report.String(), kid) || strings.Contains(report.String(), hmac) {
+		t.Fatal("configuration report exposed EAB credentials")
+	}
+	for _, name := range []string{"ACME_EAB_KID", "ACME_EAB_HMAC"} {
+		if !strings.Contains(report.String(), name) {
+			t.Fatalf("configuration report omitted %s", name)
+		}
+	}
+	configured, _, err := resolveAppConfig([]string{"--acme-eab-kid=" + kid, "--acme-eab-hmac=" + hmac}, nil)
+	if err != nil || configured.Relay.ACME.EABKID != kid || configured.Relay.ACME.EABHMAC != hmac {
+		t.Fatalf("EAB flags did not reach the ACME config: %v", err)
+	}
+}
+
 func writeEnvFile(t *testing.T, lines ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.env")
