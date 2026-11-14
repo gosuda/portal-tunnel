@@ -48,8 +48,9 @@ type Client struct {
 	closeOnce   sync.Once
 	closeErr    error
 
-	relay    *relaySource
-	hostname string
+	relayURL   string
+	serverName string
+	hostname   string
 
 	refreshMu sync.Mutex
 }
@@ -72,17 +73,18 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 }
 
 func buildTenantClient(ctx context.Context, config ClientConfig, normalizedRelayURL, serverName string) (*Client, error) {
-	var err error
 	hostname := strings.TrimSpace(config.Hostname)
 	if hostname == "" {
 		return nil, errKeylessHostnameIsRequired
 	}
 	client := &Client{
 		accessToken: strings.TrimSpace(config.AccessToken),
+		relayURL:    normalizedRelayURL,
+		serverName:  serverName,
 		hostname:    hostname,
 	}
 
-	client.relay = &relaySource{relayURL: normalizedRelayURL, serverName: serverName, hostname: hostname, headers: client.headers}
+	var err error
 	if client.pin, err = client.loadPin(ctx); err != nil {
 		return nil, err
 	}
@@ -228,23 +230,6 @@ func (c *Client) loadPin(ctx context.Context) (*pinnedChain, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return c.relay.acquire(ctx)
-}
-
-// TenantTLSConfig verifies probes using the current relay tenant chain.
-func (c *Client) TenantTLSConfig() *tls.Config {
-	return &tls.Config{ServerName: c.hostname, MinVersion: tls.VersionTLS13, RootCAs: c.TenantCertPool()}
-}
-
-// relaySource acquires bootstrap material and binds its remote signer to the lease.
-type relaySource struct {
-	relayURL   string
-	serverName string
-	hostname   string
-	headers    func() http.Header
-}
-
-func (c *relaySource) acquire(ctx context.Context) (*pinnedChain, error) {
 	chain, err := relayChain(ctx, c.relayURL, c.serverName)
 	if err != nil {
 		return nil, err
@@ -252,7 +237,7 @@ func (c *relaySource) acquire(ctx context.Context) (*pinnedChain, error) {
 	return c.newPin(chain)
 }
 
-func (c *relaySource) newPin(chainPEM []byte) (*pinnedChain, error) {
+func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 	if err := verifyCertificateHostname(chainPEM, c.hostname); err != nil {
 		return nil, fmt.Errorf("keyless certificate does not cover %s: %w", c.hostname, err)
 	}
@@ -282,6 +267,11 @@ func (c *relaySource) newPin(chainPEM []byte) (*pinnedChain, error) {
 	}
 	leaf, _ := utils.ParseCertificatePEM(chainPEM)
 	return &pinnedChain{chainPEM: chainPEM, server: server, pool: pool, signer: remoteSigner, leaf: leaf}, nil
+}
+
+// TenantTLSConfig verifies probes using the current relay tenant chain.
+func (c *Client) TenantTLSConfig() *tls.Config {
+	return &tls.Config{ServerName: c.hostname, MinVersion: tls.VersionTLS13, RootCAs: c.TenantCertPool()}
 }
 
 func resolveRelayEndpoint(relayURL string) (string, string, error) {
