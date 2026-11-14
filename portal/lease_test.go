@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -2097,5 +2098,121 @@ func TestPublicTenantCertificateRequiresExplicitApproval(t *testing.T) {
 		if got := request([]types.ServiceIdentityKey{owner.ServiceKey()}); got.Code != http.StatusBadRequest {
 			t.Fatalf("explicit grant did not reach CSR validation: %d", got.Code)
 		}
+	}
+}
+
+func TestNegotiatedNamespaceSeparatesServicesAndLegacyCache(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	var err error
+	registry.cache, err = cache.New(cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: time.Hour}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	register := func(id types.Identity, namespace string) (*leaseRecord, types.RegisterResponse) {
+		t.Helper()
+		record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: id, Namespace: namespace, Cache: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record, response
+	}
+	owner := newTestLeaseIdentity(t, "blog")
+	legacy, old := register(owner, "")
+	if old.Namespace != "" || old.LegacyCanonicalHostname != "" {
+		t.Fatal("legacy client negotiated implicitly")
+	}
+	if _, err := registry.tenantCertificateNames(legacy); err == nil {
+		t.Fatal("legacy lease authorized local TLS issuance")
+	}
+	first, current := register(owner, types.LocalTLSNamespaceV1)
+	if current.LegacyCanonicalHostname != old.CanonicalHostname || current.CanonicalHostname == old.CanonicalHostname {
+		t.Fatal("legacy URL lost or canonical unchanged")
+	}
+	if first.cacheLeaseLocked().Hostname != old.CanonicalHostname || !registry.cache.Eligible(first.id) {
+		t.Fatal("legacy cache migration changed hostname or opt-in")
+	}
+	sibling := owner
+	sibling.Name = "api"
+	second, other := register(sibling, types.LocalTLSNamespaceV1)
+	if first.id == second.id || current.CanonicalHostname == other.CanonicalHostname {
+		t.Fatal("sibling services collided")
+	}
+	for _, pair := range []struct {
+		host   string
+		record *leaseRecord
+	}{{current.CanonicalHostname, first}, {current.LegacyCanonicalHostname, first}, {other.CanonicalHostname, second}} {
+		got, ok := registry.Lookup(pair.host)
+		if !ok || got != pair.record {
+			t.Fatalf("wrong routing for %q", pair.host)
+		}
+	}
+	stranger := newTestLeaseIdentity(t, "blog")
+	_, occupied := register(stranger, types.LocalTLSNamespaceV1)
+	if occupied.Hostname != "" || occupied.CanonicalHostname == current.CanonicalHostname {
+		t.Fatal("canonical depended on friendly alias")
+	}
+	server := &Server{registry: registry}
+	response := httptest.NewRecorder()
+	server.serveCachedSite(response, httptest.NewRequest(http.MethodGet, "https://"+current.CanonicalHostname, nil), current.CanonicalHostname)
+	if response.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("canonical cache response %d", response.Code)
+	}
+}
+
+func TestNamespaceNegotiationRejectsUnknownAndReservedNames(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "default")
+	for _, namespace := range []string{types.LocalTLSNamespaceV1, "unknown-future-namespace"} {
+		if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespace}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err == nil {
+			t.Fatalf("accepted reserved/unknown namespace %q", namespace)
+		}
+	}
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {
+		t.Fatal("broke legacy default service", err)
+	}
+	owner.Name = ""
+	record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: types.LocalTLSNamespaceV1}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Name != "" || response.Hostname != "" {
+		t.Fatal("unnamed service acquired a named identity or friendly alias")
+	}
+	if _, err := registry.tenantCertificateNames(record); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCanonicalReadinessFollowsRenewedCertificateValidity(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "")
+	_, _, registered, err := registry.Register(types.RegisterChallengeRequest{
+		Identity: owner, Namespace: types.LocalTLSNamespaceV1,
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if leases := registry.PolicyLeases(now); len(leases) != 1 || leases[0].CanonicalReady {
+		t.Fatalf("registration advertised unreported local material: %+v", leases)
+	}
+	expires := now.Add(time.Minute)
+	renewed, _, err := registry.Renew(types.RenewRequest{
+		AccessToken: registered.AccessToken, LocalTLSNotAfter: expires,
+	}, netip.Addr{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leases := registry.PolicyLeases(now); len(leases) != 1 || !leases[0].CanonicalReady {
+		t.Fatalf("valid local material not advertised: %+v", leases)
+	}
+	if leases := registry.PolicyLeases(expires); len(leases) != 1 || leases[0].CanonicalReady {
+		t.Fatalf("expired local material still advertised: %+v", leases)
+	}
+	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: renewed.AccessToken}, netip.Addr{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if leases := registry.PolicyLeases(now); len(leases) != 1 || leases[0].CanonicalReady {
+		t.Fatalf("withdrawn material still advertised: %+v", leases)
 	}
 }

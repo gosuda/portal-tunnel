@@ -479,3 +479,60 @@ func TestExposeRejectsInvalidCertificateMonitoringOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestCanonicalWithdrawalUpdatesSnapshotsAndWaiters(t *testing.T) {
+	const relay = "https://relay.example"
+	const legacy = "https://legacy.relay.example"
+	owner := &listener{lease: utils.NewSnapshot(listenerSnapshot{
+		accessToken: "token", tenantTLS: &namespaceTLS{local: &localtls.Client{}},
+	})}
+	e := &Exposure{
+		relayListeners: map[string]*listener{relay: owner},
+		statuses:       map[string]RelayStatus{relay: {RelayURL: relay, State: RelayReady, PublicURL: "https://service.address.relay.example", LegacyURL: legacy}},
+		done:           make(chan struct{}),
+		updates:        make(chan RelayStatus, 1),
+		stateChanged:   make(chan struct{}),
+	}
+	changed := e.stateChanged
+	e.setListenerRelayStatus(relay, owner, listenerStatus{state: RelayReady, legacyURL: legacy})
+	status := e.Relays()[0]
+	if status.PublicURL != "" || status.State != RelayReady || status.LegacyURL != legacy {
+		t.Fatalf("unavailable canonical status: %+v", status)
+	}
+	ready, _, err := e.readyRelays(func(status RelayStatus) bool { return status.State == RelayReady && status.PublicURL != "" }, true)
+	if err != nil || len(ready) != 0 {
+		t.Fatalf("unavailable canonical marked ready: %+v, %v", ready, err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("canonical withdrawal did not wake readiness waiters")
+	}
+	select {
+	case update := <-e.Updates():
+		if !relayStatusEqual(update, status) {
+			t.Fatalf("update = %+v, snapshot = %+v", update, status)
+		}
+	default:
+		t.Fatal("canonical withdrawal did not publish an update")
+	}
+	// A report constructed while material was usable may arrive after the
+	// withdrawal. It must not restore a URL against unavailable local material.
+	e.setListenerRelayStatus(relay, owner, listenerStatus{
+		state: RelayReady, legacyURL: legacy, publicURL: "https://service.address.relay.example",
+	})
+	if status := e.Relays()[0]; status.PublicURL != "" || status.LegacyURL != legacy {
+		t.Fatalf("late ready report restored the canonical: %+v", status)
+	}
+	ready, _, err = e.readyRelays(func(status RelayStatus) bool { return status.State == RelayReady && status.PublicURL != "" }, true)
+	if err != nil || len(ready) != 0 {
+		t.Fatalf("late ready report made canonical ready: %+v, %v", ready, err)
+	}
+	select {
+	case update := <-e.Updates():
+		if update.PublicURL != "" {
+			t.Fatalf("late ready report advertised the canonical: %+v", update)
+		}
+	default:
+	}
+}
