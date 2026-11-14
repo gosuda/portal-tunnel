@@ -195,6 +195,11 @@ func Mux(s *portal.Server, fallback http.Handler, ingress *Ingress, admission *S
 	}
 	mux := http.NewServeMux()
 	registerDirectRelayRoutes(mux, s, fallback, ingress)
+	// Pre-auth shedding protects request processing, never the CA issuance quota.
+	// Only the authenticated, explicitly approved owner reaches durable admission.
+	mux.HandleFunc(types.PathV1TenantCertificate, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, admitPreAuth(admission, ingress, preAuth.RegisterCost, func(w http.ResponseWriter, r *http.Request, _ netip.Addr) {
+		s.HandleTenantCertificate(w, r, access.Snapshot().ApprovedKeys())
+	}))))
 	mux.HandleFunc(types.PathSDKRegisterChallenge, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, admitPreAuth(admission, ingress, preAuth.ChallengeCost, handleMuxRelayChallenge(s, access)))))
 	mux.HandleFunc(types.PathSDKRegister, requireHTTPMethod(http.MethodPost, requireTunnelSource(ingress, admitPreAuth(admission, ingress, preAuth.RegisterCost, handleMuxRelayRegister(s, access)))))
 	mux.HandleFunc(types.PathDiscoveryAnnounce, requireHTTPMethod(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {

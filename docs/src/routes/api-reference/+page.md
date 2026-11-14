@@ -101,6 +101,7 @@ Detailed contracts: [SDK API](/api-reference/sdk) and
 | `POST` | `/sdk/cache` | lease token header | `StaticCacheManifest` JSON | `StaticCacheStatus` |
 | `PUT` | `/sdk/cache` | lease token header | manifest and file bytes as multipart | `StaticCacheStatus` |
 | `DELETE` | `/sdk/cache` | lease token header | none | `StaticCacheStatus` |
+| `POST` | `/v1/tenant-certificate` | lease token header | `TenantCertificateRequest` | `TenantCertificateResponse` |
 
 ### Admin
 
@@ -189,10 +190,19 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `address` | `string` |
 | `expires_at`, `first_seen_at`, `last_seen_at` | `string` |
 | `hostname`, `canonical_hostname` | `string` |
+| `namespace` | `string`, optional; `local-tls-v1` selects the new canonical policy |
+| `legacy_canonical_hostname` | `string`, optional; separate compatibility origin |
+| `canonical_ready` | `boolean`, optional; Local TLS material availability, not reverse transport count |
 | `udp_enabled`, `tcp_enabled` | `boolean` |
 | `tcp_addr` | `string` |
 | `metadata` | `LeaseMetadata` |
 | `ready` | `number` |
+
+For `local-tls-v1`, only advertise the canonical as usable when
+`canonical_ready` is true and `ready` is positive. Otherwise use an available
+friendly or legacy URL as a separate origin. For legacy namespaces, `ready`
+retains its existing meaning. The hostname fields identify routes even while
+their endpoints are unavailable.
 
 `PolicyLease` extends `Lease` with:
 
@@ -263,7 +273,9 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `invalid_request` | request shape or value is invalid |
 | `method_not_allowed` | endpoint does not accept the method |
 | `unauthorized` | credential is missing, expired, or invalid |
-| `feature_unavailable` | feature is disabled or not configured |
+| `feature_unavailable` | feature is unavailable; automatic tenant ACME errors may be temporary |
+| `tenant_issuance_disabled` | the relay does not offer automatic tenant certificate issuance |
+| `tenant_issuance_not_approved` | the service lacks explicit approval for automatic tenant certificate issuance |
 | `rate_limited` | request was throttled |
 | `hostname_conflict` | canonical hostname is inconsistently bound; routing fails closed |
 | `lease_not_found` | lease token or identity has no active lease |
@@ -278,3 +290,61 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `tcp_port_disabled`, `tcp_port_capacity_exceeded`, `tcp_port_exhausted` | TCP port lease cannot be allocated |
 | `transport_mismatch` | request does not match the active lease transport |
 | `internal` | unexpected server failure |
+
+## Go Tenant TLS API
+
+`sdk.WithAutomaticTLS(stateDir, requireLocal)` opts into exact per-hostname
+CSR issuance, persistence, and renewal. `stateDir` is required at the SDK level;
+the CLI/agent resolve their identity-based defaults before calling it. Private
+leaf keys stay in that directory and are reused across restarts and renewals.
+With `requireLocal = false`, an older relay may provide legacy URLs. With it
+enabled, legacy-only relays are rejected and `WaitReady` waits for a usable
+canonical certificate. Public issuance needs relay opt-in, explicit service
+approval, and durable shared budgets; see the
+[issuance endpoint contract](/api-reference/sdk#tenant-certificate).
+
+`sdk.WithTLSCertificate(certFile, keyFile)` selects manual local signing for
+native, uncached HTTPS exposures. `sdk.Expose` reads and validates the pair
+before registering with any relay. Missing, malformed, mismatched, expired,
+or unsupported certificate material returns an error immediately. It never
+falls back to relay-backed signing.
+
+Automatic and manual modes are mutually exclusive, require the native runtime,
+and reject raw TCP. The CLI/agent additionally reject UDP and relay cache with
+Local TLS. At the lease-protocol level any cache opt-in remains on the separate
+legacy canonical; the new canonical is never cache eligible. Manual mode requires
+a namespace-capable relay. `sdk.RunHTTP` enables canonical HTTP/2 with an actual
+HTTP consumer; raw `Expose`/`Proxy` callers retain HTTP/1.1 and do not gain h2
+translation.
+
+The certificate must cover only the exact Local TLS canonical hostname assigned
+by a selected relay. Friendly and legacy URLs still use Keyless. A coverage
+failure stops that relay's listener and appears in `Exposure.Relays()` with
+`RelayFailureTerminal` and an error wrapping `localtls.ErrLocalCertificate`;
+covered relays remain usable. Ordinary network failures remain retryable. Discovery applies its existing terminal-failure
+backoff policy and can select other relays.
+
+`Exposure.WaitReady` reports when a relay can route traffic. With automatic TLS
+and no require-local option, an existing legacy URL can be ready while the new
+canonical `PublicURL` remains empty. With require-local, `WaitReady` requires a
+usable canonical certificate. If every selected relay has failed terminally or
+refuses the required issuance, it returns the current errors. Issuance policy
+refusals are also available in `RelayStatus.CertificateError`, without disabling
+live legacy URLs or an already valid canonical certificate. The exposure remains
+open for policy recovery or another compatible relay.
+
+Certificate installation and expiry update the same SDK status used by
+`Relays()`, `Updates()`, `WaitReady()`, and JSON lifecycle records. The records
+include `legacy_url` separately from the usable canonical `public_url`.
+For `local-tls-v1` public leases, `canonical_ready` reports usable local material;
+`ready` continues to count reverse transport connections. The tunnel reports
+`local_tls_not_after` through authenticated lease renewal on certificate changes,
+and the relay withdraws `canonical_ready` at that expiry even without another
+renewal. This is an owner-reported availability hint, not certificate validation
+or identity proof. Friendly and legacy URLs remain separate compatibility origins.
+
+**Go source compatibility:** direct users of `portal/keyless.Client` must
+replace `RelayCertPool()` with `TenantCertPool()`. The returned snapshot trusts
+the tenant certificate, not the relay control API. Use `TenantTLSConfig()` for
+tenant probes that must keep working across certificate rotation, and keep
+relay control-plane TLS trust separate. The old method name is not retained.

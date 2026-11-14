@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,9 +101,10 @@ func (i *testIssuer) issueFor(t *testing.T, serial int64, dnsName string) relayC
 }
 
 type relayStandIn struct {
-	srv      *httptest.Server
-	url      string
-	bindings *BindingRegistry
+	srv              *httptest.Server
+	url              string
+	bindings         *BindingRegistry
+	issuanceRequests atomic.Int64
 
 	mu      sync.Mutex
 	serving relayCertificate
@@ -126,6 +128,9 @@ func createNewRelayStandInSigner(t *testing.T, relay *relayStandIn) *Signer {
 func startNewRelayStandInServer(t *testing.T, relay *relayStandIn, signer *Signer) {
 	t.Helper()
 	relay.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == types.PathV1TenantCertificate {
+			relay.issuanceRequests.Add(1)
+		}
 		if r.URL.Path != signrpc.SignPath {
 			http.NotFound(w, r)
 			return
@@ -227,8 +232,8 @@ func checkTenantRefreshPinsRenewal(t *testing.T, relay *relayStandIn, client *Cl
 	pinned := x509.NewCertPool()
 	pinned.AddCert(renewed.leaf)
 	pinned.AddCert(issuer.cert)
-	if !client.RelayCertPool().Equal(pinned) {
-		t.Fatal("RelayCertPool() after RefreshChain is not the chain the tenant presents")
+	if !client.TenantCertPool().Equal(pinned) {
+		t.Fatal("TenantCertPool() after RefreshChain is not the chain the tenant presents")
 	}
 	if changed, err := client.RefreshChain(context.Background()); err != nil || changed {
 		t.Fatalf("RefreshChain() with nothing renewed = %v, %v; want no change", changed, err)
@@ -389,7 +394,7 @@ func checkBurstScheduledPinsNewest(t *testing.T, ctx context.Context, client *Cl
 	pinned := x509.NewCertPool()
 	pinned.AddCert(second.leaf)
 	pinned.AddCert(issuer.cert)
-	if !client.RelayCertPool().Equal(pinned) {
+	if !client.TenantCertPool().Equal(pinned) {
 		t.Fatal("a check of the same burst fetched the relay chain again")
 	}
 	if changed, err := client.RefreshChain(ctx); err != nil || !changed {
@@ -421,7 +426,7 @@ func TestRefreshChainPinsNothingAfterClose(t *testing.T) {
 	before, renewed := issuer.issue(t, 2), issuer.issue(t, 3)
 	relay := newRelayStandIn(t, before)
 	client := relay.newClient(t)
-	pinnedBefore := client.RelayCertPool()
+	pinnedBefore := client.TenantCertPool()
 
 	if err := client.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -431,7 +436,7 @@ func TestRefreshChainPinsNothingAfterClose(t *testing.T) {
 	if changed, err := client.RefreshChain(context.Background()); err != nil || changed {
 		t.Fatalf("RefreshChain() after Close = %v, %v; want nothing pinned", changed, err)
 	}
-	if client.RelayCertPool() != pinnedBefore {
+	if client.TenantCertPool() != pinnedBefore {
 		t.Fatal("RefreshChain() after Close replaced the pinned chain")
 	}
 }

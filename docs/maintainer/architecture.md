@@ -86,16 +86,23 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   not implement discovery or relay-selection policy. Applications provide only user
   intent — explicit relays, discovery on/off, max active relays, and transport
   requirements — and never interact with the discovery controller, watch callbacks,
-  or failure feedback directly. Readiness and accept operations do not infer source
-  exhaustion from the current membership; they wait for a future membership update,
-  context cancellation, or exposure closure. Local TCP/UDP targets belong to
+  or failure feedback directly. Readiness waits return the current relay errors if
+  every selected relay has failed terminally. This is a non-closing snapshot, not
+  source exhaustion: the exposure can still accept added or discovered relays.
+  Otherwise readiness waits and accept operations continue until a membership or
+  readiness update, context cancellation, or exposure closure. Local TCP/UDP targets belong to
   `sdk.ProxyConfig`, identity file loading belongs to CLI or agent callers, routed HTTP
   route tables belong to `sdk.NewHTTPRoutes`, and x402 payment gating belongs to the CLI
   and agent composition over `cmd/portal-tunnel/gateway`. `Exposure` owns one canonical relay-status
   map; listener events update it, while `Relays`, `Updates`, and `WaitReady` read
   from that state. Agent status types are not part of the SDK contract.
 
-- `portal/keyless`: the tenant TLS feature boundary. It owns tenant TLS termination
+- `portal/certmonitor`: independent, warning-only CT and CAA observations. The SDK
+  owns the observer lifecycle and passes copied public certificate installation
+  events. This package owns polling, baselines, and durable evidence without
+  controlling TLS readiness, certificate issuance, or relay selection.
+
+- `portal/keyless`: the Keyless TLS feature boundary. It owns tenant TLS termination
   via the `keyless_tls` t13server and keyless remote signing — certificate chains
   are pinned from the relay, each handshake signs transcript-bound through the
   relay's `/v1/sign` endpoint, and the relay validates every signing request against
@@ -290,3 +297,45 @@ limitation, not an unlimited TCP half-close guarantee. Relay-side revocation may
 reach the SDK as a clean EOF; the SDK preserves response-after-EOF semantics and
 can retain its local origin socket until the origin closes. Explicit SDK
 cancellation or exposure closure closes and joins those local connections.
+
+### Tenant TLS certificate ownership
+
+The negotiated `local-tls-v1` namespace fixes TLS policy by hostname. Friendly
+and legacy canonical URLs use the relay-backed Keyless engine. New exact
+`<service>.<address>.<root>` canonical URLs use a separate `portal/localtls`
+endpoint based on Go `crypto/tls`; they never use Keyless or relay static cache.
+Each endpoint retains atomic certificate rotation and in-flight handshake safety.
+The SDK dispatches by exact lease hostname and advertises canonical readiness
+only while usable local material exists. Legacy clients and relays retain their
+original URL and cache behavior through capability negotiation.
+
+The listener publishes certificate installation and expiry through the same
+status path as reverse transport changes. `Relays`, `Updates`, and `WaitReady`
+consume that stored status; queries do not repair it. The serialized status
+owner reads current canonical certificate availability when applying listener
+reports, so a delayed report cannot undo certificate expiry withdrawal.
+The existing lease renewal
+loop serializes certificate-change reports with token renewal. It reports the
+installed leaf's expiry to the relay, where `canonical_ready` expires independently
+of the reverse connection count. This is owner-reported availability, not proof
+of TLS identity. Public links use the separate friendly or legacy endpoint until
+canonical material is ready, without redirecting or downgrading the canonical.
+At lease startup, already usable manual or persisted material is reported
+immediately. Pending issuance waits for its certificate-change notification
+instead of sending an unconditional renewal after registration.
+
+The local endpoint's automatic source owns persisted bundles, CSR issuance,
+renewal, and cancellation/join of its worker. Only that worker submits CSRs;
+lease chain checks reload persisted bundles without starting issuance. The
+persisted P-256 key is intentionally reused across retries, renewals, and
+restarts; automatic key rotation is not implemented. Failed issuance uses
+exponential backoff from one minute to one hour, honoring a relay's `Retry-After`
+seconds or HTTP date up to a one-hour cap. Shutdown interrupts requests and
+retry waits. Missing or expired local material fails closed on the new canonical
+hostname without changing the separate friendly Keyless endpoint.
+
+The SDK lease separately owns the optional CAA/CT observer. It receives the
+canonical hostname and bounded, copied public leaf installation events, not the
+TLS client, private keys, or lease credentials. The observer owns its own polling,
+evidence persistence, and cancellation/join; observations never gate activation.
+A dropped event or crash may produce a conservative unrecognized-key warning.

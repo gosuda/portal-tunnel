@@ -274,3 +274,128 @@ func TestConfigNormalizeKeepsProofAndPaths(t *testing.T) {
 		t.Fatalf("normalized = %+v", cfg)
 	}
 }
+
+func TestLocalTLSCertificateConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantError bool
+	}{
+		{"paired", Config{TargetAddr: "3000", TLSCert: " cert.pem ", TLSKey: " key.pem "}, false},
+		{"certificate only", Config{TargetAddr: "3000", TLSCert: "cert.pem"}, true},
+		{"key only", Config{TargetAddr: "3000", TLSKey: "key.pem"}, true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TCPEnabled: true}, true},
+		{"relay cache", Config{Serve: "site", TLSCert: "cert.pem", TLSKey: "key.pem", Cache: &CacheConfig{}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() error = %v, want error %v", err, tc.wantError)
+			}
+			if !tc.wantError && (spec.TLSCert != tc.config.TLSCert || spec.TLSKey != tc.config.TLSKey) {
+				t.Fatalf("certificate paths = %q, %q", spec.TLSCert, spec.TLSKey)
+			}
+		})
+	}
+}
+
+func TestLocalTLSPathsAreNotNormalizedAway(t *testing.T) {
+	cfg := Config{TargetAddr: "3000", TLSCert: " ", TLSKey: " "}
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSCert != " " || spec.TLSKey != " " {
+		t.Fatal("configured local TLS file paths were silently removed")
+	}
+}
+
+func TestAutomaticTLSConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantDir   string
+		wantError bool
+	}{
+		{"identity default", Config{TargetAddr: "3000", IdentityPath: "identity.json", TLSAuto: true}, "identity.json.tls", false},
+		{"explicit", Config{TargetAddr: "3000", IdentityJSON: "{}", TLSAuto: true, TLSStateDir: " certs ", TLSRequireLocal: true}, " certs ", false},
+		{"memory identity requires directory", Config{TargetAddr: "3000", IdentityJSON: "{}", IdentityPath: "unused.json", TLSAuto: true}, "", true},
+		{"missing identity and directory", Config{TargetAddr: "3000", TLSAuto: true}, "", true},
+		{"directory does not enable automatic", Config{TargetAddr: "3000", TLSStateDir: "certs"}, "", true},
+		{"policy needs a mode", Config{TargetAddr: "3000", TLSRequireLocal: true}, "", true},
+		{"manual policy", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TLSRequireLocal: true}, "", false},
+		{"manual automatic conflict", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TLSCert: "cert.pem", TLSKey: "key.pem"}, "", true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TCPEnabled: true}, "", true},
+		{"cache", Config{Serve: "site", TLSAuto: true, TLSStateDir: "certs", Cache: &CacheConfig{}}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() = %v, want error %v", err, tc.wantError)
+			}
+			if !tc.wantError && spec.TLSStateDir != tc.wantDir {
+				t.Fatalf("state directory = %q, want %q", spec.TLSStateDir, tc.wantDir)
+			}
+			if spec.TLSRequireLocal != tc.config.TLSRequireLocal {
+				t.Fatal("require-local policy was lost")
+			}
+		})
+	}
+}
+
+func TestCertificateMonitoringConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantError bool
+	}{
+		{"disabled by default", Config{TargetAddr: "3000"}, false},
+		{"keyless", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence"}, false},
+		{"manual", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TLSMonitorStateDir: "evidence"}, false},
+		{"automatic", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TLSMonitorStateDir: "evidence"}, false},
+		{"explicit baseline and resolver", Config{TargetAddr: "3000", TLSMonitorStateDir: " evidence ", TLSMonitorBaseline: " baseline.json ", TLSMonitorDNSResolver: "[2606:4700:4700::1111]:53"}, false},
+		{"baseline alone", Config{TargetAddr: "3000", TLSMonitorBaseline: "baseline.json"}, true},
+		{"resolver alone", Config{TargetAddr: "3000", TLSMonitorDNSResolver: "9.9.9.9:53"}, true},
+		{"invalid resolver", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence", TLSMonitorDNSResolver: "resolver.example:53"}, true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence", TCPEnabled: true}, true},
+		{"relay cache", Config{Serve: "site", TLSMonitorStateDir: "evidence", Cache: &CacheConfig{}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() error = %v, want error %v", err, tc.wantError)
+			}
+			if tc.wantError {
+				return
+			}
+			monitor := spec.CertificateMonitor
+			if tc.config.TLSMonitorStateDir == "" {
+				if monitor != nil {
+					t.Fatal("monitoring enabled without an explicit request")
+				}
+				return
+			}
+			if monitor == nil || monitor.StateDir != tc.config.TLSMonitorStateDir || monitor.BaselineFile != tc.config.TLSMonitorBaseline || monitor.DNSResolver != tc.config.TLSMonitorDNSResolver {
+				t.Fatalf("monitoring configuration was changed: %+v", monitor)
+			}
+			if spec.TLSAuto != tc.config.TLSAuto || spec.TLSRequireLocal != tc.config.TLSRequireLocal {
+				t.Fatal("monitoring changed certificate provisioning policy")
+			}
+		})
+	}
+}
+
+func TestLocalTLSSelectsHTTPHandler(t *testing.T) {
+	for _, config := range []Config{
+		{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs"},
+		{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem"},
+	} {
+		spec, err := config.Spec()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if spec.HTTP == nil {
+			t.Fatal("Local TLS targets need HTTP handling for h2 translation")
+		}
+	}
+}

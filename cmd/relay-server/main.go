@@ -114,6 +114,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.Bool(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
 	env.String(fs, &cfg.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
 
+	env.Bool(fs, &cfg.Relay.TenantCertificates, "tenant-certificates", false, "allow explicitly approved tenants to request certificates using shared CA quota", "TENANT_CERTIFICATES")
+	env.String(fs, &cfg.Relay.ACME.TenantIssuanceStateDir, "tenant-issuance-state-dir", "", "durable lock-coherent directory shared by every relay using the same CA quota; required for public tenant issuance", "TENANT_ISSUANCE_STATE_DIR")
 	env.String(fs, &cfg.Relay.ACME.CADirURL, "acme-ca-dir-url", "", "ACME CA directory URL (https) for managed certificate issuance; the CA must not require External Account Binding; defaults to Let's Encrypt production when empty", "ACME_CA_DIR_URL")
 	env.String(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01 and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
 	env.Bool(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")

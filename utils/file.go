@@ -51,10 +51,7 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return os.Chmod(path, mode)
+	return os.Rename(tmpName, path)
 }
 
 func ReadJSONFile(path string, out any) error {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,12 +38,14 @@ var errRelayIncompatible = errors.New("relay is incompatible")
 type apiClient struct {
 	relayURL *url.URL
 
-	mu             sync.RWMutex
-	http           *http.Client
-	transport      *http.Transport
-	tls            *tls.Config
-	releaseVersion string
-	cache          *types.StaticCacheLimits
+	mu               sync.RWMutex
+	http             *http.Client
+	transport        *http.Transport
+	tls              *tls.Config
+	releaseVersion   string
+	cache            *types.StaticCacheLimits
+	namespaces       []string
+	issuanceDisabled bool
 }
 
 func (c *apiClient) resetTransport() {
@@ -55,6 +58,8 @@ func (c *apiClient) resetTransport() {
 	c.transport = nil
 	c.tls = nil
 	c.cache = nil
+	c.namespaces = nil
+	c.issuanceDisabled = false
 }
 
 func (c *apiClient) initHTTPTransport(ctx context.Context) error {
@@ -92,6 +97,8 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 	}
 	c.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
 	c.cache = domainResp.Cache
+	c.namespaces = slices.Clone(domainResp.Namespaces)
+	c.issuanceDisabled = domainResp.TenantCertificateIssuance != nil && !*domainResp.TenantCertificateIssuance
 	c.http = httpClient
 	c.transport = httpTransport
 	c.tls = tlsConfig
@@ -137,6 +144,12 @@ func (c *apiClient) cacheLimits() (types.StaticCacheLimits, bool) {
 func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterResponse, error) {
 	if err := c.initHTTPTransport(ctx); err != nil {
 		return types.RegisterResponse{}, err
+	}
+	c.mu.RLock()
+	supported := slices.Contains(c.namespaces, registerReq.Namespace)
+	c.mu.RUnlock()
+	if registerReq.Namespace != "" && !supported {
+		registerReq.Namespace = ""
 	}
 	resp, err := c.exchangeRegister(ctx, registerReq, reportedIP)
 	if err != nil {
@@ -219,11 +232,26 @@ func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registe
 	}
 	resp.Hostname = utils.NormalizeHostname(resp.Hostname)
 	resp.CanonicalHostname = utils.NormalizeHostname(resp.CanonicalHostname)
+	resp.LegacyCanonicalHostname = utils.NormalizeHostname(resp.LegacyCanonicalHostname)
+	if resp.Namespace != registerReq.Namespace {
+		_ = c.unregister(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, fmt.Errorf("%w: unexpected hostname namespace", errRelayIncompatible)
+	}
 	if resp.CanonicalHostname == "" {
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, errRelayDidNotReturnCanonicalHostname
 	}
-	if !aliasHostnameMatches(resp.Hostname, registerReq.Identity.Name, resp.CanonicalHostname) {
+	aliasCanonical := resp.CanonicalHostname
+	if resp.Namespace == types.LocalTLSNamespaceV1 {
+		aliasCanonical = resp.LegacyCanonicalHostname
+		_, root, ok := strings.Cut(aliasCanonical, ".")
+		expected, err := utils.LocalTLSLeaseHostname(registerReq.Identity.Name, registerReq.Identity.Address, root)
+		if !ok || err != nil || expected != resp.CanonicalHostname {
+			_ = c.unregister(context.Background(), resp.AccessToken)
+			return types.RegisterResponse{}, fmt.Errorf("%w: invalid canonical namespace", errRelayIncompatible)
+		}
+	}
+	if !aliasHostnameMatches(resp.Hostname, registerReq.Identity.Name, aliasCanonical) {
 		resp.Hostname = ""
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)

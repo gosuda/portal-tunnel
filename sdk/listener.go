@@ -14,6 +14,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -50,26 +52,33 @@ const (
 )
 
 type listenerConfig struct {
-	Cache      *cache.Source
-	Identity   types.Identity
-	Overlay    bool
-	UDPEnabled bool
-	TCPEnabled bool
-	BanMITM    bool
-	Metadata   types.LeaseMetadata
-	StartedAt  time.Time
+	CertificateMonitor *certmonitor.MonitorConfig
+	TLSStateDir        string
+	TLSRequireLocal    bool
+	TLSCertFile        string
+	TLSKeyFile         string
+	Cache              *cache.Source
+	Identity           types.Identity
+	Overlay            bool
+	UDPEnabled         bool
+	TCPEnabled         bool
+	BanMITM            bool
+	Metadata           types.LeaseMetadata
+	StartedAt          time.Time
 }
 
 type listenerStatus struct {
-	state     RelayState
-	failure   RelayFailure
-	approval  RelayApproval
-	err       error
-	publicURL string
-	aliasURL  string
-	udpAddr   string
-	tcpAddr   string
-	version   string
+	state          RelayState
+	failure        RelayFailure
+	approval       RelayApproval
+	certificateErr error
+	err            error
+	publicURL      string
+	legacyURL      string
+	aliasURL       string
+	udpAddr        string
+	tcpAddr        string
+	version        string
 }
 
 var errLeaseRefreshRequired = errors.New("lease refresh required")
@@ -78,7 +87,7 @@ func isTerminalRelayError(err error) bool {
 	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok && apiErr.IsRateLimited() {
 		return false
 	}
-	if errors.Is(err, errRelayIncompatible) {
+	if errors.Is(err, errRelayIncompatible) || errors.Is(err, localtls.ErrLocalCertificate) {
 		return true
 	}
 	if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
@@ -124,9 +133,14 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 }
 
 type listener struct {
-	cancel    context.CancelFunc
-	doneCh    <-chan struct{}
-	closeOnce sync.Once
+	certificateMonitor *certmonitor.MonitorConfig
+	tlsStateDir        string
+	tlsRequireLocal    bool
+	tlsCertFile        string
+	tlsKeyFile         string
+	cancel             context.CancelFunc
+	doneCh             <-chan struct{}
+	closeOnce          sync.Once
 
 	startedAt time.Time
 
@@ -145,6 +159,7 @@ type listener struct {
 	mitmManager   *mitmManager
 	statusUpdates chan listenerStatus
 	readySessions atomic.Int32
+	http2Enabled  atomic.Bool
 
 	api           *apiClient
 	reverseTLSMu  sync.Mutex
@@ -169,18 +184,23 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 	l := &listener{
-		cancel:        cancel,
-		doneCh:        listenerCtx.Done(),
-		metadata:      cfg.Metadata.Copy(),
-		identity:      cfg.Identity,
-		overlay:       cfg.Overlay,
-		statusUpdates: make(chan listenerStatus),
-		udpEnabled:    cfg.UDPEnabled,
-		tcpEnabled:    cfg.TCPEnabled,
-		cache:         cfg.Cache,
-		api:           &apiClient{relayURL: relayurl},
-		lease:         utils.NewSnapshot(listenerSnapshot{}),
-		startedAt:     cfg.StartedAt,
+		cancel:             cancel,
+		doneCh:             listenerCtx.Done(),
+		metadata:           cfg.Metadata.Copy(),
+		identity:           cfg.Identity,
+		overlay:            cfg.Overlay,
+		statusUpdates:      make(chan listenerStatus),
+		udpEnabled:         cfg.UDPEnabled,
+		tcpEnabled:         cfg.TCPEnabled,
+		cache:              cfg.Cache,
+		tlsCertFile:        cfg.TLSCertFile,
+		tlsKeyFile:         cfg.TLSKeyFile,
+		tlsStateDir:        cfg.TLSStateDir,
+		tlsRequireLocal:    cfg.TLSRequireLocal,
+		certificateMonitor: cfg.CertificateMonitor,
+		api:                &apiClient{relayURL: relayurl},
+		lease:              utils.NewSnapshot(listenerSnapshot{}),
+		startedAt:          cfg.StartedAt,
 	}
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
@@ -289,7 +309,7 @@ func (l *listener) reportAvailable() {
 		return
 	}
 	state := RelayConnecting
-	if l.readySessions.Load() > 0 {
+	if l.readySessions.Load() > 0 && lease.hostname != "" {
 		state = RelayReady
 	}
 	if state == RelayConnecting && lease.approval != "" {
@@ -302,7 +322,8 @@ func (l *listener) reportAvailable() {
 	}
 	l.report(listenerStatus{
 		state:     state,
-		publicURL: l.publicURLForLease(lease),
+		publicURL: l.leaseURL(lease.hostname),
+		legacyURL: l.leaseURL(lease.legacyHostname),
 		aliasURL:  l.aliasURLForLease(lease),
 		udpAddr:   udpAddr,
 		tcpAddr:   lease.tcpAddr,
@@ -380,6 +401,7 @@ func (l *listener) resetForLeaseRefresh(err error) {
 	lease := l.clearLease("lease refresh required")
 	if lease != nil && lease.tenantTLS != nil {
 		_ = lease.tenantTLS.Close()
+		lease.certificateObserver.Close()
 	}
 	l.api.resetTransport()
 	l.clearReverseTLSCache()
@@ -412,6 +434,7 @@ func (l *listener) runCloseCleanup() error {
 	var tenantErr error
 	if lease != nil && lease.tenantTLS != nil {
 		tenantErr = lease.tenantTLS.Close()
+		lease.certificateObserver.Close()
 	}
 	if l.api != nil {
 		l.api.resetTransport()

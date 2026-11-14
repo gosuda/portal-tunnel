@@ -8,7 +8,6 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func (r *leaseRegistry) sweepRegisterChallengeLocked(now time.Time, sourceAddr netip.Addr) (int, int) {
@@ -46,7 +45,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	if err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
-	if _, err := utils.CanonicalLeaseHostname(challenge.Request.Identity.Name, challenge.Request.Identity.Address, r.rootHostname); err != nil {
+	if _, _, err := r.resolveRegisterHostnames(challenge.Request.Identity, challenge.Request.Namespace); err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
 	r.mu.Lock()

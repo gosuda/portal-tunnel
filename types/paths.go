@@ -25,8 +25,9 @@ const (
 	PathInstallPowerShell = PathAPIPrefix + "/install.ps1"
 	PathInstallBinPrefix  = PathAPIPrefix + "/install/bin/"
 
-	PathV1Prefix = "/v1"
-	PathV1Sign   = PathV1Prefix + "/sign"
+	PathV1TenantCertificate = PathV1Prefix + "/tenant-certificate"
+	PathV1Prefix            = "/v1"
+	PathV1Sign              = PathV1Prefix + "/sign"
 
 	PathSDKPrefix            = "/sdk"
 	PathSDKDomain            = PathSDKPrefix + "/domain"

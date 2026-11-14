@@ -42,6 +42,8 @@ default HTTPS path fits an application.
 
 This article explains that design. The [Security Model](/security-model) is the
 canonical reference for current guarantees and mode-specific exceptions.
+For the separate, tunnel-owned Local TLS service namespace and automatic or
+manual certificate setup, see the [CLI guide](/cli-reference#tunnel-owned-local-tls).
 External browser and standards context was reviewed on 10 October 2026.
 
 ## Where an ordinary edge tunnel sees plaintext
@@ -201,7 +203,7 @@ design, but it is not a substitute for deciding who may authenticate a tenant.
 
 <h2 id="what-would-change-the-trust-boundary">What would change the trust boundary?</h2>
 
-Three directions affect different parts of the system:
+Three approaches affect different parts of the system:
 
 - **Delegated credentials** could reduce reliance on an online signer during
   handshakes. A relay retaining the parent certificate key would remain trusted
@@ -210,15 +212,127 @@ Three directions affect different parts of the system:
   compromise if the signer enforces independent authorization. It introduces
   another trust and availability boundary; it is not equivalent to
   browser-verifiable delegation or removal of certificate-owner authority.
-- **Tunnel-owned certificates and private keys** could move ordinary hostname
-  authentication to the endpoint. The issuer authorization and renewal path
-  must also prevent a relay from obtaining a competing certificate for that
-  hostname. Moving a key while leaving unrestricted issuance at the relay
-  would leave another impersonation path.
+- **Tunnel-owned certificates and private keys** are available through opt-in
+  local certificate files or automatic CSR issuance. They move ordinary signing
+  to the endpoint after local activation. The relay still controls its ACME
+  account and authoritative DNS, so it can retain or obtain a competing
+  certificate. Moving a key does not remove that impersonation path.
 
-These are future directions, not guarantees of today's managed Keyless TLS.
-The relay would still control forwarding, availability, and traffic metadata
-even if its authentication authority were reduced.
+Delegated credentials and an independent signer are not guarantees of today's
+managed Keyless TLS. The relay still controls forwarding, availability, and
+traffic metadata even when the tunnel holds its own certificate key.
+
+## Certificate monitoring
+
+Native tunnels can opt into best-effort CAA and certificate transparency (CT)
+monitoring. It is disabled by default and independent of certificate provisioning:
+Keyless, manual local certificates, and automatic local certificates are supported.
+The SDK lease owns the `portal/certmonitor` observer separately from its TLS
+client. The observer receives only the canonical hostname and copied public local-certificate installation
+events. Its bounded queue, DNS/CT requests, evidence writes, and shutdown never
+participate in TLS activation or acquisition. Events are best-effort: a crash or
+full queue can cause a conservative unrecognized-key warning, not silently approve
+an unknown key.
+
+The monitor checks the canonical hostname only, not a short alias. It neither
+changes DNS nor issues, replaces, revokes, or approves a certificate. Findings do
+not switch relays, block traffic, or enable a fallback. Source failures leave the
+observation unknown rather than declaring the hostname safe. Invalid initial
+configuration can reject startup; runtime observations remain warning-only.
+
+```sh
+portal expose 3000 --tls-monitor-state-dir evidence \
+  --tls-monitor-baseline baseline.json --tls-monitor-dns-resolver 1.1.1.1:53
+```
+
+Only an enabled runtime sends the hostname to the selected independent DNS
+resolver and CertSpotter's HTTPS API. The default resolver is `1.1.1.1:53`; an
+override must be an IP address and nonzero port, with brackets for IPv6. Installing
+or updating Portal does not activate monitoring. Private keys, access tokens,
+baseline files, and application traffic are not sent to either monitoring source.
+Choose a resolver outside the relay's control. The monitor uses ordinary DNS
+and does not independently validate DNSSEC responses.
+CertSpotter's [unauthenticated API](https://sslmate.com/help/reference/ct_search_api_v1)
+is intended for personal/evaluation use. This integration is an evaluation pilot,
+not a production service or monitoring SLA; it does not provision an account or
+configure authentication.
+
+For a persistent agent, add these keys to the selected `[[tunnels]]` entry:
+
+```toml
+tls_monitor_state_dir = "evidence"
+tls_monitor_baseline = "baseline.json"
+tls_monitor_dns_resolver = "1.1.1.1:53"
+```
+
+State and baseline paths resolve relative to the agent configuration file.
+The baseline and resolver options require the explicit state-directory opt-in.
+Go SDK callers use
+`sdk.WithCertificateMonitoring(stateDir, baselineFile, dnsResolver)`; empty
+baseline and resolver strings leave CAA unconfigured and select the default
+resolver, respectively. Raw TCP, relay cache, and browser/WASM paths do not
+support monitoring.
+
+### Operator-managed baseline
+
+The JSON baseline binds an approved CAA RRset and optional SPKI fingerprints to
+one exact canonical hostname. For example, after independently confirming the
+intended policy for that hostname:
+
+```json
+{
+  "hostname": "tenant.example.com",
+  "caa": [{"flags": 0, "tag": "issue", "value": "letsencrypt.org"}],
+  "approved_spki_sha256": []
+}
+```
+
+Use lowercase 64-character SHA-256 hex fingerprints of DER SubjectPublicKeyInfo
+in `approved_spki_sha256` when explicitly approving other keys. The monitor also
+records locally held certificate keys asynchronously; relay-provided keys are
+not implicitly approved. A crash or key rotation before a monitoring pass can
+leave an old local key unrecorded, causing a conservative unknown-key warning
+after restart. Monitoring storage does not delay certificate activation.
+The `caa` field must be present. An explicit empty
+array approves an empty effective policy; an omitted baseline means
+`UNCONFIGURED`, not an accepted first observation. The file is reread each pass,
+so reviewed operator changes do not need a restart. DNS observations never
+rewrite or establish this baseline.
+
+One baseline applies only to its matching hostname. A multi-relay exposure passes
+the same file to all listeners, so a baseline for one relay's canonical hostname
+does not configure the others. Use separate tunnel configurations/exposures for
+distinct hostname baselines. Missing, mismatched, or invalid baseline information
+does not establish an accepted CAA policy.
+
+### Evidence and limits
+
+Evidence is persisted beneath `stateDir/<SHA256-of-canonical-hostname>/` in
+`evidence.json`, with local certificate DER files in `local/`. It preserves
+observation source/time, certificate or precertificate DER, and recorded local
+SPKI history across restarts, separately from private certificate bundles. It is
+diagnostic evidence for operator review, not a relay proof API or a visitor
+authentication guarantee.
+
+Checks run hourly with independent 30-second DNS and CT budgets. Each CT pass
+allows at most eight pages, each bounded to 2 MiB and 1,000 entries. Persisted
+evidence is capped at 64 MiB and 10,000 certificate fingerprints; reaching a cap
+preserves prior evidence and does not advance the cursor past unsaved results.
+Local history is limited to 4,096 DER files of at most 256 KiB each. These bounds
+can leave observations incomplete and require operator attention; CT and local
+certificate history are not automatically pruned. DNS evidence keeps only the
+most recent 168 observations, including failures.
+
+CertSpotter coalesces precertificates and
+final certificates and returns unexpired issuances, not exhaustive historical
+CT coverage. Polling, publication/merge and aggregation delays, outages, and
+bounded responses can hide or delay observations. The integration does not
+verify CT log inclusion or consistency proofs and does not provide a complete
+log auditor. CAA is an issuance restriction, not certificate revocation or an
+independent authorization root: the authoritative DNS operator can change it,
+and already-issued competing certificates remain usable. An independent resolver
+does not remove that authority. No result guarantees detection before an attack
+or honest forwarding of every visitor connection.
 
 ## Choose the mode with its boundary in mind
 

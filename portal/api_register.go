@@ -34,7 +34,12 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 	s.registry.suspendIdentity(identityKey)
 
 	self, descriptors := s.issueHandleRegisterDescriptors(challenge)
-	record, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial())
+	record, replaced, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial())
+	if replaced != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
+		s.deleteLeaseDNS(cleanupCtx, replaced)
+		cleanupCancel()
+	}
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return identityKey, types.RegisterResponse{}, false

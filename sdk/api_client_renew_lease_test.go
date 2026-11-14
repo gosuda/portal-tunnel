@@ -54,7 +54,7 @@ func newRenewLeaseHourlyFixture(t *testing.T, tenantHostname string) *renewLease
 		t.Fatalf("keyless.NewClient() error = %v", err)
 	}
 	t.Cleanup(func() { _ = tenantTLS.Close() })
-	if !tenantTLS.RelayCertPool().Equal(firstPool) {
+	if !tenantTLS.TenantCertPool().Equal(firstPool) {
 		t.Fatal("the tenant did not pin the certificate the relay served")
 	}
 	listener := &listener{
@@ -80,7 +80,7 @@ func checkHourlyLeaseKeepsPinnedChain(t *testing.T, fixture *renewLeaseHourlyFix
 	t.Helper()
 	fixture.serving.Store(&fixture.renewed)
 	renewHourlyLease(t, fixture)
-	if !fixture.tenantTLS.RelayCertPool().Equal(fixture.firstPool) {
+	if !fixture.tenantTLS.TenantCertPool().Equal(fixture.firstPool) {
 		t.Fatal("renewLease() checked the relay chain again within the hour after it was found current")
 	}
 }
@@ -92,7 +92,7 @@ func checkHourlyLeaseRepinsAfterInterval(t *testing.T, fixture *renewLeaseHourly
 		return lease
 	})
 	renewHourlyLease(t, fixture)
-	if !fixture.tenantTLS.RelayCertPool().Equal(fixture.renewedPool) {
+	if !fixture.tenantTLS.TenantCertPool().Equal(fixture.renewedPool) {
 		t.Fatal("renewLease() an hour after the last check left the tenant on the replaced relay certificate")
 	}
 }
@@ -101,7 +101,7 @@ func checkHourlyLeaseDefersRecheck(t *testing.T, fixture *renewLeaseHourlyFixtur
 	t.Helper()
 	fixture.serving.Store(&fixture.later)
 	renewHourlyLease(t, fixture)
-	if !fixture.tenantTLS.RelayCertPool().Equal(fixture.renewedPool) {
+	if !fixture.tenantTLS.TenantCertPool().Equal(fixture.renewedPool) {
 		t.Fatal("renewLease() checked the relay chain again right after a scheduled check")
 	}
 }

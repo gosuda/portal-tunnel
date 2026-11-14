@@ -25,4 +25,26 @@ describe("leaseToServer", () => {
     expect(leaseToServer({ ...lease, tcp_addr: "relay.example:40001" }).link).toBe("");
     expect(leaseToServer({ ...lease, udp_addr: "relay.example:40002" }).link).toBe("");
   });
+
+  it("keeps unavailable Local TLS origins on the separate legacy URL", () => {
+    const canonical = "default.0123456789012345678901234567890123456789.relay.example";
+    const legacy = "0123456789012345678901234567890123456789.relay.example";
+    const row: Lease = {
+      ...lease,
+      hostname: "",
+      namespace: "local-tls-v1",
+      canonical_hostname: canonical,
+      legacy_canonical_hostname: legacy,
+    };
+    expect(leaseToServer(row).link).toBe(`https://${legacy}/`);
+    expect(leaseToServer({ ...row, canonical_ready: true }).link).toBe(
+      `https://${canonical}/`,
+    );
+    const unavailable = leaseToServer({
+      ...row,
+      legacy_canonical_hostname: "",
+    });
+    expect(unavailable.link).toBe("");
+    expect(unavailable.online).toBe(false);
+  });
 });

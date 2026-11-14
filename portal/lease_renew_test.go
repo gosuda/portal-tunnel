@@ -60,7 +60,7 @@ func TestLeaseBridgeRejectsExpiredAdmissionAfterWait(t *testing.T) {
 
 func TestLeaseConcurrentRenewAndBridgeAdmission(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
-	record, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "renew-bridge")}, netip.MustParseAddr("127.0.0.1"), "", types.RelayDescriptor{}, nil, nil)
+	record, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "renew-bridge")}, netip.MustParseAddr("127.0.0.1"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestRenewJudgesAgainstTheChainTheLeaseRegisteredUnder(t *testing.T) {
 	otherIssuer := second.issue(t, "example.com")
 
 	registry := newTestRegistry(t, false, false)
-	_, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, pinned)
+	_, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, pinned)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -222,7 +222,7 @@ func TestLookupRejectsHostnameNoLeaseHolds(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "lookup-guard"),
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -236,13 +236,13 @@ func TestPublicLeasesOmitsHiddenLease(t *testing.T) {
 	t.Parallel()
 
 	registry := newTestRegistry(t, false, false)
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "hidden-lease"),
 		Metadata: types.LeaseMetadata{Hide: true},
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "shown-lease"),
 	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil); err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -352,7 +352,7 @@ func admitBridgesConcurrently(t *testing.T, registry *leaseRegistry, record *lea
 
 func registerLeftBehindLease(t *testing.T, registry *leaseRegistry, tenant types.Identity, served *acme.TLSMaterial) (types.RegisterResponse, error) {
 	t.Helper()
-	record, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: tenant}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, served)
+	record, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: tenant}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, served)
 	if err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -415,7 +415,7 @@ func buildLeafCertTemplate(host string) *x509.Certificate {
 
 func checkInitialFirstSeen(t *testing.T, registry *leaseRegistry, id types.Identity, clientStartedAt time.Time) {
 	t.Helper()
-	record1, _, err := registry.Register(types.RegisterChallengeRequest{
+	record1, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:  id,
 		StartedAt: clientStartedAt,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
@@ -433,7 +433,7 @@ func checkInitialFirstSeen(t *testing.T, registry *leaseRegistry, id types.Ident
 
 func checkReconnectFirstSeen(t *testing.T, registry *leaseRegistry, id types.Identity, clientStartedAt time.Time) *leaseRecord {
 	t.Helper()
-	record2, _, err := registry.Register(types.RegisterChallengeRequest{
+	record2, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: id,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
@@ -452,7 +452,7 @@ func checkLiveReplacementFirstSeen(t *testing.T, registry *leaseRegistry, record
 	record2.FirstSeenAt = observedAt
 	registry.mu.Unlock()
 	for _, startedAt := range []time.Time{{}, clientStartedAt, time.Now().UTC().Add(-2 * time.Minute)} {
-		record3, _, err := registry.Register(types.RegisterChallengeRequest{
+		record3, _, _, err := registry.Register(types.RegisterChallengeRequest{
 			Identity:  id,
 			StartedAt: startedAt,
 		}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
@@ -479,7 +479,7 @@ func expireStartedAtLeases(t *testing.T, registry *leaseRegistry, id types.Ident
 func checkExpiredReplacementFirstSeen(t *testing.T, registry *leaseRegistry, id types.Identity) {
 	t.Helper()
 	beforeExpired := time.Now().UTC().Truncate(time.Second)
-	expiredRecord, _, err := registry.Register(types.RegisterChallengeRequest{
+	expiredRecord, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: id,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
@@ -495,7 +495,7 @@ func checkFutureStartedAtClamped(t *testing.T, registry *leaseRegistry) {
 	futureID := newTestLeaseIdentity(t, "future-started")
 	futureStartedAt := time.Now().UTC().Add(10 * time.Minute)
 	beforeReg := time.Now().UTC().Truncate(time.Second)
-	record4, _, err := registry.Register(types.RegisterChallengeRequest{
+	record4, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:  futureID,
 		StartedAt: futureStartedAt,
 	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
@@ -511,7 +511,7 @@ func checkFutureStartedAtClamped(t *testing.T, registry *leaseRegistry) {
 func checkAncientStartedAtFloored(t *testing.T, registry *leaseRegistry) {
 	t.Helper()
 	oldID := newTestLeaseIdentity(t, "ancient-started")
-	record5, _, err := registry.Register(types.RegisterChallengeRequest{
+	record5, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:  oldID,
 		StartedAt: time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil, nil)

@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"runtime"
 	"slices"
@@ -14,12 +15,19 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
+	errAutomaticTLSStateRequired           = errors.New("automatic TLS requires a certificate state directory")
+	errAutomaticTLSFilesConflict           = errors.New("automatic TLS cannot be combined with manual certificate files")
+	errLocalTLSCertificatePairRequired     = errors.New("tenant TLS requires both certificate and key files")
+	errLocalTLSModeUnsupported             = errors.New("local tenant TLS cannot be combined with raw TCP or the browser runtime")
+	errCertificateMonitorModeUnsupported   = errors.New("TLS certificate monitoring cannot be combined with raw TCP or the browser runtime")
 	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
 	errPortalSDKContextIsNil               = errors.New("portal sdk: context is nil")
 	errPortalSDKThisRuntimeSupportsHTTPS   = errors.New("portal sdk: this runtime supports HTTPS exposure only")
@@ -80,9 +88,13 @@ const (
 // RelayStatus is an immutable snapshot of one relay's externally visible state.
 type RelayStatus struct {
 	RelayURL string
-	// PublicURL is the identity-bound canonical URL. It always routes to
-	// this exposure, and the opt-in relay cache serves only this hostname.
+	// PublicURL is the identity-bound canonical URL. With negotiated Local TLS,
+	// it stays empty until a valid local certificate exists and is never cached
+	// by the relay. Old relays and non-Local-TLS exposures retain their legacy URL.
 	PublicURL string
+	// LegacyURL preserves the old one-label canonical origin and its optional
+	// relay cache. It is not a redirect to PublicURL.
+	LegacyURL string
 	// AliasURL is the <name>.<root host> URL when the relay granted that
 	// alias to this lease, else empty: another identity may own the name
 	// (canonical fallback). A set alias is held by the lease: it stays set
@@ -100,6 +112,9 @@ type RelayStatus struct {
 	State      RelayState
 	Failure    RelayFailure
 	Err        error
+	// CertificateError describes an automatic issuance policy refusal. A live
+	// legacy endpoint or an already valid local certificate can still work.
+	CertificateError error
 	// Approval is set while the relay refuses this lease's reverse connection.
 	// State stays RelayConnecting and no endpoint field is set, because nothing
 	// routes. Empty means no refusal was reported, and it never means approved:
@@ -154,19 +169,26 @@ type Exposure struct {
 
 	discovery *discovery.Controller
 
-	closeOnce sync.Once
-	connSeq   atomic.Uint64
+	closeOnce    sync.Once
+	connSeq      atomic.Uint64
+	http2Enabled bool
 }
 
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
-	Cache      *cache.SourceConfig
-	UDPEnabled bool
-	TCPEnabled bool
-	BanMITM    bool
-	Overlay    bool
-	Metadata   types.LeaseMetadata
+	CertificateMonitor *certmonitor.MonitorConfig
+	AutomaticTLS       bool
+	TLSStateDir        string
+	TLSRequireLocal    bool
+	TLSCertFile        string
+	TLSKeyFile         string
+	Cache              *cache.SourceConfig
+	UDPEnabled         bool
+	TCPEnabled         bool
+	BanMITM            bool
+	Overlay            bool
+	Metadata           types.LeaseMetadata
 
 	discoveryEnabled bool
 	maxActiveRelays  int
@@ -180,6 +202,49 @@ type Option func(*options)
 // Cache errors never stop the exposure; the caller still serves the same path.
 func WithStaticRelayCache(path string, ttl time.Duration) Option {
 	return func(opts *options) { opts.Cache = &cache.SourceConfig{Path: path, TTL: ttl} }
+}
+
+// WithTLSCertificate requires a locally held tenant certificate and private key.
+// Expose validates the pair before registering. Its only DNS SAN must be the
+// exact new canonical hostname. Friendly and legacy URLs remain Keyless.
+// Files are reloaded during certificate refresh; errors never enable relay signing.
+// This option requires a namespace-capable relay and cannot be used with raw TCP.
+func WithTLSCertificate(certFile, keyFile string) Option {
+	return func(opts *options) {
+		opts.TLSCertFile = certFile
+		opts.TLSKeyFile = keyFile
+	}
+}
+
+// WithAutomaticTLS obtains and renews tenant certificates through the relay.
+// The tunnel generates and persists private keys in directory. New canonical
+// hostnames never fall back to Keyless. requireLocal additionally rejects old
+// relays without namespace support and waits for canonical readiness; false
+// allows a live legacy endpoint to satisfy WaitReady while issuance is pending.
+// This is local-key ownership, not independent authentication of the relay.
+func WithAutomaticTLS(directory string, requireLocal bool) Option {
+	return func(opts *options) {
+		opts.AutomaticTLS = true
+		opts.TLSStateDir = directory
+		opts.TLSRequireLocal = requireLocal
+	}
+}
+
+// WithCertificateMonitoring opts into best-effort, evaluation-only CAA and certificate
+// transparency checks for each canonical tenant hostname. stateDir is required
+// for durable evidence. baselineFile is operator-managed; an empty path leaves
+// CAA policy unconfigured. dnsResolver is an optional IP:port (default 1.1.1.1:53).
+// Enabling this sends hostname queries to that resolver and CertSpotter over
+// HTTPS. Runtime findings and query failures only warn; they do not change
+// certificates, relay selection, or traffic readiness. Invalid initial monitor
+// configuration may reject startup. Detection before an attack is not guaranteed.
+// Raw TCP and the browser runtime are unsupported.
+func WithCertificateMonitoring(stateDir, baselineFile, dnsResolver string) Option {
+	return func(opts *options) {
+		opts.CertificateMonitor = &certmonitor.MonitorConfig{
+			StateDir: stateDir, BaselineFile: baselineFile, DNSResolver: dnsResolver,
+		}
+	}
 }
 
 // WithUDP enables the datagram transport capability.
@@ -225,7 +290,8 @@ func WithDiscovery(maxActiveRelays int) Option {
 }
 
 // Expose constructs a relay-backed network endpoint from an already-resolved
-// identity and concrete relay URLs. It never creates or persists keys.
+// identity and concrete relay URLs. It never creates or persists identity keys.
+// WithAutomaticTLS persists tenant TLS keys separately in its configured directory.
 //
 // When WithDiscovery is applied, Exposure delegates relay selection to an
 // internal discovery.Controller. The explicit relays are always retained;
@@ -296,6 +362,35 @@ func validateExposeContext(ctx context.Context) error {
 }
 
 func validateExposeConfig(cfg options) error {
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return errLocalTLSCertificatePairRequired
+	}
+	if cfg.AutomaticTLS {
+		if strings.TrimSpace(cfg.TLSStateDir) == "" {
+			return errAutomaticTLSStateRequired
+		}
+		if cfg.TLSCertFile != "" {
+			return errAutomaticTLSFilesConflict
+		}
+	}
+	localTLSConfigured := cfg.TLSCertFile != "" || cfg.AutomaticTLS
+	localTLSUnsupported := cfg.TCPEnabled || runtime.GOOS == "js"
+	if localTLSConfigured && localTLSUnsupported {
+		return errLocalTLSModeUnsupported
+	}
+	if cfg.TLSCertFile != "" {
+		if err := localtls.ValidateCertificateFiles(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+			return fmt.Errorf("tenant TLS: %w", err)
+		}
+	}
+	if cfg.CertificateMonitor != nil {
+		if localTLSUnsupported {
+			return errCertificateMonitorModeUnsupported
+		}
+		if err := cfg.CertificateMonitor.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := cfg.Metadata.Validate(); err != nil {
 		return err
 	}

@@ -85,10 +85,11 @@ func bootHarnessRelay(t *testing.T, ctx context.Context, host, attack string, h 
 		ingressAddr = net.JoinHostPort(host, strconv.Itoa(harnessPort(t, host)))
 	}
 	relay, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     "https://" + sniAddr,
-		StateDir:      stateDir,
-		SNIListenAddr: ingressAddr,
-		SNIPort:       sniPort,
+		TenantCertificates: true,
+		PortalURL:          "https://" + sniAddr,
+		StateDir:           stateDir,
+		SNIListenAddr:      ingressAddr,
+		SNIPort:            sniPort,
 	})
 	if err != nil {
 		h.cancel()

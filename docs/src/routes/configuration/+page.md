@@ -10,7 +10,8 @@ description: Complete reference for all Portal environment variables, CLI flags,
 Capability is enabled by default in the relay binary. Exposures are eligible
 only with `portal expose --serve ./dist --cache`. Cached responses terminate
 TLS at the selected relay and lose browser-to-origin end-to-end encryption.
-Only identity-bound canonical hostnames use the cache; friendly aliases always
+Only eligible legacy identity-bound hostnames use the cache. New canonical
+`<service>.<address>.<relay-root>` hostnames are never relay cached, and friendly aliases always
 use the live origin.
 
 | Environment | Flag | Default | Meaning |
@@ -239,9 +240,52 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
+| `TENANT_CERTIFICATES` | `false` | bool | Opt into tenant CSR issuance with the relay ACME account and DNS provider. Public issuance requires an existing relay ACME account key, an explicitly approved service identity, and shared durable budget state. Relays serving operator-managed certificate files without a relay ACME account key do not offer automatic tenant issuance. Auto-mode registration alone is not an issuance grant. Local development CAs are exempt from approval and public quota accounting. |
+| `TENANT_ISSUANCE_STATE_DIR` | (empty) | string | Required for public tenant issuance: operator-created shared durable directory with coherent operating-system file locks across all relay instances consuming the same CA quota. Startup rejects missing state or a journal that cannot be opened for reading and writing. Unavailable state suppresses issuance capability. Corrupt, locked, or full state fails closed during issuance; an active order does not disable the capability. Local development issuance requires no public quota state. |
 | `ACME_CA_DIR_URL` | `""` | string | Optional ACME CA directory URL (https) for managed certificate issuance; empty defaults to Let's Encrypt production; the CA must not require External Account Binding, which is not supported (ZeroSSL and Google Trust Services do require it); a private CA is trusted through lego's `LEGO_CA_CERTIFICATES` environment variable, the path of its PEM certificate (mount the file in Docker); the account registration and the certificate are stored per directory, so switching CAs issues a new certificate and registers a new account while the others stay on disk, unused (Let's Encrypt production keeps `fullchain.pem` and `privatekey.pem`, any other CA uses `fullchain-<id>.pem` and `privatekey-<id>.pem`) |
 | `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01 challenges, A/AAAA sync, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
+
+ACME cancellation is cooperative, not an end-to-end issuance deadline. ACME HTTP
+requests and DNS provider publication use the operation context, including
+provider API requests and change-status polling. Providers retain their
+configured TTL, propagation, polling, HTTP timeout, zone, and credential options.
+
+Each order keeps the TXT record's original CNAME target and its exact value for
+cleanup. Existing matching values and unrelated TXT records are preserved.
+After cancellation, cleanup uses fresh request and credential contexts with a
+shared 30-second API/context budget starting at the first cleanup attempt. This
+is not a strict wall-clock bound for an operator-configured AWS
+`credential_process`: its SDK timeout is capped when the client is constructed,
+but the command may start later and the SDK waits for local process completion.
+Commands or descendant processes that do not terminate promptly can extend that
+wait. Google external-account executable credentials also depend on local
+process termination after cancellation. Nested AWS credential caches can finish
+internal refresh work after a caller returns; their network requests retain operation cancellation and cannot
+resume DNS publication. The issuance lock remains held until the provider calls
+and cleanup return. Portal does not detach an issuance worker to run alongside
+another order.
+
+Cleanup is best effort, not a guarantee that a remote record was removed. A
+provider can accept a write but lose its response, or complete it after a
+canceled request. Cleanup failures produce an ACME warning; lego does not
+automatically retry them. After a provider outage or cleanup warning, inspect the
+original challenge target and remove only the stale challenge value, preserving
+other TXT values.
+
+DNS propagation stops between probes, and idle polling sleeps are capped at five
+seconds. Lego's CNAME resolution, in-flight DNS probes, and ACME authorization
+polling still have context-free stages. DNS exchanges allow 10 seconds on Unix
+or 20 seconds on Windows, with additional exchanges for TCP fallback, CNAME
+chains, zone discovery, and multiple nameservers. These stages can still delay
+other tenant orders and relay renewal after cancellation. Tenant issuance
+remains disabled by default. The same cancellation and cleanup behavior applies
+to relay certificates without shortening the configured propagation budget.
+
+Scheduled relay certificate renewal gives the ARI lookup a separate two-minute
+budget. The certificate order itself uses the provider's configured propagation
+timeout and the existing HTTP request timeouts, rather than sharing the
+two-minute DNS synchronization limit. Relay shutdown still cancels the order.
 
 ### IPv4 and IPv6
 
@@ -287,6 +331,8 @@ After NS/glue delegation is reachable, copy the `ds_record` from the relay start
 Authoritative RRsets, including apex DNSKEY and denial-of-existence NSEC records, are signed. Signatures last 24 hours, tolerate five minutes of clock skew, and refresh before answering after 12 hours; keep the host clock synchronized. A finite wildcard zone preserves synthesized addresses even below explicit TXT owners and their ancestors. Before either public address is initialized, missing names return REFUSED without an SOA so resolvers do not negatively cache pending tunnel names. After address initialization, genuinely absent names return authenticated NXDOMAIN. Existing owners without the requested type return NODATA, including AAAA queries on an IPv4-only zone and A queries on an IPv6-only zone. DNSSEC records accompany responses only when requested with EDNS DO (or queried directly), and large UDP responses require TCP retry.
 
 External managed providers (`cloudflare`, `gcloud`, `hetzner`, `njalla`, `route53`, `vultr`) are supported first-class backends; `embedded` remains the canonical default. Keep any vendor as the **parent** DNS provider and delegate only the relay subdomain to embedded DNS. Manual/external certificate ownership remains supported via `fullchain.pem` and `privatekey.pem` when neither ACME state file is present. Certificate loading itself needs no vendor API credentials, and the embedded provider needs none for DNS management. Managed certificates use the selected external provider for DNS publication. With `ENS_GASLESS_ENABLED=true`, ENS/DNSSEC synchronization also uses that provider before certificate loading; a manual certificate does not bypass ENS provider credentials.
+
+For Local TLS leases on external managed DNS, reserve the exact service hostname and its address-only parent under the relay root for Portal-managed A/AAAA records. Do not provision unrelated address records at these names. The exact parent preserves legacy address-only URLs when a child suppresses wildcard DNS answers. Regardless of ENS configuration, Portal publishes the parent before the canonical child and waits for provider acknowledgment before starting tenant DNS-01. The parent remains owned while any sibling canonical service or legacy lease needs it, and failed child removal retains the parent for retry. ENS TXT publication remains opt-in. Provider propagation is not atomic across resolvers; a failed cleanup may still require manual removal of the stale challenge TXT record.
 
 | Variable | Default | Type | Description |
 |----------|---------|------|-------------|
@@ -374,9 +420,17 @@ The `portal expose` subcommand accepts the following flags. Flags that read from
 
 ### Lease
 
+Tunnel-owned TLS flags and their defaults are listed in the
+[CLI reference](/cli-reference#advanced-flags). Automatic mode uses `--tls-auto`
+and persistent `--tls-state-dir`; manual mode uses `--tls-cert` plus `--tls-key`.
+The [Local TLS agent example](#local-tls-services) below lists the corresponding
+TOML keys and relative-path rules. Public automatic issuance also needs the
+relay's `TENANT_CERTIFICATES`, explicit service approval, and
+`TENANT_ISSUANCE_STATE_DIR`; see [issuance admission](#public-tenant-issuance-admission).
+
 | Flag | Env Var | Type | Default | Description |
 |------|---------|------|---------|-------------|
-| `--name` | | string | | Request a short URL without the Ethereum address (single DNS label, maximum 63 ASCII characters); applies to new identities. When omitted for a new identity, an address-only canonical hostname (<address>.<relay-domain>) is used |
+| `--name` | | string | | Select a service and request its friendly alias; up to 63 ASCII characters after normalization. Overrides a legacy saved name without rewriting the signing identity |
 | `--description` | | string | | Service description metadata |
 | `--tags` | | string | | Service tags metadata (comma-separated) |
 | `--owner` | | string | | Service owner metadata |
@@ -537,7 +591,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Stable tunnel ID used by the agent dashboard |
-| `name` | string | Name used when creating a new identity; an existing identity keeps its saved name |
+| `name` | string | Selects this service under the signing key, overriding any legacy saved name without rewriting the identity file; omitted uses the saved name or an unnamed service |
 | `max_active_relays` | int | Auto-selected relay limit; defaults to `3`; explicit relays remain included |
 | `ban_mitm` | bool | Ban on suspected TLS termination; defaults to warning-only |
 | `target` | string | Local TCP target, equivalent to the `portal expose <target>` argument |
@@ -548,6 +602,13 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `overlay` | bool | Prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to direct and retains direct fallback |
 | `identity_path` | string | Tunnel identity JSON file path. When omitted, one tunnel uses the platform default `identity.json`; multiple tunnels use `<state-dir>/<tunnel-id>/identity.json` |
 | `identity_json` | string | In-memory identity JSON; takes precedence over `identity_path` without reading or writing that file |
+| `tls_auto` | bool | Obtain and renew exact canonical certificates through the relay; defaults to `false` |
+| `tls_state_dir` | string | Automatic certificate/key directory; requires `tls_auto`; defaults to resolved `identity_path` plus `.tls`; must be explicit with `identity_json` |
+| `tls_require_local` | bool | Require namespace support and, in automatic mode, usable canonical readiness; defaults to `false`; requires automatic or manual Local TLS; manual mode already rejects legacy-only relays |
+| `tls_cert`, `tls_key` | string | Manual certificate-chain and matching private-key PEM files; supply both; cannot be combined with `tls_auto` |
+| `tls_monitor_state_dir` | string | Opt into warning-only CT/CAA observations and persist public evidence; omitted disables monitoring |
+| `tls_monitor_baseline` | string | Operator-maintained CAA/SPKI baseline JSON; requires `tls_monitor_state_dir`; omitted leaves CAA unconfigured |
+| `tls_monitor_dns_resolver` | string | Independent DNS resolver IP:port; requires `tls_monitor_state_dir`; defaults to `1.1.1.1:53` when monitoring is enabled |
 | `udp`, `udp_addr`, `tcp` | bool/string | UDP and raw TCP relay options |
 | `description`, `tags`, `owner`, `thumbnail`, `hide` | mixed | Lease metadata shown by relays |
 | `auth` | string | Application login provider: `siwe`, `credential`, `oidc`, `saml`, or `email`; cannot be combined with TCP or UDP |
@@ -629,30 +690,75 @@ x402_endpoints = ["https://rpc.nano.to", "https://rainstorm.city/api"]
 
 For a task-oriented walkthrough, see [Portal Agent](/portal-agent).
 
+#### Local TLS services
+
+All TLS file, state-directory, and monitor-baseline paths above resolve relative
+to `config.toml`. Automatic and manual Local TLS select the negotiated
+`<service>.<address>.<relay-root>` namespace. Canonical handshakes require usable
+local material; friendly and legacy URLs retain their separate Keyless policy.
+Local TLS cannot be combined with raw TCP or UDP in the agent HTTP path.
+Monitoring cannot be combined with raw TCP; the agent does not support relay cache.
+
+Two services can share a signing identity while retaining separate leases,
+targets, and per-hostname leaf keys:
+
+```toml
+[[tunnels]]
+id = "blog"
+name = "blog"
+target = "3000"
+identity_path = "identity.json"
+tls_auto = true
+tls_require_local = true
+
+[[tunnels]]
+id = "api"
+name = "api"
+target = "4000"
+identity_path = "identity.json"
+tls_auto = true
+tls_require_local = true
+```
+
+Explicit names do not rewrite the shared identity file. Automatic mode requires
+relay operator [issuance admission](#public-tenant-issuance-admission); it
+persists and reuses each hostname's key across restart and renewal. Protect and
+back up this state. Deleting it loses the leaf key and can require a new CA order.
+Without `tls_require_local`, older relays may still provide legacy URLs.
+Canonical certificate failure never changes that hostname to Keyless.
+
+For manual mode, set `tls_cert` and `tls_key` instead of `tls_auto` and
+`tls_state_dir`. Only the exact assigned canonical DNS SAN is allowed. Missing,
+expired, corrupt, mismatched, wildcard, or sibling-SAN material is rejected.
+Successful checks reload replaced files at most hourly during lease renewal;
+restart for immediate reload. An invalid replacement leaves the previous usable
+pair installed, but expiry still withdraws canonical readiness. Manual mode
+does not issue or automatically renew certificates.
+
+See [CLI Local TLS](/cli-reference#tunnel-owned-local-tls) for hostname and
+migration rules, and [certificate monitoring](/keyless-tls#certificate-monitoring)
+for the optional baseline, evidence format, and observation limits.
+
 ### `identity.json`
 
 Stores the secp256k1 identity used to sign tunnel sessions and relay descriptors. `portal expose` treats `--identity-path` as a direct JSON file path. `relay-server` treats `IDENTITY_PATH` as a state directory and stores this file at `IDENTITY_PATH/identity.json`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Human-readable label for this identity |
+| `name` | string | Optional legacy service-name default; new tunnel identity files omit it, and an explicit service name overrides it without rewriting the file |
 | `address` | string | Derived EVM address used for SIWE and identity ownership |
 | `public_key` | string | Compressed secp256k1 public key hex |
 | `private_key` | string | secp256k1 private key hex; keep secret |
 | `mnemonic` | string | BIP-39 mnemonic used to derive the secp256k1 identity key; keep secret |
 | `derivation_path` | string | EVM derivation path for `mnemonic`; defaults to `m/44'/60'/0'/0/0` |
 
-When `--name` is omitted, the service does not claim a friendly public name and
-publishes an address-only canonical hostname (`<address>.<relay-domain>`).
-When `--name` is provided and available, share the short URL
-`https://<name>.<relay-domain>/`, which has no Ethereum address. Portal also
-publishes the identity-bound canonical hostname (`<name>-<address>.<relay-domain>`).
-If another identity owns the short name, the CLI continues with only the
-identity-bound URL. The short URL reaches the live origin; opt-in relay caching
-uses the canonical hostname.
-An existing identity file or `--identity-json` supplies the saved name as well
-as the key. `--name` applies only when creating a new identity; it does not
-rename an existing one. Use a separate `--identity-path` for a new identity.
+The file or `--identity-json` supplies the signing key. Explicit `--name` or
+agent `name` selects a service without changing the persisted identity. Omitting
+the name retains an old file's saved default; new files store no service name.
+Distinct explicit service names can share one key and retain independent leases
+and targets. Use a separate identity path when a different signing key is wanted.
+See [Identity Names](/cli-reference#identity-names) for friendly, Local TLS, and
+legacy canonical hostnames and the reserved unnamed-service label.
 
 When `mnemonic` is present, Portal derives the private key at `derivation_path`
 and preserves the mnemonic form when rewriting `identity.json`. The same
@@ -799,3 +905,40 @@ reverse proxy, so stripping them here is safe and has no lasting effect.
 The same policy applies automatically to WebSocket upgrade requests routed
 through `--http-route`. Portal-owned forwarding headers are set after stripping,
 so they remain correct and trusted.
+
+### Public tenant issuance admission
+
+Explicit approval through the existing operator policy is required even in automatic
+registration mode. A fresh identity, lease, IP address, or CSR does not grant CA
+access. Denied, banned, expired, and replaced leases remain ineligible. Request
+shedding before authentication protects CPU and request processing only; it is
+not CA quota protection. Durable issuance reservations happen only after live
+lease authentication, operator approval, ownership, and CSR validation.
+
+`TENANT_ISSUANCE_STATE_DIR/tenant-orders.jsonl` is an append-only, fsynced journal
+protected by an operating-system exclusive file lock, released when the process
+exits. Every reservation is durable before an ACME client can place an order.
+Failures, cancellations, incomplete replies, and crash-ambiguous orders consume
+capacity for the full rolling seven-day window. Success appends validated public
+certificate validity dates; it never refunds a reservation. Corrupt or truncated
+state fails closed instead of resetting quotas.
+
+The conservative ceilings are 20 new attempts and 10 eligible renewal attempts
+per registered domain and CA directory in seven days, 40 total attempts per CA
+directory, and three attempts per exact hostname, with a one-hour hostname
+cooldown. Subdomains share their public-suffix-derived registered-domain bucket.
+A recorded successful, unexpired certificate reaching two thirds of its lifetime qualifies
+for the separate renewal capacity. A new CSR or key alone does not qualify, and
+renewals still consume total CA and hostname capacity. This is local admission,
+not a claim of exemption from any CA's renewal or duplicate-certificate rules.
+
+All replicas, including replicas with different ACME accounts or base subdomains,
+must point at the same pre-existing, durably provisioned, lock-coherent directory. Independent local disks
+are not a supported shared-quota deployment. Do not delete, truncate, restore an
+older copy of, or rotate this journal to recover capacity. The 16 MiB journal
+ceiling requires operator maintenance that preserves reservations and successful
+issuance history; there is no automatic reset. Filesystem locking and durable
+writes must work across the deployment. Operators must reserve additional quota
+for relay certificates and other issuers outside this endpoint and keep tenant
+issuance disabled if their CA's limits or external consumption leave insufficient
+headroom. No filesystem-local mechanism coordinates independent installations.

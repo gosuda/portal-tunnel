@@ -185,8 +185,20 @@ func awaitMITMVerdict(t *testing.T, h *harness) {
 }
 
 func TestMITMTerminationExcludesRelay(t *testing.T) {
-	h := newHarnessWithName(t, "termination", "127.0.0.1", "terminate", sdk.WithMITMProtection(true))
-	awaitMITMVerdict(t, h)
+	for _, automatic := range []bool{false, true} {
+		name := "keyless"
+		if automatic {
+			name = "local-tls"
+		}
+		t.Run(name, func(t *testing.T) {
+			opts := []sdk.Option{sdk.WithMITMProtection(true)}
+			if automatic {
+				opts = append(opts, sdk.WithAutomaticTLS(t.TempDir(), false))
+			}
+			h := newHarnessWithName(t, "termination", "127.0.0.1", "terminate", opts...)
+			awaitMITMVerdict(t, h)
+		})
+	}
 }
 
 func exerciseProbeBudget(t *testing.T, h *harness, publicURL string) {

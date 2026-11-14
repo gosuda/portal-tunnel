@@ -35,28 +35,31 @@ const (
 )
 
 type Config struct {
-	BaseDomain         string
-	KeyDir             string
-	CADirURL           string
-	DNSProvider        string
-	ENSGaslessEnabled  bool
-	ENSGaslessAddress  string
-	EmbeddedDNSPort    int
-	CloudflareToken    string
-	GCPProjectID       string
-	GCPManagedZone     string
-	HetznerAPIToken    string
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSSessionToken    string
-	AWSRegion          string
-	AWSHostedZoneID    string
-	AWSKMSKeyARN       string
-	VultrAPIKey        string
-	NjallaToken        string
+	// TenantIssuanceStateDir must be shared by every relay consuming the same CA quota.
+	TenantIssuanceStateDir string
+	BaseDomain             string
+	KeyDir                 string
+	CADirURL               string
+	DNSProvider            string
+	ENSGaslessEnabled      bool
+	ENSGaslessAddress      string
+	EmbeddedDNSPort        int
+	CloudflareToken        string
+	GCPProjectID           string
+	GCPManagedZone         string
+	HetznerAPIToken        string
+	AWSAccessKeyID         string
+	AWSSecretAccessKey     string
+	AWSSessionToken        string
+	AWSRegion              string
+	AWSHostedZoneID        string
+	AWSKMSKeyARN           string
+	VultrAPIKey            string
+	NjallaToken            string
 }
 
 type Manager struct {
+	issuanceMu   sync.Mutex
 	stopCh       chan struct{}
 	stopCtx      context.Context
 	stopErr      error
@@ -291,6 +294,8 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 }
 
 func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
+	m.issuanceMu.Lock()
+	defer m.issuanceMu.Unlock()
 	certFile, keyFile := m.certificateFiles()
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
 	if err := provisionEnsureParentDirs(keyFile, certFile, accountKeyFile); err != nil {

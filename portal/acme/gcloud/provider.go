@@ -63,21 +63,11 @@ func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, e
 		return nil, errGcloudProviderIsNil
 	}
 
-	runtimeCfg, err := newRuntimeConfig(ctx, p.cfg)
-	if err != nil {
-		return nil, err
-	}
-
 	cfg := gcloud.NewDefaultConfig()
-	cfg.Project = runtimeCfg.ProjectID
-	cfg.ZoneID = runtimeCfg.ManagedZone
-	cfg.HTTPClient = runtimeCfg.HTTPClient
-
-	provider, err := gcloud.NewDNSProviderConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create gcloud lego provider: %w", err)
-	}
-	return provider, nil
+	return dnsrecord.NewChallengeProvider(ctx, cfg.PropagationTimeout, cfg.PollingInterval,
+		func(ctx context.Context, name, value string) (dnsrecord.Cleanup, error) {
+			return p.presentChallenge(ctx, cfg, name, value)
+		}), nil
 }
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {

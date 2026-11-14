@@ -16,23 +16,26 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
-	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 type listenerSnapshot struct {
-	hostname string
+	hostname       string
+	legacyHostname string
 
-	aliasHostname string
-	udpAddr       string
-	tcpAddr       string
-	accessToken   string
-	reverse       types.ReverseEndpoint
-	expiresAt     time.Time
-	tenantTLS     *keyless.Client
+	aliasHostname       string
+	udpAddr             string
+	tcpAddr             string
+	accessToken         string
+	reverse             types.ReverseEndpoint
+	expiresAt           time.Time
+	tenantTLS           tenantTLSClient
+	certificateObserver *certmonitor.CertificateObserver
 
 	approval RelayApproval
 
@@ -151,6 +154,9 @@ func (l *listener) sendDatagram(frame types.DatagramFrame) error {
 }
 
 func (l *listener) publicURLForLease(lease listenerSnapshot) string {
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && !endpoint.local.Ready() {
+		return ""
+	}
 	return l.leaseURL(lease.hostname)
 }
 
@@ -267,6 +273,24 @@ func (l *listener) runLeaseStartSessions(leaseCtx context.Context, workers *sync
 }
 
 func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.WaitGroup, errCh chan error) {
+	// Certificate observations publish local status immediately. Remote reports
+	// stay serialized with access-token rotation in the existing renewal loop.
+	var renew chan struct{}
+	if lease, ok := l.leaseSnapshot(); ok {
+		if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+			renew = make(chan struct{}, 1)
+			// Registration has no local certificate report. Publish already
+			// usable material now; pending issuance will signal its own change.
+			if endpoint.local.Ready() {
+				renew <- struct{}{}
+			}
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				l.runCertificateStatus(leaseCtx, endpoint.local, renew)
+			}()
+		}
+	}
 	if l.udpEnabled {
 		workers.Add(1)
 		go func() {
@@ -279,10 +303,40 @@ func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.Wa
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		if err := l.runRenewLoop(leaseCtx); err != nil {
+		if err := l.runRenewLoop(leaseCtx, renew); err != nil {
 			l.runLeaseReportError(leaseCtx, errCh, err)
 		}
 	}()
+}
+
+// runCertificateStatus publishes installation and expiry without waiting for
+// network renewal, then asks the token-owning renewal loop to report remotely.
+func (l *listener) runCertificateStatus(ctx context.Context, client *localtls.Client, renew chan<- struct{}) {
+	for {
+		var expiry <-chan time.Time
+		var timer *time.Timer
+		if until := time.Until(client.CertificateExpiry()); until > 0 {
+			timer = time.NewTimer(until)
+			expiry = timer.C
+		}
+		select {
+		case <-ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
+			return
+		case <-client.CertificateChanges():
+		case <-expiry:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		l.reportAvailable()
+		select {
+		case renew <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (l *listener) runLeaseAwait(ctx context.Context, cancel context.CancelFunc, workers *sync.WaitGroup, errCh chan error) error {
@@ -362,7 +416,7 @@ func (s *runReverseSessionLoopState) runReverseSessionLoopClaimRetry(ctx context
 	return false, nil
 }
 
-func (s *runReverseSessionLoopState) runReverseSessionLoopSettle(ctx context.Context, lease listenerSnapshot, conn net.Conn, tenantTLS *keyless.Client, probeReady chan<- struct{}) (bool, error) {
+func (s *runReverseSessionLoopState) runReverseSessionLoopSettle(ctx context.Context, lease listenerSnapshot, conn net.Conn, tenantTLS tenantTLSClient, probeReady chan<- struct{}) (bool, error) {
 	l := s.listener
 	l.reportStreamReady()
 	select {
@@ -390,7 +444,7 @@ func (s *runReverseSessionLoopState) runReverseSessionLoopSettle(ctx context.Con
 	}
 }
 
-func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS *keyless.Client, sessionSlot int, reverseTransport *leaseReverseTransport, probeReady chan<- struct{}) error {
+func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS tenantTLSClient, sessionSlot int, reverseTransport *leaseReverseTransport, probeReady chan<- struct{}) error {
 	state := &runReverseSessionLoopState{listener: l, sessionSlot: sessionSlot}
 	for {
 		lease, _ := l.leaseSnapshot()
@@ -417,7 +471,7 @@ func (l *listener) failoverReverseEndpoint(ctx context.Context, lease listenerSn
 	return false, nil
 }
 
-func (l *listener) claimReverseSession(ctx context.Context, conn net.Conn, tenantTLS *keyless.Client) (bool, error) {
+func (l *listener) claimReverseSession(ctx context.Context, conn net.Conn, tenantTLS tenantTLSClient) (bool, error) {
 	defer l.reportStreamClosed()
 	binding, err := transport.ReadStart(ctx, conn, defaultHandshakeTimeout)
 	if err != nil {

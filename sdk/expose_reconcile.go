@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +18,13 @@ type exposureConn struct {
 	localAddr  string
 	remoteAddr string
 	closeOnce  sync.Once
+}
+
+func (c *exposureConn) ConnectionState() tls.ConnectionState {
+	if conn, ok := c.Conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+		return conn.ConnectionState()
+	}
+	return tls.ConnectionState{}
 }
 
 func (c *exposureConn) CloseWrite() error {
@@ -253,17 +261,25 @@ func (e *Exposure) closeStaleRelayListenersLocked(staleListeners map[string]*lis
 
 func (e *Exposure) publishRelayListenerLocked(relayURL string) (bool, error) {
 	listener, err := newListener(context.Background(), relayURL, listenerConfig{
-		Cache:      e.cache,
-		Identity:   e.identity,
-		Overlay:    e.options.Overlay,
-		UDPEnabled: e.options.UDPEnabled,
-		TCPEnabled: e.options.TCPEnabled,
-		BanMITM:    e.options.BanMITM,
-		Metadata:   e.metadata.Copy(),
-		StartedAt:  e.startedAt,
+		TLSCertFile:        e.options.TLSCertFile,
+		TLSKeyFile:         e.options.TLSKeyFile,
+		TLSStateDir:        e.options.TLSStateDir,
+		TLSRequireLocal:    e.options.TLSRequireLocal,
+		CertificateMonitor: e.options.CertificateMonitor,
+		Cache:              e.cache,
+		Identity:           e.identity,
+		Overlay:            e.options.Overlay,
+		UDPEnabled:         e.options.UDPEnabled,
+		TCPEnabled:         e.options.TCPEnabled,
+		BanMITM:            e.options.BanMITM,
+		Metadata:           e.metadata.Copy(),
+		StartedAt:          e.startedAt,
 	})
 	if err != nil {
 		return false, err
+	}
+	if e.http2Enabled {
+		listener.enableHTTP2()
 	}
 	return e.publishCreatedListener(relayURL, listener), nil
 }

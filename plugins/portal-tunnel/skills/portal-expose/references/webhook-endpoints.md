@@ -8,7 +8,7 @@ Portal only carries the requests. Signature checks, challenge replies, and respo
 
 The other service stores the URL, so it must not change between runs.
 
-- Pass an explicit `--name` and an absolute `--identity-path` outside the repository, and reuse that identity file every time. A new identity file gets a new address, and an existing file keeps its saved name even if `--name` changes.
+- Pass the same explicit `--name` and an absolute `--identity-path` outside the repository, and reuse that identity file every time. A new identity file gets a new address. An explicit name selects a service without rewriting the existing key file; omitting it uses a legacy saved name or an unnamed service.
 - Register the granted short URL (`alias_url`, `https://<name>.<relay-host>/...`) with the exact path the app serves, for example `/interactions`.
 - Pin the relay with `--relays <url> --discovery=false`, because the hostname belongs to one relay.
 - When the endpoint must stay reachable after the terminal closes, use the persistent `portal agent` mode in `portal-cli.md`. A temporary preview is fine for one test session.

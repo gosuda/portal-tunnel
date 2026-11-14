@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -108,11 +109,9 @@ func (m *Manager) syncChangedAddressRecords(ctx context.Context, state *maintena
 		if publicIP == state.lastPublicIPs[ipv4] {
 			continue
 		}
-		if m.cfg.ENSGaslessEnabled {
-			if err := m.syncTrackedENSGaslessHostAddressRecords(ctx, publicIP); err != nil {
-				syncErr = errors.Join(syncErr, err)
-				continue
-			}
+		if err := m.syncTrackedENSGaslessHostAddressRecords(ctx, publicIP); err != nil {
+			syncErr = errors.Join(syncErr, err)
+			continue
 		}
 		state.lastPublicIPs[ipv4] = publicIP
 	}
@@ -124,7 +123,11 @@ drainENS:
 	for {
 		select {
 		case command := <-m.ensCommands:
-			state.pendingENS[command.hostname] = command
+			if command.ready != nil {
+				command.ready <- errLeaseDNSPending
+			} else {
+				state.pendingENS[command.hostname] = command
+			}
 		default:
 			break drainENS
 		}
@@ -133,14 +136,11 @@ drainENS:
 
 func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *maintenanceLoopState) error {
 	var err error
-	for hostname, command := range state.pendingENS {
+	for _, command := range state.pendingENS {
 		if commandErr := m.applyENSCommand(ctx, command); commandErr != nil {
 			err = errors.Join(err, commandErr)
 		} else {
-			delete(state.pendingENS, hostname)
-			if !command.remove {
-				clear(state.lastPublicIPs)
-			}
+			m.finishENSCommand(state, command)
 		}
 	}
 	return err
@@ -217,19 +217,25 @@ func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
 	if _, _, manual, err := m.manualCertificateOverride(); err != nil || manual {
 		return defaultRenewInterval
 	}
-	renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-	defer cancel()
-	needsRenewal, replacesCertID, recheck := m.shouldRenew(renewCtx)
+	checkCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+	needsRenewal, replacesCertID, recheck := m.shouldRenew(checkCtx)
+	cancel()
 	if !needsRenewal {
 		return recheck
 	}
-	if err := m.provision(renewCtx, replacesCertID); err != nil {
+	// DNS propagation uses the provider's configured budget, which can exceed
+	// the short DNS-sync/ARI timeout. Shutdown still cancels the whole order.
+	if err := m.provision(ctx, replacesCertID); err != nil {
 		log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
 	}
 	return defaultRenewInterval
 }
 
 func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *maintenanceLoopState, command ensDNSCommand) {
+	if command.ready != nil {
+		command.ready <- m.checkLeaseDNS(state, command.hostname)
+		return
+	}
 	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
 	err := m.applyENSCommand(syncCtx, command)
 	cancel()
@@ -237,9 +243,22 @@ func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *ma
 		state.pendingENS[command.hostname] = command
 		log.Warn().Err(err).Str("hostname", command.hostname).Msg("apply ENS dns command")
 	} else {
-		delete(state.pendingENS, command.hostname)
-		if !command.remove {
-			clear(state.lastPublicIPs)
+		m.finishENSCommand(state, command)
+	}
+}
+
+func (m *Manager) finishENSCommand(state *maintenanceLoopState, command ensDNSCommand) {
+	delete(state.pendingENS, command.hostname)
+	if command.remove {
+		return
+	}
+	clear(state.lastPublicIPs)
+	if utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
+		_, parent, _ := strings.Cut(command.hostname, ".")
+		// The new child republished the shared parent. An old withdrawal
+		// intent must not outlive the newly registered DNS owner.
+		if state.pendingENS[parent].remove {
+			delete(state.pendingENS, parent)
 		}
 	}
 }

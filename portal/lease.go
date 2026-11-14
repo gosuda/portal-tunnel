@@ -290,9 +290,16 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	defer r.mu.RUnlock()
 
 	now := time.Now()
+	localTLS := utils.IsLocalTLSHostname(host, r.rootHostname)
 	var wildcard *leaseRecord
 	for _, record := range r.records {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
+			continue
+		}
+		if localTLS {
+			if record.Namespace == types.LocalTLSNamespaceV1 && record.CanonicalHostname == host {
+				return record, true
+			}
 			continue
 		}
 		exact, wild := matchLookupHostnames(record, host)

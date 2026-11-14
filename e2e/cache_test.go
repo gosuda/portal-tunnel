@@ -38,7 +38,7 @@ func startCacheRelay(t *testing.T, ctx context.Context, cfg cache.Config) (*url.
 	base, _ := url.Parse("https://127.0.0.1:" + strconv.Itoa(harnessPort(t, "127.0.0.1")))
 	relay, err := portal.NewServer(portal.ServerConfig{
 		PortalURL: base.String(), StateDir: stateDir, SNIListenAddr: base.Host,
-		Cache: cfg,
+		Cache: cfg, TenantCertificates: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -413,4 +413,53 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	awaitCachePopulated(readyCtx, t, client, publicURL)
 	assertCacheSemantics(t, ctx, client, publicURL, relay, &originCalls)
 	assertOfflineCacheExpiry(t, client, publicURL, exposure, offlineTTL)
+}
+
+func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	base, stateDir, relay := startCacheRelay(t, ctx, cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: time.Minute})
+	t.Cleanup(func() { _ = relay.Shutdown(context.Background()); _ = relay.Wait() })
+	h := &harness{t: t, server: relay, sniAddr: base.Host, certificate: filepath.Join(stateDir, "fullchain.pem")}
+	id, err := identity.Generate("namespace-cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exposure, ready := namespaceService(t, h, id, "live origin", sdk.WithAutomaticTLS(t.TempDir(), true), sdk.WithStaticRelayCache(writeCacheSite(t), time.Minute))
+	if ready.LegacyURL == "" || ready.LegacyURL == ready.PublicURL {
+		t.Fatalf("cache migration URLs=%+v", ready)
+	}
+	client, transport, ok := tenantTLSClient(h.sniAddr, h.certificate)
+	if !ok {
+		t.Fatal("load trust")
+	}
+	transport.DisableKeepAlives = true
+	defer transport.CloseIdleConnections()
+	deadline, stop := context.WithTimeout(ctx, 15*time.Second)
+	defer stop()
+	awaitCachePopulated(deadline, t, client, ready.LegacyURL)
+	namespaceResponse(t, h, ready.PublicURL, "live origin", true)
+	parsed, _ := url.Parse(ready.PublicURL)
+	// Even when the relay terminates TLS for a legacy snapshot, a forged HTTP
+	// authority must not make that snapshot available under a canonical name.
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, ready.LegacyURL, nil)
+	request.Host = parsed.Host
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("legacy cache accepted canonical authority: %d", response.StatusCode)
+	}
+	if err := exposure.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertOfflineCacheAvailable(t, client, ready.LegacyURL)
+	transport.CloseIdleConnections()
+	response, err = client.Get(ready.PublicURL)
+	if err == nil {
+		response.Body.Close()
+		t.Fatalf("offline canonical completed TLS and returned %d", response.StatusCode)
+	}
 }

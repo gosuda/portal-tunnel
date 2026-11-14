@@ -188,15 +188,21 @@ func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
 		if relay.State == sdk.RelayReady && !relay.Deselected {
 			aliasURL = relay.AliasURL
 		}
+		var certificateError string
+		if relay.CertificateError != nil {
+			certificateError = relay.CertificateError.Error()
+		}
 		statuses = append(statuses, AgentRelayStatus{
-			RelayURL:  relay.RelayURL,
-			PublicURL: relay.PublicURL,
-			AliasURL:  aliasURL,
-			TCPAddr:   relay.TCPAddr,
-			Version:   relay.Version,
-			State:     relay.State,
-			Failure:   relay.Failure,
-			Approval:  relay.Approval,
+			CertificateError: certificateError,
+			RelayURL:         relay.RelayURL,
+			PublicURL:        relay.PublicURL,
+			LegacyURL:        relay.LegacyURL,
+			AliasURL:         aliasURL,
+			TCPAddr:          relay.TCPAddr,
+			Version:          relay.Version,
+			State:            relay.State,
+			Failure:          relay.Failure,
+			Approval:         relay.Approval,
 		})
 	}
 	return statuses
