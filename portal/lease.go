@@ -45,6 +45,7 @@ const (
 	maxClaimedStartedAge                     = 7 * 24 * time.Hour
 	defaultReadyQueueLimit                   = 8
 	defaultLeaseBridgeLimit                  = 128
+	defaultReplicaLimit                      = 16
 )
 
 func requestedLeaseTTL(seconds int) (time.Duration, error) {
@@ -72,6 +73,7 @@ type leaseRegistry struct {
 
 	blocked        map[types.ServiceIdentityKey]blockedIdentity
 	accessRevision uint64
+	selectionOrder uint64
 
 	udpEnabled, tcpPortEnabled bool
 	udpMaxLeases, tcpMaxLeases int
@@ -239,7 +241,7 @@ func (r *leaseRegistry) admitBridge(ctx context.Context, record *leaseRecord, in
 	return bridge, nil
 }
 
-func (r *leaseRegistry) activateBridge(record *leaseRecord, bridge *leaseBridge, reverse net.Conn) error {
+func (r *leaseRegistry) activateBridge(record *leaseRecord, bridge *leaseBridge, reverse, inbound net.Conn) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.recordByLease(record.ServiceKey(), record.id, time.Now()) != record {
@@ -254,6 +256,9 @@ func (r *leaseRegistry) activateBridge(record *leaseRecord, bridge *leaseBridge,
 		return net.ErrClosed
 	}
 	bridge.reverse = reverse
+	if inbound != nil {
+		bridge.inbound = inbound
+	}
 	return nil
 }
 
@@ -326,23 +331,58 @@ func (r *leaseRegistry) recordByKey(key types.ServiceIdentityKey, now time.Time)
 	return nil
 }
 
-func (r *leaseRegistry) recordByLease(key types.ServiceIdentityKey, leaseID string, now time.Time) *leaseRecord {
-	record := r.recordByKey(key, now)
-	if record == nil || record.id != leaseID {
+// selectReplica rotates live leases of one identity and TLS namespace under the
+// registry lock, skipping leases without a ready reverse stream when
+// requireReady is set. Siblings in another namespace serve other certificates,
+// so they never receive this namespace's traffic. Selection order is compared
+// only within an identity, so unrelated traffic cannot skew its round-robin order.
+func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, namespace string, tried map[string]bool, requireReady bool) *leaseRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.isRoutableLocked(key) {
 		return nil
 	}
-	return record
+	now := time.Now()
+	var selected *leaseRecord
+	for _, record := range r.records {
+		if record == nil || !record.replica || record.ServiceKey() != key || record.Namespace != namespace {
+			continue
+		}
+		unready := requireReady && record.reverse.ReadyCount() == 0
+		if record.isExpired(now) || tried[record.id] || unready {
+			continue
+		}
+		if selected == nil || record.lastSelected < selected.lastSelected {
+			selected = record
+		}
+	}
+	if selected != nil {
+		r.selectionOrder++
+		selected.lastSelected = r.selectionOrder
+	}
+	return selected
+}
+
+func (r *leaseRegistry) recordByLease(key types.ServiceIdentityKey, leaseID string, now time.Time) *leaseRecord {
+	for _, record := range r.records {
+		if record == nil || record.reverse == nil || record.isExpired(now) {
+			continue
+		}
+		if record.id == leaseID && record.ServiceKey() == key {
+			return record
+		}
+	}
+	return nil
 }
 
 func (r *leaseRegistry) recordForVerifiedLeaseLocked(key types.ServiceIdentityKey, leaseID string, now time.Time) (*leaseRecord, error) {
-	record := r.recordByKey(key, now)
-	if record == nil {
-		return nil, errLeaseNotFound
+	if record := r.recordByLease(key, leaseID, now); record != nil {
+		return record, nil
 	}
-	if record.id != leaseID {
+	if r.recordByKey(key, now) != nil {
 		return nil, errUnauthorized
 	}
-	return record, nil
+	return nil, errLeaseNotFound
 }
 
 func (r *leaseRegistry) sweepRegisterChallengeLocked(now time.Time, sourceAddr netip.Addr) (int, int) {
@@ -397,6 +437,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	})
 
 	return types.RegisterChallengeResponse{
+		Replica:     req.Replica,
 		ChallengeID: challenge.ChallengeID,
 		ExpiresAt:   challenge.ExpiresAt,
 		SIWEMessage: challenge.SIWEMessage,
@@ -455,11 +496,11 @@ func (r *leaseRegistry) verifySigningAccessTokenLease(req *http.Request) (string
 	return claims.LeaseID, true
 }
 
-func (r *leaseRegistry) Touch(key types.ServiceIdentityKey, sourceAddr netip.Addr, now time.Time) {
+func (r *leaseRegistry) Touch(key types.ServiceIdentityKey, leaseID string, sourceAddr netip.Addr, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record := r.recordByKey(key, now)
+	record := r.recordByLease(key, leaseID, now)
 	if record == nil {
 		return
 	}
@@ -475,9 +516,6 @@ func (r *leaseRegistry) collectCleanupExpiredLocked(now time.Time) []*leaseRecor
 		record := r.records[i]
 		if record != nil && record.isExpired(now) {
 			expired = append(expired, record)
-			if record.reverse != nil {
-				r.bps.ResetIdentityLimiter(record.ServiceKey())
-			}
 			r.deleteRecord(i)
 			continue
 		}
@@ -534,11 +572,44 @@ func (r *leaseRegistry) includePublicLeaseLocked(record *leaseRecord, now time.T
 
 func (r *leaseRegistry) collectPublicLeasesLocked(now time.Time) []types.Lease {
 	leases := make([]types.Lease, 0, len(r.records))
+	byIdentity := make(map[types.ServiceIdentityKey]int)
+	var representatives []string
 	for _, record := range r.records {
 		if !r.includePublicLeaseLocked(record, now) {
 			continue
 		}
-		leases = append(leases, r.publicLease(record, now))
+		lease := r.publicLease(record, now)
+		key := record.ServiceKey()
+		index, found := byIdentity[key]
+		if !found {
+			byIdentity[key] = len(leases)
+			leases = append(leases, lease)
+			representatives = append(representatives, record.id)
+			continue
+		}
+		// Metadata comes from a deterministic live representative, while service
+		// availability and continuity aggregate all visible replicas.
+		previous := leases[index]
+		if record.id < representatives[index] {
+			leases[index] = lease
+			representatives[index] = record.id
+		}
+		leases[index].Ready = previous.Ready + lease.Ready
+		if previous.FirstSeenAt.Before(lease.FirstSeenAt) {
+			leases[index].FirstSeenAt = previous.FirstSeenAt
+		} else {
+			leases[index].FirstSeenAt = lease.FirstSeenAt
+		}
+		if previous.LastSeenAt.After(lease.LastSeenAt) {
+			leases[index].LastSeenAt = previous.LastSeenAt
+		} else {
+			leases[index].LastSeenAt = lease.LastSeenAt
+		}
+		if previous.ExpiresAt.After(lease.ExpiresAt) {
+			leases[index].ExpiresAt = previous.ExpiresAt
+		} else {
+			leases[index].ExpiresAt = lease.ExpiresAt
+		}
 	}
 	return leases
 }
@@ -567,6 +638,7 @@ func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
 		serializedIdentityKey := identityKey.String()
 		leases = append(leases, types.PolicyLease{
 			Lease:       r.publicLease(record, now),
+			LeaseID:     record.id,
 			IdentityKey: serializedIdentityKey,
 			BPS:         r.bps.IdentityBPS(identityKey),
 			ClientIP:    clientIP,
@@ -592,16 +664,22 @@ func (r *leaseRegistry) stats(now time.Time) (activeLeases, activeUDPFlows int64
 }
 
 func (r *leaseRegistry) deleteRecord(i int) {
-	if record := r.records[i]; record != nil {
+	record := r.records[i]
+	if record != nil {
 		r.cache.Detach(record.cacheLeaseLocked())
-	}
-	if record := r.records[i]; record != nil && r.overlay != nil {
-		r.overlay.ForgetLease(record.id)
+		if r.overlay != nil {
+			r.overlay.ForgetLease(record.id)
+		}
 	}
 	last := len(r.records) - 1
 	r.records[i] = r.records[last]
 	r.records[last] = nil
 	r.records = r.records[:last]
+	if record != nil && record.reverse != nil {
+		if key := record.ServiceKey(); r.recordByKey(key, time.Time{}) == nil {
+			r.bps.ResetIdentityLimiter(key)
+		}
+	}
 }
 
 func (r *leaseRegistry) publicLease(record *leaseRecord, now time.Time) types.Lease {
@@ -845,6 +923,10 @@ func clampRegisterStartedAt(requested time.Time, issuedAt time.Time) time.Time {
 
 func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, served *acme.TLSMaterial) (*leaseRecord, string, error) {
 	leaseIdentity := req.Identity
+	hasExclusiveTransport := req.UDPEnabled || req.TCPEnabled || req.Cache || req.Overlay
+	if req.Replica && hasExclusiveTransport {
+		return nil, "", errReplicaMode
+	}
 	if err := req.Metadata.Validate(); err != nil {
 		return nil, "", err
 	}
@@ -879,6 +961,7 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 		CanonicalHostname: canonicalHostname,
 		Metadata:          req.Metadata.Copy(),
 		Overlay:           req.Overlay,
+		replica:           req.Replica,
 		ExpiresAt:         expiresAt,
 		FirstSeenAt:       clampRegisterStartedAt(req.StartedAt, issuedAt),
 		LastSeenAt:        issuedAt,
@@ -946,16 +1029,50 @@ func (r *leaseRegistry) checkRegisterCapacityLocked(record *leaseRecord, now tim
 	return nil
 }
 
-func (r *leaseRegistry) findRegisterReplacedLocked(identityKey types.ServiceIdentityKey) int {
-	for i, existing := range r.records {
-		if existing == nil {
+// joinRegisterReplicasLocked carries continuity from live leases of the same
+// identity. A replica also shares their alias and may not join an exclusive
+// lease; the alias epoch survives while this identity keeps the alias.
+func (r *leaseRegistry) joinRegisterReplicasLocked(record *leaseRecord, identityKey types.ServiceIdentityKey, req types.RegisterChallengeRequest, now time.Time) error {
+	if req.Replica && r.cache.Has(record.cacheLeaseLocked().Hostname) {
+		return errReplicaConflict
+	}
+	replicas := 0
+	for _, existing := range r.records {
+		if existing == nil || existing.isExpired(now) || existing.reverse == nil || existing.ServiceKey() != identityKey {
 			continue
 		}
-		if existing.reverse != nil && existing.ServiceKey() == identityKey {
-			return i
+		if req.Replica {
+			if !existing.replica {
+				return errReplicaConflict
+			}
+			record.Hostname = existing.Hostname
+			replicas++
+		}
+		if !existing.FirstSeenAt.IsZero() && existing.FirstSeenAt.Before(record.FirstSeenAt) {
+			record.FirstSeenAt = existing.FirstSeenAt
 		}
 	}
-	return -1
+	if replicas >= defaultReplicaLimit {
+		return errReplicaLimit
+	}
+	return nil
+}
+
+func (r *leaseRegistry) assignAliasEpochLocked(record *leaseRecord, identityKey types.ServiceIdentityKey, now time.Time) {
+	record.AliasEpoch = ""
+	if record.Hostname == "" {
+		return
+	}
+	for _, existing := range r.records {
+		if existing == nil || existing.isExpired(now) || existing.ServiceKey() != identityKey {
+			continue
+		}
+		if existing.Hostname == record.Hostname && existing.AliasEpoch != "" {
+			record.AliasEpoch = existing.AliasEpoch
+			return
+		}
+	}
+	record.AliasEpoch = utils.RandomID("alias_")
 }
 
 func (r *leaseRegistry) checkRegisterHostnameLocked(record *leaseRecord, identityKey types.ServiceIdentityKey, req types.RegisterChallengeRequest, now time.Time) error {
@@ -1001,7 +1118,11 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 
 	r.mu.Lock()
 	now := time.Now()
-	replacedIndex := r.findRegisterReplacedLocked(identityKey)
+	if err := r.joinRegisterReplicasLocked(record, identityKey, req, now); err != nil {
+		r.mu.Unlock()
+		r.rollbackRecord(record)
+		return nil, nil, types.RegisterResponse{}, err
+	}
 	if err := r.checkRegisterHostnameLocked(record, identityKey, req, now); err != nil {
 		r.mu.Unlock()
 		r.rollbackRecord(record)
@@ -1012,34 +1133,42 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		r.rollbackRecord(record)
 		return nil, nil, types.RegisterResponse{}, err
 	}
+	r.assignAliasEpochLocked(record, identityKey, now)
+	// An exclusive lease replaces every live lease of its identity, including
+	// replicas. A replica joins its live siblings and replaces none of them.
+	var replaced *leaseRecord
+	var retired []*leaseRecord
 	for i := 0; i < len(r.records); i++ {
 		existing := r.records[i]
-		if existing == nil || existing.reverse != nil || !existing.isPublicEntry() || existing.ServiceKey() != identityKey {
+		if existing == nil || existing.ServiceKey() != identityKey {
 			continue
 		}
-		if existing.CanonicalHostname == record.CanonicalHostname {
-			r.deleteRecord(i)
-			i--
+		if existing.reverse == nil {
+			if existing.isPublicEntry() && existing.CanonicalHostname == record.CanonicalHostname {
+				r.deleteRecord(i)
+				i--
+			}
+			continue
 		}
+		if req.Replica {
+			continue
+		}
+		if replaced == nil {
+			replaced = existing
+		} else {
+			retired = append(retired, existing)
+		}
+		r.deleteRecord(i)
+		i--
 	}
 	r.cache.Register(record.cacheLeaseLocked(), req)
-	var replaced *leaseRecord
-	if replacedIndex < 0 {
-		r.records = append(r.records, record)
-	} else {
-		replaced = r.records[replacedIndex]
-		if !replaced.isExpired(now) && !replaced.FirstSeenAt.IsZero() && replaced.FirstSeenAt.Before(record.FirstSeenAt) {
-			record.FirstSeenAt = replaced.FirstSeenAt
-		}
-		r.bps.ResetIdentityLimiter(record.ServiceKey())
-		r.records[replacedIndex] = record
-	}
+	r.records = append(r.records, record)
 	r.mu.Unlock()
 
+	for _, previous := range retired {
+		r.closeRecord(previous)
+	}
 	if replaced != nil {
-		if r.overlay != nil {
-			r.overlay.ForgetLease(replaced.id)
-		}
 		r.closeRecord(replaced)
 	}
 
@@ -1054,7 +1183,6 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		for i, current := range r.records {
 			if current == record {
 				r.deleteRecord(i)
-				r.bps.ResetIdentityLimiter(identityKey)
 				break
 			}
 		}
@@ -1071,6 +1199,7 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		Namespace:               record.Namespace,
 		LegacyCanonicalHostname: record.LegacyCanonicalHostname,
 		Hostname:                record.Hostname,
+		AliasEpoch:              record.AliasEpoch,
 		CanonicalHostname:       record.CanonicalHostname,
 		ExpiresAt:               record.ExpiresAt,
 		AccessToken:             accessToken,
@@ -1312,7 +1441,6 @@ func (r *leaseRegistry) Unregister(req types.UnregisterRequest) (*leaseRecord, e
 			continue
 		}
 		r.deleteRecord(i)
-		r.bps.ResetIdentityLimiter(key)
 		r.mu.Unlock()
 		r.closeRecord(record)
 		return record, nil

@@ -385,7 +385,10 @@ func renewUnapprovedSlotLease(t *testing.T, registry *leaseRegistry, firstLease 
 
 func touchUnapprovedSlotLease(t *testing.T, registry *leaseRegistry, second types.Identity, other netip.Addr) {
 	t.Helper()
-	registry.Touch(second.ServiceKey(), other, time.Now())
+	registry.mu.RLock()
+	record := registry.recordByKey(second.ServiceKey(), time.Now())
+	registry.mu.RUnlock()
+	registry.Touch(second.ServiceKey(), record.id, other, time.Now())
 }
 
 func checkUnapprovedSlotStillBound(t *testing.T, registry *leaseRegistry, newcomer types.Identity, source netip.Addr) {
@@ -1406,7 +1409,7 @@ func TestLeaseBridgeRejectsExpiredAdmissionAfterWait(t *testing.T) {
 	reverse, other := net.Pipe()
 	defer reverse.Close()
 	defer other.Close()
-	if err := registry.activateBridge(record, bridge, reverse); !errors.Is(err, errLeaseNotFound) {
+	if err := registry.activateBridge(record, bridge, reverse, nil); !errors.Is(err, errLeaseNotFound) {
 		t.Fatalf("expired activation=%v", err)
 	}
 }
@@ -1619,7 +1622,7 @@ func admitCapacityBridges(t *testing.T, registry *leaseRegistry, record *leaseRe
 		if index < 16 {
 			reverse, other := net.Pipe()
 			t.Cleanup(func() { _ = other.Close() })
-			if err := registry.activateBridge(record, bridge, reverse); err != nil {
+			if err := registry.activateBridge(record, bridge, reverse, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1650,7 +1653,7 @@ func revokeCapacityBridges(t *testing.T, registry *leaseRegistry, record *leaseR
 			t.Fatal("deny did not cancel bridge")
 		}
 		reverse, peer := net.Pipe()
-		err := registry.activateBridge(record, bridge, reverse)
+		err := registry.activateBridge(record, bridge, reverse, nil)
 		_ = reverse.Close()
 		_ = peer.Close()
 		if !errors.Is(err, net.ErrClosed) {
@@ -1694,7 +1697,7 @@ func admitBridgesConcurrently(t *testing.T, registry *leaseRegistry, record *lea
 			return
 		}
 		reverse, other := net.Pipe()
-		if err := registry.activateBridge(record, bridge, reverse); err != nil {
+		if err := registry.activateBridge(record, bridge, reverse, nil); err != nil {
 			t.Error(err)
 		}
 		record.releaseBridge(bridge)
