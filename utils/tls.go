@@ -164,9 +164,13 @@ func dialEndpointTLS(ctx context.Context, host, port, serverName string) (*tls.C
 	return tlsConn, nil
 }
 
+// endpointProxy is the REST client's proxy rule. Tests replace it because
+// http.ProxyFromEnvironment reads the environment only once per process.
+var endpointProxy = http.ProxyFromEnvironment
+
 // dialEndpointTCP follows the proxy environment the REST client uses:
-// HTTP(S)_PROXY, ALL_PROXY and NO_PROXY route the endpoint through an HTTP
-// CONNECT tunnel or a SOCKS proxy, everything else dials directly. Local
+// HTTP(S)_PROXY and NO_PROXY route the endpoint through an HTTP CONNECT
+// tunnel or a SOCKS5 proxy, everything else dials directly. Local
 // relay hosts never consult a proxy: their trust bootstrap pins the chain the
 // dialed peer presents, so a proxy in between would define that trust.
 func dialEndpointTCP(ctx context.Context, host, port string) (net.Conn, error) {
@@ -175,7 +179,7 @@ func dialEndpointTCP(ctx context.Context, host, port string) (net.Conn, error) {
 	var proxyURL *url.URL
 	if !IsLocalRelayHost(host) {
 		var proxyErr error
-		proxyURL, proxyErr = http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
+		proxyURL, proxyErr = endpointProxy(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
 		if proxyErr != nil {
 			return nil, fmt.Errorf("resolve proxy for relay endpoint: %w", proxyErr)
 		}
