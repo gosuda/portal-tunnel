@@ -40,15 +40,23 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
+      - name: Cache CI tools
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin
+          key: ${{ runner.os }}-go-tools-${{ hashFiles('go.mod', 'Makefile') }}
+
       - name: Install CI tools
+        if: steps.cache-tools.outputs.cache-hit != 'true'
         run: make install
 
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
 
-      - name: Compile tunnel targets
-        run: make build-tunnel
+      - name: Compile browser tunnel WASM
+        run: make build-wasm
 
       - name: Run Make checks
         run: |
