@@ -47,6 +47,7 @@ type apiClient struct {
 	cache            *types.StaticCacheLimits
 	namespaces       []string
 	issuanceDisabled bool
+	replicas         bool
 }
 
 func (c *apiClient) resetTransport() {
@@ -61,6 +62,7 @@ func (c *apiClient) resetTransport() {
 	c.cache = nil
 	c.namespaces = nil
 	c.issuanceDisabled = false
+	c.replicas = false
 }
 
 func (c *apiClient) initHTTPTransport(ctx context.Context) error {
@@ -98,6 +100,7 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 	}
 	c.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
 	c.cache = domainResp.Cache
+	c.replicas = domainResp.Replicas
 	c.namespaces = slices.Clone(domainResp.Namespaces)
 	c.issuanceDisabled = domainResp.TenantCertificateIssuance != nil && !*domainResp.TenantCertificateIssuance
 	c.http = httpClient
@@ -148,7 +151,11 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	}
 	c.mu.RLock()
 	supported := slices.Contains(c.namespaces, registerReq.Namespace)
+	replicas := c.replicas
 	c.mu.RUnlock()
+	if registerReq.Replica && !replicas {
+		return types.RegisterResponse{}, fmt.Errorf("%w: relay does not support HTTP replicas", errRelayIncompatible)
+	}
 	if registerReq.Namespace != "" && !supported {
 		registerReq.Namespace = ""
 	}
@@ -165,16 +172,10 @@ func (c *apiClient) exchangeRegister(ctx context.Context, registerReq types.Regi
 	var resp types.RegisterResponse
 	for {
 		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
-			var reloadErr error
-			if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
-				reloadErr = pauseRegisterRetry(ctx, err)
-			} else if signed, err := signRegisterChallenge(challenge, c.relayURL, registerReq, reportedIP); err != nil {
-				reloadErr = err
-			} else {
-				request = signed
-			}
-			if reloadErr != nil {
-				return types.RegisterResponse{}, reloadErr
+			var err error
+			challenge, request, err = c.acquireRegisterChallenge(ctx, registerReq, reportedIP)
+			if err != nil {
+				return types.RegisterResponse{}, err
 			}
 			continue
 		}
@@ -186,6 +187,21 @@ func (c *apiClient) exchangeRegister(ctx context.Context, registerReq types.Regi
 			return types.RegisterResponse{}, pauseErr
 		}
 	}
+}
+
+func (c *apiClient) acquireRegisterChallenge(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterChallengeResponse, types.RegisterRequest, error) {
+	var challenge types.RegisterChallengeResponse
+	if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
+		return types.RegisterChallengeResponse{}, types.RegisterRequest{}, pauseRegisterRetry(ctx, err)
+	}
+	if registerReq.Replica && !challenge.Replica {
+		return types.RegisterChallengeResponse{}, types.RegisterRequest{}, fmt.Errorf("%w: relay did not confirm replica registration", errRelayIncompatible)
+	}
+	signed, err := signRegisterChallenge(challenge, c.relayURL, registerReq, reportedIP)
+	if err != nil {
+		return types.RegisterChallengeResponse{}, types.RegisterRequest{}, err
+	}
+	return challenge, signed, nil
 }
 
 func pauseRegisterRetry(ctx context.Context, err error) error {

@@ -3,13 +3,53 @@ package transport
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+func TestTLSStartHonorsCallerAndSessionDeadlines(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration
+		want   time.Duration
+	}{
+		{name: "remaining claim budget", budget: 100 * time.Millisecond, want: 100 * time.Millisecond},
+		{name: "expired claim", budget: -time.Second},
+		{name: "session limit", budget: time.Minute, want: 5 * time.Second},
+		{name: "no caller deadline", want: 5 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				relay, client := net.Pipe()
+				defer relay.Close()
+				defer client.Close()
+				start := time.Now()
+				var deadline time.Time
+				if tc.budget != 0 {
+					deadline = start.Add(tc.budget)
+				}
+				// An unread peer blocks the real framing write until its deadline.
+				err := WriteTLSStart(relay, [types.TLSBindingSize]byte{}, deadline)
+				if tc.budget < 0 {
+					if !errors.Is(err, context.DeadlineExceeded) {
+						t.Fatalf("expired framing returned %v, want deadline exceeded", err)
+					}
+				} else if timeout, ok := errors.AsType[net.Error](err); !ok || !timeout.Timeout() {
+					t.Fatalf("blocked framing returned %v, want a timeout", err)
+				}
+				if elapsed := time.Since(start); elapsed != tc.want {
+					t.Fatalf("blocked framing took %v, want %v", elapsed, tc.want)
+				}
+			})
+		})
+	}
+}
 
 func TestReadRawStartSkipsKeepaliveAndPreservesPayload(t *testing.T) {
 	relay, client := net.Pipe()

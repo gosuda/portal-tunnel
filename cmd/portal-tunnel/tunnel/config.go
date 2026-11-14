@@ -38,6 +38,7 @@ type Config struct {
 	UDPEnabled          bool        `toml:"udp,omitempty"`
 	UDPAddr             string      `toml:"udp_addr,omitempty"`
 	TCPEnabled          bool        `toml:"tcp,omitempty"`
+	Replica             bool        `toml:"replica,omitempty"`
 	// Cache comes from portal expose --cache; the agent config has no key for it.
 	Cache *CacheConfig `toml:"-"`
 
@@ -176,7 +177,7 @@ func (c Config) Spec() (Spec, error) {
 			BanMITM:   c.BanMITM != nil && *c.BanMITM,
 		},
 		Metadata:  c.LeaseMetadata,
-		Transport: TransportSpec{Target: c.TargetAddr, TCP: c.TCPEnabled},
+		Transport: TransportSpec{Target: c.TargetAddr, TCP: c.TCPEnabled, Replica: c.Replica},
 	}
 	if c.UDPEnabled {
 		spec.Transport.UDP = &UDPConfig{Target: c.UDPAddr}
@@ -200,7 +201,7 @@ func (c Config) Spec() (Spec, error) {
 func buildConfigSpecHTTP(c Config) *HTTPConfig {
 	auth := c.AuthConfig
 	localTLS := c.TLSAuto || c.TLSCert != ""
-	httpRouting := c.Serve != "" || len(c.HTTPRoutes) != 0
+	httpRouting := c.Replica || c.Serve != "" || len(c.HTTPRoutes) != 0
 	httpPolicy := !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) != 0
 	if !localTLS && !httpRouting && !httpPolicy {
 		return nil

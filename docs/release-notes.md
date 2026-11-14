@@ -22,6 +22,24 @@ so correct it in the TOML configuration before restarting the upgraded agent.
 Discovery announcement attempts, including network failures, now log at debug
 level. An unreachable bootstrap target does not emit a warning every poll.
 
+### Tunnels: several HTTP clients for one service URL
+
+HTTP tunnels can now opt into replica mode with `portal expose --replica`,
+`replica = true` in an agent tunnel, or `sdk.WithReplicas()`. Clients that hold
+the same identity then serve one public URL, and the relay spreads new TLS
+connections among them. Without the option, registration still replaces every
+lease of the identity. Replica mode needs a relay that advertises it, and it
+rejects dedicated TCP/UDP ports, relay cache, overlay, email/SAML authentication
+and paid Nano routes. Replicas share the identity's policy and bandwidth limit,
+so adding a replica does not add bandwidth. See
+[HTTP Replicas](/api-reference/sdk#http-replicas).
+
+The relay now issues an alias ownership epoch, and application auth binds alias
+sessions and sign-ins to it. After the relay and the tunnel are upgraded,
+visitors on an alias sign in again once. Sessions on the address-bound URL are
+not affected. A Go program that builds `appauth.PublicHost` itself must pass
+`RelayStatus.AliasEpoch` as `Epoch` for the alias.
+
 ### Relay: accept tunnels only from your networks
 
 `TUNNEL_SOURCE_CIDRS` lists the networks that may register tunnels. A tunnel from

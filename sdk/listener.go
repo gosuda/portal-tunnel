@@ -66,6 +66,7 @@ const (
 )
 
 type listenerConfig struct {
+	Replica            bool
 	CertificateMonitor *certmonitor.MonitorConfig
 	TLSStateDir        string
 	TLSRequireLocal    bool
@@ -90,6 +91,7 @@ type listenerStatus struct {
 	publicURL      string
 	legacyURL      string
 	aliasURL       string
+	aliasEpoch     string
 	udpAddr        string
 	tcpAddr        string
 	version        string
@@ -99,6 +101,11 @@ var errLeaseRefreshRequired = errors.New("lease refresh required")
 
 func isTerminalRelayError(err error) bool {
 	if apiErr, ok := errors.AsType[*types.APIRequestError](err); ok && apiErr.IsRateLimited() {
+		return false
+	}
+	// A replica conflict clears when the exclusive lease expires or the
+	// retained cache entry ages out, so the replica keeps retrying.
+	if errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeReplicaConflict}) {
 		return false
 	}
 	if errors.Is(err, errRelayIncompatible) || errors.Is(err, localtls.ErrLocalCertificate) {
@@ -161,6 +168,7 @@ type listener struct {
 	metadataMu        sync.RWMutex
 	metadata          types.LeaseMetadata
 	identity          types.Identity
+	replica           bool
 	overlay           bool
 	warnOverlayDirect sync.Once
 	udpEnabled        bool
@@ -202,6 +210,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		doneCh:             listenerCtx.Done(),
 		metadata:           cfg.Metadata.Copy(),
 		identity:           cfg.Identity,
+		replica:            cfg.Replica,
 		overlay:            cfg.Overlay,
 		statusUpdates:      make(chan listenerStatus),
 		udpEnabled:         cfg.UDPEnabled,
@@ -335,13 +344,14 @@ func (l *listener) reportAvailable() {
 		udpAddr = lease.udpAddr
 	}
 	l.report(listenerStatus{
-		state:     state,
-		publicURL: l.leaseURL(lease.hostname),
-		legacyURL: l.leaseURL(lease.legacyHostname),
-		aliasURL:  l.aliasURLForLease(lease),
-		udpAddr:   udpAddr,
-		tcpAddr:   lease.tcpAddr,
-		version:   l.api.relayReleaseVersion(),
+		state:      state,
+		publicURL:  l.leaseURL(lease.hostname),
+		legacyURL:  l.leaseURL(lease.legacyHostname),
+		aliasURL:   l.aliasURLForLease(lease),
+		aliasEpoch: lease.aliasEpoch,
+		udpAddr:    udpAddr,
+		tcpAddr:    lease.tcpAddr,
+		version:    l.api.relayReleaseVersion(),
 	})
 }
 
@@ -380,7 +390,7 @@ func (l *listener) run(ctx context.Context) {
 			return
 		}
 		if errors.Is(err, errLeaseRefreshRequired) {
-			l.resetForLeaseRefresh(err)
+			l.resetForLeaseRefresh(ctx, err)
 			continue
 		}
 		log.Error().Err(err).
@@ -393,8 +403,11 @@ func (l *listener) run(ctx context.Context) {
 	}
 }
 
-func (l *listener) resetForLeaseRefresh(err error) {
+func (l *listener) resetForLeaseRefresh(ctx context.Context, err error) {
 	lease := l.clearLease("lease refresh required")
+	if l.replica && lease != nil && lease.accessToken != "" {
+		_ = l.api.unregister(ctx, lease.accessToken)
+	}
 	if lease != nil && lease.tenantTLS != nil {
 		_ = lease.tenantTLS.Close()
 		lease.certificateObserver.Close()
@@ -458,6 +471,7 @@ type listenerSnapshot struct {
 	legacyHostname string
 
 	aliasHostname       string
+	aliasEpoch          string
 	udpAddr             string
 	tcpAddr             string
 	accessToken         string
@@ -1151,6 +1165,7 @@ func (l *listener) refreshTenantChain(ctx context.Context, tenantTLS tenantTLSCl
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	registerReq := types.RegisterChallengeRequest{
+		Replica:                l.replica,
 		AllowCanonicalFallback: true,
 		Identity:               l.identity,
 		Metadata:               l.metadataSnapshot(),
@@ -1172,6 +1187,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		hostname:       resp.CanonicalHostname,
 		legacyHostname: resp.LegacyCanonicalHostname,
 		aliasHostname:  resp.Hostname,
+		aliasEpoch:     resp.AliasEpoch,
 		udpAddr:        resp.UDPAddr,
 		tcpAddr:        resp.TCPAddr,
 		accessToken:    resp.AccessToken,
@@ -1222,6 +1238,11 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	pending = nil // The installed lease now owns TLS, observations, and the token.
 	if l.http2Enabled.Load() {
 		l.enableHTTP2()
+	}
+	if l.replica && oldLease.accessToken != "" {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = l.api.unregister(cleanupCtx, oldLease.accessToken)
+		cancel()
 	}
 	if oldLease.tenantTLS != nil {
 		_ = oldLease.tenantTLS.Close()

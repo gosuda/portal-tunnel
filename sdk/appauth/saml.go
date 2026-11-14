@@ -82,6 +82,7 @@ type samlIdentityProvider struct {
 type samlStateClaims struct {
 	RequestID string `json:"rid"`
 	Host      string `json:"host"`
+	HostEpoch string `json:"host_epoch,omitempty"`
 	Next      string `json:"next"`
 	ExpiresAt int64  `json:"exp"`
 }
@@ -172,7 +173,7 @@ func (s *samlAuthenticator) issuerHost(idp samlIdentityProvider) string {
 	}
 }
 
-func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
+func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request, hostEpoch string) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -192,7 +193,7 @@ func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request host", http.StatusBadRequest)
 		return
 	}
-	authURL := s.buildServeLoginAuthRedirect(w, r, idp, host)
+	authURL := s.buildServeLoginAuthRedirect(w, r, idp, host, hostEpoch)
 	if authURL == "" {
 		return
 	}
@@ -200,7 +201,7 @@ func (s *samlAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, authURL, http.StatusSeeOther)
 }
 
-func (s *samlAuthenticator) buildServeLoginAuthRedirect(w http.ResponseWriter, r *http.Request, idp samlIdentityProvider, host string) string {
+func (s *samlAuthenticator) buildServeLoginAuthRedirect(w http.ResponseWriter, r *http.Request, idp samlIdentityProvider, host, hostEpoch string) string {
 	sp := s.serviceProvider(idp, host)
 	sp.ForceAuthn = r.URL.Query().Get("prompt") == accountChooserPrompt
 	request, err := sp.BuildAuthRequestDocumentNoSig()
@@ -209,6 +210,7 @@ func (s *samlAuthenticator) buildServeLoginAuthRedirect(w http.ResponseWriter, r
 		return ""
 	}
 	stateClaims := samlStateClaims{
+		HostEpoch: hostEpoch,
 		RequestID: request.Root().SelectAttrValue("ID", ""),
 		Host:      host,
 		Next:      sanitizeApplicationAuthNext(r.URL.Query().Get("next")),
@@ -274,6 +276,7 @@ func (a *applicationAuth) serveSAMLACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !sameApplicationHost(state.Host, host) ||
+		state.HostEpoch != a.hostEpoch(host) ||
 		now.Unix() >= state.ExpiresAt ||
 		loginStateIssuedAt(state.ExpiresAt).Before(a.heldSince(host)) {
 		a.failServeSAMLACS(w, r, serveSAMLACSFailure{message: "invalid or expired saml login state", page: signinProviderExpiredPage, next: state.Next, idp: samlIdentityProvider{}})
