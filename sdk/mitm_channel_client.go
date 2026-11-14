@@ -11,6 +11,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -61,7 +62,7 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 func prepareChannelBindingClient(conn net.Conn, hostname string) ([]byte, string, [types.TLSChannelBindingNonceSize]byte, error) {
 	var nonce [types.TLSChannelBindingNonceSize]byte
 	var expectedAddr string
-	e, err := utils.ExtractCanonicalHostnameAddress(hostname)
+	e, err := namespace.CanonicalAddress(hostname)
 	if err != nil {
 		_ = conn.Close()
 		return nil, "", nonce, err
@@ -156,7 +157,7 @@ func readChannelBindingAnswer(ctx context.Context, conn net.Conn) ([]byte, []byt
 // before returning the connection for application traffic.
 func DialCanonicalTLS(ctx context.Context, addr, hostname string, baseTLSConfig *tls.Config) (net.Conn, error) {
 	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
-	if _, err := utils.ExtractCanonicalHostnameAddress(normalizedHost); err != nil {
+	if _, err := namespace.CanonicalAddress(normalizedHost); err != nil {
 		return nil, err
 	}
 	tlsConf := buildDialCanonicalTLSConfig(normalizedHost, baseTLSConfig)

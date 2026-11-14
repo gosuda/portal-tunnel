@@ -27,9 +27,9 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func writeTenantCertificate(t *testing.T, hostnames ...string) (string, string) {
@@ -75,7 +75,7 @@ func TestLocalTenantCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hostname, err := utils.LocalTLSLeaseHostname(id.Name, id.Address, "localhost")
+	hostname, err := namespace.LocalTLSHostname(id.Name, id.Address, "localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestLocalCertificateExpiryWithdrawsCanonical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hostname, err := utils.LocalTLSLeaseHostname(id.Name, id.Address, "localhost")
+	hostname, err := namespace.LocalTLSHostname(id.Name, id.Address, "localhost")
 	if err != nil {
 		t.Fatal(err)
 	}

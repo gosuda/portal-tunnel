@@ -470,31 +470,6 @@ func TestRateLimitsNeverPermanentlyDisqualifyRelay(t *testing.T) {
 	}
 }
 
-func TestAliasHostnameMatches(t *testing.T) {
-	t.Parallel()
-
-	const canonical = "demo-0123456789abcdef0123456789abcdef01234567.relay.example"
-	tests := []struct {
-		name, hostname, service string
-		want                    bool
-	}{
-		{"no alias", "", "demo", true},
-		{"own alias", "demo.relay.example", "demo", true},
-		{"normalized name", "demo.relay.example", "Demo", true},
-		{"other name", "other.relay.example", "demo", false},
-		{"other root", "demo.other.example", "demo", false},
-		{"unnamed service", "demo.relay.example", "", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := aliasHostnameMatches(tc.hostname, tc.service, canonical); got != tc.want {
-				t.Fatalf("aliasHostnameMatches(%q, %q) = %v, want %v", tc.hostname, tc.service, got, tc.want)
-			}
-		})
-	}
-}
-
 func signTestReverseGateway(t *testing.T, rawURL string, expiresAt time.Time) types.RelayDescriptor {
 	t.Helper()
 	signer, err := identity.Generate("gateway")

@@ -21,6 +21,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -299,7 +300,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	defer r.mu.RUnlock()
 
 	now := time.Now()
-	localTLS := utils.IsLocalTLSHostname(host, r.rootHostname)
+	localTLS := namespace.IsLocalTLSHostname(host, r.rootHostname)
 	var wildcard *leaseRecord
 	for _, record := range r.records {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
@@ -823,22 +824,22 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 	return r.enforceRefuseChallengeBudgetLocked(len(held), issued)
 }
 
-func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, namespace string) (string, string, error) {
+func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, namespaceID string) (string, string, error) {
 	var publicHostname string
 	if leaseIdentity.Name != "" {
 		var err error
-		publicHostname, err = utils.LeaseHostname(leaseIdentity.Name, r.rootHostname)
+		publicHostname, err = namespace.AliasHostname(leaseIdentity.Name, r.rootHostname)
 		if err != nil {
 			return "", "", err
 		}
 	}
-	hostname := utils.CanonicalLeaseHostname
-	switch namespace {
+	hostname := namespace.LegacyHostname
+	switch namespaceID {
 	case "":
 	case types.LocalTLSNamespaceV1:
-		hostname = utils.LocalTLSLeaseHostname
+		hostname = namespace.LocalTLSHostname
 	default:
-		return "", "", fmt.Errorf("unsupported namespace %q", namespace)
+		return "", "", fmt.Errorf("unsupported namespace %q", namespaceID)
 	}
 	canonicalHostname, err := hostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
 	if err != nil {
@@ -925,7 +926,7 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 		reverse:           transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
 	if req.Namespace == types.LocalTLSNamespaceV1 {
-		record.LegacyCanonicalHostname, err = utils.CanonicalLeaseHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
+		record.LegacyCanonicalHostname, err = namespace.LegacyHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1247,14 +1248,14 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 		return types.RenewResponse{}, reverseEndpointInput{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 	return types.RenewResponse{
-		ExpiresAt:   expiresAt,
-		AccessToken: nextAccessToken,
-	}, reverseEndpointInput{
-		leaseIdentity: recordIdentity,
-		leaseID:       leaseID,
-		expiresAt:     expiresAt,
-		useOverlay:    useOverlay,
-	}, nil
+			ExpiresAt:   expiresAt,
+			AccessToken: nextAccessToken,
+		}, reverseEndpointInput{
+			leaseIdentity: recordIdentity,
+			leaseID:       leaseID,
+			expiresAt:     expiresAt,
+			useOverlay:    useOverlay,
+		}, nil
 }
 
 func (r *leaseRegistry) stalePinLocked(record *leaseRecord, current *acme.TLSMaterial) bool {
@@ -1386,7 +1387,7 @@ func (r *leaseRegistry) tenantCertificateNames(record *leaseRecord) ([]string, e
 	if blocked, ok := r.blocked[current.ServiceKey()]; ok {
 		return nil, blocked.refusal
 	}
-	if current.Namespace != types.LocalTLSNamespaceV1 || !utils.IsLocalTLSHostname(current.CanonicalHostname, r.rootHostname) {
+	if current.Namespace != types.LocalTLSNamespaceV1 || !namespace.IsLocalTLSHostname(current.CanonicalHostname, r.rootHostname) {
 		return nil, errUnauthorized
 	}
 	if current.reverse == nil {

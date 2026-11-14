@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -438,7 +439,7 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 	}
 	helloSpan := clientHello.HandshakeMessage
 	serverName := utils.NormalizeHostname(clientHello.ServerName)
-	localTLS := utils.IsLocalTLSHostname(serverName, s.registry.rootHostname)
+	localTLS := namespace.IsLocalTLSHostname(serverName, s.registry.rootHostname)
 	relayAPI := serverName == "" || serverName == s.identity.Name
 	if !localTLS && (relayAPI || s.registry.cache.Has(serverName)) {
 		select {

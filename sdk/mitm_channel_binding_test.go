@@ -14,6 +14,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -65,7 +66,7 @@ func newChannelBindingListener(t *testing.T, seed, hostname string) *listener {
 
 func canonicalTestHostname(t *testing.T, address string) string {
 	t.Helper()
-	hostname, err := utils.CanonicalLeaseHostname("myapp", address, "relay.example")
+	hostname, err := namespace.LegacyHostname("myapp", address, "relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,11 +535,11 @@ func TestCanonicalBindingCoversSiblingNonceAndExporter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, err := utils.LocalTLSLeaseHostname("blog", id.Address, "relay.example")
+	host, err := namespace.LocalTLSHostname("blog", id.Address, "relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sibling, err := utils.LocalTLSLeaseHostname("api", id.Address, "relay.example")
+	sibling, err := namespace.LocalTLSHostname("api", id.Address, "relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}

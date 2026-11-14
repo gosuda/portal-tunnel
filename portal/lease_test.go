@@ -29,6 +29,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -1136,7 +1137,7 @@ func registerUnnamedLease(t *testing.T, registry *leaseRegistry) (types.Identity
 
 func checkUnnamedHostnames(t *testing.T, leasedIdentity types.Identity, resp types.RegisterResponse) string {
 	t.Helper()
-	expectedCanonical, err := utils.CanonicalLeaseHostname("", leasedIdentity.Address, "example.com")
+	expectedCanonical, err := namespace.LegacyHostname("", leasedIdentity.Address, "example.com")
 	if err != nil {
 		t.Fatalf("CanonicalLeaseHostname error = %v", err)
 	}
@@ -2108,9 +2109,9 @@ func TestNegotiatedNamespaceSeparatesServicesAndLegacyCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	register := func(id types.Identity, namespace string) (*leaseRecord, types.RegisterResponse) {
+	register := func(id types.Identity, namespaceID string) (*leaseRecord, types.RegisterResponse) {
 		t.Helper()
-		record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: id, Namespace: namespace, Cache: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: id, Namespace: namespaceID, Cache: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2162,9 +2163,9 @@ func TestNegotiatedNamespaceSeparatesServicesAndLegacyCache(t *testing.T) {
 func TestNamespaceNegotiationRejectsUnknownAndReservedNames(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	owner := newTestLeaseIdentity(t, "default")
-	for _, namespace := range []string{types.LocalTLSNamespaceV1, "unknown-future-namespace"} {
-		if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespace}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err == nil {
-			t.Fatalf("accepted reserved/unknown namespace %q", namespace)
+	for _, namespaceID := range []string{types.LocalTLSNamespaceV1, "unknown-future-namespace"} {
+		if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespaceID}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err == nil {
+			t.Fatalf("accepted reserved/unknown namespace %q", namespaceID)
 		}
 	}
 	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {

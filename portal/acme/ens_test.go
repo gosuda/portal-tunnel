@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-acme/lego/v4/challenge"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -289,9 +290,9 @@ func TestCanonicalDNSLifecycle(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			const root = "relay.delegated.example.com"
 			address := "0x" + strings.Repeat("a", 40)
-			parent, _ := utils.CanonicalLeaseHostname("", address, root)
-			first, _ := utils.LocalTLSLeaseHostname("", address, root)
-			second, _ := utils.LocalTLSLeaseHostname("api", address, root)
+			parent, _ := namespace.LegacyHostname("", address, root)
+			first, _ := namespace.LocalTLSHostname("", address, root)
+			second, _ := namespace.LocalTLSHostname("api", address, root)
 			zone := newFakeZone()
 			manager := newTestENSManager(Config{BaseDomain: root, KeyDir: t.TempDir(), ENSGaslessEnabled: ens}, zone)
 			previous := utils.DefaultHTTPClient
@@ -368,8 +369,8 @@ func TestNamespaceDNSRetainsParentUntilChildWithdrawn(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			const root = "relay.delegated.example.com"
 			address := "0x" + strings.Repeat("a", 40)
-			parent, _ := utils.CanonicalLeaseHostname("", address, root)
-			child, _ := utils.LocalTLSLeaseHostname("api", address, root)
+			parent, _ := namespace.LegacyHostname("", address, root)
+			child, _ := namespace.LocalTLSHostname("api", address, root)
 			zone := &failingNamespaceDNSZone{fakeZone: newFakeZone(), unavailableChild: child}
 			manager := newTestENSManager(Config{BaseDomain: root, KeyDir: t.TempDir(), ENSGaslessEnabled: ens}, zone)
 			previous := utils.DefaultHTTPClient
@@ -411,7 +412,7 @@ func TestNamespaceDNSRetainsParentUntilChildWithdrawn(t *testing.T) {
 func TestNamespaceDNSLeavesUntrackedLegacyAddressAlone(t *testing.T) {
 	const root = "relay.delegated.example.com"
 	address := "0x" + strings.Repeat("a", 40)
-	parent, _ := utils.CanonicalLeaseHostname("", address, root)
+	parent, _ := namespace.LegacyHostname("", address, root)
 	zone := newFakeZone()
 	manager := newTestENSManager(Config{BaseDomain: root, KeyDir: t.TempDir()}, zone)
 	ctx := t.Context()
@@ -451,8 +452,8 @@ func TestTenantIssuanceWaitsForNamespaceAddressDNS(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			const root = "relay.delegated.example.com"
 			address := "0x" + strings.Repeat("a", 40)
-			parent, _ := utils.CanonicalLeaseHostname("", address, root)
-			child, _ := utils.LocalTLSLeaseHostname("api", address, root)
+			parent, _ := namespace.LegacyHostname("", address, root)
+			child, _ := namespace.LocalTLSHostname("api", address, root)
 			zone := &namespaceDNSPublicationZone{fakeZone: newFakeZone(), unavailableParent: parent}
 			manager := newTestENSManager(Config{BaseDomain: root, KeyDir: t.TempDir(), ENSGaslessEnabled: ens}, zone)
 			state := &maintenanceLoopState{pendingENS: make(map[string]ensDNSCommand)}

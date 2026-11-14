@@ -1,22 +1,33 @@
-package utils
+// Package namespace owns Portal service names and public hostname syntax.
+package namespace
 
 import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func LeaseHostname(name, rootHost string) (string, error) {
-	label, err := NormalizeDNSLabel(name)
+var (
+	errRootHostIsRequired                        = errors.New("root host is required")
+	errNameMustNotLookLikeCanonical              = errors.New("name must not look like a canonical hostname (40 hexadecimal characters, alone or after a hyphen)")
+	errHostnameDoesNotContainCanonicalLease      = errors.New("hostname does not contain a canonical lease address")
+	errAddressMustContain40HexadecimalCharacters = errors.New("address must contain 40 hexadecimal characters")
+)
+
+// AliasHostname composes a single DNS label under the relay root.
+func AliasHostname(name, rootHost string) (string, error) {
+	label, err := utils.NormalizeDNSLabel(name)
 	if err != nil {
 		return "", err
 	}
-	rootHost = NormalizeHostname(rootHost)
+	rootHost = utils.NormalizeHostname(rootHost)
 	if rootHost == "" {
 		return "", errRootHostIsRequired
 	}
@@ -26,11 +37,43 @@ func LeaseHostname(name, rootHost string) (string, error) {
 	return label + "." + rootHost, nil
 }
 
+// MatchesAlias checks an optional alias against its service name and legacy
+// canonical origin. An empty hostname means the alias was not granted.
+func MatchesAlias(hostname, name, legacyHostname string) bool {
+	if hostname == "" {
+		return true
+	}
+	label, err := utils.NormalizeDNSLabel(name)
+	if err != nil || label == "" {
+		return false
+	}
+	_, root, ok := strings.Cut(legacyHostname, ".")
+	return ok && hostname == label+"."+root
+}
+
+// AddressParent returns the address.<root> DNS parent of a Local TLS hostname.
+// Callers must first validate the hostname with IsLocalTLSHostname or use a
+// canonical hostname derived for a negotiated Local TLS lease.
+func AddressParent(hostname string) string {
+	_, parent, _ := strings.Cut(hostname, ".")
+	return parent
+}
+
+// IsAddressHostname recognizes the address-only legacy hostname at this root.
+func IsAddressHostname(hostname, rootHost string) bool {
+	label, _, found := strings.Cut(hostname, ".")
+	if !found {
+		return false
+	}
+	parent, err := LegacyHostname("", label, rootHost)
+	return err == nil && parent == hostname
+}
+
 // NormalizeServiceName normalizes a service name to a DNS label that cannot
 // be mistaken for a canonical label, so a friendly hostname never collides
 // with an identity-bound one.
 func NormalizeServiceName(raw string) (string, error) {
-	label, err := NormalizeDNSLabel(raw)
+	label, err := utils.NormalizeDNSLabel(raw)
 	if err != nil {
 		return "", err
 	}
@@ -40,12 +83,12 @@ func NormalizeServiceName(raw string) (string, error) {
 	return label, nil
 }
 
-// ExtractCanonicalHostnameAddress extracts the 40-character hexadecimal EVM
+// CanonicalAddress extracts the 40-character hexadecimal EVM
 // address from the second label of a service.address.root hostname, or the
 // first label of a legacy canonical hostname, with a lowercase 0x prefix.
 // Routing must additionally validate depth relative to its configured root.
-func ExtractCanonicalHostnameAddress(hostname string) (string, error) {
-	label, rest, ok := strings.Cut(NormalizeHostWithoutPort(hostname), ".")
+func CanonicalAddress(hostname string) (string, error) {
+	label, rest, ok := strings.Cut(utils.NormalizeHostWithoutPort(hostname), ".")
 	if !ok || label == "" || rest == "" {
 		return "", errHostnameDoesNotContainCanonicalLease
 	}
@@ -62,9 +105,9 @@ func ExtractCanonicalHostnameAddress(hostname string) (string, error) {
 	return "", errHostnameDoesNotContainCanonicalLease
 }
 
-// LocalTLSLeaseHostname binds an exact service label and wallet under the relay
+// LocalTLSHostname binds an exact service label and wallet under the relay
 // root. The reserved default label represents an unnamed service.
-func LocalTLSLeaseHostname(name, address, rootHost string) (string, error) {
+func LocalTLSHostname(name, address, rootHost string) (string, error) {
 	label := types.UnnamedServiceLabel
 	if strings.TrimSpace(name) != "" {
 		var err error
@@ -76,7 +119,7 @@ func LocalTLSLeaseHostname(name, address, rootHost string) (string, error) {
 			return "", fmt.Errorf("service name %q is reserved for unnamed services", label)
 		}
 	}
-	addressHost, err := CanonicalLeaseHostname("", address, rootHost)
+	addressHost, err := LegacyHostname("", address, rootHost)
 	if err != nil {
 		return "", err
 	}
@@ -90,11 +133,11 @@ func LocalTLSLeaseHostname(name, address, rootHost string) (string, error) {
 // IsLocalTLSHostname recognizes the exact two-label namespace relative to the
 // configured root, never by an absolute DNS depth.
 func IsLocalTLSHostname(hostname, rootHost string) bool {
-	root := NormalizeHostWithoutPort(rootHost)
+	root := utils.NormalizeHostWithoutPort(rootHost)
 	if ip := net.ParseIP(root); ip != nil && ip.IsLoopback() {
 		root = "localhost"
 	}
-	relative, ok := strings.CutSuffix(NormalizeHostWithoutPort(hostname), "."+root)
+	relative, ok := strings.CutSuffix(utils.NormalizeHostWithoutPort(hostname), "."+root)
 	if !ok || root == "" {
 		return false
 	}
@@ -131,14 +174,14 @@ func canonicalNameHash(label string) string {
 	return strings.ToLower(encoded[:types.CanonicalLeaseNameHashLength])
 }
 
-// CanonicalLeaseHostname returns the identity-bound hostname for a lease.
+// LegacyHostname returns the identity-bound hostname for a lease.
 // The full 20-byte EVM address is encoded as lowercase hexadecimal so the
 // hostname cannot move between authenticated identities. When name is empty,
 // it returns an address-only canonical hostname. See
 // types.CanonicalLeaseNameMaxLength for how a name enters the label.
-func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
+func LegacyHostname(name, address, rootHost string) (string, error) {
 	name = strings.TrimSpace(name)
-	address = strings.ToLower(TrimHexPrefix(strings.TrimSpace(address)))
+	address = strings.ToLower(utils.TrimHexPrefix(strings.TrimSpace(address)))
 	if len(address) != 40 {
 		return "", errAddressMustContain40HexadecimalCharacters
 	}
@@ -146,14 +189,14 @@ func CanonicalLeaseHostname(name, address, rootHost string) (string, error) {
 		return "", fmt.Errorf("%w: %w", errAddressMustContain40HexadecimalCharacters, err)
 	}
 	if name == "" {
-		return LeaseHostname(address, rootHost)
+		return AliasHostname(address, rootHost)
 	}
 	label, err := NormalizeServiceName(name)
 	if err != nil {
 		return "", err
 	}
 	if len(label) <= types.CanonicalLeaseNameMaxLength {
-		return LeaseHostname(label+"-"+address, rootHost)
+		return AliasHostname(label+"-"+address, rootHost)
 	}
-	return LeaseHostname(canonicalNameHash(label)+"--"+address, rootHost)
+	return AliasHostname(canonicalNameHash(label)+"--"+address, rootHost)
 }
