@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/proxy"
+
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
@@ -162,16 +164,22 @@ func dialEndpointTLS(ctx context.Context, host, port, serverName string) (*tls.C
 	return tlsConn, nil
 }
 
-// dialEndpointTCP honors the same HTTP(S)_PROXY and NO_PROXY rules as the REST
-// client: endpoints routed through a proxy by the environment are reached over
-// an HTTP CONNECT tunnel, all others through a direct TCP connection.
+// dialEndpointTCP follows the proxy environment the REST client uses:
+// HTTP(S)_PROXY, ALL_PROXY and NO_PROXY route the endpoint through an HTTP
+// CONNECT tunnel or a SOCKS proxy, everything else dials directly. Local
+// relay hosts never consult a proxy: their trust bootstrap pins the chain the
+// dialed peer presents, so a proxy in between would define that trust.
 func dialEndpointTCP(ctx context.Context, host, port string) (net.Conn, error) {
 	address := net.JoinHostPort(host, port)
-	proxyURL, err := http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
-	if err != nil {
-		return nil, fmt.Errorf("resolve proxy for relay endpoint: %w", err)
-	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	var proxyURL *url.URL
+	if !IsLocalRelayHost(host) {
+		var proxyErr error
+		proxyURL, proxyErr = http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
+		if proxyErr != nil {
+			return nil, fmt.Errorf("resolve proxy for relay endpoint: %w", proxyErr)
+		}
+	}
 	if proxyURL == nil {
 		rawConn, dialErr := dialer.DialContext(ctx, "tcp", address)
 		if dialErr != nil {
@@ -179,16 +187,41 @@ func dialEndpointTCP(ctx context.Context, host, port string) (net.Conn, error) {
 		}
 		return rawConn, nil
 	}
-	return dialConnectTunnel(ctx, dialer, proxyURL, address)
+	return dialEndpointThroughProxy(ctx, dialer, proxyURL, address)
+}
+
+// dialEndpointThroughProxy opens address through an HTTP or SOCKS proxy and
+// returns the raw proxied connection.
+func dialEndpointThroughProxy(ctx context.Context, dialer *net.Dialer, proxyURL *url.URL, address string) (net.Conn, error) {
+	switch strings.ToLower(proxyURL.Scheme) {
+	case "http", "https":
+		return dialConnectTunnel(ctx, dialer, proxyURL, address)
+	case "socks5", "socks5h":
+		return dialSocksProxy(ctx, dialer, proxyURL, address)
+	default:
+		return nil, fmt.Errorf("relay endpoint proxy scheme %q is not supported", proxyURL.Scheme)
+	}
+}
+
+func dialSocksProxy(ctx context.Context, dialer *net.Dialer, proxyURL *url.URL, address string) (net.Conn, error) {
+	socksDialer, err := proxy.FromURL(proxyURL, dialer)
+	if err != nil {
+		return nil, fmt.Errorf("build socks dialer for relay endpoint proxy: %w", err)
+	}
+	contextDialer, ok := socksDialer.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("socks dialer for relay endpoint does not support contexts")
+	}
+	rawConn, err := contextDialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("dial relay endpoint through proxy: %w", err)
+	}
+	return rawConn, nil
 }
 
 // dialConnectTunnel opens address through an HTTP proxy and returns the raw
 // tunneled connection.
 func dialConnectTunnel(ctx context.Context, dialer *net.Dialer, proxyURL *url.URL, address string) (net.Conn, error) {
-	scheme := strings.ToLower(proxyURL.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return nil, fmt.Errorf("relay endpoint proxy scheme %q is not supported", proxyURL.Scheme)
-	}
 	proxyConn, err := dialer.DialContext(ctx, "tcp", proxyDialAddress(proxyURL))
 	if err != nil {
 		return nil, fmt.Errorf("dial relay endpoint proxy: %w", err)
@@ -198,7 +231,7 @@ func dialConnectTunnel(ctx context.Context, dialer *net.Dialer, proxyURL *url.UR
 		connectDeadline = ctxDeadline
 	}
 	_ = proxyConn.SetDeadline(connectDeadline)
-	if scheme == "https" {
+	if strings.EqualFold(proxyURL.Scheme, "https") {
 		proxyTLSConn := tls.Client(proxyConn, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: proxyURL.Hostname()})
 		if err := proxyTLSConn.HandshakeContext(ctx); err != nil {
 			_ = proxyConn.Close()
@@ -229,8 +262,12 @@ func dialConnectTunnel(ctx context.Context, dialer *net.Dialer, proxyURL *url.UR
 		_ = proxyConn.Close()
 		return nil, fmt.Errorf("read relay endpoint proxy response: %w", err)
 	}
-	_ = response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		// Close the body only on the failure path: a nonconformant proxy can
+		// frame the CONNECT response with a body, and closing such a body
+		// drains bytes that are tunnel data the endpoint never sends. net/http
+		// leaves the successful CONNECT response body alone for this reason.
+		_ = response.Body.Close()
 		_ = proxyConn.Close()
 		return nil, fmt.Errorf("connect relay endpoint through proxy: %s", response.Status)
 	}
