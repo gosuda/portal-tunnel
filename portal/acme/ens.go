@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -124,7 +125,7 @@ func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address strin
 		return nil
 	}
 
-	if !m.cfg.ENSGaslessEnabled && !utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
+	if !m.cfg.ENSGaslessEnabled && !namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
 	hostname = utils.NormalizeHostname(hostname)
@@ -142,24 +143,13 @@ func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address strin
 	return m.queueENSCommand(ctx, ensDNSCommand{hostname: hostname, address: address})
 }
 
-// isLeaseAddressParent recognizes the address-only legacy hostname directly
-// under this relay root, not other legacy hostnames.
-func (m *Manager) isLeaseAddressParent(hostname string) bool {
-	label, _, found := strings.Cut(hostname, ".")
-	if !found {
-		return false
-	}
-	parent, err := utils.CanonicalLeaseHostname("", label, m.cfg.BaseDomain)
-	return err == nil && parent == hostname
-}
-
 func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) error {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
 	hostname = utils.NormalizeHostname(hostname)
-	if !m.cfg.ENSGaslessEnabled && !utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) && !m.isLeaseAddressParent(hostname) {
+	if !m.cfg.ENSGaslessEnabled && !namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) && !namespace.IsAddressHostname(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
 	if hostname == "" {
@@ -195,7 +185,7 @@ func (m *Manager) waitLeaseDNS(ctx context.Context, hostname string) error {
 }
 
 func (m *Manager) checkLeaseDNS(state *maintenanceLoopState, hostname string) error {
-	_, parent, _ := strings.Cut(hostname, ".")
+	parent := namespace.AddressParent(hostname)
 	// Tracking may precede failed writes; pending operations are not proof
 	// that an address was published successfully.
 	for _, name := range []string{hostname, parent} {
@@ -238,10 +228,10 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
 		}
-		if utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
+		if namespace.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
 			// An exact child suppresses wildcard answers for its address parent.
 			// Publish the parent before the child to keep legacy URLs working.
-			_, parent, _ := strings.Cut(command.hostname, ".")
+			parent := namespace.AddressParent(command.hostname)
 			for _, name := range []string{parent, command.hostname} {
 				// Track before DNS writes so a partial update can be withdrawn.
 				if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string { return append(hostnames, name) }); err != nil {
@@ -262,7 +252,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 }
 
 func (m *Manager) applyENSCommandRemove(ctx context.Context, command ensDNSCommand) error {
-	if m.isLeaseAddressParent(command.hostname) {
+	if namespace.IsAddressHostname(command.hostname, m.cfg.BaseDomain) {
 		tracked, err := m.trackedENSGaslessHostnames()
 		if err != nil {
 			return err
@@ -271,7 +261,7 @@ func (m *Manager) applyENSCommandRemove(ctx context.Context, command ensDNSComma
 			return nil
 		}
 		for _, name := range tracked {
-			if strings.HasSuffix(name, "."+command.hostname) && utils.IsLocalTLSHostname(name, m.cfg.BaseDomain) {
+			if strings.HasSuffix(name, "."+command.hostname) && namespace.IsLocalTLSHostname(name, m.cfg.BaseDomain) {
 				return fmt.Errorf("wait for canonical DNS removal before withdrawing %s", command.hostname)
 			}
 		}
@@ -334,7 +324,7 @@ func (m *Manager) withdrawTrackedENSHosts(ctx context.Context, cleanupErr error)
 		})
 		remaining := hostnames[:0]
 		for _, hostname := range hostnames {
-			if m.isLeaseAddressParent(hostname) && slices.ContainsFunc(remaining, func(name string) bool {
+			if namespace.IsAddressHostname(hostname, m.cfg.BaseDomain) && slices.ContainsFunc(remaining, func(name string) bool {
 				return strings.HasSuffix(name, "."+hostname)
 			}) {
 				remaining = append(remaining, hostname)
@@ -367,14 +357,14 @@ func (m *Manager) syncTrackedENSGaslessHostAddressRecords(ctx context.Context, p
 	var syncErr error
 	failedParents := make(map[string]bool)
 	for _, hostname := range hostnames {
-		if utils.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
-			_, parent, _ := strings.Cut(hostname, ".")
+		if namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
+			parent := namespace.AddressParent(hostname)
 			if failedParents[parent] {
 				continue
 			}
 		}
 		if err := m.dns.EnsureAddressRecord(ctx, hostname, publicIP); err != nil {
-			if m.isLeaseAddressParent(hostname) {
+			if namespace.IsAddressHostname(hostname, m.cfg.BaseDomain) {
 				failedParents[hostname] = true
 			}
 			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ens gasless address record for %s: %w", hostname, err))

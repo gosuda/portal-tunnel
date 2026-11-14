@@ -633,6 +633,7 @@ The agent supports `serve` for static sites. It does not support `cache` or `cac
 | `x402_asset` | string | wCSPR CEP-18 contract hash; required for Casper payments |
 | `x402_endpoints` | string array | Optional Sui RPC endpoints, Casper facilitator URL, or Nano RPC nodes; Casper uses the first endpoint, Nano requires at least two |
 | `x402_facilitator_token` | string | Casper facilitator authorization token; when omitted, the agent uses `CSPR_CLOUD_API_KEY` |
+| `x402_options` | table of strings | Network-specific options passed to the x402-facilitator paywall unchanged, such as `nano_claims_file`; an option the network does not support stops the tunnel |
 | `http_routes[].amount` | string | Optional human payment amount, such as `0.01`, for one HTTP route prefix; requires `x402_pay_to` |
 | `http_routes[].methods` | string array | Optional HTTP methods that require payment on that route; empty means every method |
 
@@ -651,6 +652,13 @@ the 402 requirements from the protected resource, sign them with a compatible
 external SDK, and retry with `PAYMENT-SIGNATURE` or `X-PAYMENT`; the embedded
 browser client remains Sui-only. Payment is enforced by the tunnel before the
 request reaches the upstream.
+
+The tunnel does not implement any payment network itself. It passes the
+`x402_*` settings to the `resource/paywall` package of
+[x402-facilitator](https://github.com/gosuda/x402-facilitator), which validates
+the network, pay-to, asset and amounts, settles payments, and owns network
+state such as Nano claim logs. A network the facilitator adds is usable here
+after a dependency update.
 
 #### x402 payment networks
 
@@ -682,10 +690,22 @@ omitted), requires a confirmed send of exactly the route amount to
 amount is in XNO and is published in raw units (1 XNO = 10^30 raw). Nano has no
 memo field, so use a dedicated pay-to account for each paid tunnel.
 
+Two Nano options close the remaining gaps:
+
+- `nano_claims_file`: keeps accepted block hashes refused after a restart.
+  Each hash is appended and synced to the file (mode 0600) before the request
+  is served, and a file with an unreadable line stops the tunnel. Use an absolute
+  path and one file per tunnel; the tunnel closes it when it stops.
+- `nano_require_binding = "true"`: a block hash is public once broadcast, so
+  this accepts a payment only when the payer also signs it with the key of the
+  account that sent the block, over the `extra.binding` nonce and resource
+  published in the route's 402 (`nano-block-sig/1`).
+
 ```toml
 x402_network = "nano:mainnet"
 x402_pay_to = "nano_..."
 x402_endpoints = ["https://rpc.nano.to", "https://rainstorm.city/api"]
+x402_options = { nano_claims_file = "/var/lib/portal/nano-claims.jsonl", nano_require_binding = "true" }
 ```
 
 For a task-oriented walkthrough, see [Portal Agent](/portal-agent).

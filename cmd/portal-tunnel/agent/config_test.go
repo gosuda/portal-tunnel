@@ -117,6 +117,7 @@ x402_network = "base"
 x402_asset = "usdc"
 x402_endpoints = ["/paid"]
 x402_facilitator_token = "facilitator-token"
+x402_options = { nano_claims_file = "/var/lib/portal/claims.jsonl" }
 
 [[tunnels.http_routes]]
 prefix = "/api"
@@ -151,7 +152,7 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 	saveConfigFixture(t, path, 0o600, loaded)
 	saved := readConfigFixture(t, path)
 	for _, key := range keys {
-		if !strings.Contains(string(saved), "\n"+key+" =") && !strings.Contains(string(saved), "\n[[tunnels."+key+"]]") {
+		if !strings.Contains(string(saved), "\n"+key+" =") && !strings.Contains(string(saved), "\n[[tunnels."+key+"]]") && !strings.Contains(string(saved), "\n[tunnels."+key+"]") {
 			t.Errorf("saved config does not keep %q:\n%s", key, saved)
 		}
 	}
@@ -231,6 +232,7 @@ func TestExistingConfigKeysFillComponents(t *testing.T) {
 	payment := gateway.X402Config{
 		Testnet: true, Network: "base", Asset: "usdc", PayTo: "0x1234567890abcdef1234567890abcdef12345678",
 		Endpoints: []string{"/paid"}, FacilitatorToken: "facilitator-token",
+		Options: map[string]string{"nano_claims_file": "/var/lib/portal/claims.jsonl"},
 	}
 	if got := *specs["web"].HTTP.Auth; !reflect.DeepEqual(got, oidc) {
 		t.Errorf("web auth = %+v, want %+v", got, oidc)

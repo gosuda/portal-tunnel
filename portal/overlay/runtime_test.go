@@ -1,16 +1,436 @@
 package overlay
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"gosuda.org/ivnp"
 	"gosuda.org/ivnp/foundation"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+type peerConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c peerConn) RemoteAddr() net.Addr { return c.remote }
+
+func TestGatewayKeepsTheRefusalReason(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		status byte
+		code   int
+		api    string
+	}{
+		{types.OverlayStatusPending, http.StatusForbidden, types.APIErrorCodeLeaseRejected},
+		{types.OverlayStatusDenied, http.StatusForbidden, types.APIErrorCodeLeaseDenied},
+		{types.OverlayStatusCapacity, http.StatusTooManyRequests, types.APIErrorCodeRateLimited},
+		{types.OverlayStatusUnavailable, http.StatusForbidden, types.APIErrorCodeUnauthorized},
+		{9, http.StatusForbidden, types.APIErrorCodeUnauthorized},
+	} {
+		checkRefusalReasonCase(t, tc.status, tc.code, tc.api)
+	}
+}
+
+func newRefusalReasonEndpoint(t *testing.T, status byte) endpointStub {
+	t.Helper()
+	return endpointStub{
+		destination: testDestination("gateway"),
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			local, remote := net.Pipe()
+			go func() {
+				defer remote.Close()
+				var size uint16
+				if binary.Read(remote, binary.BigEndian, &size) != nil {
+					return
+				}
+				if _, err := io.ReadFull(remote, make([]byte, size)); err != nil {
+					return
+				}
+				_, _ = remote.Write([]byte{status})
+			}()
+			return peerConn{Conn: local, remote: ivnp.Addr{Hash: sha256.Sum256([]byte("ingress")), Port: 4017}}, nil
+		},
+	}
+}
+
+func checkRefusalReasonCase(t *testing.T, status byte, code int, api string) {
+	t.Helper()
+	gate, capability := testGateway(t)
+	gate.sourceLimiter = newSourceLimiter(1000, 1000)
+	gate.endpoint = newRefusalReasonEndpoint(t, status)
+	response := httptest.NewRecorder()
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != code || body.Error.Code != api {
+		t.Fatalf("status %d answered %d %q, want %d %q", status, response.Code, body.Error.Code, code, api)
+	}
+}
+
+func TestGatewayTruncatedUpstreamResponseIsUnavailable(t *testing.T) {
+	t.Parallel()
+	gate, capability := testGateway(t)
+	gate.sourceLimiter = newSourceLimiter(1000, 1000)
+	gate.endpoint = endpointStub{
+		destination: testDestination("gateway"),
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			local, remote := net.Pipe()
+			go func() {
+				defer remote.Close()
+				var size uint16
+				if binary.Read(remote, binary.BigEndian, &size) != nil {
+					return
+				}
+				_, _ = io.CopyN(io.Discard, remote, int64(size))
+			}()
+			return peerConn{Conn: local, remote: ivnp.Addr{Hash: sha256.Sum256([]byte("ingress")), Port: 4017}}, nil
+		},
+	}
+	response := httptest.NewRecorder()
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusServiceUnavailable || body.Error.Code != types.APIErrorCodeFeatureUnavailable {
+		t.Fatalf("truncated upstream answered %d %q, want %d %q", response.Code, body.Error.Code, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable)
+	}
+}
+
+var errDialFailed = errors.New("dial failed")
+
+type endpointStub struct {
+	destination string
+	dial        func(context.Context, string, string) (net.Conn, error)
+}
+
+func (e endpointStub) B32() string { return e.destination }
+
+func (e endpointStub) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return e.dial(ctx, network, address)
+}
+
+func testGateway(t *testing.T) (*Runtime, string) {
+	t.Helper()
+	ingressAuthority := testAuthority(t, "ingress")
+	gatewayAuthority := testAuthority(t, "gateway")
+	ingress := testDescriptor(t, ingressAuthority, "https://ingress.example", testDestination("ingress"), 0)
+	capability, err := signCapability(ingressAuthority, capabilityClaims{
+		Version:            1,
+		LeaseIdentity:      types.Identity{Name: "lease", Address: ingressAuthority.Identity().Address},
+		LeaseID:            "lease_1",
+		ExpiresAt:          time.Now().UTC().Add(time.Minute),
+		Ingress:            ingress,
+		GatewayAddress:     gatewayAuthority.Identity().Address,
+		GatewayDestination: testDestination("gateway"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{
+		config:        Config{Authority: gatewayAuthority},
+		activeSources: make(map[netip.Addr]int),
+	}
+	runtime.ready.Store(true)
+	return runtime, capability
+}
+
+func TestGatewayLimitsSourceRequestsBeforeDial(t *testing.T) {
+	t.Parallel()
+	gate, capability := testGateway(t)
+	dials := 0
+	gate.endpoint = endpointStub{
+		destination: testDestination("gateway"),
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errDialFailed
+		},
+	}
+	gate.sourceLimiter = newSourceLimiter(1, 2)
+	for range 2 {
+		response := httptest.NewRecorder()
+		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("dial-failed request status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+		}
+	}
+	response := httptest.NewRecorder()
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited request status = %d, want %d", response.Code, http.StatusTooManyRequests)
+	}
+	if dials != 2 {
+		t.Fatalf("dial invocations = %d, want 2: the over-budget request must not reach the dial", dials)
+	}
+}
+
+func TestGatewayReservesCapacityForOtherSources(t *testing.T) {
+	t.Parallel()
+	gate, capability := testGateway(t)
+	gate.sourceLimiter = newSourceLimiter(1000, 1000)
+	entered := make(chan struct{}, sourceConnectionLimit+1)
+	release := make(chan struct{})
+	gate.endpoint = newBlockingGatewayEndpoint(t, entered, release)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{}, sourceConnectionLimit+1)
+	for range sourceConnectionLimit {
+		go runGatewayConnectForSource(t, ctx, gate, capability, "192.0.2.1", done)
+	}
+	checkGatewaySourcesEntered(t, entered)
+	checkGatewayOverBudgetRejected(t, gate, capability)
+	go runGatewayConnectForSource(t, ctx, gate, capability, "192.0.2.2", done)
+	checkOtherGatewaySourceEntered(t, entered)
+	close(release)
+	for range sourceConnectionLimit + 1 {
+		<-done
+	}
+	checkGatewayCapacityReleased(t, gate, capability)
+}
+
+func newBlockingGatewayEndpoint(t *testing.T, entered chan struct{}, release chan struct{}) endpointStub {
+	t.Helper()
+	return endpointStub{
+		destination: testDestination("gateway"),
+		dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return nil, errDialFailed
+		},
+	}
+}
+
+func runGatewayConnectForSource(t *testing.T, ctx context.Context, gate *Runtime, capability, source string, done chan struct{}) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/sdk/connect", nil).WithContext(ctx)
+	gate.HandleConnect(httptest.NewRecorder(), request, capability, netip.MustParseAddr(source))
+	done <- struct{}{}
+}
+
+func checkGatewaySourcesEntered(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	for range sourceConnectionLimit {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("source connections did not enter the dial")
+		}
+	}
+}
+
+func checkGatewayOverBudgetRejected(t *testing.T, gate *Runtime, capability string) {
+	t.Helper()
+	response := httptest.NewRecorder()
+	gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr("192.0.2.1"))
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-budget source status = %d, want %d", response.Code, http.StatusTooManyRequests)
+	}
+}
+
+func checkOtherGatewaySourceEntered(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("one source's full budget blocked a different source")
+	}
+}
+
+func checkGatewayCapacityReleased(t *testing.T, gate *Runtime, capability string) {
+	t.Helper()
+	for _, source := range []string{"192.0.2.1", "192.0.2.2"} {
+		response := httptest.NewRecorder()
+		gate.HandleConnect(response, httptest.NewRequest(http.MethodGet, "/sdk/connect", nil), capability, netip.MustParseAddr(source))
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("released capacity for %s: status=%d", source, response.Code)
+		}
+	}
+}
+
+func TestDialRequiresAuthenticatedIVNPPeer(t *testing.T) {
+	hash := sha256.Sum256([]byte("ingress"))
+	destination := foundation.B32(hash)
+	for _, tc := range []struct {
+		name   string
+		remote net.Addr
+		accept bool
+	}{
+		{name: "authenticated destination", remote: ivnp.Addr{Hash: hash, Port: 4017}, accept: true},
+		{name: "wrong destination", remote: ivnp.Addr{Hash: sha256.Sum256([]byte("other")), Port: 4017}},
+		{name: "missing identity", remote: ivnp.Addr{Port: 4017}},
+		{name: "unbound peer", remote: ivnp.Addr{Hash: hash}},
+		{name: "untrusted address text", remote: &net.UnixAddr{Net: "i2p", Name: destination + ":4017"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.accept {
+				checkAuthenticatedDialAccepted(t, destination, tc.remote)
+				return
+			}
+			checkAuthenticatedDialRejected(t, destination, tc.remote)
+		})
+	}
+}
+
+func newAuthenticatedPeerRuntime(t *testing.T, destination string, local net.Conn, remoteAddr net.Addr) *Runtime {
+	t.Helper()
+	return &Runtime{endpoint: endpointStub{
+		destination: testDestination("gateway"),
+		dial: func(_ context.Context, network, address string) (net.Conn, error) {
+			if network != "i2p" || address != net.JoinHostPort(destination, types.OverlayStreamPort) {
+				t.Fatalf("dial = %q %q, want destination-owned I2P stream", network, address)
+			}
+			return peerConn{Conn: local, remote: remoteAddr}, nil
+		},
+	}}
+}
+
+func checkAuthenticatedDialAccepted(t *testing.T, destination string, remoteAddr net.Addr) {
+	t.Helper()
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	if err := remote.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newAuthenticatedPeerRuntime(t, destination, local, remoteAddr)
+	conn, err := runtime.dial(t.Context(), destination)
+	if err != nil || conn == nil {
+		t.Fatalf("authenticated dial = %v, %v", conn, err)
+	}
+}
+
+func checkAuthenticatedDialRejected(t *testing.T, destination string, remoteAddr net.Addr) {
+	t.Helper()
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	if err := remote.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newAuthenticatedPeerRuntime(t, destination, local, remoteAddr)
+	conn, err := runtime.dial(t.Context(), destination)
+	if err == nil || conn != nil {
+		t.Fatalf("untrusted dial = %v, %v", conn, err)
+	}
+	if _, err := remote.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("rejected peer connection was not closed: %v", err)
+	}
+}
+
+func TestStartRejectsInvalidRouterConfiguration(t *testing.T) {
+	for _, content := range []string{
+		"", "null", "[router]\n", `{"Unknown":true}`, `{} {}`,
+		`{"NetworkID":256}`, `{"Logger":{}}`,
+	} {
+		t.Run(content, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ivnp.json")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &Runtime{config: Config{ConfigPath: path}}
+			defer runtime.Close()
+			if err := runtime.Start(t.Context()); err == nil {
+				t.Fatal("invalid IVNP configuration was accepted")
+			}
+			if runtime.router != nil {
+				t.Fatal("invalid configuration started a router")
+			}
+		})
+	}
+}
+
+func TestUnavailableOverlayStartsAndShutsDownWithoutPeers(t *testing.T) {
+	for _, mode := range []string{"cancel run", "close runtime"} {
+		t.Run(mode, func(t *testing.T) {
+			checkUnavailableOverlayMode(t, mode)
+		})
+	}
+}
+
+func writeUnavailableOverlayConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ivnp.json")
+	config := `{"Bootstrap":{"ReseedURLs":[]},"NTCP2":{"Bind":"127.0.0.1:0"},"SSU2":{"Bind":"127.0.0.1:0"}}`
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func startUnavailableOverlay(t *testing.T, ctx context.Context, runtime *Runtime) {
+	t.Helper()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatalf("local startup without peers: %v", err)
+	}
+	if endpoint, useOverlay, err := runtime.IssueEndpoint(IssueInput{}); err != nil || useOverlay || endpoint.URL != "" {
+		t.Fatalf("unavailable overlay must retain direct fallback: %v, %v, %v", endpoint, useOverlay, err)
+	}
+}
+
+func checkUnavailableOverlayShutdown(t *testing.T, ctx context.Context, runtime *Runtime, mode string) {
+	t.Helper()
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(runCtx) }()
+	if mode == "cancel run" {
+		cancelRun()
+	} else {
+		runtime.Close()
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("overlay shutdown: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("shutdown did not cancel destination warmup")
+	}
+	if runtime.Destination() != "" {
+		t.Fatal("shutdown left the overlay available")
+	}
+}
+
+func checkUnavailableOverlayMode(t *testing.T, mode string) {
+	t.Helper()
+	path := writeUnavailableOverlayConfig(t)
+	runtime := &Runtime{config: Config{ConfigPath: path}}
+	defer runtime.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	startUnavailableOverlay(t, ctx, runtime)
+	checkUnavailableOverlayShutdown(t, ctx, runtime, mode)
+}
 
 func testAuthority(t *testing.T, name string) identity.Authority {
 	t.Helper()

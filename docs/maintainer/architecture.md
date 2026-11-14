@@ -97,6 +97,13 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   map; listener events update it, while `Relays`, `Updates`, and `WaitReady` read
   from that state. Agent status types are not part of the SDK contract.
 
+- `portal/namespace`: service-name validation and public hostname syntax shared
+  by relay registration, routing, DNS publication, identity loading, and the SDK.
+  It owns alias, legacy canonical, and Local TLS hostname derivation, address
+  extraction, and DNS-parent classification. Lease ownership remains in the
+  registry; TLS, cache, and readiness lifecycles remain with their runtime owners.
+  Wire capability identifiers and shared protocol constants remain in `types`.
+
 - `portal/certmonitor`: independent, warning-only CT and CAA observations. The SDK
   owns the observer lifecycle and passes copied public certificate installation
   events. This package owns polling, baselines, and durable evidence without

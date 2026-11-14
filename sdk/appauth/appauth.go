@@ -1,10 +1,10 @@
-// Package appauth is the application sign-in gate: an http.Handler that signs
-// visitors in with a wallet, an access credential, OpenID Connect, SAML, or an
-// email link, and passes only signed-in requests to the application behind it.
 package appauth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +13,11 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -525,4 +529,459 @@ func (a *applicationAuth) writeJSON(w http.ResponseWriter, status int, value any
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+type applicationAuthClaims struct {
+	Subject        string `json:"sub"`
+	Provider       string `json:"auth,omitempty"`
+	Email          string `json:"email,omitempty"`
+	Host           string `json:"host"`
+	IssuedAtMillis int64  `json:"iat_ms,omitempty"`
+	ExpiresAt      int64  `json:"exp"`
+	Binding        string `json:"bnd,omitempty"`
+}
+
+type applicationAuthChallengeRequest struct {
+	Address string `json:"address"`
+}
+
+type applicationAuthChallengeResponse struct {
+	ChallengeID string    `json:"challenge_id"`
+	Message     string    `json:"message"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+type applicationAuthVerifyRequest struct {
+	ChallengeID string `json:"challenge_id"`
+	Message     string `json:"message"`
+	Signature   string `json:"signature"`
+}
+
+type applicationAuthRedeemRequest struct {
+	Credential string `json:"credential"`
+}
+
+type providerCache[T any] struct {
+	flight singleflight.Group
+
+	mu        sync.Mutex
+	value     T
+	fetchedAt time.Time
+}
+
+func (c *providerCache[T]) get(ctx context.Context, maxAge time.Duration, fetch func(context.Context) (T, error)) (T, error) {
+	if value, ok := c.fresh(maxAge); ok {
+		return value, nil
+	}
+	result := c.flight.DoChan("", func() (any, error) {
+		if value, ok := c.fresh(maxAge); ok {
+			return value, nil
+		}
+		value, err := fetch(context.WithoutCancel(ctx))
+		if err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		c.value, c.fetchedAt = value, time.Now()
+		c.mu.Unlock()
+		return value, nil
+	})
+	var zero T
+	select {
+	case res := <-result:
+		if res.Err != nil {
+			return zero, res.Err
+		}
+		return res.Val.(T), nil
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
+}
+
+func (c *providerCache[T]) fresh(maxAge time.Duration) (T, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.value, !c.fetchedAt.IsZero() && time.Since(c.fetchedAt) < maxAge
+}
+
+func (a *applicationAuth) authorizeMutation(w http.ResponseWriter, r *http.Request, provider string) bool {
+	if a.provider != provider {
+		a.writeJSONError(w, http.StatusNotFound, "not found")
+		return false
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		a.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return false
+	}
+	if !sameOrigin(r) {
+		a.writeJSONError(w, http.StatusForbidden, "request origin is not allowed")
+		return false
+	}
+	return true
+}
+
+func (a *applicationAuth) serveChallenge(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeMutation(w, r, ProviderSIWE) {
+		return
+	}
+	var req applicationAuthChallengeRequest
+	if err := decodeApplicationAuthJSON(w, r, &req); err != nil {
+		a.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	host := strings.TrimSpace(r.Host)
+	now := time.Now().UTC()
+	challenge, err := a.siwe.Issue(req.Address, host, "https://"+host, now)
+	if err != nil {
+		a.writeJSONError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	a.writeJSON(w, http.StatusOK, applicationAuthChallengeResponse{ChallengeID: challenge.ID, Message: challenge.Message, ExpiresAt: challenge.ExpiresAt})
+}
+
+func (a *applicationAuth) serveVerify(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeMutation(w, r, ProviderSIWE) {
+		return
+	}
+	var req applicationAuthVerifyRequest
+	if err := decodeApplicationAuthJSON(w, r, &req); err != nil {
+		a.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	address, err := a.siwe.Verify(req.ChallengeID, req.Message, req.Signature, r.Host, a.heldSince(r.Host), now)
+	if err != nil {
+		a.writeJSONError(w, http.StatusUnauthorized, "wallet signature is invalid")
+		return
+	}
+	if err := a.setSession(w, Principal{Provider: ProviderSIWE, Subject: address}, strings.TrimSpace(r.Host), now, now.Add(applicationAuthSessionTTL)); err != nil {
+		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]string{"address": address})
+}
+
+func (a *applicationAuth) serveRedeem(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeMutation(w, r, ProviderCredential) {
+		return
+	}
+	var req applicationAuthRedeemRequest
+	if err := decodeApplicationAuthJSON(w, r, &req); err != nil {
+		a.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, req.Credential, now)
+	if err != nil || !a.subjectAllowed(claims.Subject) {
+		a.writeJSONError(w, http.StatusUnauthorized, "application credential is invalid or expired")
+		return
+	}
+	expiresAt := time.Unix(claims.ExpiresAt, 0)
+	if sessionExpiry := now.Add(applicationAuthSessionTTL); sessionExpiry.Before(expiresAt) {
+		expiresAt = sessionExpiry
+	}
+	if err := a.setSession(w, Principal{Provider: ProviderCredential, Subject: claims.Subject}, strings.TrimSpace(r.Host), now, expiresAt); err != nil {
+		a.writeJSONError(w, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]string{"subject": claims.Subject})
+}
+
+func (a *applicationAuth) authenticate(r *http.Request, credential string) (Principal, bool) {
+	if credential == "" {
+		return a.authenticateSession(r)
+	}
+	if a.provider != ProviderCredential {
+		return Principal{}, false
+	}
+	claims, err := verifyApplicationCredential(a.credentialKey, a.tunnelIdentity, r.Host, credential, time.Now().UTC())
+	if err == nil && a.subjectAllowed(claims.Subject) {
+		return Principal{Provider: ProviderCredential, Subject: claims.Subject}, true
+	}
+	return Principal{}, false
+}
+
+func (a *applicationAuth) authenticateSession(r *http.Request) (Principal, bool) {
+	cookie, err := r.Cookie(applicationAuthCookieName)
+	if err != nil {
+		return Principal{}, false
+	}
+	var claims applicationAuthClaims
+	if err := decodeSignedApplicationAuthJSON(a.signingKey, cookie.Value, &claims); err != nil || !sameApplicationHost(claims.Host, r.Host) || time.Now().UTC().Unix() >= claims.ExpiresAt {
+		return Principal{}, false
+	}
+	provider := claims.Provider
+	if provider != a.provider {
+		return Principal{}, false
+	}
+	if claims.IssuedAtMillis < a.heldSince(r.Host).UnixMilli() {
+		return Principal{}, false
+	}
+	if provider == ProviderSIWE {
+		address, err := identity.NormalizeEVMAddress(claims.Subject)
+		if err != nil || a.siwe == nil || !a.siwe.AddressAllowed(address) {
+			return Principal{}, false
+		}
+		return Principal{Provider: provider, Subject: address}, true
+	}
+	subject, ok := a.resolveAuthenticateSessionSubject(provider, claims.Subject, claims.Binding)
+	if !ok {
+		return Principal{}, false
+	}
+	return Principal{Provider: provider, Subject: subject, Email: claims.Email}, true
+}
+
+func (a *applicationAuth) resolveAuthenticateSessionSubject(provider, subjectClaim, bindingClaim string) (string, bool) {
+	var subject string
+	var err error
+	switch provider {
+	case ProviderOIDC, ProviderSAML, ProviderEmail:
+		if binding := a.binding(); binding == "" || bindingClaim != binding {
+			return "", false
+		}
+		subject, err = normalizeProviderPrincipal(subjectClaim)
+	default:
+		subject, err = normalizeApplicationAuthSubject(subjectClaim)
+	}
+	if err != nil || !a.subjectAllowed(subject) {
+		return "", false
+	}
+	return subject, true
+}
+
+func (a *applicationAuth) issueSession(principal Principal, host string, issuedAt, expiresAt time.Time) (string, error) {
+	claims := applicationAuthClaims{Subject: principal.Subject, Provider: principal.Provider, Email: principal.Email, Host: host, IssuedAtMillis: issuedAt.UnixMilli(), ExpiresAt: expiresAt.Unix(), Binding: a.binding()}
+	return encodeSignedApplicationAuthJSON(a.signingKey, claims)
+}
+
+func (a *applicationAuth) binding() string {
+	switch {
+	case a.oidc != nil:
+		return a.oidc.binding
+	case a.saml != nil:
+		return a.saml.binding
+	case a.email != nil:
+		return a.email.binding
+	default:
+		return ""
+	}
+}
+
+func (a *applicationAuth) setSession(w http.ResponseWriter, principal Principal, host string, now, expiresAt time.Time) error {
+	token, err := a.issueSession(principal, host, now, expiresAt)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{Name: applicationAuthCookieName, Value: token, Path: "/", MaxAge: max(1, int(expiresAt.Sub(now).Seconds())), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	return nil
+}
+
+func encodeSignedApplicationAuthJSON(key []byte, value any) (string, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signApplicationAuthPayload(key, payload)), nil
+}
+
+func loginStateIssuedAt(expiresAt int64) time.Time {
+	return time.Unix(expiresAt, 0).Add(-applicationAuthLoginStateTTL)
+}
+
+func encodeApplicationAuthLoginState(key []byte, claims any, next *string) (string, error) {
+	token, err := encodeSignedApplicationAuthJSON(key, claims)
+	if err == nil && len(token) > applicationAuthStateTokenLimit {
+		*next = "/"
+		token, err = encodeSignedApplicationAuthJSON(key, claims)
+	}
+	return token, err
+}
+
+func decodeSignedApplicationAuthJSON(key []byte, token string, dst any) error {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return errInvalidSignedValue
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return errInvalidSignedValue
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || !hmac.Equal(signature, signApplicationAuthPayload(key, payload)) {
+		return errInvalidSignedValue
+	}
+	return json.Unmarshal(payload, dst)
+}
+
+func signApplicationAuthPayload(key, payload []byte) []byte {
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(payload)
+	return mac.Sum(nil)
+}
+
+type principalContextKey struct{}
+
+// PublicHost is a URL the application is reachable at now.
+type PublicHost struct {
+	URL string
+	// Since is when the application came to hold URL. Set it for a URL that can
+	// change hands, such as an alias, so that a session or a sign-in from an
+	// earlier hold does not count. Credentials are not dated, because they have to
+	// outlive a restart. Leave Since zero for a URL only this identity can hold.
+	Since time.Time
+}
+
+// Principal is the visitor the gate signed in.
+type Principal struct {
+	// Provider is the method that signed the visitor in, such as ProviderOIDC.
+	Provider string
+	// Subject is the principal the allowlist checks: a wallet address, a
+	// credential subject, an email, or a sub:<subject> entry.
+	Subject string
+	// Email is the address oidc, saml or email vouches for, also when Subject
+	// is a sub: entry, and empty when there is none. An OIDC email counts only
+	// with email_verified. It is the value from the sign-in: the allowlist checks
+	// Subject on each request, not this. A session from before this field reads
+	// as no email until the visitor signs in again.
+	Email string
+}
+
+// PrincipalFromContext returns the visitor of a request that passed the gate,
+// with or without Config.IdentityHeaders. Without a gate in front of the handler
+// there is none.
+func PrincipalFromContext(ctx context.Context) (Principal, bool) {
+	principal, ok := ctx.Value(principalContextKey{}).(Principal)
+	return principal, ok
+}
+
+func normalizeProviderPrincipals(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		principal, err := normalizeProviderAllowlistEntry(raw)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[principal]; ok {
+			continue
+		}
+		seen[principal] = struct{}{}
+		normalized = append(normalized, principal)
+	}
+	return normalized, nil
+}
+
+func normalizeProviderAllowlistEntry(raw string) (string, error) {
+	principal, err := normalizeProviderPrincipal(raw)
+	if err != nil {
+		return "", fmt.Errorf("principal %q: %w", raw, err)
+	}
+	if strings.HasPrefix(principal, subjectPrincipalPrefix) {
+		return principal, nil
+	}
+	_, domain, ok := strings.Cut(principal, "@")
+	if !ok || domain == "" || strings.ContainsAny(domain, "@ ") {
+		return "", fmt.Errorf("principal %q must be an email, an @example.com domain, or a sub:<subject> entry", raw)
+	}
+	return principal, nil
+}
+
+const subjectPrincipalPrefix = "sub:"
+
+func normalizeProviderPrincipal(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	isSubject := len(raw) >= len(subjectPrincipalPrefix) && strings.EqualFold(raw[:len(subjectPrincipalPrefix)], subjectPrincipalPrefix)
+	if isSubject {
+		raw = raw[len(subjectPrincipalPrefix):]
+	}
+	subject, err := normalizeApplicationAuthSubject(raw)
+	if err != nil {
+		return "", err
+	}
+	if isSubject {
+		return subjectPrincipalPrefix + subject, nil
+	}
+	if strings.ContainsFunc(subject, func(r rune) bool { return r > unicode.MaxASCII }) {
+		return "", errEmailPrincipalsMustASCII
+	}
+	if strings.Contains(subject, "@") {
+		subject = strings.ToLower(subject)
+	}
+	return subject, nil
+}
+
+func providerClaimPrincipal(raw string) string {
+	principal, err := normalizeProviderPrincipal(raw)
+	if err != nil || strings.HasPrefix(principal, "@") {
+		return ""
+	}
+	return principal
+}
+
+func sanitizeApplicationAuthNext(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") || strings.ContainsFunc(raw, isUnsafeRedirectRune) {
+		return "/"
+	}
+	return raw
+}
+
+func isUnsafeRedirectRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || r == '\\'
+}
+
+func providerEmail(raw string) string {
+	email := providerClaimPrincipal(raw)
+	if !strings.Contains(email, "@") || strings.HasPrefix(email, subjectPrincipalPrefix) {
+		return ""
+	}
+	return email
+}
+
+func providerAccount(email, subject string) string {
+	if email := providerEmail(email); email != "" {
+		return email
+	}
+	return subjectPrincipalPrefix + subject
+}
+
+func (a *applicationAuth) resolveAllowedPrincipal(email, subject string) (string, bool) {
+	if email := providerEmail(email); email != "" && a.subjectAllowed(email) {
+		return email, true
+	}
+	if subject != strings.TrimSpace(subject) {
+		return "", false
+	}
+	sub, err := normalizeProviderPrincipal(subjectPrincipalPrefix + subject)
+	if err == nil && a.subjectAllowed(sub) {
+		return sub, true
+	}
+	return "", false
+}
+
+func (a *applicationAuth) subjectAllowed(subject string) bool {
+	if a == nil {
+		return false
+	}
+	if a.allowAnySubject {
+		return true
+	}
+	if _, ok := a.allowedSubjects[subject]; ok {
+		return true
+	}
+	if !ProviderTakesEmailList(a.provider) {
+		return false
+	}
+	if strings.HasPrefix(subject, "sub:") {
+		return false
+	}
+	if _, domain, ok := strings.Cut(subject, "@"); ok && !strings.Contains(domain, "@") {
+		_, ok = a.allowedSubjects["@"+domain]
+		return ok
+	}
+	return false
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
@@ -73,6 +74,7 @@ type exposeFlags struct {
 	relayCSV       string
 	tags           string
 	httpRoutes     []string
+	x402Options    []string
 	discovery      bool
 	banMITM        bool
 	cache          bool
@@ -116,10 +118,11 @@ func registerIdentityAuthFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *expo
 func registerPaymentTransportFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags, env *cli.Env) {
 	fs.StringVar(&cfg.PayTo, "x402-pay-to", "", "Payment recipient address for this tunnel")
 	fs.BoolVar(&cfg.Testnet, "x402-testnet", false, "Use the testnet for x402 payments when --x402-network is omitted; default is Sui mainnet")
-	fs.StringVar(&cfg.Network, "x402-network", "", "x402 CAIP-2 network; supported values are sui:mainnet, sui:testnet, casper:casper, casper:casper-test, and nano:mainnet")
-	fs.StringVar(&cfg.Asset, "x402-asset", "", "Payment asset contract; required for Casper wCSPR")
+	fs.StringVar(&cfg.Network, "x402-network", "", "x402 CAIP-2 network supported by the x402-facilitator paywall, such as sui:mainnet, sui:testnet, casper:casper, casper:casper-test, or nano:mainnet; default is Sui")
+	fs.StringVar(&cfg.Asset, "x402-asset", "", "Payment asset where the network needs one named, such as the Casper wCSPR contract hash")
 	cli.RepeatedStringFlag(fs, &cfg.Endpoints, "x402-endpoint", "x402 chain RPC or hosted facilitator endpoint; repeat for Sui RPC fallback, while Casper uses the first facilitator endpoint and Nano verifies each payment on every listed RPC node (at least two)")
 	env.String(fs, &cfg.FacilitatorToken, "x402-facilitator-token", "", "Casper facilitator authorization token", "CSPR_CLOUD_API_KEY")
+	cli.RepeatedStringFlag(fs, &flags.x402Options, "x402-option", "Network-specific x402 option in KEY=VALUE form, passed to the facilitator unchanged, such as nano_claims_file=/var/lib/portal/claims.jsonl or nano_require_binding=true; repeatable; an option the network does not support is an error")
 	cli.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM [METHOD[,METHOD...]:PAYMENT_AMOUNT] form; repeat to aggregate multiple local HTTP services behind one public URL")
 	cli.RepeatedStringFlag(fs, &cfg.StripRequestHeaders, "strip-request-header", "Client request header removed before routed HTTP forwards it upstream; repeat for multiple headers; case-insensitive; applies to HTTP and WebSocket upgrades; Portal-owned headers (Host, X-Forwarded-*) are always rewritten by the tunnel; requires --http-route or --auth")
 	fs.StringVar(&cfg.Serve, "serve", "", "Serve a local static site: pass a directory (served with index.html) or an HTML file (its folder is served with that file as the SPA/CSR entry). Unknown paths fall back to the entry file")
@@ -243,6 +246,16 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 			return tunnel.Spec{}, fmt.Errorf("--http-route %q: %w", raw, err)
 		}
 		cfg.HTTPRoutes = append(cfg.HTTPRoutes, route)
+	}
+	for _, raw := range flags.x402Options {
+		key, value, err := gateway.ParseX402Option(raw)
+		if err != nil {
+			return tunnel.Spec{}, fmt.Errorf("--x402-option: %w", err)
+		}
+		if cfg.Options == nil {
+			cfg.Options = make(map[string]string)
+		}
+		cfg.Options[key] = value
 	}
 	cfg.RelayURLs = utils.SplitCSV(flags.relayCSV)
 	cfg.Tags = utils.SplitCSV(flags.tags)

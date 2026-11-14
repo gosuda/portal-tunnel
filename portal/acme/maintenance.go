@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -253,8 +253,8 @@ func (m *Manager) finishENSCommand(state *maintenanceLoopState, command ensDNSCo
 		return
 	}
 	clear(state.lastPublicIPs)
-	if utils.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
-		_, parent, _ := strings.Cut(command.hostname, ".")
+	if namespace.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
+		parent := namespace.AddressParent(command.hostname)
 		// The new child republished the shared parent. An old withdrawal
 		// intent must not outlive the newly registered DNS owner.
 		if state.pendingENS[parent].remove {

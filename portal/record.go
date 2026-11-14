@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"net/netip"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -234,8 +234,7 @@ func (r *leaseRecord) dnsAddressParent() string {
 	if r == nil || r.Namespace != types.LocalTLSNamespaceV1 {
 		return ""
 	}
-	_, parent, _ := strings.Cut(r.CanonicalHostname, ".")
-	return parent
+	return namespace.AddressParent(r.CanonicalHostname)
 }
 
 func (s *Server) isDNSHostnameOwnedLocked(hostname string, now time.Time) bool {

@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"encoding/hex"
 	"errors"
 	"net/url"
 	"strconv"
@@ -24,14 +23,6 @@ func TestNormalizeRelayURLPreservesParseErrors(t *testing.T) {
 	var numErr *strconv.NumError
 	if !errors.As(err, &numErr) || !errors.Is(err, strconv.ErrRange) {
 		t.Fatalf("NormalizeRelayURL() error = %v, want wrapped port overflow", err)
-	}
-}
-
-func TestCanonicalLeaseHostnamePreservesAddressDecodeError(t *testing.T) {
-	_, err := CanonicalLeaseHostname("demo", "0x"+strings.Repeat("z", 40), "example.com")
-	var invalidByte hex.InvalidByteError
-	if !errors.As(err, &invalidByte) || invalidByte != 'z' {
-		t.Fatalf("CanonicalLeaseHostname() error = %v, want wrapped hex error", err)
 	}
 }
 
@@ -64,210 +55,6 @@ func TestHostnameMatchesPattern(t *testing.T) {
 				t.Fatalf("HostnameMatchesPattern(%q, %q) = %v, want %v", tt.pattern, tt.host, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestLeaseHostname(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		raw     string
-		root    string
-		want    string
-		wantErr bool
-	}{
-		{name: "composes child hostname", raw: "demo", root: "example.com", want: "demo.example.com"},
-		{name: "normalizes name and root", raw: "My App", root: "Example.COM.", want: "my-app.example.com"},
-		{name: "rejects empty name", raw: "", root: "example.com", wantErr: true},
-		{name: "rejects punctuation-only name", raw: "!!!", root: "example.com", wantErr: true},
-		{name: "rejects over-long name", raw: strings.Repeat("a", 64), root: "example.com", wantErr: true},
-		{name: "rejects empty root host", raw: "demo", root: "", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			if tt.wantErr {
-				rejectInvalidLeaseHostname(t, tt.raw, tt.root)
-				return
-			}
-			checkComposedLeaseHostname(t, tt.raw, tt.root, tt.want)
-		})
-	}
-}
-
-func checkComposedLeaseHostname(t *testing.T, raw, root, want string) {
-	t.Helper()
-	got, err := LeaseHostname(raw, root)
-	if err != nil {
-		t.Fatalf("LeaseHostname(%q, %q) error = %v", raw, root, err)
-	}
-	if got != want {
-		t.Fatalf("LeaseHostname(%q, %q) = %q, want %q", raw, root, got, want)
-	}
-}
-
-func rejectInvalidLeaseHostname(t *testing.T, raw, root string) {
-	t.Helper()
-	if _, err := LeaseHostname(raw, root); err == nil {
-		t.Fatalf("LeaseHostname(%q, %q) error = nil, want invalid label error", raw, root)
-	}
-}
-
-func TestCanonicalLeaseHostname(t *testing.T) {
-	t.Parallel()
-
-	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
-	checkCanonicalBasicName(t, address)
-	checkCanonicalMaxLabel(t, address)
-	checkCanonicalUnnamedName(t, address)
-	const addr = "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
-	for name, label := range map[string]string{
-		strings.Repeat("a", 23):                 "5e2twslnrzki2h4l7bzvq--" + addr,
-		"internal-metrics-dashboard-production": "okm4rhbie4a4gidozw5r5--" + addr,
-		strings.Repeat("a", 63):                 "c7pboclanhxavtsfp7efc--" + addr,
-	} {
-		checkCanonicalHashedName(t, address, name, label)
-	}
-	for _, name := range []string{
-		strings.Repeat("a", 64),
-		addr,
-		"myapp-" + addr,
-		"5e2twslnrzki2h4l7bzvq--" + addr,
-	} {
-		rejectCanonicalBadName(t, address, name)
-	}
-	rejectCanonicalShortAddress(t)
-}
-
-func checkCanonicalBasicName(t *testing.T, address string) {
-	t.Helper()
-	want := "herdr-7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com"
-	got, err := CanonicalLeaseHostname("Herdr", address, "Example.COM.")
-	if err != nil {
-		t.Fatalf("CanonicalLeaseHostname() error = %v", err)
-	}
-	if got != want {
-		t.Fatalf("CanonicalLeaseHostname() = %q, want %q", got, want)
-	}
-}
-
-func checkCanonicalMaxLabel(t *testing.T, address string) {
-	t.Helper()
-	maxName := strings.Repeat("a", 22)
-	got, err := CanonicalLeaseHostname(maxName, address, "example.com")
-	if err != nil {
-		t.Fatalf("CanonicalLeaseHostname(maximum name) error = %v", err)
-	}
-	if label := strings.SplitN(got, ".", 2)[0]; len(label) != 63 {
-		t.Fatalf("canonical label length = %d, want 63", len(label))
-	}
-}
-
-func checkCanonicalUnnamedName(t *testing.T, address string) {
-	t.Helper()
-	unnamedWant := "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com"
-	got, err := CanonicalLeaseHostname("", address, "Example.COM.")
-	if err != nil {
-		t.Fatalf("CanonicalLeaseHostname(empty name) error = %v", err)
-	}
-	if got != unnamedWant {
-		t.Fatalf("CanonicalLeaseHostname(empty name) = %q, want %q", got, unnamedWant)
-	}
-}
-
-func checkCanonicalHashedName(t *testing.T, address, name, label string) {
-	t.Helper()
-	got, err := CanonicalLeaseHostname(name, address, "example.com")
-	if err != nil {
-		t.Fatalf("CanonicalLeaseHostname(%d-character name) error = %v", len(name), err)
-	}
-	if got != label+".example.com" {
-		t.Fatalf("CanonicalLeaseHostname(%q) = %q, want %q", name, got, label+".example.com")
-	}
-}
-
-func rejectCanonicalBadName(t *testing.T, address, name string) {
-	t.Helper()
-	if _, err := CanonicalLeaseHostname(name, address, "example.com"); err == nil {
-		t.Fatalf("CanonicalLeaseHostname(%q) error = nil", name)
-	}
-}
-
-func rejectCanonicalShortAddress(t *testing.T) {
-	t.Helper()
-	if _, err := CanonicalLeaseHostname("herdr", "0x1234", "example.com"); err == nil {
-		t.Fatal("CanonicalLeaseHostname(short address) error = nil")
-	}
-}
-
-func TestServiceNamesCannotTakeCanonicalLabels(t *testing.T) {
-	t.Parallel()
-
-	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
-	long, err := CanonicalLeaseHostname("internal-metrics-dashboard-production", address, "example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash, _, _ := strings.Cut(long, "--")
-	for _, short := range []string{hash, hash + "-", hash + "-k"} {
-		got, err := CanonicalLeaseHostname(short, address, "example.com")
-		if err == nil && got == long {
-			t.Fatalf("short name %q took the long name's canonical hostname %q", short, long)
-		}
-	}
-	for _, name := range []string{"7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d", "x-7A3B2C4D5E6F708192A3B4C5D6E7F8091A2B3C4D"} {
-		if _, err := NormalizeServiceName(name); err == nil {
-			t.Fatalf("NormalizeServiceName(%q) error = nil", name)
-		}
-	}
-	for _, name := range []string{"myapp", "deadbeef", "my-app-" + strings.Repeat("f", 39), strings.Repeat("f", 41)} {
-		if _, err := NormalizeServiceName(name); err != nil {
-			t.Fatalf("NormalizeServiceName(%q) error = %v", name, err)
-		}
-	}
-}
-
-func TestCanonicalLeaseHostnameNormalizesFirst(t *testing.T) {
-	t.Parallel()
-
-	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
-	fullwidth := strings.Map(func(r rune) rune { return r + 0xFEE0 }, "7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d")
-	if _, err := NormalizeServiceName(fullwidth); err == nil {
-		t.Fatalf("NormalizeServiceName(fullwidth address) error = nil")
-	}
-
-	unicode, err := CanonicalLeaseHostname("bücher-abcdefghij", address, "example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ascii, err := CanonicalLeaseHostname("xn--bcher-abcdefghij-jzb", address, "example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if unicode != ascii || !strings.HasSuffix(unicode, "--7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d.example.com") {
-		t.Fatalf("canonical hostnames = (%q, %q), want the same hashed form", unicode, ascii)
-	}
-}
-
-func TestCanonicalLeaseHostnameKeepsServiceIdentityAcrossRelays(t *testing.T) {
-	t.Parallel()
-
-	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
-	relayA, err := CanonicalLeaseHostname("herdr", address, "relay-a.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	relayB, err := CanonicalLeaseHostname("herdr", address, "relay-b.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	labelA, _, _ := strings.Cut(relayA, ".")
-	labelB, _, _ := strings.Cut(relayB, ".")
-	if labelA != labelB || relayA == relayB {
-		t.Fatalf("relay canonical hostnames = (%q, %q), want the same service label under different relay origins", relayA, relayB)
 	}
 }
 
@@ -369,24 +156,6 @@ func TestNormalizeHostWithoutPort(t *testing.T) {
 		if got := NormalizeHostWithoutPort(tc.in); got != tc.want {
 			t.Errorf("NormalizeHostWithoutPort(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-	}
-}
-
-func TestExtractCanonicalHostnameAddressIgnoresCasePortAndTrailingDot(t *testing.T) {
-	t.Parallel()
-
-	const address = "0x1234567890abcdef1234567890abcdef12345678"
-	for _, hostname := range []string{
-		"1234567890abcdef1234567890abcdef12345678.relay.example",
-		"1234567890ABCDEF1234567890abcdef12345678.Relay.Example.:8443",
-		"myapp-1234567890abcdef1234567890abcdef12345678.relay.example",
-	} {
-		if got, err := ExtractCanonicalHostnameAddress(hostname); err != nil || got != address {
-			t.Errorf("ExtractCanonicalHostnameAddress(%q) = %q, %v; want %q", hostname, got, err, address)
-		}
-	}
-	if _, err := ExtractCanonicalHostnameAddress("myapp.relay.example"); err == nil {
-		t.Error("ExtractCanonicalHostnameAddress accepted a friendly name that embeds no address")
 	}
 }
 

@@ -42,7 +42,6 @@ var (
 	errStripRequestHeadersRequireHTTPUpstream  = errors.New("strip request headers require an HTTP upstream route or target")
 	errStripRequestHeaderHostNotSupported      = errors.New(`strip request header "Host" is not supported: Go stores it in Request.Host, not Header`)
 	errStripRequestHeaderXForwardedProto       = errors.New(`strip request header "X-Forwarded-Proto" is not supported: RunHTTP always overwrites it with the trusted https value`)
-	errCasperPaymentsRequireAnAsset            = errors.New("casper payments require an asset")
 )
 
 // Spec is the resolved description of one tunnel that the runtime is built from.
@@ -237,9 +236,6 @@ func (spec Spec) Validate() error {
 	if err := validateStripRequestHeaders(spec); err != nil {
 		return err
 	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(spec.HTTP.Payment.Network)), "casper:") && strings.TrimSpace(spec.HTTP.Payment.Asset) == "" {
-		return errCasperPaymentsRequireAnAsset
-	}
 	if auth := spec.HTTP.Auth; auth != nil {
 		if err := appauth.Validate(*auth); err != nil {
 			return err
@@ -252,6 +248,7 @@ func (spec Spec) Validate() error {
 type Runtime struct {
 	Identity     types.Identity
 	Exposure     *sdk.Exposure
+	gateway      *gateway.HTTPGateway
 	handler      http.Handler
 	target       string
 	udpTarget    string
@@ -315,7 +312,11 @@ func buildExposureOptions(spec Spec) []sdk.Option {
 }
 
 func composeTunnelHandler(spec Spec, runtime *Runtime, listenerIdentity types.Identity, routes []gateway.ExposedHTTPRoute) (http.Handler, error) {
-	handler, err := gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment)
+	var handler http.Handler
+	var err error
+	if runtime.gateway, err = gateway.ComposeHTTPRoutes(routes, spec.HTTP.Payment); err == nil {
+		handler = runtime.gateway
+	}
 	if err == nil && spec.HTTP.Auth != nil {
 		auth := *spec.HTTP.Auth
 		auth.PublicHosts = runtime.publicHosts
@@ -325,7 +326,7 @@ func composeTunnelHandler(spec Spec, runtime *Runtime, listenerIdentity types.Id
 		handler, err = gateway.NewStripRequestHeaders(handler, spec.HTTP.StripRequestHeaders)
 	}
 	if err != nil {
-		_ = runtime.Exposure.Close()
+		_ = runtime.Close()
 		return nil, err
 	}
 	return handler, nil
@@ -420,6 +421,8 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	})
 }
 
+// Close stops the exposure and releases the gateway's payment runtime, such
+// as RPC connections and claim logs.
 func (runtime *Runtime) Close() error {
-	return runtime.Exposure.Close()
+	return errors.Join(runtime.Exposure.Close(), runtime.gateway.Close())
 }
