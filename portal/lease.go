@@ -277,19 +277,6 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	return out
 }
 
-func matchLookupHostnames(record *leaseRecord, host string) (bool, bool) {
-	wildcard := false
-	for _, hostname := range record.hostnames() {
-		if hostname == host {
-			return true, false
-		}
-		if !wildcard && utils.HostnameMatchesPattern(hostname, host) {
-			wildcard = true
-		}
-	}
-	return false, wildcard
-}
-
 func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	host = utils.NormalizeHostname(host)
 	if host == "" {
@@ -312,12 +299,13 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 			}
 			continue
 		}
-		exact, wild := matchLookupHostnames(record, host)
-		if exact {
-			return record, true
-		}
-		if wildcard == nil && wild {
-			wildcard = record
+		for _, hostname := range record.hostnames() {
+			if hostname == host {
+				return record, true
+			}
+			if wildcard == nil && utils.HostnameMatchesPattern(hostname, host) {
+				wildcard = record
+			}
 		}
 	}
 	if wildcard != nil {
@@ -779,16 +767,6 @@ func (a *portPool) cleanupExpired(now time.Time) {
 	}
 }
 
-func (r *leaseRegistry) enforceRefuseChallengeBudgetLocked(held int, issued int) error {
-	if held < r.unapprovedPerSource {
-		return nil
-	}
-	if issued >= 0 {
-		r.deleteRecord(issued)
-	}
-	return errUnapprovedLeaseLimit
-}
-
 func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, challengeID string, source netip.Addr) error {
 	now := time.Now().UTC()
 	r.mu.Lock()
@@ -821,7 +799,13 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 			held[holder] = struct{}{}
 		}
 	}
-	return r.enforceRefuseChallengeBudgetLocked(len(held), issued)
+	if len(held) >= r.unapprovedPerSource {
+		if issued >= 0 {
+			r.deleteRecord(issued)
+		}
+		return errUnapprovedLeaseLimit
+	}
+	return nil
 }
 
 func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, namespaceID string) (string, string, error) {
