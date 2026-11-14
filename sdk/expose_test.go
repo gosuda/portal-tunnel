@@ -263,11 +263,11 @@ func checkListenerRefusalReconnecting(t *testing.T, fixture *listenerRefusalFixt
 func TestApprovalKeepsARelayOutOfTheActiveSet(t *testing.T) {
 	const relayURL = "https://relay.example"
 	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 8)}
-	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: "https://demo.relay.example", tcpAddr: "demo.relay.example:40000"})
+	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: "https://demo.relay.example", tcpAddr: "demo.relay.example:40000"}, nil)
 	if got := exposure.ActiveRelays(); len(got) != 1 {
 		t.Fatalf("ActiveRelays() = %v", got)
 	}
-	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting, approval: RelayApprovalPending})
+	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting, approval: RelayApprovalPending}, nil)
 	status := exposure.Relays()[0]
 	if status.Approval != RelayApprovalPending || status.PublicURL != "" || status.TCPAddr != "" || status.Active() {
 		t.Fatalf("waiting status = %+v", status)
@@ -275,11 +275,11 @@ func TestApprovalKeepsARelayOutOfTheActiveSet(t *testing.T) {
 	if got := exposure.ActiveRelays(); len(got) != 0 {
 		t.Fatalf("ActiveRelays() = %v while the relay refuses the lease", got)
 	}
-	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting, approval: RelayApprovalRefused})
+	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting, approval: RelayApprovalRefused}, nil)
 	if status := exposure.Relays()[0]; status.Approval != RelayApprovalRefused {
 		t.Fatalf("refused status = %+v", status)
 	}
-	exposure.setRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: "https://demo.relay.example"})
+	exposure.applyRelayStatus(relayURL, listenerStatus{state: RelayReady, publicURL: "https://demo.relay.example"}, nil)
 	if status := exposure.Relays()[0]; status.Approval != "" || status.State != RelayReady {
 		t.Fatalf("approved status = %+v", status)
 	}
@@ -288,8 +288,8 @@ func TestApprovalKeepsARelayOutOfTheActiveSet(t *testing.T) {
 func TestRelaySetChangeKeepsTheStatus(t *testing.T) {
 	const waiting, ready = "https://waiting.example", "https://ready.example"
 	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 8)}
-	exposure.setRelayStatus(waiting, listenerStatus{state: RelayConnecting, approval: RelayApprovalPending})
-	exposure.setRelayStatus(ready, listenerStatus{state: RelayReady, publicURL: "https://demo.ready.example", tcpAddr: "ready.example:40000"})
+	exposure.applyRelayStatus(waiting, listenerStatus{state: RelayConnecting, approval: RelayApprovalPending}, nil)
+	exposure.applyRelayStatus(ready, listenerStatus{state: RelayReady, publicURL: "https://demo.ready.example", tcpAddr: "ready.example:40000"}, nil)
 	before := exposure.Relays()
 
 	exposure.syncRelayStatuses([]string{waiting, ready, "https://added.example"})
@@ -443,7 +443,7 @@ func TestWaitReadyOnlyReturnsFailuresWhenAllRelaysAreTerminal(t *testing.T) {
 	exposure := &Exposure{done: make(chan struct{}), updates: make(chan RelayStatus, 1)}
 	readyCtx, readyCancel := context.WithTimeout(t.Context(), time.Second)
 	defer readyCancel()
-	exposure.setRelayStatus(badRelay, listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: localtls.ErrLocalCertificate})
+	exposure.applyRelayStatus(badRelay, listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: localtls.ErrLocalCertificate}, nil)
 	if _, err := exposure.WaitReady(readyCtx); !errors.Is(err, localtls.ErrLocalCertificate) {
 		t.Fatalf("terminal relay returned %v", err)
 	}
@@ -453,7 +453,7 @@ func TestWaitReadyOnlyReturnsFailuresWhenAllRelaysAreTerminal(t *testing.T) {
 	if _, err := exposure.WaitReady(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("connecting relay was discarded: %v", err)
 	}
-	exposure.setRelayStatus(otherRelay, listenerStatus{state: RelayReady, publicURL: "https://tenant.other.example"})
+	exposure.applyRelayStatus(otherRelay, listenerStatus{state: RelayReady, publicURL: "https://tenant.other.example"}, nil)
 	ready, err := exposure.WaitReady(readyCtx)
 	if err != nil || len(ready) != 1 || ready[0].RelayURL != otherRelay {
 		t.Fatalf("healthy relay was discarded: %v, %v", ready, err)
@@ -494,7 +494,7 @@ func TestCanonicalWithdrawalUpdatesSnapshotsAndWaiters(t *testing.T) {
 		stateChanged:   make(chan struct{}),
 	}
 	changed := e.stateChanged
-	e.setListenerRelayStatus(relay, owner, listenerStatus{state: RelayReady, legacyURL: legacy})
+	e.applyRelayStatus(relay, listenerStatus{state: RelayReady, legacyURL: legacy}, owner)
 	status := e.Relays()[0]
 	if status.PublicURL != "" || status.State != RelayReady || status.LegacyURL != legacy {
 		t.Fatalf("unavailable canonical status: %+v", status)
@@ -518,9 +518,9 @@ func TestCanonicalWithdrawalUpdatesSnapshotsAndWaiters(t *testing.T) {
 	}
 	// A report constructed while material was usable may arrive after the
 	// withdrawal. It must not restore a URL against unavailable local material.
-	e.setListenerRelayStatus(relay, owner, listenerStatus{
+	e.applyRelayStatus(relay, listenerStatus{
 		state: RelayReady, legacyURL: legacy, publicURL: "https://service.address.relay.example",
-	})
+	}, owner)
 	if status := e.Relays()[0]; status.PublicURL != "" || status.LegacyURL != legacy {
 		t.Fatalf("late ready report restored the canonical: %+v", status)
 	}

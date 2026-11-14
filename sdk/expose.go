@@ -867,10 +867,10 @@ func (e *Exposure) detachStaleRelayListenersLocked(relayURLs []string, desired m
 func (e *Exposure) publishMissingRelayListeners(missingRelayURLs []string, failOnError bool) ([]string, error) {
 	addedRelayURLs := make([]string, 0, len(missingRelayURLs))
 	for _, relayURL := range missingRelayURLs {
-		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
+		e.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting}, nil)
 		published, err := e.publishRelayListenerLocked(relayURL)
 		if err != nil {
-			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err})
+			e.applyRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err}, nil)
 			if failOnError {
 				return nil, fmt.Errorf("add relay listener %q: %w", relayURL, err)
 			}
@@ -957,7 +957,7 @@ func (e *Exposure) publishCreatedListener(relayURL string, listener *listener) b
 	if blockErr, blocked := e.blockedRelays[relayURL]; blocked {
 		e.mu.Unlock()
 		_ = listener.Close()
-		e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: blockErr})
+		e.applyRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: blockErr}, nil)
 		return false
 	}
 	if _, exists := e.relayListeners[relayURL]; exists {
@@ -1058,7 +1058,7 @@ func (e *Exposure) forwardListenerStatuses(listener *listener, relayURL string, 
 	for {
 		select {
 		case status := <-statusUpdates:
-			e.setListenerRelayStatus(relayURL, listener, status)
+			e.applyRelayStatus(relayURL, status, listener)
 		case <-listener.doneCh:
 			return
 		}
@@ -1147,14 +1147,6 @@ func (e *Exposure) ActiveRelays() []string {
 	e.mu.RUnlock()
 	slices.Sort(relayURLs)
 	return relayURLs
-}
-
-func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
-	e.applyRelayStatus(relayURL, update, nil)
-}
-
-func (e *Exposure) setListenerRelayStatus(relayURL string, owner *listener, update listenerStatus) {
-	e.applyRelayStatus(relayURL, update, owner)
 }
 
 func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owner *listener) {
