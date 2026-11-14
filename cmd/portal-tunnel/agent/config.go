@@ -148,7 +148,8 @@ func (cfg TunnelConfig) holdsSecret() bool {
 	return strings.TrimSpace(cfg.OIDCClientSecret) != "" ||
 		strings.TrimSpace(cfg.SMTPPassword) != "" ||
 		strings.TrimSpace(cfg.IdentityJSON) != "" ||
-		strings.TrimSpace(cfg.FacilitatorToken) != ""
+		strings.TrimSpace(cfg.FacilitatorToken) != "" ||
+		strings.TrimSpace(cfg.PGNSACMEEABHMAC) != ""
 }
 
 func (cfg *Config) normalize(configPath string) error {
@@ -182,6 +183,7 @@ func (cfg *Config) normalize(configPath string) error {
 		t.TLSCert = resolveAgentPath(configDir, t.TLSCert)
 		t.TLSKey = resolveAgentPath(configDir, t.TLSKey)
 		t.TLSStateDir = resolveAgentPath(configDir, t.TLSStateDir)
+		t.PGNSStateDir = resolveAgentPath(configDir, t.PGNSStateDir)
 		t.TLSMonitorStateDir = resolveAgentPath(configDir, t.TLSMonitorStateDir)
 		t.TLSMonitorBaseline = resolveAgentPath(configDir, t.TLSMonitorBaseline)
 		if t.IdentityPath != "" {

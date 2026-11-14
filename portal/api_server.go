@@ -67,6 +67,9 @@ var (
 	errLeaseRejected            = &apiError{types.APIErrorCodeLeaseRejected, "lease is not approved for routing", http.StatusForbidden}
 	errLeaseDenied              = &apiError{types.APIErrorCodeLeaseDenied, "lease is denied by the relay", http.StatusForbidden}
 	errTransportMismatch        = &apiError{types.APIErrorCodeTransportMismatch, "transport mismatch", http.StatusConflict}
+	errReplicaMode              = &apiError{types.APIErrorCodeInvalidRequest, "replicas require direct HTTP leases without dedicated TCP/UDP ports, cache, or overlay", http.StatusBadRequest}
+	errReplicaLimit             = &apiError{types.APIErrorCodeRateLimited, "replica limit reached for this identity", http.StatusServiceUnavailable}
+	errReplicaConflict          = &apiError{types.APIErrorCodeReplicaConflict, "replicas cannot join an exclusive lease or retained cache entry", http.StatusConflict}
 	errUnauthorized             = &apiError{types.APIErrorCodeUnauthorized, "unauthorized", http.StatusForbidden}
 	errUDPDisabled              = &apiError{types.APIErrorCodeUDPDisabled, "udp disabled", http.StatusForbidden}
 	errUDPCapacityExceeded      = &apiError{types.APIErrorCodeUDPCapacityExceeded, "udp capacity exceeded", http.StatusServiceUnavailable}
@@ -121,8 +124,8 @@ func (s *Server) apiHandler(base http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := utils.NormalizeHostWithoutPort(r.Host)
-		if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
+		host := types.NormalizeHostWithoutPort(r.Host)
+		if r.TLS != nil && r.TLS.ServerName != "" && types.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
 			s.serveCachedSite(w, r, host)
 			return
 		}
@@ -241,7 +244,7 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
-	host := utils.NormalizeHostname(announceURL.Hostname())
+	host := types.NormalizeHostname(announceURL.Hostname())
 	if s.rejectAnnounceSelf(w, desc, host) {
 		return
 	}
@@ -269,12 +272,12 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 
 func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescriptor, host string) bool {
 	cfg := s.config()
-	if selfURL, err := utils.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
+	if selfURL, err := types.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
 			fmt.Sprintf("self-announce rejected: %q matches receiving relay url", desc.APIHTTPSAddr))
 		return true
 	}
-	if host != "" && host == utils.NormalizeHostname(s.identity.Name) {
+	if host != "" && host == types.NormalizeHostname(s.identity.Name) {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
 			fmt.Sprintf("self-announce rejected: host %q matches receiving relay host", host))
 		return true
@@ -290,6 +293,7 @@ func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescr
 func (s *Server) DomainReport() types.DomainResponse {
 	issuance := s.config().TenantCertificates && s.acmeManager.TenantIssuanceConfigured()
 	return types.DomainResponse{
+		Replicas:                  true,
 		TenantCertificateIssuance: &issuance,
 		Namespaces:                []string{types.LocalTLSNamespaceV1},
 		Cache:                     s.registry.cache.Limits(),
@@ -343,9 +347,12 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 	identityKey := challenge.Request.Identity.ServiceKey()
-	// A registering identity starts fail-closed. Mux replaces this projection
-	// with the relay's current access decision before publishing success.
-	s.registry.suspendIdentity(identityKey)
+	// Exclusive registration starts fail-closed. Replicas keep the existing
+	// identity decision so joining a service cannot interrupt its siblings.
+	// Mux publishes the current decision before returning either kind of token.
+	if !challenge.Request.Replica {
+		s.registry.suspendIdentity(identityKey)
+	}
 
 	self, descriptors := s.issueHandleRegisterDescriptors(challenge)
 	record, replaced, resp, err := s.registry.RegisterWithPGNS(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial(), pgnsLeaf)
@@ -547,7 +554,7 @@ func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseM
 		if err := lease.reverse.Offer(stream); err != nil {
 			continue
 		}
-		s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
+		s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
 	}
 }
 
@@ -587,7 +594,7 @@ func (s *Server) offerReverseLease(lease *leaseRecord, conn net.Conn, sourceAddr
 			Msg("sdk reverse rejected")
 		return
 	}
-	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
+	s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
 	log.Info().
 		Str("address", lease.Address).
 		Str("lease_name", lease.Name).
@@ -674,7 +681,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 		http.Error(w, "local TLS hostnames require tunnel termination", http.StatusMisdirectedRequest)
 		return
 	}
-	if req.TLS == nil || utils.NormalizeHostname(req.TLS.ServerName) != host {
+	if req.TLS == nil || types.NormalizeHostname(req.TLS.ServerName) != host {
 		http.Error(w, "TLS name and request host must match", http.StatusMisdirectedRequest)
 		return
 	}
@@ -711,7 +718,8 @@ func (s *Server) serveCachedSiteFallbackTransport(host string, record *leaseReco
 					s.registry.bindings.Discard(binding)
 					return nil, err
 				}
-				if err := transport.WriteTLSStart(upstream, binding); err == nil {
+				deadline, _ := ctx.Deadline()
+				if err := transport.WriteTLSStart(upstream, binding, deadline); err == nil {
 					break
 				}
 				_ = upstream.Close()

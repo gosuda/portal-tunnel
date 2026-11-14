@@ -20,14 +20,14 @@ var (
 
 // Monitor compares CT observations for a PGNS zone against witnessed epoch leaf state.
 type Monitor struct {
-	mu          sync.RWMutex
-	zone        string
-	witnessSet  pgns.WitnessSet
-	hasEpoch    bool
-	lastEpoch   uint64
-	lastRoot    [32]byte
-	lastTime    uint64
-	activeLeaf  map[string]pgns.PortalLeafRecord
+	mu         sync.RWMutex
+	zone       string
+	witnessSet pgns.WitnessSet
+	hasEpoch   bool
+	lastEpoch  uint64
+	lastRoot   [32]byte
+	lastTime   uint64
+	activeLeaf map[string]pgns.PortalLeafRecord
 }
 
 // New creates a deterministic CT monitor bound to zone and ws.

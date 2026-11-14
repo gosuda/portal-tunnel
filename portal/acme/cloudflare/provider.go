@@ -14,6 +14,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -122,7 +123,7 @@ func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, e
 }
 
 func presentChallenge(ctx context.Context, client *http.Client, token, zoneID, fqdn, value string, ttl int) (dnsrecord.Cleanup, error) {
-	name := utils.NormalizeHostname(fqdn)
+	name := types.NormalizeHostname(fqdn)
 	existing, err := listDNSRecords(ctx, client, token, zoneID, name, "TXT")
 	if err != nil {
 		return nil, err
@@ -351,8 +352,8 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 }
 
 func (p *Provider) findZoneID(ctx context.Context, client *http.Client, domain string) (string, error) {
-	domain = utils.NormalizeHostname(domain)
-	candidates := utils.DomainCandidates(domain)
+	domain = types.NormalizeHostname(domain)
+	candidates := types.DomainCandidates(domain)
 	return searchFindZoneIDCandidates(ctx, p, client, candidates, domain)
 }
 
@@ -385,7 +386,7 @@ func fetchFindZoneIDCandidate(ctx context.Context, p *Provider, client *http.Cli
 		if zoneID == "" {
 			continue
 		}
-		zoneName := utils.NormalizeHostname(z.Name)
+		zoneName := types.NormalizeHostname(z.Name)
 		p.zones.UpdateCopy(func(cached *map[string]string) {
 			if *cached == nil {
 				*cached = make(map[string]string)

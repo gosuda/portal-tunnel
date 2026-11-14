@@ -205,7 +205,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 func newTunnelConfig(req AgentTunnelRequest) (TunnelConfig, error) {
 	id := strings.TrimSpace(req.ID)
 	name := strings.TrimSpace(req.Name)
-	id = cmp.Or(id, agentTunnelID(name))
+	id = cmp.Or(id, AgentTunnelID(name))
 	if id == "" {
 		return TunnelConfig{}, errTunnelNameIsRequired
 	}
@@ -231,13 +231,14 @@ func newTunnelConfig(req AgentTunnelRequest) (TunnelConfig, error) {
 		RelayURLs:           req.RelayURLs,
 		Discovery:           req.Discovery,
 		Overlay:             req.Overlay,
+		Replica:             req.Replica,
 		MaxActiveRelays:     req.MaxActiveRelays,
 		AuthConfig:          req.AuthConfig,
 		X402Config:          req.X402Config,
 	}}, nil
 }
 
-func agentTunnelID(name string) string {
+func AgentTunnelID(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	var out strings.Builder
 	dash := false
@@ -552,6 +553,7 @@ func (cfg TunnelConfig) renderTunnelStatus(runtime *tunnel.Runtime, done chan st
 		Serve:                   cfg.Serve,
 		Discovery:               spec.Relays.Discovery,
 		Overlay:                 cfg.Overlay,
+		Replica:                 cfg.Replica,
 		MaxActiveRelays:         spec.Relays.MaxActive,
 		Metadata:                spec.Metadata,
 		AuthConfig:              auth.Public(),

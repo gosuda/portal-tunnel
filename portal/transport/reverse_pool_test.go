@@ -47,7 +47,7 @@ func startReserveClaim(ctx context.Context, t *testing.T, relay *ReversePool) <-
 	go func() {
 		conn, err := relay.Acquire(ctx)
 		if err == nil {
-			_ = WriteTLSStart(conn, [16]byte{})
+			_ = WriteTLSStart(conn, [16]byte{}, time.Time{})
 		}
 		claimed <- conn
 	}()
@@ -116,7 +116,7 @@ func startBindingClaim(t *testing.T, relay *ReversePool, binding [16]byte) (<-ch
 			claimErr <- err
 			return
 		}
-		if err := WriteTLSStart(conn, binding); err != nil {
+		if err := WriteTLSStart(conn, binding, time.Time{}); err != nil {
 			_ = conn.Close()
 			claimErr <- err
 			return

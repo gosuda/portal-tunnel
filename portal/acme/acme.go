@@ -39,6 +39,8 @@ type Config struct {
 	BaseDomain             string
 	KeyDir                 string
 	CADirURL               string
+	EABKID                 string `json:"-"`
+	EABHMAC                string `json:"-"`
 	DNSProvider            string
 	ENSGaslessEnabled      bool
 	ENSGaslessAddress      string
@@ -77,13 +79,15 @@ type Manager struct {
 }
 
 func NewManager(cfg Config) (*Manager, error) {
-	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
+	cfg.BaseDomain = types.NormalizeBaseDomain(cfg.BaseDomain)
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
 	caDirURL, err := NormalizeCADirURL(cfg.CADirURL)
 	if err != nil {
 		return nil, err
 	}
 	cfg.CADirURL = caDirURL
+	cfg.EABKID = strings.TrimSpace(cfg.EABKID)
+	cfg.EABHMAC = strings.TrimSpace(cfg.EABHMAC)
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
 	if cfg.DNSProvider == "" {
 		cfg.DNSProvider = TypeEmbedded
@@ -120,7 +124,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.BaseDomain == "" {
 		return nil, errACMEBaseDomainIsRequired
 	}
-	if utils.IsLocalRelayHost(cfg.BaseDomain) {
+	if types.IsLocalRelayHost(cfg.BaseDomain) {
 		return &Manager{
 			cfg:       cfg,
 			stopCh:    make(chan struct{}),
@@ -147,7 +151,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if m == nil {
 		return "", "", errACMEManagerIsNil
 	}
-	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
 			return "", "", err
 		}
@@ -189,7 +193,7 @@ func (m *Manager) EnsureTLSMaterial(ctx context.Context) error {
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return
 	}
 
@@ -240,7 +244,7 @@ func (m *Manager) TLSFiles() (string, string, error) {
 }
 
 func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return "", "", false, nil
 	}
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)

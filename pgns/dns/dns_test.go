@@ -19,8 +19,12 @@ type recorderWriter struct {
 	msg *dns.Msg
 }
 
-func (r *recorderWriter) LocalAddr() net.Addr       { return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53} }
-func (r *recorderWriter) RemoteAddr() net.Addr      { return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345} }
+func (r *recorderWriter) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53}
+}
+func (r *recorderWriter) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
+}
 func (r *recorderWriter) WriteMsg(m *dns.Msg) error { r.msg = m; return nil }
 func (r *recorderWriter) Write([]byte) (int, error) { return 0, nil }
 func (r *recorderWriter) Close() error              { return nil }

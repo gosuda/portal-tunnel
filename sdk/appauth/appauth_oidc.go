@@ -55,6 +55,7 @@ type oidcStateClaims struct {
 	Nonce        string `json:"nonce"`
 	CodeVerifier string `json:"cv"`
 	Host         string `json:"host"`
+	HostEpoch    string `json:"host_epoch,omitempty"`
 	Next         string `json:"next"`
 	ExpiresAt    int64  `json:"exp"`
 }
@@ -155,7 +156,7 @@ func checkProviderRedirect(req *http.Request, via []*http.Request) error {
 
 const accountChooserPrompt = "select_account"
 
-func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
+func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request, hostEpoch string) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -175,10 +176,10 @@ func (o *oidcAuthenticator) serveLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request host", http.StatusBadRequest)
 		return
 	}
-	o.issueOIDCServeLoginRedirect(w, r, doc, host)
+	o.issueOIDCServeLoginRedirect(w, r, doc, host, hostEpoch)
 }
 
-func (o *oidcAuthenticator) issueOIDCServeLoginRedirect(w http.ResponseWriter, r *http.Request, doc oidcDiscoveryDocument, host string) {
+func (o *oidcAuthenticator) issueOIDCServeLoginRedirect(w http.ResponseWriter, r *http.Request, doc oidcDiscoveryDocument, host, hostEpoch string) {
 	loginState := rand.Text()
 	nonce := rand.Text()
 	codeVerifier := oauth2.GenerateVerifier()
@@ -186,6 +187,7 @@ func (o *oidcAuthenticator) issueOIDCServeLoginRedirect(w http.ResponseWriter, r
 	expiresAt := now.Add(applicationAuthLoginStateTTL)
 	next := sanitizeApplicationAuthNext(r.URL.Query().Get("next"))
 	stateClaims := oidcStateClaims{
+		HostEpoch:    hostEpoch,
 		State:        loginState,
 		Nonce:        nonce,
 		CodeVerifier: codeVerifier,
@@ -285,6 +287,7 @@ func (a *applicationAuth) validateServeOIDCCallbackState(r *http.Request, stateC
 	var stateClaims oidcStateClaims
 	if err := decodeSignedApplicationAuthJSON(a.oidc.stateKey, stateCookieValue, &stateClaims); err != nil ||
 		!sameApplicationHost(stateClaims.Host, host) ||
+		stateClaims.HostEpoch != a.hostEpoch(host) ||
 		now.Unix() >= stateClaims.ExpiresAt ||
 		loginStateIssuedAt(stateClaims.ExpiresAt).Before(a.heldSince(host)) {
 		next := "/"

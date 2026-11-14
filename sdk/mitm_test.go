@@ -1038,7 +1038,7 @@ func TestPGNSChannelBindingALPNAndOwnerPubKey(t *testing.T) {
 	const fqdn = "myapp.app.portal.gosuda.org"
 	cert := makeSelfSignedTLSCert(t, fqdn)
 	l := newChannelBindingListener(t, "d", fqdn)
-	l.lease.Store(listenerSnapshot{hostname: fqdn, pgnsFQDN: fqdn})
+	l.lease.Store(listenerSnapshot{hostname: fqdn, pgnsFQDN: fqdn, accessToken: "test-access-token"})
 
 	pubBytes, err := hex.DecodeString(strings.TrimPrefix(l.identity.PublicKey, "0x"))
 	if err != nil {

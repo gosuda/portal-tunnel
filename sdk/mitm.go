@@ -12,13 +12,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	mathrand "math/rand/v2"
 	"net"
 	"net/url"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	mathrand "math/rand/v2"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
@@ -174,6 +175,20 @@ func (m *mitmManager) probePassthrough(ctx context.Context, pgnsOnly bool) (mitm
 	}
 	defer tlsConn.Close()
 	defer stopClose()
+	if l.replica {
+		// Any sibling can answer the existing identity-bound exchange; no
+		// instance-local nonce/result state needs to follow replica selection.
+		if err := tlsConn.HandshakeContext(probeCtx); err != nil {
+			return report, fmt.Errorf("mitm probe tls handshake: %w", err)
+		}
+		err := VerifyTLSChannelBinding(probeCtx, tlsConn, lease.hostname)
+		if errors.Is(err, errTLSChannelBindingExporterMismatchRelay) {
+			report.Detected = true
+			report.Reason = types.MITMProbeReasonExporterMismatch
+			return report, nil
+		}
+		return report, err
+	}
 	resultCh := m.reserveProbe(nonce)
 	defer m.releaseProbe(nonce)
 	if err := m.finishprobeTLSPassthroughHandshake(probeCtx, tlsConn, nonce, frame); err != nil {
@@ -304,7 +319,7 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse ingress relay url: %w", err)
 	}
-	if utils.IsLocalRelayHost(entryRelayURL.Hostname()) {
+	if types.IsLocalRelayHost(entryRelayURL.Hostname()) {
 		dialHost = entryRelayURL.Host
 	}
 	return utils.EnsurePort(dialHost), nil
@@ -508,7 +523,7 @@ func VerifyPGNSChannelBinding(ctx context.Context, conn net.Conn, fqdn string, e
 	if conn == nil {
 		return errTLSConnectionIsRequired
 	}
-	normalizedHost := utils.NormalizeHostWithoutPort(fqdn)
+	normalizedHost := types.NormalizeHostWithoutPort(fqdn)
 	if normalizedHost == "" {
 		_ = conn.Close()
 		return errTLSNameOutsideLease
@@ -632,7 +647,7 @@ func readChannelBindingAnswer(ctx context.Context, conn net.Conn) ([]byte, []byt
 // Portal hostname, and enforces identity-bound TLS channel binding (#653)
 // before returning the connection for application traffic.
 func DialCanonicalTLS(ctx context.Context, addr, hostname string, baseTLSConfig *tls.Config) (net.Conn, error) {
-	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
+	normalizedHost := types.NormalizeHostWithoutPort(hostname)
 	if _, err := namespace.CanonicalAddress(normalizedHost); err != nil {
 		return nil, err
 	}
@@ -678,7 +693,7 @@ func dialCanonicalTLSTransport(ctx context.Context, addr string, tlsConf *tls.Co
 }
 
 func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
-	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
+	normalizedHost := types.NormalizeHostWithoutPort(hostname)
 	buf := make([]byte, 0, len(types.TLSChannelBindingDomain)+1+len(normalizedHost)+1+len(nonce)+len(exported))
 	buf = append(buf, types.TLSChannelBindingDomain...)
 	buf = append(buf, 0)
@@ -721,7 +736,7 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 	if lease, ok := l.leaseSnapshot(); ok {
 		hostname = lease.hostname
 		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
-			if sni := utils.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
+			if sni := types.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
 				if sni != lease.hostname && sni != lease.legacyHostname && (lease.pgnsFQDN == "" || sni != lease.pgnsFQDN) {
 					_ = conn.Close()
 					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
@@ -808,7 +823,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		if lease, ok := m.listener.leaseSnapshot(); ok {
 			if tlsConn, ok := conn.(*tls.Conn); ok {
 				_, canonical := lease.tenantTLS.(*namespaceTLS)
-				canChannelBind = canonical && utils.NormalizeHostname(tlsConn.ConnectionState().ServerName) == lease.hostname
+				canChannelBind = canonical && types.NormalizeHostname(tlsConn.ConnectionState().ServerName) == lease.hostname
 			}
 		}
 	}

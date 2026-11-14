@@ -44,7 +44,7 @@ type dnsProvider interface {
 }
 
 func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil, nil
 	}
 	_, _, manual, err := m.manualCertificateOverride()

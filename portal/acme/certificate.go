@@ -29,6 +29,7 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -207,8 +208,11 @@ func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, r
 	if err != nil {
 		return nil, fmt.Errorf("create acme client: %w", err)
 	}
-	if user.Registration == nil && client.GetExternalAccountRequired() {
-		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
+	eabConfigured := m.cfg.EABKID != "" || m.cfg.EABHMAC != ""
+	if user.Registration == nil && (client.GetExternalAccountRequired() || eabConfigured) {
+		if m.cfg.EABKID == "" || m.cfg.EABHMAC == "" {
+			return nil, fmt.Errorf("acme directory %s: external account binding requires ACME_EAB_KID and ACME_EAB_HMAC together to register a new account", m.cfg.CADirURL)
+		}
 	}
 
 	challengeProvider, err := m.dns.ChallengeProvider(ctx)
@@ -221,7 +225,19 @@ func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, r
 	}
 
 	if user.Registration == nil {
-		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		var reg *registration.Resource
+		if m.cfg.EABKID != "" {
+			reg, err = client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
+				TermsOfServiceAgreed: true,
+				Kid:                  m.cfg.EABKID,
+				HmacEncoded:          m.cfg.EABHMAC,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("register acme account with external account binding: verify ACME_EAB_KID and ACME_EAB_HMAC for this directory: %w", err)
+			}
+		} else {
+			reg, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		}
 		if err != nil {
 			return nil, fmt.Errorf("register acme account: %w", err)
 		}
@@ -335,7 +351,7 @@ func caDirectoryDigest(caDirURL string) string {
 }
 
 func (m *Manager) certificateFiles() (certFile, keyFile string) {
-	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return certificateFilePaths(m.cfg.KeyDir, lego.LEDirectoryProduction)
 	}
 	return certificateFilePaths(m.cfg.KeyDir, m.cfg.CADirURL)
@@ -425,7 +441,7 @@ func localDevelopmentCertificateReusable(cert *x509.Certificate, domains []strin
 }
 
 func localDevelopmentDomains(baseHost string) []string {
-	baseHost = utils.NormalizeBaseDomain(baseHost)
+	baseHost = types.NormalizeBaseDomain(baseHost)
 	domains := []string{"localhost", "*.localhost", "127.0.0.1", "::1"}
 	if baseHost != "" && baseHost != "localhost" {
 		domains = append(domains, baseHost)

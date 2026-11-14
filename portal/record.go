@@ -27,6 +27,7 @@ type leaseRecord struct {
 	registerSource          netip.Addr
 	ReportedIP              string
 	Hostname                string
+	AliasEpoch              string
 	Namespace               string
 	LegacyCanonicalHostname string
 	CanonicalHostname       string
@@ -35,6 +36,8 @@ type leaseRecord struct {
 	localTLSNotAfter        time.Time
 	Metadata                types.LeaseMetadata
 	Overlay                 bool
+	replica                 bool
+	lastSelected            uint64
 	pinnedChain             []byte
 	verifiedChain           []byte
 
@@ -159,8 +162,10 @@ func (r *leaseRecord) releaseBridge(bridge *leaseBridge) {
 	bridge.cancel()
 	inbound, reverse := bridge.inbound, bridge.reverse
 	r.mu.Unlock()
-	_ = inbound.SetDeadline(time.Now())
-	_ = inbound.Close()
+	if inbound != nil {
+		_ = inbound.SetDeadline(time.Now())
+		_ = inbound.Close()
+	}
 	if reverse != nil {
 		_ = reverse.SetDeadline(time.Now())
 		_ = reverse.Close()
@@ -173,7 +178,9 @@ func (r *leaseRecord) releaseBridge(bridge *leaseBridge) {
 func (r *leaseRecord) revokeBridgesLocked() {
 	for bridge := range r.bridges {
 		bridge.cancel()
-		_ = bridge.inbound.SetDeadline(time.Now())
+		if bridge.inbound != nil {
+			_ = bridge.inbound.SetDeadline(time.Now())
+		}
 		if bridge.reverse != nil {
 			_ = bridge.reverse.SetDeadline(time.Now())
 		}

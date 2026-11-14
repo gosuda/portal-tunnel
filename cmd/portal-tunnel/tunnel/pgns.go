@@ -11,7 +11,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -225,7 +224,7 @@ func parsePGNSEndpointOverrides(entries []string) (map[string]pgnsEndpointOverri
 		if !ok || strings.TrimSpace(lhs) == "" || strings.TrimSpace(rhs) == "" {
 			return nil, fmt.Errorf("invalid pgns endpoint %q (expected <relay-url>=<ip>[:port][,<ip6>])", entry)
 		}
-		relayURL, err := utils.NormalizeRelayURL(lhs)
+		relayURL, err := types.NormalizeRelayURL(lhs)
 		if err != nil {
 			return nil, fmt.Errorf("invalid pgns endpoint relay %q: %w", lhs, err)
 		}
@@ -447,7 +446,7 @@ func compressedPub33(priv *secp256k1.PrivateKey) [33]byte {
 }
 
 func buildSiteIdentity(sitePriv *secp256k1.PrivateKey, serviceName string) (types.Identity, error) {
-	payload, err := json.Marshal(types.Identity{
+	payload, err := identity.Marshal(types.Identity{
 		Name:       serviceName,
 		PrivateKey: hex.EncodeToString(sitePriv.Serialize()),
 	})
@@ -482,7 +481,7 @@ func resolvePGNSRelayEndpoints(ctx context.Context, relaySpec RelaySpec, explici
 	}
 	out := make([]pgnsRelayEndpoint, 0, min(len(urls), pgns.MaxEndpoints))
 	for _, rawURL := range urls {
-		normURL, err := utils.NormalizeRelayURL(rawURL)
+		normURL, err := types.NormalizeRelayURL(rawURL)
 		if err != nil {
 			return nil, err
 		}
@@ -551,6 +550,9 @@ func assignAddr(ep *pgns.Endpoint, addr netip.Addr) {
 }
 
 func ensureInitialPGNSCert(stateDir, fqdn string) (certFile, keyFile string, spki [32]byte, err error) {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return "", "", [32]byte{}, fmt.Errorf("create pgns state dir: %w", err)
+	}
 	certFile = filepath.Join(stateDir, pgnsCertFileName)
 	keyFile = filepath.Join(stateDir, pgnsKeyFileName)
 	if spki, ok := reusableSingleSANCert(certFile, keyFile, fqdn, time.Now().UTC()); ok {

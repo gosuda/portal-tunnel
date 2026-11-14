@@ -78,6 +78,73 @@ background; a runtime overlay failure leaves public ingress and direct reverse
 transport running. See [the overlay networking concepts](/concepts#ivnp-backed-overlay-networking)
 and [the architecture](/architecture#ivnp-backed-overlay-networking).
 
+## Google Trust Services with External Account Binding
+
+Let's Encrypt remains the default CA. To select Google Trust Services (GTS)
+Public CA, create or select a Google Cloud project, enable the Public CA API,
+and obtain an external account binding (EAB) key. The identity requesting the
+key needs `roles/publicca.externalAccountKeyCreator`; enabling the API also
+requires the appropriate Service Usage permission.
+
+```sh
+gcloud services enable publicca.googleapis.com --project=YOUR_PROJECT_ID
+gcloud publicca external-account-keys create --project=YOUR_PROJECT_ID
+```
+
+Copy the returned `keyId` and `b64MacKey` into the relay's private `.env`:
+
+```dotenv
+ACME_CA_DIR_URL=https://dv.acme-v02.api.pki.goog/directory
+ACME_EAB_KID=REPLACE_WITH_keyId
+ACME_EAB_HMAC=REPLACE_WITH_b64MacKey
+```
+
+The HMAC is a base64url secret. Restrict `.env` access (`chmod 600 .env` on
+Unix), keep it out of version control, and use environment variables rather
+than putting secrets in command-line arguments. The repository Compose file
+forwards these settings to the relay. Treat access to the Docker daemon and
+container inspection output as access to the secrets. The relay's config
+report redacts both EAB values.
+
+EAB keys are single-use and must be used within seven days. After successful
+registration, preserve the entire identity volume, including the account key
+and CA-specific registration. Both EAB variables can then be removed; startup,
+renewal, and tenant issuance reuse the registered account. A different CA
+directory uses its own registration and certificate files. Switching back
+reuses that directory's saved state. Registration failures stop issuance;
+Portal does not fall back to another CA. Operator-managed certificate files
+continue to override managed relay issuance.
+
+GTS uses the existing DNS-01 provider. It does not require Google Cloud DNS.
+If your domain restricts issuance through CAA, authorize `pki.goog` for the
+names being issued, including wildcard policy where applicable. See Google's
+[Public CA setup guide](https://cloud.google.com/certificate-manager/docs/public-ca-tutorial)
+for IAM, EAB, CAA, and staging details.
+
+The selected CA serves both relay wildcard issuance and authorized tenant
+CSRs. `TENANT_CERTIFICATES` stays default-off. Public tenant issuance still
+requires explicit service approval and shared durable
+`TENANT_ISSUANCE_STATE_DIR` accounting. GTS quotas apply to the Google Cloud
+project; multiple ACME accounts in that project share them. EAB does not
+remove issuance limits. Check the project's effective quotas and Google's
+[Public CA request quotas](https://cloud.google.com/certificate-manager/docs/quotas#public_ca_request_quotas)
+before enabling tenant issuance broadly. These instructions were checked
+against Google's documentation on 2026-11-14.
+
+### Optional live verification
+
+Use a dedicated test relay and delegated DNS zone. Follow Google's staging
+instructions to obtain a **staging** EAB key, then select
+`https://dv.acme-v02.test-api.pki.goog/directory` and use a separate identity
+volume. Staging certificates are not publicly trusted. Confirm wildcard
+DNS-01 issuance, remove both EAB variables, and restart with the same volume
+to confirm account and certificate reuse. With tenant issuance explicitly
+enabled and an approved service identity, request an automatic tenant
+certificate and check its exact hostname and chain. Observe subsequent
+renewal with the same account; do not repeatedly delete account state to
+force registration. Live GTS issuance is an operator opt-in check and is not
+performed by regular CI.
+
 ## Optional Observability
 
 The [observability Compose overlay](https://github.com/gosuda/portal-tunnel/blob/main/docs/examples/observability/README.md)

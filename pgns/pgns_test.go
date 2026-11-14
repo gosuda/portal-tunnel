@@ -151,17 +151,17 @@ func TestScopedNamespaceRejectsInvalidNames(t *testing.T) {
 	badPadTag := validTag[:25] + "b"
 
 	invalidFQDNs := []string{
-		"abc.app." + testZone,                 // alias < 4
-		"api.app." + testZone,                 // reserved app label
-		"www.app." + testZone,                 // reserved app label
-		"admin.app." + testZone,               // reserved app label
-		"ns1.app." + testZone,                 // reserved app label
-		"witness.app." + testZone,             // reserved app label
-		"wpad.app." + testZone,                // reserved app label
-		"extra.myblog.app." + testZone,        // wrong depth on *.app
-		"_acme.myblog.app." + testZone,        // underscore
-		"MYBLOG.app." + testZone,              // uppercase
-		"myblog.app." + testZone + ".",        // trailing dot
+		"abc.app." + testZone,                          // alias < 4
+		"api.app." + testZone,                          // reserved app label
+		"www.app." + testZone,                          // reserved app label
+		"admin.app." + testZone,                        // reserved app label
+		"ns1.app." + testZone,                          // reserved app label
+		"witness.app." + testZone,                      // reserved app label
+		"wpad.app." + testZone,                         // reserved app label
+		"extra.myblog.app." + testZone,                 // wrong depth on *.app
+		"_acme.myblog.app." + testZone,                 // underscore
+		"MYBLOG.app." + testZone,                       // uppercase
+		"myblog.app." + testZone + ".",                 // trailing dot
 		"wpad." + validTag + ".id." + testZone,         // discovery hazard on *.id
 		"autoconfig." + validTag + ".id." + testZone,   // discovery hazard on *.id
 		"autodiscover." + validTag + ".id." + testZone, // discovery hazard on *.id
@@ -558,7 +558,7 @@ func TestWitnessBatchVerificationAndCheckpoints(t *testing.T) {
 		var cons tlog.TreeProof
 		var recP tlog.RecordProof
 		if oldSize > 0 {
-			cons, err = tlog.ProveTree(int64(oldSize), int64(oldSize+1), hr)
+			cons, err = tlog.ProveTree(int64(oldSize+1), int64(oldSize), hr)
 			if err != nil {
 				t.Fatal(err)
 			}

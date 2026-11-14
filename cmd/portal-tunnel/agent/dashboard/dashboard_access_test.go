@@ -1,20 +1,25 @@
-package agent
+package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/pelletier/go-toml/v2"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestDashboardAccessRequestNamesOnlyWhatChanged(t *testing.T) {
@@ -73,7 +78,7 @@ func accessRequestNameCases(typed func(string) tea.Msg) []accessRequestNameCase 
 	}
 }
 
-func checkAccessRequestName(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, step accessRequestNameCase) {
+func checkAccessRequestName(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, step accessRequestNameCase) {
 	t.Helper()
 	model := accessScreen(t, theme, status, step.down, step.keys...)
 	if got := accessBody(t, model); !sameJSON(t, got, step.want) {
@@ -226,7 +231,7 @@ func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 	})
 }
 
-func checkChangedMeanwhileReshown(t *testing.T, theme agentDashboardTheme, status, elsewhere AgentStatusResponse, keys []tea.Msg) {
+func checkChangedMeanwhileReshown(t *testing.T, theme agentDashboardTheme, status, elsewhere agent.AgentStatusResponse, keys []tea.Msg) {
 	t.Helper()
 	model := accessScreen(t, theme, status, accessWeb, keys...)
 	model = send(model, agentDashboardStatusMsg{status: elsewhere})
@@ -374,7 +379,7 @@ func checkAccessSecretNowhere(t *testing.T, model agentDashboardModel) {
 	}
 }
 
-func checkSecretDroppedAfterApply(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, typeIt []tea.Msg) {
+func checkSecretDroppedAfterApply(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, typeIt []tea.Msg) {
 	t.Helper()
 	model := send(press1(accessScreen(t, theme, status, accessWeb, typeIt...), keyF2), agentDashboardAccessMsg{tunnelID: "web"})
 	if view := model.View(); strings.Contains(view, fakeSecret) || strings.Contains(view, "Secret (shown)") || !strings.Contains(view, "set; type to replace") {
@@ -385,7 +390,7 @@ func checkSecretDroppedAfterApply(t *testing.T, theme agentDashboardTheme, statu
 	}
 }
 
-func checkSecretDroppedAfterCancel(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, typeIt []tea.Msg) {
+func checkSecretDroppedAfterCancel(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, typeIt []tea.Msg) {
 	t.Helper()
 	model := press1(accessScreen(t, theme, status, accessWeb, typeIt...), keyEsc)
 	if strings.Contains(model.View(), "ACCESS:") {
@@ -402,7 +407,7 @@ func checkSecretDroppedAfterCancel(t *testing.T, theme agentDashboardTheme, stat
 	}
 }
 
-func checkSecretDroppedAfterTunnelGone(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, typeIt []tea.Msg) {
+func checkSecretDroppedAfterTunnelGone(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, typeIt []tea.Msg) {
 	t.Helper()
 	model := accessScreen(t, theme, status, accessWeb, typeIt...)
 	gone := testAccessStatus()
@@ -582,17 +587,129 @@ func TestDashboardAccessRequestsAreWhatTheControlAPIStores(t *testing.T) {
 	const storedSecret = "stored-fake-secret"
 	app := oidcTunnel("app", unreachableIssuer, storedSecret)
 	app.IdentityHeaders = true
-	m, path := testManager(t, app, testTunnel("site"))
-	startManager(t, m)
+	ctx, stateDir, path := startDashboardAgent(t, app, testTunnel("site"))
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
-	runAccessRequestSteps(t, theme, m, path, accessRequestSteps())
+	runAccessRequestSteps(t, ctx, theme, stateDir, path, accessRequestSteps())
+}
+
+const (
+	unreachableRelay  = "https://127.0.0.1:1"
+	unreachableIssuer = "http://127.0.0.1:1"
+)
+
+func testTunnel(id string) agent.TunnelConfig {
+	discovery := false
+	return agent.TunnelConfig{ID: id, Config: tunnel.Config{TargetAddr: "127.0.0.1:3000", RelayURLs: []string{unreachableRelay}, Discovery: &discovery}}
+}
+
+func oidcTunnel(id, issuer, secret string) agent.TunnelConfig {
+	cfg := testTunnel(id)
+	cfg.Provider = "oidc"
+	cfg.Allow = []string{"alice@example.com"}
+	cfg.OIDCIssuerURL = issuer
+	cfg.OIDCClientID = "client-123"
+	cfg.OIDCClientSecret = secret
+	return cfg
+}
+
+func startDashboardAgent(t *testing.T, tunnels ...agent.TunnelConfig) (context.Context, string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cfg := agent.Config{
+		Agent:   agent.AgentConfig{StateDir: dir, ControlAddr: "127.0.0.1:0"},
+		Tunnels: tunnels,
+	}
+	data, err := toml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := agent.LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- agent.Run(ctx, loaded) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("stop agent: %v", err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Error("agent did not stop")
+		}
+	})
+	waitDashboardAgent(t, ctx, dir)
+	return ctx, dir, path
+}
+
+func waitDashboardAgent(t *testing.T, ctx context.Context, stateDir string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	timer := time.NewTimer(10 * time.Millisecond)
+	defer timer.Stop()
+	for {
+		if _, err := agent.Status(ctx, stateDir); err == nil {
+			return
+		}
+		select {
+		case <-timer.C:
+			timer.Reset(10 * time.Millisecond)
+		case <-ctx.Done():
+			t.Fatal("agent context ended while waiting for the control API")
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("agent control API did not come up")
+		}
+	}
+}
+
+func dashboardAgentStatus(t *testing.T, ctx context.Context, stateDir string) agent.AgentStatusResponse {
+	t.Helper()
+	status, err := agent.Status(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+func savedTunnel(t *testing.T, path, id string) agent.TunnelConfig {
+	t.Helper()
+	cfg, err := agent.LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tunnel := range cfg.Tunnels {
+		if tunnel.ID == id {
+			return tunnel
+		}
+	}
+	t.Fatalf("tunnel %q not saved", id)
+	return agent.TunnelConfig{}
+}
+
+func tunnelStatus(t *testing.T, ctx context.Context, stateDir, id string) agent.AgentTunnelStatus {
+	t.Helper()
+	for _, candidate := range dashboardAgentStatus(t, ctx, stateDir).Tunnels {
+		if candidate.ID == id {
+			return candidate
+		}
+	}
+	t.Fatalf("tunnel %q not in status", id)
+	return agent.AgentTunnelStatus{}
 }
 
 type accessRequestStep struct {
 	name  string
 	down  int
 	keys  []tea.Msg
-	check func(t *testing.T, saved TunnelConfig)
+	check func(t *testing.T, saved agent.TunnelConfig)
 }
 
 func accessRequestSteps() []accessRequestStep {
@@ -618,86 +735,86 @@ func accessRequestSteps() []accessRequestStep {
 	}
 }
 
-func checkSavedAllowAndClearedSecret(t *testing.T, saved TunnelConfig) {
+func checkSavedAllowAndClearedSecret(t *testing.T, saved agent.TunnelConfig) {
 	t.Helper()
 	if !slices.Equal(saved.Allow, []string{"alice@example.com", "carol@example.com"}) || saved.OIDCClientSecret != "" {
 		t.Fatalf("saved = %+v", saved)
 	}
 }
 
-func checkSavedReplacementNoHeaders(t *testing.T, saved TunnelConfig) {
+func checkSavedReplacementNoHeaders(t *testing.T, saved agent.TunnelConfig) {
 	t.Helper()
 	if saved.OIDCClientSecret != "replacement-fake-secret" || saved.IdentityHeaders {
 		t.Fatalf("saved = %+v", saved)
 	}
 }
 
-func checkSavedSecretIssuerChange(t *testing.T, saved TunnelConfig) {
+func checkSavedSecretIssuerChange(t *testing.T, saved agent.TunnelConfig) {
 	t.Helper()
 	if saved.OIDCClientSecret != "replacement-fake-secret" || saved.OIDCIssuerURL != unreachableIssuer+"/" {
 		t.Fatalf("saved = %+v", saved)
 	}
 }
 
-func checkSavedSecretRemoved(t *testing.T, saved TunnelConfig) {
+func checkSavedSecretRemoved(t *testing.T, saved agent.TunnelConfig) {
 	t.Helper()
 	if saved.OIDCClientSecret != "" || saved.Provider != "oidc" {
 		t.Fatalf("saved = %+v", saved)
 	}
 }
 
-func checkSavedWalletSwitch(t *testing.T, saved TunnelConfig) {
+func checkSavedWalletSwitch(t *testing.T, saved agent.TunnelConfig) {
 	t.Helper()
 	if saved.Provider != "siwe" || len(saved.Allow) != 1 || saved.OIDCIssuerURL != "" || saved.OIDCClientID != "" || saved.OIDCClientSecret != "" {
 		t.Fatalf("saved = %+v", saved)
 	}
 }
 
-func checkSavedCredentialSwitch(t *testing.T, saved TunnelConfig) {
+func checkSavedCredentialSwitch(t *testing.T, saved agent.TunnelConfig) {
 	t.Helper()
 	if saved.Provider != "credential" || len(saved.Allow) != 0 {
 		t.Fatalf("saved = %+v", saved)
 	}
 }
 
-func checkSavedOpenSwitch(t *testing.T, saved TunnelConfig) {
+func checkSavedOpenSwitch(t *testing.T, saved agent.TunnelConfig) {
 	t.Helper()
 	if auth := saved.AuthConfig; !auth.IsZero() {
 		t.Fatalf("saved = %+v", saved)
 	}
 }
 
-func checkSavedBackToOIDC(t *testing.T, saved TunnelConfig) {
+func checkSavedBackToOIDC(t *testing.T, saved agent.TunnelConfig) {
 	t.Helper()
 	if saved.Provider != "oidc" || saved.OIDCIssuerURL != unreachableIssuer || saved.OIDCClientID != "client-1" || saved.OIDCClientSecret != "first-fake-secret" {
 		t.Fatalf("saved = %+v", saved)
 	}
 }
 
-func runAccessRequestSteps(t *testing.T, theme agentDashboardTheme, m *manager, path string, steps []accessRequestStep) {
+func runAccessRequestSteps(t *testing.T, ctx context.Context, theme agentDashboardTheme, stateDir, path string, steps []accessRequestStep) {
 	t.Helper()
 	for _, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
-			checkAccessRequestStep(t, theme, m, path, step)
+			checkAccessRequestStep(t, ctx, theme, stateDir, path, step)
 		})
 	}
 }
 
-func checkAccessRequestStep(t *testing.T, theme agentDashboardTheme, m *manager, path string, step accessRequestStep) {
+func checkAccessRequestStep(t *testing.T, ctx context.Context, theme agentDashboardTheme, stateDir, path string, step accessRequestStep) {
 	t.Helper()
-	model := accessScreen(t, theme, m.Snapshot(), step.down, step.keys...)
+	model := accessScreen(t, theme, dashboardAgentStatus(t, ctx, stateDir), step.down, step.keys...)
 	tunnel, _ := model.accessTunnel()
-	code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+tunnel.ID, accessBody(t, model))
-	if code != http.StatusAccepted {
-		t.Fatalf("the control API answered %d: %s", code, resp)
+	req := model.access.request(tunnel)
+	if err := agent.UpdateTunnel(ctx, stateDir, tunnel.ID, req); err != nil {
+		t.Fatalf("the control API rejected the request: %v", err)
 	}
 	step.check(t, savedTunnel(t, path, tunnel.ID))
 	model = send(press1(model, keyF2), agentDashboardAccessMsg{tunnelID: tunnel.ID})
-	if req := model.access.request(tunnelStatus(t, m, tunnel.ID)); !req.Empty() {
+	if req := model.access.request(tunnelStatus(t, ctx, stateDir, tunnel.ID)); !req.Empty() {
 		body, _ := json.Marshal(req)
 		t.Fatalf("what the agent stored differs from the draft in %s", body)
 	}
-	model = send(model, agentDashboardStatusMsg{status: m.Snapshot()})
+	model = send(model, agentDashboardStatusMsg{status: dashboardAgentStatus(t, ctx, stateDir)})
 	if view := model.View(); !strings.Contains(view, "ACCESS: "+tunnel.ID) || !strings.Contains(view, "( Applied )") {
 		t.Fatalf("after the poll the screen should stay open and say Applied:\n%s", view)
 	}
@@ -820,7 +937,7 @@ var (
 
 const fakeSecret = "not-a-real-secret-0123"
 
-func testAccessStatus() AgentStatusResponse {
+func testAccessStatus() agent.AgentStatusResponse {
 	status := testDashboardStatus()
 	web, api, paid, idle := &status.Tunnels[0], &status.Tunnels[1], &status.Tunnels[2], &status.Tunnels[4]
 	web.Provider = appauth.ProviderOIDC
@@ -882,14 +999,14 @@ func storedEmailPasswordCases(typed func(string) tea.Msg) []storedEmailPasswordC
 	}
 }
 
-func checkStoredEmailPasswordCase(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, step storedEmailPasswordCase) {
+func checkStoredEmailPasswordCase(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, step storedEmailPasswordCase) {
 	t.Helper()
 	if got := accessBody(t, accessScreen(t, theme, status, accessOpen, step.keys...)); !sameJSON(t, got, step.want) {
 		t.Fatalf("request body = %s\nwant           %s", got, step.want)
 	}
 }
 
-func settingsOf(t *testing.T, status AgentStatusResponse, down int) string {
+func settingsOf(t *testing.T, status agent.AgentStatusResponse, down int) string {
 	t.Helper()
 	steps := []tea.Msg{agentDashboardStatusMsg{status: status}}
 	for range down {
@@ -931,7 +1048,7 @@ func TestDashboardSettingsShowHowEachTunnelIsProtected(t *testing.T) {
 	}
 }
 
-func checkTunnelProtectedView(t *testing.T, status AgentStatusResponse, down int, want, not []string) {
+func checkTunnelProtectedView(t *testing.T, status agent.AgentStatusResponse, down int, want, not []string) {
 	t.Helper()
 	view := settingsOf(t, status, down)
 	for _, want := range want {
@@ -998,14 +1115,14 @@ func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{})
 	tests := []struct {
 		name   string
-		tunnel AgentTunnelStatus
+		tunnel agent.AgentTunnelStatus
 		want   string
 	}{
-		{"usable", AgentTunnelStatus{State: "running", AuthProviderChecked: true}, "[*] ok"},
-		{"unusable", AgentTunnelStatus{State: "running", AuthProviderChecked: true, AuthProviderError: "no such host"}, "[!] failed"},
-		{"still checking", AgentTunnelStatus{State: "running"}, "[~] checking..."},
-		{"tunnel starting", AgentTunnelStatus{State: "starting"}, "[~] checking..."},
-		{"tunnel not running", AgentTunnelStatus{State: "stopped"}, "[ ] not checked"},
+		{"usable", agent.AgentTunnelStatus{State: "running", AuthProviderChecked: true}, "[*] ok"},
+		{"unusable", agent.AgentTunnelStatus{State: "running", AuthProviderChecked: true, AuthProviderError: "no such host"}, "[!] failed"},
+		{"still checking", agent.AgentTunnelStatus{State: "running"}, "[~] checking..."},
+		{"tunnel starting", agent.AgentTunnelStatus{State: "starting"}, "[~] checking..."},
+		{"tunnel not running", agent.AgentTunnelStatus{State: "stopped"}, "[ ] not checked"},
 	}
 	for _, tt := range tests {
 		if got, _ := agentDashboardProviderCheck(&theme, tt.tunnel); got != tt.want {
@@ -1044,7 +1161,7 @@ const (
 	accessIdle   = 4
 )
 
-func accessScreen(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, down int, keys ...tea.Msg) agentDashboardModel {
+func accessScreen(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, down int, keys ...tea.Msg) agentDashboardModel {
 	t.Helper()
 	steps := []tea.Msg{agentDashboardStatusMsg{status: status}}
 	for range down {

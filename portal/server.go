@@ -94,7 +94,7 @@ func parseRedirectTarget(portalURL string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
 	}
-	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
+	hasHTTPSOrigin := target.Scheme == "https" && types.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
 		return nil, errHTTPRedirectRequiresPortalURLAbsolute
 	}
@@ -151,11 +151,11 @@ func applyValidateServerConfigACME(cfg ServerConfig) (ServerConfig, error) {
 }
 
 func applyValidateServerConfigRelayURLs(cfg ServerConfig) (ServerConfig, error) {
-	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
+	selfRelayURL, err := types.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {
 		return ServerConfig{}, fmt.Errorf("normalize portal url: %w", err)
 	}
-	if utils.PortalRootHost(selfRelayURL) == "" {
+	if types.PortalRootHost(selfRelayURL) == "" {
 		return ServerConfig{}, errRootHostIsRequired
 	}
 	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
@@ -202,7 +202,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg = next
 	if cfg.TenantCertificates {
 		issuanceConfig := cfg.ACME
-		issuanceConfig.BaseDomain = utils.PortalRootHost(cfg.PortalURL)
+		issuanceConfig.BaseDomain = types.PortalRootHost(cfg.PortalURL)
 		if err := issuanceConfig.ValidateTenantIssuanceState(); err != nil {
 			return ServerConfig{}, fmt.Errorf("TENANT_CERTIFICATES requires usable TENANT_ISSUANCE_STATE_DIR: %w", err)
 		}
@@ -222,7 +222,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 // leaves SNI_PORT unset: the explicit PORTAL_URL port when the canonical
 // origin names one, otherwise 443.
 func DefaultSNIPort(portalURL string) int {
-	normalized, err := utils.NormalizeRelayURL(portalURL)
+	normalized, err := types.NormalizeRelayURL(portalURL)
 	if err != nil {
 		return 443
 	}
@@ -415,7 +415,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
-	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
+	if baseDomain := types.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
 		return nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
@@ -495,7 +495,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	identityPath := filepath.Join(validated.StateDir, types.RelayIdentityFilename)
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(validated.PortalURL))
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, types.PortalRootHost(validated.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
@@ -546,6 +546,7 @@ func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.Reverse
 
 const (
 	defaultClaimTimeout          = 10 * time.Second
+	replicaWaitSlice             = 250 * time.Millisecond
 	defaultClientHelloWait       = 2 * time.Second
 	defaultControlBodyLimit      = 4 << 20
 	reverseOfferAdmissionWorkers = 16
@@ -671,7 +672,7 @@ func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
 			sourceAddr = addrPort.Addr().Unmap()
 		}
 	}
-	s.registry.Touch(lease.ServiceKey(), sourceAddr, time.Now())
+	s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
 	log.Info().
 		Str("component", "quic-backhaul-listener").
 		Str("address", lease.Address).
@@ -1213,7 +1214,7 @@ func (s *Server) bridgeTCPConn(record *leaseRecord, bridge *leaseBridge, inbound
 		if err != nil {
 			return
 		}
-		if err := s.registry.activateBridge(record, bridge, reverse); err != nil {
+		if err := s.registry.activateBridge(record, bridge, reverse, inbound); err != nil {
 			_ = reverse.Close()
 			return
 		}
@@ -1297,37 +1298,109 @@ func (s *Server) closeIngress() {
 }
 
 func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte, localTLS bool) error {
-	bridge, err := s.registry.admitBridge(ctx, record, conn)
-	if err != nil {
-		return err
-	}
-	defer record.releaseBridge(bridge)
-	claimCtx, cancel := context.WithTimeout(bridge.ctx, defaultClaimTimeout)
-	defer cancel()
-	var binding []byte
-	if !localTLS {
-		binding = s.registry.bindings.Issue(record.id, helloSpan)
-		defer s.registry.bindings.Discard(binding)
+	deadline := time.Now().Add(defaultClaimTimeout)
+	key, namespace, replica := record.ServiceKey(), record.Namespace, record.replica
+	var tried map[string]bool
+	if replica {
+		tried = make(map[string]bool)
 	}
 	for {
-		session, err := record.reverse.Acquire(claimCtx)
-		if err != nil {
-			return fmt.Errorf("acquire lease connection: %w", err)
-		}
-		if err := s.registry.activateBridge(record, bridge, session); err != nil {
-			_ = session.Close()
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if localTLS {
-			err = transport.WriteLocalTLSStart(session)
+		if !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		// waitUntil is zero while ready replicas are tried without waiting.
+		var waitUntil time.Time
+		if replica {
+			next := s.registry.selectReplica(key, namespace, tried, true)
+			if next == nil {
+				// No untried replica is ready. Wait one slice on a live replica,
+				// then rescan all of them: a crashed client keeps its lease until
+				// expiry, so one wait target must not hold the whole deadline.
+				if next = s.registry.selectReplica(key, namespace, nil, false); next == nil {
+					return errLeaseNotFound
+				}
+				clear(tried)
+				waitUntil = time.Now().Add(replicaWaitSlice)
+				if waitUntil.After(deadline) {
+					waitUntil = deadline
+				}
+			}
+			record = next
+			tried[record.id] = true
+		}
+		// Until framing succeeds, only this function owns the inbound connection.
+		// Losing one candidate must leave it available to another replica.
+		bridge, err := s.registry.admitBridge(ctx, record, nil)
+		if err != nil {
+			if !replica {
+				return err
+			}
+			// A failed wait still lasts its slice, so an unusable wait
+			// target cannot turn the rescan into a busy loop.
+			if !waitUntil.IsZero() && !utils.SleepOrDone(ctx, time.Until(waitUntil)) {
+				return ctx.Err()
+			}
+			continue
+		}
+		claimDeadline := deadline
+		if attempt := time.Now().Add(replicaWaitSlice); replica && attempt.Before(claimDeadline) {
+			claimDeadline = attempt
+		}
+		if !waitUntil.IsZero() {
+			claimDeadline = waitUntil
+		}
+		claimCtx, cancel := context.WithDeadline(bridge.ctx, claimDeadline)
+		var session net.Conn
+		if replica && waitUntil.IsZero() {
+			session, err = record.reverse.TryAcquire(claimCtx)
 		} else {
-			err = transport.WriteTLSStart(session, binding)
+			session, err = record.reverse.Acquire(claimCtx)
+		}
+		cancel()
+		if err != nil || session == nil {
+			record.releaseBridge(bridge)
+			if !replica {
+				return fmt.Errorf("acquire lease connection: %w", err)
+			}
+			if !waitUntil.IsZero() && !utils.SleepOrDone(ctx, time.Until(waitUntil)) {
+				return ctx.Err()
+			}
+			continue
+		}
+		var binding [types.TLSBindingSize]byte
+		if !localTLS {
+			binding = s.registry.bindings.Issue(record.id, helloSpan)
+		}
+		err = s.registry.activateBridge(record, bridge, session, nil)
+		if err == nil {
+			if localTLS {
+				err = transport.WriteLocalTLSStart(session, claimDeadline)
+			} else {
+				err = transport.WriteTLSStart(session, binding, claimDeadline)
+			}
+		}
+		if err == nil && !time.Now().Before(deadline) {
+			err = context.DeadlineExceeded
+		}
+		if err == nil {
+			err = s.registry.activateBridge(record, bridge, session, conn)
 		}
 		if err != nil {
+			if !localTLS {
+				s.registry.bindings.Discard(binding)
+			}
 			_ = session.Close()
+			record.releaseBridge(bridge)
 			continue
 		}
 		s.proxy.bridge(bridge.ctx, conn, session, record.ServiceKey(), s.registry.bps)
+		if !localTLS {
+			s.registry.bindings.Discard(binding)
+		}
+		record.releaseBridge(bridge)
 		return nil
 	}
 }
@@ -1482,7 +1555,7 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	helloSpan := clientHello.HandshakeMessage
-	serverName := utils.NormalizeHostname(clientHello.ServerName)
+	serverName := types.NormalizeHostname(clientHello.ServerName)
 	localTLS := namespace.IsLocalTLSHostname(serverName, s.registry.rootHostname)
 	relayAPI := serverName == "" || serverName == s.identity.Name
 	if !localTLS && (relayAPI || s.registry.cache.Has(serverName)) {

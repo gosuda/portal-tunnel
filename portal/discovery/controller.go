@@ -130,7 +130,7 @@ func (c *Controller) AddRelay(relayURL string) {
 	if c == nil || relayURL == "" {
 		return
 	}
-	if normalized, err := utils.NormalizeRelayURL(relayURL); err == nil {
+	if normalized, err := types.NormalizeRelayURL(relayURL); err == nil {
 		relayURL = normalized
 	}
 	c.mu.Lock()

@@ -33,6 +33,7 @@ var (
 	errLocalTLSModeUnsupported             = errors.New("local tenant TLS cannot be combined with raw TCP or the browser runtime")
 	errCertificateMonitorModeUnsupported   = errors.New("TLS certificate monitoring cannot be combined with raw TCP or the browser runtime")
 	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
+	errReplicaRequiresDirectHTTP           = errors.New("replicas require direct HTTP tunnels without dedicated TCP/UDP ports, relay cache, or overlay")
 	errPortalSDKContextIsNil               = errors.New("portal sdk: context is nil")
 	errPortalSDKThisRuntimeSupportsHTTPS   = errors.New("portal sdk: this runtime supports HTTPS exposure only")
 	errRelayStaticCacheCannotCombinedUDP   = errors.New("relay static cache cannot be combined with UDP, raw TCP, or MITM blocking")
@@ -111,8 +112,12 @@ type RelayStatus struct {
 	// origin. The RelayReady rule is for display only: show the alias only
 	// while State is RelayReady.
 	AliasURL string
-	// AliasSince is when this exposure came to hold AliasURL, zero without one.
-	// Another identity may have held the name before that.
+	// AliasEpoch is the relay-issued alias ownership generation, shared by replicas.
+	// Empty means the relay predates ownership generations; AliasSince then
+	// supplies a conservative local lifetime for application authentication.
+	AliasEpoch string
+	// AliasSince dates a local alias hold on relays without AliasEpoch.
+	// It is zero when AliasEpoch is available or there is no alias.
 	AliasSince time.Time
 	UDPAddr    string
 	TCPAddr    string
@@ -185,6 +190,7 @@ type Exposure struct {
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
+	Replica            bool
 	CertificateMonitor *certmonitor.MonitorConfig
 	AutomaticTLS       bool
 	TLSStateDir        string
@@ -207,6 +213,16 @@ type options struct {
 
 // Option configures an optional capability of a relay-backed exposure.
 type Option func(*options)
+
+// WithReplicas joins independent HTTP leases sharing this service's identity key.
+// Dedicated TCP/UDP ports, relay cache, and overlay cannot be combined with it.
+// Handler state is not shared: embedders must provide their own service-wide
+// login and payment replay guarantees. Built-in appauth supports SIWE, credentials
+// and OIDC with relay-issued alias epochs; email, SAML and the CLI's Nano payment
+// gate require a single consumption owner and do not support replica rotation.
+func WithReplicas() Option {
+	return func(opts *options) { opts.Replica = true }
+}
 
 // WithStaticRelayCache opts a static site into relay TLS termination and bounded
 // offline serving. A zero TTL accepts the relay's maximum offline lifetime.
@@ -263,7 +279,7 @@ func WithCertificateMonitoring(stateDir, baselineFile, dnsResolver string) Optio
 func WithPGNS(fqdn string, proofProvider func(context.Context) (*types.PGNSRegistrationProof, error)) Option {
 	return func(opts *options) {
 		opts.pgnsConfigured = true
-		opts.PGNSFQDN = utils.NormalizeHostname(fqdn)
+		opts.PGNSFQDN = types.NormalizeHostname(fqdn)
 		opts.PGNSProvider = proofProvider
 	}
 }
@@ -401,6 +417,20 @@ func validateExposeConfig(cfg options) error {
 			return errAutomaticTLSFilesConflict
 		}
 	}
+	if cfg.pgnsConfigured {
+		if cfg.PGNSFQDN == "" {
+			return errPGNSFQDNRequired
+		}
+		if cfg.PGNSProvider == nil {
+			return errPGNSProviderRequired
+		}
+		if cfg.Cache != nil || cfg.TCPEnabled || cfg.AutomaticTLS || runtime.GOOS == "js" {
+			return errPGNSModeUnsupported
+		}
+		if cfg.TLSCertFile == "" {
+			return errPGNSRequiresLocalCertificate
+		}
+	}
 	localTLSConfigured := cfg.TLSCertFile != "" || cfg.AutomaticTLS
 	localTLSUnsupported := cfg.TCPEnabled || runtime.GOOS == "js"
 	if localTLSConfigured && localTLSUnsupported {
@@ -422,19 +452,9 @@ func validateExposeConfig(cfg options) error {
 	if err := cfg.Metadata.Validate(); err != nil {
 		return err
 	}
-	if cfg.pgnsConfigured {
-		if cfg.PGNSFQDN == "" {
-			return errPGNSFQDNRequired
-		}
-		if cfg.PGNSProvider == nil {
-			return errPGNSProviderRequired
-		}
-		if cfg.Cache != nil || cfg.TCPEnabled || cfg.AutomaticTLS || runtime.GOOS == "js" {
-			return errPGNSModeUnsupported
-		}
-		if cfg.TLSCertFile == "" {
-			return errPGNSRequiresLocalCertificate
-		}
+	hasExclusiveTransport := cfg.UDPEnabled || cfg.TCPEnabled || cfg.Overlay || cfg.Cache != nil
+	if cfg.Replica && hasExclusiveTransport {
+		return errReplicaRequiresDirectHTTP
 	}
 	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM || cfg.pgnsConfigured
 	if runtime.GOOS == "js" && requiresSocketTransport {
@@ -522,7 +542,7 @@ func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 // selectable) as one atomic unit; re-selection republishes membership
 // through the selection loop.
 func (e *Exposure) AddRelay(relayURL string) error {
-	relayURL, err := utils.NormalizeRelayURL(relayURL)
+	relayURL, err := types.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}
@@ -549,7 +569,7 @@ func (e *Exposure) AddRelay(relayURL string) error {
 // as one atomic unit; re-selection republishes membership through the
 // selection loop.
 func (e *Exposure) RemoveRelay(relayURL string) error {
-	relayURL, err := utils.NormalizeRelayURL(relayURL)
+	relayURL, err := types.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}
@@ -926,6 +946,7 @@ func (e *Exposure) unblockedRelaySet(relayURLs []string) map[string]struct{} {
 
 func (e *Exposure) publishRelayListenerLocked(relayURL string) (bool, error) {
 	listener, err := newListener(context.Background(), relayURL, listenerConfig{
+		Replica:            e.options.Replica,
 		TLSCertFile:        e.options.TLSCertFile,
 		TLSKeyFile:         e.options.TLSKeyFile,
 		TLSStateDir:        e.options.TLSStateDir,
@@ -987,7 +1008,7 @@ func (e *Exposure) ProbeRelayPGNS(ctx context.Context, relayURL string) error {
 	if ctx == nil {
 		return errPortalSDKContextIsNil
 	}
-	normalized, err := utils.NormalizeRelayURL(relayURL)
+	normalized, err := types.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}
@@ -1310,10 +1331,14 @@ func mergeRelayStatusFieldsLocked(previous RelayStatus, update listenerStatus, r
 	}
 
 	switch {
-	case status.AliasURL == "":
+	case status.AliasURL == "" || update.aliasEpoch != "":
 		status.AliasSince = time.Time{}
-	case status.AliasURL != previous.AliasURL:
+	case status.AliasURL != previous.AliasURL || previous.AliasEpoch != "":
 		status.AliasSince = time.Now()
+	}
+	status.AliasEpoch = ""
+	if status.AliasURL != "" {
+		status.AliasEpoch = update.aliasEpoch
 	}
 	return status
 }
@@ -1403,6 +1428,7 @@ func relayStatusEqual(a, b RelayStatus) bool {
 		a.PublicURL == b.PublicURL &&
 		a.LegacyURL == b.LegacyURL &&
 		a.AliasURL == b.AliasURL &&
+		a.AliasEpoch == b.AliasEpoch &&
 		a.UDPAddr == b.UDPAddr &&
 		a.TCPAddr == b.TCPAddr &&
 		a.Version == b.Version &&

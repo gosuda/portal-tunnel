@@ -24,6 +24,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/route53"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 
 	awsroute53 "github.com/aws/aws-sdk-go-v2/service/route53"
@@ -278,7 +279,7 @@ func challengeHostedZone(ctx context.Context, client *awsroute53.Client, cfg *ro
 	if cfg.HostedZoneID != "" {
 		return normalizeZoneID(cfg.HostedZoneID), nil
 	}
-	for _, candidate := range utils.DomainCandidates(name) {
+	for _, candidate := range types.DomainCandidates(name) {
 		input := &awsroute53.ListHostedZonesByNameInput{DNSName: aws.String(candidate)}
 		for {
 			out, err := client.ListHostedZonesByName(ctx, input)
@@ -287,11 +288,11 @@ func challengeHostedZone(ctx context.Context, client *awsroute53.Client, cfg *ro
 			}
 			for _, zone := range out.HostedZones {
 				private := zone.Config != nil && zone.Config.PrivateZone
-				if utils.NormalizeHostname(aws.ToString(zone.Name)) == candidate && private == cfg.PrivateZone {
+				if types.NormalizeHostname(aws.ToString(zone.Name)) == candidate && private == cfg.PrivateZone {
 					return normalizeZoneID(aws.ToString(zone.Id)), nil
 				}
 			}
-			if !out.IsTruncated || utils.NormalizeHostname(aws.ToString(out.NextDNSName)) != candidate {
+			if !out.IsTruncated || types.NormalizeHostname(aws.ToString(out.NextDNSName)) != candidate {
 				break
 			}
 			input.DNSName, input.HostedZoneId = out.NextDNSName, out.NextHostedZoneId
@@ -593,7 +594,7 @@ func (p *Provider) findHostedZoneID(ctx context.Context, client *awsroute53.Clie
 		return "", errRoute53ClientIsNil
 	}
 
-	candidates := utils.DomainCandidates(domain)
+	candidates := types.DomainCandidates(domain)
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("invalid base domain for hosted zone lookup: %q", domain)
 	}
@@ -673,7 +674,7 @@ func listFindHostedZoneIDZonesByName(ctx context.Context, client *awsroute53.Cli
 			if hostedZone.Config != nil && hostedZone.Config.PrivateZone {
 				continue
 			}
-			zoneName := utils.NormalizeHostname(aws.ToString(hostedZone.Name))
+			zoneName := types.NormalizeHostname(aws.ToString(hostedZone.Name))
 			zoneID := normalizeZoneID(aws.ToString(hostedZone.Id))
 			if zoneName == "" || zoneID == "" {
 				continue
@@ -755,7 +756,7 @@ func upsertRecord(ctx context.Context, client *awsroute53.Client, hostedZoneID, 
 		return errHostedZoneIDIsRequired
 	}
 
-	fqdn := utils.NormalizeHostname(name)
+	fqdn := types.NormalizeHostname(name)
 	if !strings.HasSuffix(fqdn, ".") {
 		fqdn += "."
 	}
@@ -801,7 +802,7 @@ func getRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneID, 
 	if client == nil {
 		return nil, errRoute53ClientIsNil
 	}
-	fqdn := utils.NormalizeHostname(name)
+	fqdn := types.NormalizeHostname(name)
 	if !strings.HasSuffix(fqdn, ".") {
 		fqdn += "."
 	}

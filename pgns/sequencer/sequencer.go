@@ -390,7 +390,7 @@ func (s *Sequencer) previewLogAppendLocked(recHash [32]byte) ([32]byte, []tlog.H
 	}
 	extended := append(append([]tlog.Hash(nil), s.logHashes...), added...)
 	extReader := s.hashReaderForSlice(extended)
-	consProof, err := tlog.ProveTree(int64(oldSize), int64(oldSize+1), extReader)
+	consProof, err := tlog.ProveTree(int64(oldSize+1), int64(oldSize), extReader)
 	if err != nil {
 		return [32]byte{}, nil, nil, nil, fmt.Errorf("prove consistency: %w", err)
 	}

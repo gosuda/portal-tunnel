@@ -139,7 +139,7 @@ func (r *PGNSResolver) Resolve(ctx context.Context, fqdn string) (pgns.PortalLea
 	if err := ctx.Err(); err != nil {
 		return pgns.PortalLeafRecord{}, pgns.Checkpoint{}, err
 	}
-	normFQDN := utils.NormalizeHostWithoutPort(fqdn)
+	normFQDN := types.NormalizeHostWithoutPort(fqdn)
 	if _, err := pgns.ParseScopedFQDN(normFQDN, r.zone); err != nil {
 		return pgns.PortalLeafRecord{}, pgns.Checkpoint{}, err
 	}
@@ -213,7 +213,7 @@ func DialPGNS(ctx context.Context, resolver *PGNSResolver, fqdn string) (net.Con
 	if ctx == nil {
 		return nil, errPortalSDKContextIsNil
 	}
-	normFQDN := utils.NormalizeHostWithoutPort(fqdn)
+	normFQDN := types.NormalizeHostWithoutPort(fqdn)
 	leaf, _, err := resolver.Resolve(ctx, normFQDN)
 	if err != nil {
 		return nil, err
@@ -229,7 +229,7 @@ func NewPGNSHTTPClient(resolver *PGNSResolver) *http.Client {
 			ForceAttemptHTTP2: false,
 			TLSNextProto:      make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
 			DialTLSContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-				return DialPGNS(ctx, resolver, utils.NormalizeHostWithoutPort(addr))
+				return DialPGNS(ctx, resolver, types.NormalizeHostWithoutPort(addr))
 			},
 		},
 	}

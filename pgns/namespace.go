@@ -165,7 +165,7 @@ func IsValidIDTag(tag string) bool {
 			return false
 		}
 	}
-	decoded, err := base32LowerNoPad.Strict().DecodeString(tag)
+	decoded, err := base32LowerNoPad.DecodeString(tag)
 	if err != nil || len(decoded) != idTagByteLen {
 		return false
 	}

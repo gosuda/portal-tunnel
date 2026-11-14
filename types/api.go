@@ -87,8 +87,10 @@ const UnnamedServiceLabel = "default"
 
 type RegisterChallengeRequest struct {
 	Namespace string `json:"namespace,omitempty"`
-	Cache     bool   `json:"cache,omitempty"`
-	CacheTTL  int    `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	// Replica joins concurrent HTTP leases of the same service identity.
+	Replica  bool `json:"replica,omitempty"`
+	Cache    bool `json:"cache,omitempty"`
+	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
 	// AllowCanonicalFallback permits registration to continue without the friendly alias.
 	AllowCanonicalFallback bool          `json:"allow_canonical_fallback,omitempty"`
 	Identity               Identity      `json:"identity"`
@@ -101,6 +103,7 @@ type RegisterChallengeRequest struct {
 }
 
 type RegisterChallengeResponse struct {
+	Replica     bool      `json:"replica,omitempty"`
 	ChallengeID string    `json:"challenge_id"`
 	ExpiresAt   time.Time `json:"expires_at"`
 	SIWEMessage string    `json:"siwe_message"`
@@ -117,18 +120,21 @@ type ReverseEndpoint struct {
 }
 
 type RegisterResponse struct {
-	Namespace               string          `json:"namespace,omitempty"`
-	LegacyCanonicalHostname string          `json:"legacy_canonical_hostname,omitempty"`
-	Identity                Identity        `json:"identity"`
-	Hostname                string          `json:"hostname"`
-	CanonicalHostname       string          `json:"canonical_hostname"`
-	ExpiresAt               time.Time       `json:"expires_at"`
-	AccessToken             string          `json:"access_token"`
-	ReverseEndpoint         ReverseEndpoint `json:"reverse_endpoint"`
-	UDPAddr                 string          `json:"udp_addr,omitempty"`
-	UDPEnabled              bool            `json:"udp_enabled,omitempty"`
-	TCPAddr                 string          `json:"tcp_addr,omitempty"`
-	TCPEnabled              bool            `json:"tcp_enabled,omitempty"`
+	Namespace               string   `json:"namespace,omitempty"`
+	LegacyCanonicalHostname string   `json:"legacy_canonical_hostname,omitempty"`
+	Identity                Identity `json:"identity"`
+	Hostname                string   `json:"hostname"`
+	CanonicalHostname       string   `json:"canonical_hostname"`
+	// AliasEpoch identifies this identity's uninterrupted ownership of Hostname.
+	// It is shared by replicas and changes after the alias is released.
+	AliasEpoch      string          `json:"alias_epoch,omitempty"`
+	ExpiresAt       time.Time       `json:"expires_at"`
+	AccessToken     string          `json:"access_token"`
+	ReverseEndpoint ReverseEndpoint `json:"reverse_endpoint"`
+	UDPAddr         string          `json:"udp_addr,omitempty"`
+	UDPEnabled      bool            `json:"udp_enabled,omitempty"`
+	TCPAddr         string          `json:"tcp_addr,omitempty"`
+	TCPEnabled      bool            `json:"tcp_enabled,omitempty"`
 }
 
 // MaxDiscoveryResponseBytes is the decoded-byte budget for both discovery
@@ -206,6 +212,7 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
+	Replicas   bool     `json:"replicas,omitempty"`
 	Namespaces []string `json:"namespaces,omitempty"`
 	// TenantCertificateIssuance is independent of manual Local TLS support.
 	// Nil means that the relay predates issuance capability reporting.

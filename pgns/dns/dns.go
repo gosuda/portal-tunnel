@@ -4,11 +4,18 @@ package dns
 
 import (
 	"crypto"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"math/big"
 	"net"
 	"slices"
 	"strings"
@@ -91,6 +98,8 @@ func NewStage1KeysWithKSK(zone string, ksk *dns.DNSKEY, kskSigner crypto.Signer,
 	zskCopy.Hdr.Name = zoneFQDN
 	zskCopy.Hdr.Ttl = ApexRecordTTL
 
+	kskSigner = wrapDeterministicP256Signer(kskSigner)
+	zskSigner = wrapDeterministicP256Signer(zskSigner)
 	rrsig := &dns.RRSIG{
 		Hdr:        dns.RR_Header{Name: zoneFQDN, Rrtype: dns.TypeRRSIG, Class: dns.ClassINET, Ttl: ApexRecordTTL},
 		KeyTag:     kskCopy.KeyTag(),
@@ -113,6 +122,93 @@ func NewStage1KeysWithKSK(zone string, ksk *dns.DNSKEY, kskSigner crypto.Signer,
 // DSRecord returns the SHA-256 DS delegation record for the parent zone.
 func (k Stage1Keys) DSRecord() *dns.DS {
 	return k.KSK.ToDS(dns.SHA256)
+}
+
+var p256Order, _ = new(big.Int).SetString("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", 16)
+
+type deterministicP256Signer struct {
+	pub    crypto.PublicKey
+	d      *big.Int
+	dBytes [32]byte
+}
+
+func wrapDeterministicP256Signer(signer crypto.Signer) crypto.Signer {
+	ecPriv, ok := signer.(*ecdsa.PrivateKey)
+	if !ok {
+		return signer
+	}
+	ecdhKey, err := ecPriv.ECDH()
+	if err != nil || ecdhKey.Curve() != ecdh.P256() {
+		return signer
+	}
+	raw := ecdhKey.Bytes()
+	if len(raw) != 32 {
+		return signer
+	}
+	var dBytes [32]byte
+	copy(dBytes[:], raw)
+	return &deterministicP256Signer{
+		pub:    ecPriv.Public(),
+		d:      new(big.Int).SetBytes(raw),
+		dBytes: dBytes,
+	}
+}
+
+func (s *deterministicP256Signer) Public() crypto.PublicKey {
+	return s.pub
+}
+
+func (s *deterministicP256Signer) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
+	if len(digest) != sha256.Size {
+		return nil, fmt.Errorf("%w: expected 32-byte SHA-256 digest, got %d", errDNSSECKeyInvalid, len(digest))
+	}
+	z := new(big.Int).SetBytes(digest)
+	zModQ := new(big.Int).Mod(z, p256Order)
+	var h1Octets [32]byte
+	zModQ.FillBytes(h1Octets[:])
+
+	var v, k [32]byte
+	for i := range v {
+		v[i] = 0x01
+	}
+	k = hmacSHA256(k[:], v[:], []byte{0x00}, s.dBytes[:], h1Octets[:])
+	v = hmacSHA256(k[:], v[:])
+	k = hmacSHA256(k[:], v[:], []byte{0x01}, s.dBytes[:], h1Octets[:])
+	v = hmacSHA256(k[:], v[:])
+
+	for {
+		v = hmacSHA256(k[:], v[:])
+		kCand := new(big.Int).SetBytes(v[:])
+		if kCand.Sign() > 0 && kCand.Cmp(p256Order) < 0 {
+			if ecdhK, err := ecdh.P256().NewPrivateKey(v[:]); err == nil {
+				pubBytes := ecdhK.PublicKey().Bytes()
+				r := new(big.Int).SetBytes(pubBytes[1:33])
+				r.Mod(r, p256Order)
+				if r.Sign() != 0 {
+					kInv := new(big.Int).ModInverse(kCand, p256Order)
+					sv := new(big.Int).Mul(r, s.d)
+					sv.Add(sv, z)
+					sv.Mul(sv, kInv)
+					sv.Mod(sv, p256Order)
+					if sv.Sign() != 0 {
+						return asn1.Marshal(struct{ R, S *big.Int }{R: r, S: sv})
+					}
+				}
+			}
+		}
+		k = hmacSHA256(k[:], v[:], []byte{0x00})
+		v = hmacSHA256(k[:], v[:])
+	}
+}
+
+func hmacSHA256(key []byte, parts ...[]byte) [32]byte {
+	mac := hmac.New(sha256.New, key)
+	for _, p := range parts {
+		_, _ = mac.Write(p)
+	}
+	var out [32]byte
+	copy(out[:], mac.Sum(nil))
+	return out
 }
 
 func generateAlg13Key(zoneFQDN string, flags uint16) (*dns.DNSKEY, crypto.Signer, error) {

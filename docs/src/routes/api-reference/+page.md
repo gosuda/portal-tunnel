@@ -208,6 +208,7 @@ their endpoints are unavailable.
 
 | Field | Type |
 |-------|------|
+| `lease_id` | `string` |
 | `identity_key` | `string` |
 | `bps` | `number` |
 | `client_ip`, `reported_ip` | `string` |
@@ -278,6 +279,7 @@ their endpoints are unavailable.
 | `tenant_issuance_not_approved` | the service lacks explicit approval for automatic tenant certificate issuance |
 | `rate_limited` | request was throttled |
 | `hostname_conflict` | canonical hostname is inconsistently bound; routing fails closed |
+| `replica_conflict` | a replica cannot join a live exclusive lease or retained cache entry; retryable |
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not approved to route yet |
 | `lease_denied` | relay denied or banned the lease |

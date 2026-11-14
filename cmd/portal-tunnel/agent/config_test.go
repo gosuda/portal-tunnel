@@ -135,6 +135,30 @@ id = "udp"
 target = "127.0.0.1:19132"
 udp = true
 udp_addr = "127.0.0.1:19133"
+
+[[tunnels]]
+id = "replica"
+target = "127.0.0.1:3004"
+replica = true
+
+[[tunnels]]
+id = "pgns"
+target = "127.0.0.1:3005"
+pgns_zone = "portal.example"
+pgns_alias = "myapp"
+pgns_site_label = "site-a"
+pgns_sequencers = ["https://seq.portal.example"]
+pgns_witnesses = ["w1=0101010101010101010101010101010101010101010101010101010101010101"]
+pgns_witness_threshold = 1
+pgns_state_dir = "pgns-state"
+pgns_recovery_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+pgns_acme_directory = "https://dv.acme-v02.api.pki.goog/directory"
+pgns_acme_email = "ops@portal.example"
+pgns_acme_caa_issuer = "pki.goog"
+pgns_acme_eab_kid = "eab-kid"
+pgns_acme_eab_hmac = "eab-hmac-secret"
+pgns_persist01 = true
+pgns_endpoints = ["https://relay.example.com=93.184.216.34:443"]
 `
 
 func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
@@ -310,6 +334,7 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 		{"OIDC client secret in a world-readable file", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{AuthConfig: appauth.Config{Provider: "oidc", OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o600},
 		{"identity with a private key in a group-readable file", 0o640, TunnelConfig{ID: "web", Config: tunnel.Config{IdentityJSON: `{"private_key":"fake"}`}}, 0o600},
 		{"x402 facilitator token in a group-writable file", 0o660, TunnelConfig{ID: "web", Config: tunnel.Config{X402Config: gateway.X402Config{FacilitatorToken: "fake-token"}}}, 0o600},
+		{"pgns acme eab hmac in a world-readable file", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{PGNSACMEEABHMAC: "fake-eab-hmac"}}, 0o600},
 		{"a secret in a file that is already private", 0o600, TunnelConfig{ID: "web", Config: tunnel.Config{AuthConfig: appauth.Config{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o600},
 		{"the owner's other bits are kept", 0o755, TunnelConfig{ID: "web", Config: tunnel.Config{AuthConfig: appauth.Config{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "fake-secret"}}}}, 0o700},
 		{"a blank secret is not one", 0o644, TunnelConfig{ID: "web", Config: tunnel.Config{AuthConfig: appauth.Config{OIDCConfig: appauth.OIDCConfig{OIDCClientSecret: "  "}}}}, 0o644},
@@ -342,11 +367,11 @@ func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 	var found int
 	for _, field := range reflect.VisibleFields(reflect.TypeOf(TunnelConfig{})) {
 		key, _, _ := strings.Cut(field.Tag.Get("toml"), ",")
-		credential := key == "identity_json" || slices.ContainsFunc([]string{"secret", "token", "key", "password"}, func(word string) bool {
+		credential := key == "identity_json" || slices.ContainsFunc([]string{"secret", "token", "key", "password", "hmac"}, func(word string) bool {
 			return strings.Contains(key, word)
 		})
-		// tls_key stores a file path, not private key bytes.
-		if !field.IsExported() || key == "" || key == "-" || key == "tls_key" || !credential {
+		// tls_key stores a file path and pgns_recovery_pubkey stores a compressed public key, not private key bytes.
+		if !field.IsExported() || key == "" || key == "-" || key == "tls_key" || key == "pgns_recovery_pubkey" || !credential {
 			continue
 		}
 		found++

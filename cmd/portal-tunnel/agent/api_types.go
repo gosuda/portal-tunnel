@@ -36,6 +36,7 @@ type AgentTunnelStatus struct {
 	LastError       string              `json:"last_error,omitempty"`
 	Discovery       bool                `json:"discovery"`
 	Overlay         bool                `json:"overlay"`
+	Replica         bool                `json:"replica"`
 	MaxActiveRelays int                 `json:"max_active_relays,omitempty"`
 	Metadata        types.LeaseMetadata `json:"metadata"`
 	// The auth settings come without their secrets (see
@@ -83,6 +84,7 @@ type AgentTunnelRequest struct {
 	RelayURLs           []string           `json:"relays,omitempty"`
 	Discovery           *bool              `json:"discovery,omitempty"`
 	Overlay             bool               `json:"overlay,omitempty"`
+	Replica             bool               `json:"replica,omitempty"`
 	MaxActiveRelays     int                `json:"max_active_relays,omitempty"`
 	tunnel.AuthConfig
 	gateway.X402Config
@@ -189,7 +191,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.Config) error {
 	return nil
 }
 
-func authChanges(stored, desired appauth.Config) map[string]json.RawMessage {
+func AuthChanges(stored, desired appauth.Config) map[string]json.RawMessage {
 	fields := func(auth appauth.Config) map[string]json.RawMessage {
 		data, _ := json.Marshal(auth.Public())
 		var out map[string]json.RawMessage

@@ -63,6 +63,17 @@ func ComputeAppendLogRoot(oldSize uint64, recordHash [32]byte, hr tlog.HashReade
 	if oldSize > math.MaxInt64-1 {
 		return [32]byte{}, nil, fmt.Errorf("%w: log size overflow", ErrInvalidBatch)
 	}
+	if hr == nil {
+		if oldSize != 0 {
+			return [32]byte{}, nil, fmt.Errorf("%w: hash reader is required", ErrInvalidBatch)
+		}
+		hr = tlog.HashReaderFunc(func(indexes []int64) ([]tlog.Hash, error) {
+			if len(indexes) != 0 {
+				return nil, fmt.Errorf("%w: unexpected hash read at genesis", ErrInvalidBatch)
+			}
+			return nil, nil
+		})
+	}
 	n := int64(oldSize)
 	newHashes, err := tlog.StoredHashesForRecordHash(n, tlog.Hash(recordHash), hr)
 	if err != nil {
@@ -471,7 +482,8 @@ type BatchTransitionProof struct {
 	TxEntries         []LeafTx
 	PrevLeaves        [][]byte // len == len(TxEntries); nil/empty slice means absent prior leaf
 	PreStateMP        BatchMultiproof
-	ConsistencyProof  tlog.TreeProof // proves PrevLogRoot (size Epoch) -> NewLogRoot (size Epoch+1)
+	ConsistencyProof  tlog.TreeProof   // proves PrevLogRoot (size Epoch) -> NewLogRoot (size Epoch+1)
+	AppendRecordProof tlog.RecordProof // proves Epoch record inclusion at NewLogRoot (size Epoch+1)
 }
 
 // VerifyBatchTransition runs the 5-step stateless witness verification against prevState
@@ -598,7 +610,7 @@ func verifyBatchLogAppend(b BatchTransitionProof, prevLogSize uint64, prevLogRoo
 		}
 		return nil
 	}
-	if err := tlog.CheckTree(b.ConsistencyProof, int64(prevLogSize), tlog.Hash(prevLogRoot), int64(b.Epoch+1), tlog.Hash(b.NewLogRoot)); err != nil {
+	if err := tlog.CheckTree(b.ConsistencyProof, int64(b.Epoch+1), tlog.Hash(b.NewLogRoot), int64(prevLogSize), tlog.Hash(prevLogRoot)); err != nil {
 		return fmt.Errorf("%w: c2sp log consistency: %w", ErrInvalidBatch, err)
 	}
 	if err := tlog.CheckRecord(b.AppendRecordProof, int64(b.Epoch+1), tlog.Hash(b.NewLogRoot), int64(b.Epoch), tlog.Hash(recHash)); err != nil {

@@ -115,7 +115,7 @@ func knownEnvNames(vars []cli.EnvVar) map[string]cli.EnvVar {
 
 func secretEnvName(name string) bool {
 	upper := strings.ToUpper(name)
-	for _, marker := range []string{"TOKEN", "SECRET", "KEY", "PASSWORD", "CREDENTIALS"} {
+	for _, marker := range []string{"TOKEN", "SECRET", "KEY", "PASSWORD", "CREDENTIALS", "EAB"} {
 		if strings.Contains(upper, marker) {
 			return true
 		}

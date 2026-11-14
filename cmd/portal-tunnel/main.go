@@ -156,6 +156,7 @@ func registerPGNSFlags(fs *flag.FlagSet, cfg *tunnel.Config, env *cli.Env) {
 }
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
+	fs.BoolVar(&cfg.Replica, "replica", false, "Join HTTP replicas sharing this service identity key; requires a supporting relay; excludes dedicated TCP/UDP ports, relay cache, overlay, email/SAML authentication, and Nano payments")
 	fs.BoolVar(&cfg.TLSAuto, "tls-auto", false, "Obtain and renew exact service.address certificates; canonical TLS never falls back to Keyless")
 	fs.StringVar(&cfg.TLSStateDir, "tls-state-dir", "", "Persistent certificate/key directory for --tls-auto (default identity path plus .tls; required with --identity-json)")
 	fs.BoolVar(&cfg.TLSRequireLocal, "tls-require-local", false, "Require relay support for the Local TLS namespace; reject legacy-only relays")

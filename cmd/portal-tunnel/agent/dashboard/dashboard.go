@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 )
 
 const agentDashboardPollInterval = 2 * time.Second
@@ -48,7 +50,7 @@ type agentDashboardModel struct {
 	stateDir   string
 	theme      agentDashboardTheme
 
-	status  AgentStatusResponse
+	status  agent.AgentStatusResponse
 	err     error
 	pollErr error
 
@@ -93,7 +95,7 @@ type agentDashboardModel struct {
 }
 
 type agentDashboardStatusMsg struct {
-	status AgentStatusResponse
+	status agent.AgentStatusResponse
 	err    error
 }
 
@@ -413,7 +415,7 @@ func (m agentDashboardModel) scrollActivePane(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m *agentDashboardModel) clampSelection() {
-	if !slices.ContainsFunc(m.status.Tunnels, func(tunnel AgentTunnelStatus) bool { return tunnel.ID == m.confirmDelete }) {
+	if !slices.ContainsFunc(m.status.Tunnels, func(tunnel agent.AgentTunnelStatus) bool { return tunnel.ID == m.confirmDelete }) {
 		m.confirmDelete = ""
 	}
 	if _, ok := m.accessTunnel(); m.accessing() && !ok {
@@ -446,15 +448,15 @@ func (m *agentDashboardModel) clampSelection() {
 	m.selectedRelayURL = relays[0].RelayURL
 }
 
-func (m agentDashboardModel) selectedTunnelStatus() (AgentTunnelStatus, bool) {
+func (m agentDashboardModel) selectedTunnelStatus() (agent.AgentTunnelStatus, bool) {
 	index := m.selectedTunnelIndex()
 	if index < 0 {
-		return AgentTunnelStatus{}, false
+		return agent.AgentTunnelStatus{}, false
 	}
 	return m.status.Tunnels[index], true
 }
 
-func (m agentDashboardModel) selectedRelayIndex(tunnel AgentTunnelStatus) int {
+func (m agentDashboardModel) selectedRelayIndex(tunnel agent.AgentTunnelStatus) int {
 	if len(tunnel.Relays) == 0 {
 		return -1
 	}
@@ -466,23 +468,23 @@ func (m agentDashboardModel) selectedRelayIndex(tunnel AgentTunnelStatus) int {
 	return 0
 }
 
-func (m agentDashboardModel) selectedRelayStatus() (AgentRelayStatus, bool) {
+func (m agentDashboardModel) selectedRelayStatus() (agent.AgentRelayStatus, bool) {
 	tunnel, ok := m.selectedTunnelStatus()
 	index := m.selectedRelayIndex(tunnel)
 	if !ok || index < 0 {
-		return AgentRelayStatus{}, false
+		return agent.AgentRelayStatus{}, false
 	}
 	return tunnel.Relays[index], true
 }
 
-func (m agentDashboardModel) selectedTunnelRelay() (AgentTunnelStatus, AgentRelayStatus, bool) {
+func (m agentDashboardModel) selectedTunnelRelay() (agent.AgentTunnelStatus, agent.AgentRelayStatus, bool) {
 	tunnel, ok := m.selectedTunnelStatus()
 	if !ok {
-		return AgentTunnelStatus{}, AgentRelayStatus{}, false
+		return agent.AgentTunnelStatus{}, agent.AgentRelayStatus{}, false
 	}
 	relay, ok := m.selectedRelayStatus()
 	if !ok {
-		return AgentTunnelStatus{}, AgentRelayStatus{}, false
+		return agent.AgentTunnelStatus{}, agent.AgentRelayStatus{}, false
 	}
 	return tunnel, relay, true
 }
@@ -535,7 +537,7 @@ func agentDashboardFetchStatus(stateDir string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		status, err := Status(ctx, stateDir)
+		status, err := agent.Status(ctx, stateDir)
 		return agentDashboardStatusMsg{status: status, err: err}
 	}
 }
