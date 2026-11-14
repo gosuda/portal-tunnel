@@ -166,7 +166,7 @@ func (l httpTLSListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	if tracked, ok := conn.(*exposureConn); ok {
-		if native, ok := tracked.Conn.(*tls.Conn); ok {
+		if native, ok := tracked.Conn.(*tls.Conn); ok && native.ConnectionState().NegotiatedProtocol != types.ALPNPortalCBV1 {
 			return native, nil
 		}
 	}

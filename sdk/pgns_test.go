@@ -475,3 +475,156 @@ func TestExposeWithPGNSValidation(t *testing.T) {
 		t.Fatalf("with tcp err = %v, want errPGNSModeUnsupported", err)
 	}
 }
+
+type pgnsTestExposureListener struct {
+	net.Listener
+	l *listener
+}
+
+func (p pgnsTestExposureListener) Accept() (net.Conn, error) {
+	for {
+		raw, err := p.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		lease, _ := p.l.leaseSnapshot()
+		tlsConn := tls.Server(raw, lease.tenantTLS.TenantTLSConfig().Clone())
+		if err := tlsConn.Handshake(); err != nil {
+			_ = tlsConn.Close()
+			continue
+		}
+		nextConn, handled, err := p.l.mitmManager.maybeHandleConn(tlsConn)
+		if err != nil || handled {
+			if err != nil {
+				_ = tlsConn.Close()
+			}
+			continue
+		}
+		return &exposureConn{Conn: nextConn}, nil
+	}
+}
+
+type staticTenantTLS struct {
+	cert tls.Certificate
+	fqdn string
+}
+
+func (s staticTenantTLS) TerminateConn(_ context.Context, conn net.Conn, _ []byte) (net.Conn, error) {
+	return conn, nil
+}
+func (s staticTenantTLS) RefreshChain(context.Context) (bool, error) { return false, nil }
+func (s staticTenantTLS) TenantTLSConfig() *tls.Config {
+	return &tls.Config{
+		Certificates: []tls.Certificate{s.cert},
+		NextProtos:   []string{"h2", "http/1.1", types.ALPNPortalCBV1},
+		MinVersion:   tls.VersionTLS13,
+	}
+}
+func (s staticTenantTLS) TenantCertPool() *x509.CertPool {
+	leaf, err := x509.ParseCertificate(s.cert.Certificate[0])
+	if err != nil {
+		return nil
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return pool
+}
+func (s staticTenantTLS) SetAccessToken(string) {}
+func (s staticTenantTLS) Close() error          { return nil }
+
+func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
+	const (
+		zone = "portal.example"
+		fqdn = "myapp.app.portal.example"
+	)
+	now := time.Now().UTC()
+	ws, _, id, cert, buildBundle := makePGNSWitnessFixture(t, fqdn, now)
+
+	l := &listener{
+		identity: id,
+		lease: utils.NewSnapshot(listenerSnapshot{
+			hostname:    fqdn,
+			pgnsFQDN:    fqdn,
+			accessToken: "test-access-token",
+			tenantTLS:   staticTenantTLS{cert: cert, fqdn: fqdn},
+		}),
+	}
+	l.mitmManager = newMITMManager(l, false)
+
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tcpLn.Close() })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- RunHTTP(ctx, pgnsTestExposureListener{Listener: tcpLn, l: l}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.TLS == nil || r.TLS.ServerName != fqdn {
+				http.Error(w, "missing TLS state", http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte("hello:" + r.URL.Path))
+		}), "")
+	}()
+	t.Cleanup(func() {
+		cancel()
+		_ = tcpLn.Close()
+		<-runDone
+	})
+
+	bundleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(buildBundle(0, uint64(now.Unix())))
+	}))
+	defer bundleSrv.Close()
+
+	resolver, err := NewPGNSResolver(PGNSResolverConfig{
+		Zone:        zone,
+		Witnesses:   ws,
+		ResolveURLs: []string{bundleSrv.URL},
+		Now:         func() time.Time { return now },
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, tcpLn.Addr().String())
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pgnsClient := NewPGNSHTTPClient(resolver)
+	resp, err := pgnsClient.Get("https://" + fqdn + "/cb")
+	if err != nil {
+		t.Fatalf("NewPGNSHTTPClient GET failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "hello:/cb" {
+		t.Fatalf("PGNS response = (%d, %q), want (200, %q)", resp.StatusCode, string(body), "hello:/cb")
+	}
+
+	browserClient := &http.Client{
+		Transport: &http.Transport{
+			ForceAttemptHTTP2: true,
+			TLSClientConfig: &tls.Config{
+				RootCAs:    staticTenantTLS{cert: cert, fqdn: fqdn}.TenantCertPool(),
+				ServerName: fqdn,
+				MinVersion: tls.VersionTLS13,
+				NextProtos: []string{"h2", "http/1.1"},
+			},
+			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, network, tcpLn.Addr().String())
+			},
+		},
+	}
+	bResp, err := browserClient.Get("https://" + fqdn + "/h2")
+	if err != nil {
+		t.Fatalf("HTTP/2 browser GET failed: %v", err)
+	}
+	bBody, _ := io.ReadAll(bResp.Body)
+	_ = bResp.Body.Close()
+	if bResp.ProtoMajor != 2 || string(bBody) != "hello:/h2" {
+		t.Fatalf("browser response = (proto=%s body=%q), want (HTTP/2, %q)", bResp.Proto, string(bBody), "hello:/h2")
+	}
+}

@@ -673,9 +673,6 @@ func buildDialCanonicalTLSConfig(normalizedHost string, baseTLSConfig *tls.Confi
 	if tlsConf.MinVersion < tls.VersionTLS13 {
 		tlsConf.MinVersion = tls.VersionTLS13
 	}
-	if len(tlsConf.NextProtos) == 0 {
-		tlsConf.NextProtos = []string{types.ALPNPortalCBV1}
-	}
 	return tlsConf
 }
 
@@ -824,7 +821,9 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		if lease, ok := m.listener.leaseSnapshot(); ok {
 			if tlsConn, ok := conn.(*tls.Conn); ok {
 				_, canonical := lease.tenantTLS.(*namespaceTLS)
-				canChannelBind = canonical && types.NormalizeHostname(tlsConn.ConnectionState().ServerName) == lease.hostname
+				sni := types.NormalizeHostname(tlsConn.ConnectionState().ServerName)
+				pgnsMatch := lease.pgnsFQDN != "" && sni == lease.pgnsFQDN
+				canChannelBind = canonical && (sni == lease.hostname || pgnsMatch)
 			}
 		}
 	}
