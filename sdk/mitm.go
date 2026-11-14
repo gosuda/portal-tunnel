@@ -125,11 +125,18 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	if !ok {
 		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
-	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && endpoint.alias != nil {
-		// Probe the relay-owned certificate path even before local issuance is
-		// ready. The canonical hostname uses independent local TLS material.
-		lease.hostname = lease.aliasHostname
-		lease.tenantTLS = endpoint.alias
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+		cachedAlias := l.cache != nil
+		if endpoint.alias != nil && !cachedAlias {
+			// Probe the relay-owned certificate path even before local issuance is
+			// ready. The canonical hostname uses independent local TLS material.
+			lease.hostname = lease.aliasHostname
+			lease.tenantTLS = endpoint.alias
+		} else if !endpoint.local.Ready() {
+			// A cached alias is relay-terminated by consent, so only the
+			// canonical passthrough path is probed, once its certificate exists.
+			return mitmProbeReport{}, errListenerHostnameIsUnavailable
+		}
 	}
 	if lease.hostname == "" {
 		return mitmProbeReport{}, errListenerHostnameIsUnavailable
@@ -345,7 +352,11 @@ func (m *mitmManager) completeProbe(nonce mitmProbeNonce, actual []byte) {
 }
 
 func (m *mitmManager) run(ctx context.Context, ready <-chan struct{}) {
-	if m.listener.cache != nil || m.listener.udpEnabled || m.listener.tcpEnabled || runtime.GOOS == "js" {
+	l := m.listener
+	// Relay caching permits relay TLS termination of the alias. A Local TLS
+	// canonical endpoint stays passthrough, so it is still probed.
+	cacheWithoutCanonical := l.cache != nil && l.tlsStateDir == "" && l.tlsCertFile == ""
+	if cacheWithoutCanonical || l.udpEnabled || l.tcpEnabled || runtime.GOOS == "js" {
 		return
 	}
 	select {
