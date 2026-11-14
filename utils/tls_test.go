@@ -74,7 +74,7 @@ func TestFetchEndpointCertificateChainHonorsProxyEnvironment(t *testing.T) {
 		resultPath := filepath.Join(t.TempDir(), "chain.pem")
 		runCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(runCtx, os.Args[0], "-test.run=^TestFetchEndpointCertificateChainHonorsProxyEnvironment$")
+		cmd := exec.CommandContext(runCtx, os.Args[0], chainFetchSubprocessArgs()...)
 		cmd.Env = chainFetchSubprocessEnv(endpoint.PublicURL(), proxy.URL, endpoint.CAPEMPath(t), resultPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -91,8 +91,24 @@ func TestFetchEndpointCertificateChainHonorsProxyEnvironment(t *testing.T) {
 	})
 }
 
-// chainFetchSubprocessEnv builds a child environment that carries only the
-// proxy and trust variables this scenario owns.
+// chainFetchSubprocessArgs runs only this test in the child. The coverage
+// directory flag is forwarded so the child's counters land in the parent's
+// coverage profile; other flags are not, because -count=N would make the
+// child fetch N times and break the single-CONNECT assertion.
+func chainFetchSubprocessArgs() []string {
+	args := []string{"-test.run=^TestFetchEndpointCertificateChainHonorsProxyEnvironment$"}
+	for _, flag := range os.Args[1:] {
+		if strings.HasPrefix(flag, "-test.gocoverdir=") {
+			args = append(args, flag)
+		}
+	}
+	return args
+}
+
+// chainFetchSubprocessEnv replaces the proxy variables and SSL_CERT_FILE with
+// the ones this scenario owns, scrubbing inherited spellings
+// (case-insensitively: Windows matches environment names that way) and
+// passing the rest through.
 func chainFetchSubprocessEnv(endpointURL, proxyURL, caPath, resultPath string) []string {
 	env := []string{
 		chainFetchRunEnv + "=1",
@@ -104,17 +120,26 @@ func chainFetchSubprocessEnv(endpointURL, proxyURL, caPath, resultPath string) [
 		"no_proxy=",
 		"SSL_CERT_FILE=" + caPath,
 	}
+	owned := map[string]bool{
+		chainFetchRunEnv: true, chainFetchEndpointEnv: true, chainFetchResultEnv: true,
+	}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		switch key {
-		case chainFetchRunEnv, chainFetchEndpointEnv, chainFetchResultEnv,
-			"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
-			"ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE":
+		if owned[key] || isProxyEnvironmentName(key) || strings.EqualFold(key, "SSL_CERT_FILE") {
 			continue
 		}
 		env = append(env, entry)
 	}
 	return env
+}
+
+func isProxyEnvironmentName(key string) bool {
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"} {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // chainFetchSubprocess runs the real proxied fetch in the child process and
