@@ -49,24 +49,10 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	if handler == nil {
 		handler = http.NotFoundHandler()
 	}
-	driver := newRunHTTPDriver(relayListener, handler, localAddr)
 	if exposure, ok := relayListener.(*Exposure); ok {
 		exposure.enableHTTP2()
 	}
-	driver.launchRunHTTPservers()
-	return driver.waitRunHTTPResult(ctx)
-}
 
-type serveRunHTTPDriver struct {
-	relayListener net.Listener
-	relaySrv      *http.Server
-	localSrv      *http.Server
-	results       chan error
-	shutdownOnce  sync.Once
-	shutdownErr   error
-}
-
-func newRunHTTPDriver(relayListener net.Listener, handler http.Handler, localAddr string) *serveRunHTTPDriver {
 	relaySrv := relayHTTPServer(relayListener, handler)
 	localSrv := localHTTPServer(localAddr, handler)
 	serverCount := 0
@@ -76,52 +62,45 @@ func newRunHTTPDriver(relayListener net.Listener, handler http.Handler, localAdd
 	if localSrv != nil {
 		serverCount++
 	}
-	return &serveRunHTTPDriver{
-		relayListener: relayListener,
-		relaySrv:      relaySrv,
-		localSrv:      localSrv,
-		results:       make(chan error, serverCount),
-	}
-}
 
-func (d *serveRunHTTPDriver) shutdownRunHTTP() error {
-	d.shutdownOnce.Do(func() {
-		d.shutdownErr = shutdownHTTPServers(d.localSrv, d.relaySrv)
-	})
-	return d.shutdownErr
-}
-
-func (d *serveRunHTTPDriver) launchRunHTTPservers() {
-	if d.localSrv != nil {
+	results := make(chan error, serverCount)
+	if localSrv != nil {
 		go func() {
-			d.results <- normalizeHTTPServeError(d.localSrv.ListenAndServe(), "serve local http")
+			results <- normalizeHTTPServeError(localSrv.ListenAndServe(), "serve local http")
 		}()
 	}
-	if d.relaySrv != nil {
+	if relaySrv != nil {
 		go func() {
-			d.results <- normalizeHTTPServeError(d.relaySrv.Serve(httpTLSListener{d.relayListener}), "serve relay http")
+			results <- normalizeHTTPServeError(relaySrv.Serve(httpTLSListener{relayListener}), "serve relay http")
 		}()
 	}
-}
 
-func (d *serveRunHTTPDriver) waitRunHTTPResult(ctx context.Context) error {
+	var shutdownErr error
+	var shutdownOnce sync.Once
+	shutdown := func() error {
+		shutdownOnce.Do(func() {
+			shutdownErr = shutdownHTTPServers(localSrv, relaySrv)
+		})
+		return shutdownErr
+	}
+
 	var serveErr error
-	remaining := cap(d.results)
+	remaining := serverCount
 	ctxDone := ctx.Done()
 	for remaining > 0 {
 		select {
-		case err := <-d.results:
+		case err := <-results:
 			remaining--
 			if err != nil {
 				serveErr = errors.Join(serveErr, err)
-				_ = d.shutdownRunHTTP()
+				_ = shutdown()
 			}
 		case <-ctxDone:
-			_ = d.shutdownRunHTTP()
+			_ = shutdown()
 			ctxDone = nil
 		}
 	}
-	return errors.Join(serveErr, d.shutdownErr)
+	return errors.Join(serveErr, shutdownErr)
 }
 
 func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Server {
