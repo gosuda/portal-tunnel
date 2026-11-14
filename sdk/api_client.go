@@ -21,7 +21,6 @@ import (
 var (
 	errRelayDidNotReturnAccessToken              = errors.New("relay did not return access token")
 	errRelayReturnedMismatchedLeaseIdentity      = errors.New("relay returned mismatched lease identity")
-	errRelayDidNotReturnCanonicalHostname        = errors.New("relay did not return canonical hostname")
 	errRelayDidNotReturnRenewedAccess            = errors.New("relay did not return renewed access token")
 	errRelayReturnedIncompleteReverseEndpoint    = errors.New("relay returned incomplete reverse endpoint")
 	errRelayReturnedInvalidReverseEndpointURL    = errors.New("relay returned invalid reverse endpoint URL")

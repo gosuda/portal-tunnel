@@ -897,16 +897,13 @@ func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, n
 			return "", "", err
 		}
 	}
-	hostname := namespace.LocalTLSHostname
-	switch namespaceID {
-	case "":
+	if namespaceID == "" {
 		return publicHostname, "", nil
-	case types.LocalTLSNamespaceV1:
-		hostname = namespace.LocalTLSHostname
-	default:
+	}
+	if namespaceID != types.LocalTLSNamespaceV1 {
 		return "", "", fmt.Errorf("unsupported namespace %q", namespaceID)
 	}
-	canonicalHostname, err := hostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
+	canonicalHostname, err := namespace.LocalTLSHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
 	if err != nil {
 		return "", "", err
 	}

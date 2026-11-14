@@ -58,7 +58,6 @@ func rejectInvalidLeaseHostname(t *testing.T, raw, root string) {
 func TestServiceNamesCannotTakeCanonicalLabels(t *testing.T) {
 	t.Parallel()
 
-	const address = "0x7A3B2C4d5E6F708192a3B4C5D6E7F8091A2b3C4D"
 	for _, name := range []string{"7a3b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d", "x-7A3B2C4D5E6F708192A3B4C5D6E7F8091A2B3C4D"} {
 		if _, err := NormalizeServiceName(name); err == nil {
 			t.Fatalf("NormalizeServiceName(%q) error = nil", name)
