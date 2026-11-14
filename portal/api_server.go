@@ -334,7 +334,12 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 
 	challenge, sourceAddr, err := s.registry.consumeVerifiedRegisterChallenge(req)
 	if err != nil {
-		s.writeHandleRegisterChallengeError(w, err)
+		switch {
+		case errors.Is(err, identity.ErrRegisterChallengeInvalidSignature):
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
+		default:
+			utils.InvalidRequestError(err).Write(w)
+		}
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 	identityKey := challenge.Request.Identity.ServiceKey()
@@ -361,15 +366,6 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 	}
 
 	return record.ServiceKey(), resp, true
-}
-
-func (s *Server) writeHandleRegisterChallengeError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, identity.ErrRegisterChallengeInvalidSignature):
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-	default:
-		utils.InvalidRequestError(err).Write(w)
-	}
 }
 
 func (s *Server) issueHandleRegisterDescriptors(challenge *identity.RegisterChallenge) (types.RelayDescriptor, []types.RelayDescriptor) {
@@ -411,14 +407,29 @@ func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request,
 		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
 
-	return s.createChallengeResponse(w, r, req, sourceAddr)
-}
+	scheme := "https"
+	if r.TLS == nil {
+		scheme = "http"
+	}
+	domain := strings.TrimSpace(r.Host)
+	domain = cmp.Or(domain, s.identity.Name)
+	registerURI := (&url.URL{
+		Scheme: scheme,
+		Host:   domain,
+		Path:   types.PathSDKRegister,
+	}).String()
 
-func (s *Server) createChallengeResponse(w http.ResponseWriter, r *http.Request, req types.RegisterChallengeRequest, sourceAddr netip.Addr) (types.ServiceIdentityKey, types.RegisterChallengeResponse, bool) {
-	domain, registerURI := s.buildHandleRegisterChallengeURI(r)
-	if s.rejectDisabledTransports(w, req) {
+	if req.UDPEnabled && !s.supportsUDP() {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled,
+			"UDP transport is disabled on this relay")
 		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
 	}
+	if req.TCPEnabled && !s.supportsTCP() {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTCPPortDisabled,
+			"raw TCP transport is disabled on this relay")
+		return types.ServiceIdentityKey{}, types.RegisterChallengeResponse{}, false
+	}
+
 	normalized, err := identity.NormalizeIdentity(req.Identity)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
@@ -432,35 +443,6 @@ func (s *Server) createChallengeResponse(w http.ResponseWriter, r *http.Request,
 		return identityKey, types.RegisterChallengeResponse{}, false
 	}
 	return identityKey, resp, true
-}
-
-func (s *Server) buildHandleRegisterChallengeURI(r *http.Request) (string, string) {
-	scheme := "https"
-	if r.TLS == nil {
-		scheme = "http"
-	}
-	domain := strings.TrimSpace(r.Host)
-	domain = cmp.Or(domain, s.identity.Name)
-	registerURI := (&url.URL{
-		Scheme: scheme,
-		Host:   domain,
-		Path:   types.PathSDKRegister,
-	}).String()
-	return domain, registerURI
-}
-
-func (s *Server) rejectDisabledTransports(w http.ResponseWriter, req types.RegisterChallengeRequest) bool {
-	if req.UDPEnabled && !s.supportsUDP() {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled,
-			"UDP transport is disabled on this relay")
-		return true
-	}
-	if req.TCPEnabled && !s.supportsTCP() {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTCPPortDisabled,
-			"raw TCP transport is disabled on this relay")
-		return true
-	}
-	return false
 }
 
 // RefuseChallengeOverBudget reports whether it answered 429 because the source
@@ -623,12 +605,26 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAdd
 		return
 	}
 
-	if s.serveHandleConnectMux(w, r, sourceAddr) {
+	if transport.IsReverseMuxRequest(r) {
+		lease, err := s.registry.admitReverseCapability(transport.ReverseMuxCapability(r))
+		if err != nil {
+			writeAPIErrorResponse(w, err)
+			return
+		}
+		session, err := transport.AcceptReverseMux(w, r)
+		if err != nil {
+			return
+		}
+		s.serveReverseMux(lease, session, sourceAddr)
 		return
 	}
 
 	capability := strings.TrimSpace(r.Header.Get(types.HeaderReverseCapability))
-	if s.serveHandleConnectOverlay(w, r, capability, sourceAddr) {
+	if s.overlay != nil && s.overlay.Handles(capability) {
+		client, gateway := s.overlay.HandleConnect(w, r, capability, sourceAddr)
+		if client != nil {
+			s.proxy.bridge(s.ingressCtx, client, gateway, types.ServiceIdentityKey{}, s.registry.bps)
+		}
 		return
 	}
 
@@ -643,34 +639,6 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAdd
 		return
 	}
 	s.offerReverseLease(lease, conn, sourceAddr)
-}
-
-func (s *Server) serveHandleConnectMux(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) bool {
-	if !transport.IsReverseMuxRequest(r) {
-		return false
-	}
-	lease, err := s.registry.admitReverseCapability(transport.ReverseMuxCapability(r))
-	if err != nil {
-		writeAPIErrorResponse(w, err)
-		return true
-	}
-	session, err := transport.AcceptReverseMux(w, r)
-	if err != nil {
-		return true
-	}
-	s.serveReverseMux(lease, session, sourceAddr)
-	return true
-}
-
-func (s *Server) serveHandleConnectOverlay(w http.ResponseWriter, r *http.Request, capability string, sourceAddr netip.Addr) bool {
-	if s.overlay == nil || !s.overlay.Handles(capability) {
-		return false
-	}
-	client, gateway := s.overlay.HandleConnect(w, r, capability, sourceAddr)
-	if client != nil {
-		s.proxy.bridge(s.ingressCtx, client, gateway, types.ServiceIdentityKey{}, s.registry.bps)
-	}
-	return true
 }
 
 func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
