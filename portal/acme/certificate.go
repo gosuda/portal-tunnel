@@ -188,25 +188,6 @@ func (m *Manager) newClientLoadUser(email string, createKey bool) (*acmeUser, st
 }
 
 func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, registrationFile string) (*lego.Client, error) {
-	client, err := m.newClientBuildWithUser(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-	challengeProvider, err := m.dns.ChallengeProvider(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create dns challenge provider: %w", err)
-	}
-	provider := dnsChallengeProvider{Provider: challengeProvider, ctx: ctx}
-	if err := client.Challenge.SetDNS01Provider(provider, dns01.WrapPreCheck(provider.checkPropagation)); err != nil {
-		return nil, fmt.Errorf("set dns01 provider: %w", err)
-	}
-	if err := m.newClientRegisterUser(client, user, registrationFile); err != nil {
-		return nil, err
-	}
-	return client, nil
-}
-
-func (m *Manager) newClientBuildWithUser(ctx context.Context, user *acmeUser) (*lego.Client, error) {
 	clientConfig := lego.NewConfig(user)
 	clientConfig.CADirURL = m.cfg.CADirURL
 	clientConfig.Certificate.KeyType = certcrypto.RSA2048
@@ -218,22 +199,27 @@ func (m *Manager) newClientBuildWithUser(ctx context.Context, user *acmeUser) (*
 	if user.Registration == nil && client.GetExternalAccountRequired() {
 		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
 	}
-	return client, nil
-}
 
-func (m *Manager) newClientRegisterUser(client *lego.Client, user *acmeUser, registrationFile string) error {
-	if user.Registration != nil {
-		return nil
-	}
-	reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	challengeProvider, err := m.dns.ChallengeProvider(ctx)
 	if err != nil {
-		return fmt.Errorf("register acme account: %w", err)
+		return nil, fmt.Errorf("create dns challenge provider: %w", err)
 	}
-	user.Registration = reg
-	if err := utils.WriteJSONFile(registrationFile, reg, 0o600); err != nil {
-		return fmt.Errorf("persist acme registration: %w", err)
+	provider := dnsChallengeProvider{Provider: challengeProvider, ctx: ctx}
+	if err := client.Challenge.SetDNS01Provider(provider, dns01.WrapPreCheck(provider.checkPropagation)); err != nil {
+		return nil, fmt.Errorf("set dns01 provider: %w", err)
 	}
-	return nil
+
+	if user.Registration == nil {
+		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			return nil, fmt.Errorf("register acme account: %w", err)
+		}
+		user.Registration = reg
+		if err := utils.WriteJSONFile(registrationFile, reg, 0o600); err != nil {
+			return nil, fmt.Errorf("persist acme registration: %w", err)
+		}
+	}
+	return client, nil
 }
 
 func (u *acmeUser) GetEmail() string                        { return u.Email }
