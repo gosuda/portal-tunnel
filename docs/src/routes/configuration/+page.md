@@ -168,6 +168,13 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `UNAPPROVED_LEASES_PER_SOURCE` | `64` | int | Leases one source IP can hold while they are not routable; `0` is unlimited; see [Private relay](/self-hosting#private-relay) |
 | `TUNNEL_SOURCE_CIDRS` | `""` | string | Networks that may register tunnels (comma-separated CIDRs); a tunnel from anywhere else gets `403 source_not_allowed`; empty allows every network, and a value that names no network is a startup error; see [Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks) |
 
+`TUNNEL_SOURCE_CIDRS` limits tunnel registration and renewal, not discovery
+announces. With `DISCOVERY=true`, announces share the global pre-auth budget
+with registration and can delay registrations from allowed networks. Keep
+discovery disabled on a restricted relay unless needed; see
+[Discovery and registration capacity](/self-hosting#discovery-and-registration-capacity)
+for the effect and limits of budget tuning.
+
 ### IVNP overlay
 
 `IVNP_CONFIG` now points to a JSON object using the fields of IVNP's
