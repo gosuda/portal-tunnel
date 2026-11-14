@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -262,9 +263,21 @@ func (m *Manager) reserveTenantOrder(host string, now time.Time) (*tenantOrderRe
 		return nil, err
 	}
 
-	if err := syncTenantJournalDirectory(m.cfg.TenantIssuanceStateDir); err != nil {
-		_ = file.Close()
-		return nil, err
+	// Establish the journal directory entry before authorizing a CA order.
+	// Windows cannot Sync directories; the operator must provision the state
+	// directory durably, and file.Sync flushes the journal data and metadata.
+	if runtime.GOOS != "windows" {
+		dir, err := os.Open(m.cfg.TenantIssuanceStateDir)
+		if err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		err = dir.Sync()
+		_ = dir.Close()
+		if err != nil {
+			_ = file.Close()
+			return nil, err
+		}
 	}
 	return reservation, nil
 }
