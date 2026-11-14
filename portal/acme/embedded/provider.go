@@ -8,10 +8,13 @@ import (
 	"cmp"
 	"context"
 	"crypto"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -338,4 +341,83 @@ func (p *Provider) bumpSerialLocked() {
 	} else {
 		p.serial++
 	}
+}
+
+func listenDNS(addr string) (net.PacketConn, net.Listener, error) {
+	listenConfig := net.ListenConfig{}
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse embedded dns listen address %q: %w", addr, err)
+	}
+	if portStr != "0" {
+		return listenDNSFixedAddr(addr, listenConfig)
+	}
+	return listenDNSCompanionPort(addr, host, listenConfig)
+}
+
+func listenDNSFixedAddr(addr string, listenConfig net.ListenConfig) (net.PacketConn, net.Listener, error) {
+	packetConn, err := listenConfig.ListenPacket(context.Background(), "udp", addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen embedded dns udp %s: %w", addr, err)
+	}
+	listener, err := listenConfig.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		_ = packetConn.Close()
+		return nil, nil, fmt.Errorf("listen embedded dns tcp %s: %w", addr, err)
+	}
+	return packetConn, listener, nil
+}
+
+func listenDNSCompanionPort(addr, host string, listenConfig net.ListenConfig) (net.PacketConn, net.Listener, error) {
+	var lastErr error
+	for range 5 {
+		packetConn, err := listenConfig.ListenPacket(context.Background(), "udp", addr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("listen embedded dns udp %s: %w", addr, err)
+		}
+		port := packetConn.LocalAddr().(*net.UDPAddr).Port
+		listener, err := listenConfig.Listen(context.Background(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+		if err == nil {
+			return packetConn, listener, nil
+		}
+		lastErr = err
+		_ = packetConn.Close()
+	}
+	return nil, nil, fmt.Errorf("listen embedded dns tcp companion port: %w", lastErr)
+}
+
+func (p *Provider) verifyDelegatedPath(ip net.IP) {
+	label := make([]byte, 8)
+	if _, err := rand.Read(label); err != nil {
+		log.Warn().Err(err).Msg("dns self-check random label")
+		return
+	}
+	name := hex.EncodeToString(label) + "." + p.zone
+	ctx, cancel := context.WithTimeout(context.Background(), selfCheckTimeout)
+	defer cancel()
+	started := time.Now()
+	network := "ip4"
+	if ip.To4() == nil {
+		network = "ip6"
+	}
+	addrs, err := net.DefaultResolver.LookupIP(ctx, network, name)
+	elapsed := time.Since(started)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Dur("elapsed", elapsed).Msg("dns self-check failed")
+		return
+	}
+	if slices.ContainsFunc(addrs, func(addr net.IP) bool { return addr.Equal(ip) }) {
+		log.Info().Str("name", name).Str("resolved", ip.String()).Dur("elapsed", elapsed).Msg("dns self-check passed")
+		return
+	}
+	resolved := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		resolved = append(resolved, addr.String())
+	}
+	log.Warn().
+		Str("name", name).
+		Str("resolved", strings.Join(resolved, ",")).
+		Str("expected", ip.String()).
+		Dur("elapsed", elapsed).
+		Msg("dns self-check resolved a different address")
 }
