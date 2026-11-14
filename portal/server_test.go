@@ -749,6 +749,7 @@ func TestNewServerSeparatesPublicAndLocalSNIPorts(t *testing.T) {
 		wantLocalPort int
 	}{
 		{"default ports", "https://relay.example.com", 0, 443},
+		{"negative port falls back to HTTPS", "https://relay.example.com:9443", -1, 443},
 		{"local bind override", "https://relay.example.com", 8443, 8443},
 		{"explicit public port", "https://relay.example.com:9443", 443, 443},
 		{"unoverridden listener follows public port", "https://relay.example.com:9443", 0, 9443},
