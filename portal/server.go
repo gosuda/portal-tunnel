@@ -1384,28 +1384,6 @@ func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
 	}
 }
 
-func relayDiscoveryRefreshStopped(ctx context.Context, err error) bool {
-	if err == nil {
-		return false
-	}
-	return ctx.Err() != nil
-}
-
-func (s *Server) refreshRunRelayDiscoveryLoop(ctx context.Context, refresher *discovery.Refresher, now time.Time) error {
-	self, err := s.newSelfDescriptor(now)
-	if err != nil {
-		return fmt.Errorf("build relay discovery descriptor: %w", err)
-	}
-	refreshErr := refresher.Refresh(ctx, &self)
-	if relayDiscoveryRefreshStopped(ctx, refreshErr) {
-		return nil
-	}
-	if refreshErr != nil {
-		return refreshErr
-	}
-	return nil
-}
-
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	if s.relaySet == nil {
 		<-ctx.Done()
@@ -1416,8 +1394,12 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		if err := s.refreshRunRelayDiscoveryLoop(ctx, refresher, time.Now().UTC()); err != nil {
-			return err
+		self, err := s.newSelfDescriptor(time.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("build relay discovery descriptor: %w", err)
+		}
+		if refreshErr := refresher.Refresh(ctx, &self); refreshErr != nil && ctx.Err() == nil {
+			return refreshErr
 		}
 		if ctx.Err() != nil {
 			return nil
@@ -1498,10 +1480,6 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	inspecting = false
-	s.bridgePublicIngressLease(ctx, wrappedConn, serverName, helloSpan)
-}
-
-func (s *Server) bridgePublicIngressLease(ctx context.Context, wrappedConn net.Conn, serverName string, helloSpan []byte) {
 	record, ok := s.registry.Lookup(serverName)
 	if !ok {
 		log.Warn().
