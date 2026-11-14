@@ -3,6 +3,7 @@
 package dns
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/ecdh"
 	"crypto/ecdsa"
@@ -179,26 +180,38 @@ func (s *deterministicP256Signer) Sign(_ io.Reader, digest []byte, _ crypto.Sign
 	for {
 		v = hmacSHA256(k[:], v[:])
 		kCand := new(big.Int).SetBytes(v[:])
-		if kCand.Sign() > 0 && kCand.Cmp(p256Order) < 0 {
-			if ecdhK, err := ecdh.P256().NewPrivateKey(v[:]); err == nil {
-				pubBytes := ecdhK.PublicKey().Bytes()
-				r := new(big.Int).SetBytes(pubBytes[1:33])
-				r.Mod(r, p256Order)
-				if r.Sign() != 0 {
-					kInv := new(big.Int).ModInverse(kCand, p256Order)
-					sv := new(big.Int).Mul(r, s.d)
-					sv.Add(sv, z)
-					sv.Mul(sv, kInv)
-					sv.Mod(sv, p256Order)
-					if sv.Sign() != 0 {
-						return asn1.Marshal(struct{ R, S *big.Int }{R: r, S: sv})
-					}
-				}
-			}
+		if sig, ok, err := s.trySignRFC6979Candidate(kCand, z, v); err != nil || ok {
+			return sig, err
 		}
 		k = hmacSHA256(k[:], v[:], []byte{0x00})
 		v = hmacSHA256(k[:], v[:])
 	}
+}
+
+func (s *deterministicP256Signer) trySignRFC6979Candidate(kCand, z *big.Int, v [32]byte) ([]byte, bool, error) {
+	if kCand.Sign() <= 0 || kCand.Cmp(p256Order) >= 0 {
+		return nil, false, nil
+	}
+	ecdhK, err := ecdh.P256().NewPrivateKey(v[:])
+	if err != nil {
+		return nil, false, nil
+	}
+	pubBytes := ecdhK.PublicKey().Bytes()
+	r := new(big.Int).SetBytes(pubBytes[1:33])
+	r.Mod(r, p256Order)
+	if r.Sign() == 0 {
+		return nil, false, nil
+	}
+	kInv := new(big.Int).ModInverse(kCand, p256Order)
+	sv := new(big.Int).Mul(r, s.d)
+	sv.Add(sv, z)
+	sv.Mul(sv, kInv)
+	sv.Mod(sv, p256Order)
+	if sv.Sign() == 0 {
+		return nil, false, nil
+	}
+	sig, err := asn1.Marshal(struct{ R, S *big.Int }{R: r, S: sv})
+	return sig, err == nil, err
 }
 
 func hmacSHA256(key []byte, parts ...[]byte) [32]byte {
@@ -300,10 +313,7 @@ func New(cfg Config) (*Server, error) {
 	if len(nsList) == 0 {
 		nsList = []NameserverGlue{{Host: "ns1." + normZone, IPv4: net.IPv4(192, 0, 2, 53)}}
 	}
-	buckets := cfg.RefreshBuckets
-	if buckets == 0 {
-		buckets = DefaultRefreshBuckets
-	}
+	buckets := cmp.Or(cfg.RefreshBuckets, DefaultRefreshBuckets)
 	return &Server{
 		zone:           normZone,
 		zoneFQDN:       dns.Fqdn(normZone),
@@ -390,11 +400,20 @@ func (s *Server) leafNeedsRefresh(fqdn string, leaf pgns.PortalLeafRecord, epoch
 		if exp <= te {
 			return true
 		}
-		if isBucketEpoch && (exp-te <= RRSIGRefreshThreshold || rtype == dns.TypeA || rtype == dns.TypeAAAA || rtype == dns.TypeHTTPS || rtype == dns.TypeCAA) {
+		if isBucketEpoch && (exp-te <= RRSIGRefreshThreshold || isBucketRefreshType(rtype)) {
 			return true
 		}
 	}
 	return s.subownerNeedsRefresh(fqdn, te)
+}
+
+func isBucketRefreshType(rtype uint16) bool {
+	switch rtype {
+	case dns.TypeA, dns.TypeAAAA, dns.TypeHTTPS, dns.TypeCAA:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) subownerNeedsRefresh(fqdn string, te uint64) bool {
@@ -413,17 +432,8 @@ func (s *Server) rebuildZoneLocked(epoch, te uint64, dirtyLeaves map[string]stru
 	nextRR := make(map[string]map[uint16]signedRRSet, len(s.rrCache)+len(dirtyLeaves))
 	for fqdn, leaf := range s.leaves {
 		owner := dns.Fqdn(fqdn)
-		_, isDirty := dirtyLeaves[fqdn]
-		if !isDirty {
-			if existing, ok := s.rrCache[owner]; ok {
-				nextRR[owner] = cloneTypeMap(existing)
-				for _, sub := range []string{"_acme-challenge." + owner, "_validation-persist." + owner} {
-					if subSet, ok := s.rrCache[sub]; ok {
-						nextRR[sub] = cloneTypeMap(subSet)
-					}
-				}
-				continue
-			}
+		if _, isDirty := dirtyLeaves[fqdn]; !isDirty && s.reuseCachedLeafLocked(nextRR, owner) {
+			continue
 		}
 		if err := s.synthesizeLeafOwner(nextRR, leaf, te); err != nil {
 			return err
@@ -464,6 +474,20 @@ func (s *Server) rebuildZoneLocked(epoch, te uint64, dirtyLeaves map[string]stru
 		soaSet:       soaSet,
 	})
 	return nil
+}
+
+func (s *Server) reuseCachedLeafLocked(dst map[string]map[uint16]signedRRSet, owner string) bool {
+	existing, ok := s.rrCache[owner]
+	if !ok {
+		return false
+	}
+	dst[owner] = cloneTypeMap(existing)
+	for _, sub := range []string{"_acme-challenge." + owner, "_validation-persist." + owner} {
+		if subSet, hasSub := s.rrCache[sub]; hasSub {
+			dst[sub] = cloneTypeMap(subSet)
+		}
+	}
+	return true
 }
 
 func (s *Server) synthesizeLeafOwner(dst map[string]map[uint16]signedRRSet, leaf pgns.PortalLeafRecord, te uint64) error {
@@ -672,9 +696,7 @@ func (s *Server) rebuildNSEC3RingLocked(activeOwners map[string]struct{}, rrsets
 			NextDomain: nextH,
 			TypeBitMap: typeBitmap,
 		}
-		if cached, ok := s.nsec3Map[h]; ok && cached.rrsig != nil && uint64(cached.rrsig.Expiration) > te+RRSIGRefreshThreshold &&
-			cached.rr.NextDomain == nextH && slices.Equal(cached.rr.TypeBitMap, typeBitmap) &&
-			(binary.BigEndian.Uint64([]byte(h[:8]))%s.refreshBuckets != epoch%s.refreshBuckets) {
+		if cached, ok := s.canReuseCachedNSEC3Locked(h, nextH, typeBitmap, epoch, te); ok {
 			out[h] = cached
 			continue
 		}
@@ -692,6 +714,23 @@ func (s *Server) rebuildNSEC3RingLocked(activeOwners map[string]struct{}, rrsets
 		out[h] = nsec3Entry{hashUpper: h, rr: rr, rrsig: sig}
 	}
 	return out, hashes, nil
+}
+
+func (s *Server) canReuseCachedNSEC3Locked(hashUpper, nextH string, typeBitmap []uint16, epoch, te uint64) (nsec3Entry, bool) {
+	cached, ok := s.nsec3Map[hashUpper]
+	if !ok || cached.rrsig == nil {
+		return nsec3Entry{}, false
+	}
+	if uint64(cached.rrsig.Expiration) <= te+RRSIGRefreshThreshold {
+		return nsec3Entry{}, false
+	}
+	if cached.rr.NextDomain != nextH || !slices.Equal(cached.rr.TypeBitMap, typeBitmap) {
+		return nsec3Entry{}, false
+	}
+	if binary.BigEndian.Uint64([]byte(hashUpper[:8]))%s.refreshBuckets == epoch%s.refreshBuckets {
+		return nsec3Entry{}, false
+	}
+	return cached, true
 }
 
 func ownerTypeBitMap(sets map[uint16]signedRRSet) []uint16 {

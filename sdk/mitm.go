@@ -737,7 +737,8 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		hostname = lease.hostname
 		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
 			if sni := types.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
-				if sni != lease.hostname && sni != lease.legacyHostname && (lease.pgnsFQDN == "" || sni != lease.pgnsFQDN) {
+				pgnsMatch := lease.pgnsFQDN != "" && sni == lease.pgnsFQDN
+				if sni != lease.hostname && sni != lease.legacyHostname && !pgnsMatch {
 					_ = conn.Close()
 					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
 				}

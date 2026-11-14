@@ -1,6 +1,7 @@
 package pgns
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/base32"
 	"errors"
@@ -39,6 +40,7 @@ var (
 	ErrReservedLabel = errors.New("pgns: reserved label")
 	// ErrKeyDerivationFailed marks impossible or invalid subkey derivation inputs.
 	ErrKeyDerivationFailed = errors.New("pgns: subkey derivation failed")
+	errLeadingTrailingDot  = errors.New("leading or trailing dot")
 )
 
 var base32LowerNoPad = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
@@ -161,7 +163,9 @@ func IsValidIDTag(tag string) bool {
 	}
 	for i := range len(tag) {
 		c := tag[i]
-		if (c < 'a' || c > 'z') && (c < '2' || c > '7') {
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '2' && c <= '7'
+		if !isLower && !isDigit {
 			return false
 		}
 	}
@@ -208,10 +212,7 @@ func DeriveIDSiteKey(masterKey *secp256k1.PrivateKey, zone, siteKeyLabel string)
 	if err != nil {
 		return nil, err
 	}
-	label := strings.TrimSpace(siteKeyLabel)
-	if label == "" {
-		label = types.UnnamedServiceLabel
-	}
+	label := cmp.Or(strings.TrimSpace(siteKeyLabel), types.UnnamedServiceLabel)
 	baseInfo := make([]byte, 0, len(subzoneIDLabel)+1+len(normZone)+1+len(label)+1)
 	baseInfo = append(baseInfo, subzoneIDLabel...)
 	baseInfo = append(baseInfo, 0)
@@ -273,7 +274,7 @@ func validateCanonicalDomain(domain string, minLabels, maxLen int) error {
 		return fmt.Errorf("domain length %d out of range", len(domain))
 	}
 	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
-		return errors.New("leading or trailing dot")
+		return errLeadingTrailingDot
 	}
 	labels := strings.Split(domain, ".")
 	if len(labels) < minLabels {

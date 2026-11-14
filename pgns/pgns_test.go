@@ -16,6 +16,8 @@ import (
 
 const testZone = "portal.example"
 
+var errTestMissingStoredHash = errors.New("missing stored hash")
+
 func testKeyFromSeed(seed string) *secp256k1.PrivateKey {
 	h := sha256.Sum256([]byte(seed))
 	return secp256k1.PrivKeyFromBytes(h[:])
@@ -547,7 +549,7 @@ func TestWitnessBatchVerificationAndCheckpoints(t *testing.T) {
 		for i, idx := range indexes {
 			h, ok := logHashes[idx]
 			if !ok {
-				return nil, errors.New("missing stored hash")
+				return nil, errTestMissingStoredHash
 			}
 			out[i] = h
 		}

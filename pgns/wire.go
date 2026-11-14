@@ -44,7 +44,9 @@ var (
 	// ErrInvalidLeaf marks a semantically invalid PortalLeafRecord field.
 	ErrInvalidLeaf = errors.New("pgns: invalid leaf record")
 	// ErrInvalidEndpoint marks an invalid or non-public relay endpoint.
-	ErrInvalidEndpoint = errors.New("pgns: invalid endpoint")
+	ErrInvalidEndpoint     = errors.New("pgns: invalid endpoint")
+	errOwnerKeyRequired    = errors.New("pgns: owner private key is required")
+	errRecoveryKeyRequired = errors.New("pgns: recovery private key is required")
 )
 
 // Endpoint describes one relay ingress target published inside a PortalLeafRecord.
@@ -432,7 +434,7 @@ func LeafTxRecoverySigningPayload(canonicalLeaf []byte) []byte {
 // SignLeafTxOwner signs tx with ownerKey in strict BIP-62 low-S form and sets OwnerSig.
 func (tx *LeafTx) SignOwner(ownerKey *secp256k1.PrivateKey) error {
 	if ownerKey == nil {
-		return errors.New("pgns: owner private key is required")
+		return errOwnerKeyRequired
 	}
 	copy(tx.Leaf.OwnerPubKey[:], ownerKey.PubKey().SerializeCompressed())
 	canonicalLeaf, err := tx.Leaf.MarshalCanonical()
@@ -453,7 +455,7 @@ func (tx *LeafTx) SignOwner(ownerKey *secp256k1.PrivateKey) error {
 // SignRecovery sets RecoveryPubKey and signs Leaf with coldKey in strict BIP-62 low-S form.
 func (tx *LeafTx) SignRecovery(coldKey *secp256k1.PrivateKey) error {
 	if coldKey == nil {
-		return errors.New("pgns: recovery private key is required")
+		return errRecoveryKeyRequired
 	}
 	copy(tx.RecoveryPubKey[:], coldKey.PubKey().SerializeCompressed())
 	canonicalLeaf, err := tx.Leaf.MarshalCanonical()

@@ -18,7 +18,9 @@ import (
 const maxCosignRequestBytes = 4 << 20 // 4 MiB
 
 var (
-	errEpochConflict = errors.New("witness: epoch conflicts with persisted state")
+	errEpochConflict      = errors.New("witness: epoch conflicts with persisted state")
+	errWitnessKeyRequired = errors.New("witness: valid name and Ed25519 private key are required")
+	errWitnessPubInvalid  = errors.New("witness: invalid Ed25519 public key")
 )
 
 // Config configures a stateless PGNS witness node.
@@ -44,11 +46,11 @@ type Witness struct {
 // New initializes a Witness, loading any persisted 88-byte checkpoint from cfg.StatePath.
 func New(cfg Config) (*Witness, error) {
 	if cfg.Name == "" || len(cfg.PrivateKey) != ed25519.PrivateKeySize {
-		return nil, errors.New("witness: valid name and Ed25519 private key are required")
+		return nil, errWitnessKeyRequired
 	}
 	pub, ok := cfg.PrivateKey.Public().(ed25519.PublicKey)
 	if !ok {
-		return nil, errors.New("witness: invalid Ed25519 public key")
+		return nil, errWitnessPubInvalid
 	}
 	nowFn := cfg.Now
 	if nowFn == nil {

@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -64,10 +65,7 @@ type PGNSResolver struct {
 
 // NewPGNSResolver constructs a verified PGNS resolver.
 func NewPGNSResolver(cfg PGNSResolverConfig) (*PGNSResolver, error) {
-	zoneInput := strings.TrimSpace(cfg.Zone)
-	if zoneInput == "" {
-		zoneInput = pgns.DefaultZone
-	}
+	zoneInput := cmp.Or(strings.TrimSpace(cfg.Zone), pgns.DefaultZone)
 	zone, err := pgns.NormalizeZone(zoneInput)
 	if err != nil {
 		return nil, err
@@ -113,7 +111,8 @@ func normalizeResolveURLs(raw []string, zone string) ([]string, error) {
 			continue
 		}
 		parsed, err := url.Parse(trimmed)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		validScheme := parsed != nil && (parsed.Scheme == "http" || parsed.Scheme == "https")
+		if err != nil || parsed.Host == "" || !validScheme {
 			return nil, fmt.Errorf("%w: %q", errPGNSResolveURLInvalid, item)
 		}
 		if _, dup := seen[trimmed]; dup {

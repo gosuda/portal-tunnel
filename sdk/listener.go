@@ -1230,7 +1230,8 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		}
 		pending.certificateObserver.Close()
 	}()
-	if resp.Namespace != types.LocalTLSNamespaceV1 && (l.tlsRequireLocal || l.tlsCertFile != "" || l.pgnsFQDN != "") {
+	requiresLocalTLS := l.tlsRequireLocal || l.tlsCertFile != "" || l.pgnsFQDN != ""
+	if resp.Namespace != types.LocalTLSNamespaceV1 && requiresLocalTLS {
 		return fmt.Errorf("%w: relay does not support the required Local TLS namespace", errRelayIncompatible)
 	}
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
@@ -1562,7 +1563,8 @@ func (c *namespaceTLS) TerminateConn(ctx context.Context, conn net.Conn, binding
 	if hostname == c.hostname {
 		return c.local.TerminateConn(ctx, buffered, binding)
 	}
-	if c.legacy == nil || hostname == "" || (hostname != c.legacyHostname && hostname != c.aliasHostname) {
+	matchesLegacy := hostname != "" && (hostname == c.legacyHostname || hostname == c.aliasHostname)
+	if c.legacy == nil || !matchesLegacy {
 		_ = buffered.Close()
 		return nil, errTLSNameOutsideLease
 	}

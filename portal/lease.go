@@ -314,7 +314,8 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 		if record == nil || !record.isPublicEntry() || record.isExpired(now) {
 			continue
 		}
-		if !localTLS || record.pgnsFQDN != "" || (record.Namespace == types.LocalTLSNamespaceV1 && record.CanonicalHostname == host) {
+		matchesLocalTLS := record.pgnsFQDN != "" || (record.Namespace == types.LocalTLSNamespaceV1 && record.CanonicalHostname == host)
+		if !localTLS || matchesLocalTLS {
 			return record, true
 		}
 	}

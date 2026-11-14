@@ -371,7 +371,8 @@ func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 			return strings.Contains(key, word)
 		})
 		// tls_key stores a file path and pgns_recovery_pubkey stores a compressed public key, not private key bytes.
-		if !field.IsExported() || key == "" || key == "-" || key == "tls_key" || key == "pgns_recovery_pubkey" || !credential {
+		ignored := !field.IsExported() || key == "" || key == "-" || key == "tls_key" || key == "pgns_recovery_pubkey"
+		if ignored || !credential {
 			continue
 		}
 		found++

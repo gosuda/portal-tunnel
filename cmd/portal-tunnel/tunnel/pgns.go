@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -77,6 +78,15 @@ var (
 	errPGNSACMEEABNeedsDirectory = errors.New("pgns_acme_eab credentials require pgns_acme_directory")
 	errPGNSPersistNeedsIssuer    = errors.New("pgns_persist01 requires pgns_acme_caa_issuer")
 	errPGNSNoDialableRelays      = errors.New("PGNS resolved zero public relay endpoints")
+	errPGNSHttpURLRequired       = errors.New("must be an http:// or https:// URL")
+	errPGNSCompressedPubKeyHex   = errors.New("expected 33-byte compressed hex secp256k1 public key")
+	errPGNSEndpointPairCount     = errors.New("expected 1 or 2 comma-separated addresses")
+	errPGNSEndpointPortZero      = errors.New("endpoint port must be >= 1")
+	errPGNSEndpointPortMismatch  = errors.New("mismatched ports between ipv4 and ipv6")
+	errPGNSEndpointDupIPv4       = errors.New("duplicate ipv4 address")
+	errPGNSEndpointDupIPv6       = errors.New("duplicate ipv6 address")
+	errPGNSMasterKeyInvalid      = errors.New("master identity has invalid secp256k1 private key")
+	errPGNSACMENoInitialLeaf     = errors.New("cannot stage ACME challenge before initial leaf exists")
 )
 
 type pgnsRelayEndpoint struct {
@@ -162,10 +172,7 @@ func validatePGNSNamespace(cfg *PGNSConfig, rawName, normZone string) error {
 	if cfg.RecoveryPubKey != "" {
 		return errPGNSRecoveryIDForbidden
 	}
-	serviceLabel := strings.ToLower(strings.TrimSpace(rawName))
-	if serviceLabel == "" {
-		serviceLabel = types.UnnamedServiceLabel
-	}
+	serviceLabel := cmp.Or(strings.ToLower(strings.TrimSpace(rawName)), types.UnnamedServiceLabel)
 	const dummyIDTag = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
 	if _, err := pgns.ParseScopedFQDN(serviceLabel+"."+dummyIDTag+".id."+normZone, normZone); err != nil {
 		return fmt.Errorf("invalid PGNS service name %q: %w", serviceLabel, err)
@@ -197,8 +204,9 @@ func validatePGNSACME(cfg *PGNSConfig) error {
 func normalizeHTTPBaseURL(raw string) (string, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
 	parsed, err := url.Parse(trimmed)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return "", errors.New("must be an http:// or https:// URL")
+	validScheme := parsed != nil && (parsed.Scheme == "http" || parsed.Scheme == "https")
+	if err != nil || parsed.Host == "" || !validScheme {
+		return "", errPGNSHttpURLRequired
 	}
 	return trimmed, nil
 }
@@ -208,7 +216,7 @@ func parseCompressedPubKeyHex(raw string) ([33]byte, error) {
 	cleaned := strings.TrimPrefix(strings.TrimSpace(raw), "0x")
 	decoded, err := hex.DecodeString(cleaned)
 	if err != nil || len(decoded) != 33 {
-		return out, errors.New("expected 33-byte compressed hex secp256k1 public key")
+		return out, errPGNSCompressedPubKeyHex
 	}
 	copy(out[:], decoded)
 	if _, err := identity.ParseSecp256k1CompressedPubKey33(out); err != nil {
@@ -241,7 +249,7 @@ func parseEndpointAddressPair(raw string) (pgnsEndpointOverride, error) {
 	var ov pgnsEndpointOverride
 	parts := strings.Split(raw, ",")
 	if len(parts) == 0 || len(parts) > 2 {
-		return ov, errors.New("expected 1 or 2 comma-separated addresses")
+		return ov, errPGNSEndpointPairCount
 	}
 	for _, part := range parts {
 		addr, port, err := parsePublicAddrPort(strings.TrimSpace(part), 443)
@@ -249,21 +257,21 @@ func parseEndpointAddressPair(raw string) (pgnsEndpointOverride, error) {
 			return pgnsEndpointOverride{}, err
 		}
 		if port == 0 {
-			return pgnsEndpointOverride{}, errors.New("endpoint port must be >= 1")
+			return pgnsEndpointOverride{}, errPGNSEndpointPortZero
 		}
 		if ov.port == 0 {
 			ov.port = port
 		} else if ov.port != port {
-			return pgnsEndpointOverride{}, errors.New("mismatched ports between ipv4 and ipv6")
+			return pgnsEndpointOverride{}, errPGNSEndpointPortMismatch
 		}
 		if addr.Is4() {
 			if ov.ipv4 != ([4]byte{}) {
-				return pgnsEndpointOverride{}, errors.New("duplicate ipv4 address")
+				return pgnsEndpointOverride{}, errPGNSEndpointDupIPv4
 			}
 			ov.ipv4 = addr.As4()
 		} else {
 			if ov.ipv6 != ([16]byte{}) {
-				return pgnsEndpointOverride{}, errors.New("duplicate ipv6 address")
+				return pgnsEndpointOverride{}, errPGNSEndpointDupIPv6
 			}
 			ov.ipv6 = addr.As16()
 		}
@@ -408,7 +416,7 @@ func preparePGNSRuntime(ctx context.Context, spec Spec, masterIdentity types.Ide
 func derivePGNSSiteIdentity(masterHex, zone, serviceName, alias, siteLabel string) (*secp256k1.PrivateKey, string, string, error) {
 	rawKey, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(masterHex), "0x"))
 	if err != nil || len(rawKey) != 32 {
-		return nil, "", "", errors.New("master identity has invalid secp256k1 private key")
+		return nil, "", "", errPGNSMasterKeyInvalid
 	}
 	masterPriv := secp256k1.PrivKeyFromBytes(rawKey)
 	if alias != "" {
@@ -420,10 +428,7 @@ func derivePGNSSiteIdentity(masterHex, zone, serviceName, alias, siteLabel strin
 		sitePriv, err := pgns.DeriveAppSiteKey(masterPriv, fqdn)
 		return sitePriv, fqdn, normAlias, err
 	}
-	svc := strings.ToLower(strings.TrimSpace(serviceName))
-	if svc == "" {
-		svc = types.UnnamedServiceLabel
-	}
+	svc := cmp.Or(strings.ToLower(strings.TrimSpace(serviceName)), types.UnnamedServiceLabel)
 	sitePriv, err := pgns.DeriveIDSiteKey(masterPriv, zone, siteLabel)
 	if err != nil {
 		return nil, "", "", err
@@ -1135,7 +1140,7 @@ func (c *pgnsController) stageACMEChallenge(ctx context.Context, digest, nextSPK
 	c.mu.Lock()
 	if !c.hasLeaf {
 		c.mu.Unlock()
-		return errors.New("cannot stage ACME challenge before initial leaf exists")
+		return errPGNSACMENoInitialLeaf
 	}
 	c.acmeAccountURI = accountURI
 	c.acmeDigest = digest

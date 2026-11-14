@@ -139,7 +139,9 @@ func startUntrustedRelay(t *testing.T, ctx context.Context, ws pgns.WitnessSet) 
 func syncDNSEpoch(t *testing.T, seq *sequencer.Sequencer, dnsSrv *pgnsdns.Server, epoch uint64) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
 		rawCP, latestEp, ok := seq.LatestCheckpoint()
 		if ok && latestEp >= epoch {
 			if latestEp != epoch {
@@ -154,7 +156,10 @@ func syncDNSEpoch(t *testing.T, seq *sequencer.Sequencer, dnsSrv *pgnsdns.Server
 			}
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		if !time.Now().Before(deadline) {
+			break
+		}
+		<-tick.C
 	}
 	t.Fatalf("timed out waiting for sequencer epoch %d", epoch)
 }
@@ -279,12 +284,17 @@ func submitLeafTxToSequencer(ctx context.Context, seqURL string, tx pgns.LeafTx)
 func waitForLeafSeq(t *testing.T, seqURL, fqdn, zone string, minSeq uint64) pgns.PortalLeafRecord {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	for {
 		_, leaf, err := fetchResolveProof(context.Background(), seqURL, fqdn, zone)
 		if err == nil && leaf.Seq >= minSeq {
 			return leaf
 		}
-		time.Sleep(25 * time.Millisecond)
+		if !time.Now().Before(deadline) {
+			break
+		}
+		<-tick.C
 	}
 	t.Fatalf("timed out waiting for %s seq >= %d", fqdn, minSeq)
 	return pgns.PortalLeafRecord{}
