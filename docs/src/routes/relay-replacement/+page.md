@@ -75,6 +75,10 @@ between the processes. Disable the built-in HTTP redirect listener and keep
 the fixed-port control endpoints available to the SDK throughout draining.
 Firewall these endpoints to the intended tunnel and operator networks; they
 also accept tenant SNI and must not become an uncontrolled customer entry.
+The public :443 proxy must additionally allow only explicitly listed customer
+SNI names. Portal routes root-host and SNI-less TLS to its API handler, so
+forwarding all :443 traffic would expose that API through the proxy despite
+the control-port firewall. Keep the root hostname out of the public allowlist.
 
 The SDK currently derives the port in `PublicURL` and `AliasURL` from the
 relay URL. It will report `:8443` or `:9443` here, not the customer's `:443`.
@@ -141,15 +145,24 @@ or root `/api/healthz` alone does not verify tunnel serviceability.
 ## Switch and drain outside Portal
 
 An example [nginx stream configuration](/examples/relay-replacement/nginx.conf)
-passes customer TLS through unchanged. It must be a dedicated instance for
-this customer entry; tunnel control endpoints bypass it. It requires nginx
-1.21.4 or later with the stream module available. Install its
+passes allowed customer TLS through unchanged. Replace the sample hostname
+in its SNI map with the exact approved customer names, and update that list
+as services are added or removed. Unlisted names, including the root and empty
+SNI, go to a loopback rejection listener and never reach Portal. Reserve
+`127.0.0.1:10443` for that listener. The map is routing policy, not customer
+authentication; application authentication still belongs to the service.
+
+It must be a dedicated instance for this customer entry; tunnel control
+endpoints bypass it. It requires nginx 1.21.4 or later with the stream and
+[`stream_ssl_preread`](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html)
+modules available. Install its
 `worker_shutdown_timeout` **before** the cutover so the workers being retired
 already have the deadline configured.
 
 After every target service passes the readiness and application probes,
-change the single `proxy_pass` from `127.0.0.1:8443` to
-`127.0.0.1:9443`, validate the configuration, and reload that nginx instance:
+change the `customer_relay` upstream server from `127.0.0.1:8443` to
+`127.0.0.1:9443`, keeping the SNI allowlist and rejection path intact. Validate
+the configuration, and reload that nginx instance:
 
 ```sh
 nginx -t
@@ -163,6 +176,10 @@ configuration. The
 bounds the old workers' lifetime. Confirm the reload succeeded and probe the
 live stable URL; reload is not an atomic, cross-system readiness transaction.
 The stream `proxy_timeout` is an inactivity timeout, not the drain deadline.
+Before admitting production traffic, also verify that root SNI, a TLS client
+without SNI, and an unlisted hostname are closed on :443 without reaching a
+Portal API. The intended tunnel/operator networks must still be able to use
+the direct control ports. Repeat these negative probes after cutover.
 
 Leave both Portal processes and SDK listeners alive. Monitor the retiring
 nginx workers and their upstream connections; they include accepted customer
