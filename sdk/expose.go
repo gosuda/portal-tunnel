@@ -311,7 +311,10 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err != nil {
 		return nil, err
 	}
-	if err := validateExposeContext(ctx); err != nil {
+	if ctx == nil {
+		return nil, errPortalSDKContextIsNil
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := validateExposeConfig(cfg); err != nil {
@@ -352,17 +355,21 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		updates:        make(chan RelayStatus, 1),
 		discovery:      controller,
 	}
-	return exposure.startExposeRunners(exposureCtx, initialRelays)
-}
-
-func validateExposeContext(ctx context.Context) error {
-	if ctx == nil {
-		return errPortalSDKContextIsNil
+	if exposure.cache != nil {
+		go exposure.cache.Run(exposureCtx)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	if err := exposure.setRelays(initialRelays, true); err != nil {
+		_ = exposure.Close()
+		return nil, err
 	}
-	return nil
+	if exposure.discovery != nil {
+		go exposure.runDiscoveryLoop(exposureCtx)
+	}
+	go func() {
+		<-exposure.done
+		_ = exposure.Close()
+	}()
+	return exposure, nil
 }
 
 func validateExposeConfig(cfg options) error {
@@ -403,24 +410,6 @@ func validateExposeConfig(cfg options) error {
 		return errPortalSDKThisRuntimeSupportsHTTPS
 	}
 	return nil
-}
-
-func (e *Exposure) startExposeRunners(exposureCtx context.Context, initialRelays []string) (*Exposure, error) {
-	if e.cache != nil {
-		go e.cache.Run(exposureCtx)
-	}
-	if err := e.setRelays(initialRelays, true); err != nil {
-		_ = e.Close()
-		return nil, err
-	}
-	if e.discovery != nil {
-		go e.runDiscoveryLoop(exposureCtx)
-	}
-	go func() {
-		<-e.done
-		_ = e.Close()
-	}()
-	return e, nil
 }
 
 func applyExposeOptions(opts []Option) (options, error) {
@@ -826,7 +815,13 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	e.mu.Unlock()
 	deselected := e.syncRelayStatuses(relayURLs)
 
-	e.closeStaleRelayListenersLocked(staleListeners)
+	for relayURL, listener := range staleListeners {
+		if listener != nil {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
+			}
+		}
+	}
 	e.reportDeselectedRelays(deselected)
 	addedRelayURLs, err := e.publishMissingRelayListeners(missingRelayURLs, failOnError)
 	if err != nil {
@@ -896,17 +891,6 @@ func (e *Exposure) unblockedRelaySet(relayURLs []string) map[string]struct{} {
 		desired[relayURL] = struct{}{}
 	}
 	return desired
-}
-
-func (e *Exposure) closeStaleRelayListenersLocked(staleListeners map[string]*listener) {
-	for relayURL, listener := range staleListeners {
-		if listener == nil {
-			continue
-		}
-		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
-		}
-	}
 }
 
 func (e *Exposure) publishRelayListenerLocked(relayURL string) (bool, error) {
@@ -989,32 +973,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 	}
 
 	relayURL := listener.api.relayURL.String()
-	workers := e.runListenerAcceptLoopSpawnWorkers(listener, relayURL)
-	defer func() {
-
-		workers.Wait()
-		e.mu.Lock()
-		if current, ok := e.relayListeners[relayURL]; ok && current == listener {
-			delete(e.relayListeners, relayURL)
-		}
-		e.mu.Unlock()
-	}()
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			e.reportAcceptLoopError(listener, relayURL, err)
-			return
-		}
-
-		if e.deliverAcceptedConn(conn) {
-			return
-		}
-	}
-}
-
-func (e *Exposure) runListenerAcceptLoopSpawnWorkers(listener *listener, relayURL string) *sync.WaitGroup {
-	workers := &sync.WaitGroup{}
+	var workers sync.WaitGroup
 	if statusUpdates := listener.statusUpdates; statusUpdates != nil {
 		workers.Add(1)
 		go func() {
@@ -1029,28 +988,35 @@ func (e *Exposure) runListenerAcceptLoopSpawnWorkers(listener *listener, relayUR
 			e.pumpListenerDatagrams(listener, relayURL)
 		}()
 	}
-	return workers
-}
+	defer func() {
+		workers.Wait()
+		e.mu.Lock()
+		if current, ok := e.relayListeners[relayURL]; ok && current == listener {
+			delete(e.relayListeners, relayURL)
+		}
+		e.mu.Unlock()
+	}()
 
-func (e *Exposure) reportAcceptLoopError(listener *listener, relayURL string, err error) {
-	select {
-	case <-listener.doneCh:
-		return
-	default:
-	}
-	if errors.Is(err, net.ErrClosed) {
-		return
-	}
-	log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
-}
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			select {
+			case <-listener.doneCh:
+				return
+			default:
+			}
+			if !errors.Is(err, net.ErrClosed) {
+				log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
+			}
+			return
+		}
 
-func (e *Exposure) deliverAcceptedConn(conn net.Conn) bool {
-	select {
-	case <-e.done:
-		_ = conn.Close()
-		return true
-	case e.accepted <- conn:
-		return false
+		select {
+		case <-e.done:
+			_ = conn.Close()
+			return
+		case e.accepted <- conn:
+		}
 	}
 }
 
@@ -1206,18 +1172,6 @@ func (e *Exposure) trackBlockedRelayLocked(relayURL string, err error) {
 }
 
 func mergeRelayStatusFieldsLocked(previous RelayStatus, update listenerStatus, relayURL string) RelayStatus {
-	status := mergeRelayScalarFieldsLocked(previous, update, relayURL)
-	status = applyRelayEndpointsLocked(status, update)
-	switch {
-	case status.AliasURL == "":
-		status.AliasSince = time.Time{}
-	case status.AliasURL != previous.AliasURL:
-		status.AliasSince = time.Now()
-	}
-	return status
-}
-
-func mergeRelayScalarFieldsLocked(previous RelayStatus, update listenerStatus, relayURL string) RelayStatus {
 	status := previous
 	status.RelayURL = relayURL
 	if update.state != "" {
@@ -1238,10 +1192,7 @@ func mergeRelayScalarFieldsLocked(previous RelayStatus, update listenerStatus, r
 	} else if update.state != RelayFailed {
 		status.Err = nil
 	}
-	return status
-}
 
-func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayStatus {
 	if update.state == RelayFailed {
 		status.AliasURL = ""
 		status.LegacyURL = ""
@@ -1253,7 +1204,8 @@ func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayS
 		status.UDPAddr = ""
 		status.TCPAddr = ""
 	}
-	if update.publicURL != "" || update.legacyURL != "" || update.aliasURL != "" || update.state == RelayReady {
+	hasEndpoint := update.publicURL != "" || update.legacyURL != "" || update.aliasURL != ""
+	if hasEndpoint || update.state == RelayReady {
 		status.PublicURL = update.publicURL
 		status.LegacyURL = update.legacyURL
 		status.AliasURL = update.aliasURL
@@ -1263,6 +1215,13 @@ func applyRelayEndpointsLocked(status RelayStatus, update listenerStatus) RelayS
 	}
 	if update.tcpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
 		status.TCPAddr = update.tcpAddr
+	}
+
+	switch {
+	case status.AliasURL == "":
+		status.AliasSince = time.Time{}
+	case status.AliasURL != previous.AliasURL:
+		status.AliasSince = time.Now()
 	}
 	return status
 }
