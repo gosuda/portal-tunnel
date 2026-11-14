@@ -332,13 +332,13 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 
-	challenge, sourceAddr, err := s.registry.consumeVerifiedRegisterChallenge(req)
+	challenge, sourceAddr, pgnsLeaf, err := s.registry.consumeVerifiedRegisterChallenge(req)
 	if err != nil {
 		switch {
 		case errors.Is(err, identity.ErrRegisterChallengeInvalidSignature):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
 		default:
-			utils.InvalidRequestError(err).Write(w)
+			writeAPIErrorResponse(w, err)
 		}
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
@@ -348,7 +348,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 	s.registry.suspendIdentity(identityKey)
 
 	self, descriptors := s.issueHandleRegisterDescriptors(challenge)
-	record, replaced, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial())
+	record, replaced, resp, err := s.registry.RegisterWithPGNS(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial(), pgnsLeaf)
 	if replaced != nil {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
 		s.deleteLeaseDNS(cleanupCtx, replaced)

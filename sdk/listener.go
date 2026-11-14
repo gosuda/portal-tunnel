@@ -71,6 +71,8 @@ type listenerConfig struct {
 	TLSRequireLocal    bool
 	TLSCertFile        string
 	TLSKeyFile         string
+	PGNSFQDN           string
+	PGNSProvider       func(context.Context) (*types.PGNSRegistrationProof, error)
 	Cache              *cache.Source
 	Identity           types.Identity
 	Overlay            bool
@@ -152,6 +154,7 @@ type listener struct {
 	tlsRequireLocal    bool
 	tlsCertFile        string
 	tlsKeyFile         string
+	pgnsFQDN           string
 	cancel             context.CancelFunc
 	doneCh             <-chan struct{}
 	closeOnce          sync.Once
@@ -211,10 +214,15 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		tlsKeyFile:         cfg.TLSKeyFile,
 		tlsStateDir:        cfg.TLSStateDir,
 		tlsRequireLocal:    cfg.TLSRequireLocal,
+		pgnsFQDN:           utils.NormalizeHostname(cfg.PGNSFQDN),
 		certificateMonitor: cfg.CertificateMonitor,
-		api:                &apiClient{relayURL: relayurl},
-		lease:              utils.NewSnapshot(listenerSnapshot{}),
-		startedAt:          cfg.StartedAt,
+		api: &apiClient{
+			relayURL:     relayurl,
+			pgnsFQDN:     utils.NormalizeHostname(cfg.PGNSFQDN),
+			pgnsProvider: cfg.PGNSProvider,
+		},
+		lease:     utils.NewSnapshot(listenerSnapshot{}),
+		startedAt: cfg.StartedAt,
 	}
 	l.mitmManager = newMITMManager(l, cfg.BanMITM)
 	l.accepted = make(chan net.Conn, defaultReadyTarget*2)
@@ -456,6 +464,7 @@ drainLoop:
 type listenerSnapshot struct {
 	hostname       string
 	legacyHostname string
+	pgnsFQDN       string
 
 	aliasHostname       string
 	udpAddr             string
@@ -803,13 +812,17 @@ func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS tenantTL
 
 func (l *listener) claimReverseSession(ctx context.Context, conn net.Conn, tenantTLS tenantTLSClient) (bool, error) {
 	defer l.reportStreamClosed()
-	binding, err := transport.ReadStart(ctx, conn, defaultHandshakeTimeout)
+	mode, binding, err := transport.ReadStartMode(ctx, conn, defaultHandshakeTimeout)
 	if err != nil {
 		return false, err
 	}
 
 	acceptedConn := conn
-	if len(binding) != 0 {
+	if mode == transport.ReverseStartTLS || mode == transport.ReverseStartLocalTLS {
+		if tenantTLS == nil {
+			_ = conn.Close()
+			return true, errTLSNameOutsideLease
+		}
 		handshakeCtx, cancel := context.WithTimeout(ctx, defaultHandshakeTimeout)
 		defer cancel()
 		acceptedConn, err = tenantTLS.TerminateConn(handshakeCtx, conn, binding)
@@ -1160,7 +1173,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		TCPEnabled:             l.tcpEnabled,
 		StartedAt:              l.startedAt,
 	}
-	if l.tlsStateDir != "" || l.tlsCertFile != "" {
+	if l.tlsStateDir != "" || l.tlsCertFile != "" || l.pgnsFQDN != "" {
 		registerReq.Namespace = types.LocalTLSNamespaceV1
 	}
 	l.cache.ConfigureRegistration(&registerReq)
@@ -1171,6 +1184,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	pending := &listenerSnapshot{
 		hostname:       resp.CanonicalHostname,
 		legacyHostname: resp.LegacyCanonicalHostname,
+		pgnsFQDN:       l.pgnsFQDN,
 		aliasHostname:  resp.Hostname,
 		udpAddr:        resp.UDPAddr,
 		tcpAddr:        resp.TCPAddr,
@@ -1192,7 +1206,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		}
 		pending.certificateObserver.Close()
 	}()
-	if resp.Namespace != types.LocalTLSNamespaceV1 && (l.tlsRequireLocal || l.tlsCertFile != "") {
+	if resp.Namespace != types.LocalTLSNamespaceV1 && (l.tlsRequireLocal || l.tlsCertFile != "" || l.pgnsFQDN != "") {
 		return fmt.Errorf("%w: relay does not support the required Local TLS namespace", errRelayIncompatible)
 	}
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
@@ -1238,23 +1252,29 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 }
 
 func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse, observer *certmonitor.CertificateObserver) (tenantTLSClient, error) {
-	legacyHostname := resp.CanonicalHostname
-	if resp.Namespace == types.LocalTLSNamespaceV1 {
-		legacyHostname = resp.LegacyCanonicalHostname
-	}
-	legacy, err := keyless.NewClient(ctx, keyless.ClientConfig{
-		RelayURL:    l.api.relayURL.String(),
-		Hostname:    legacyHostname,
-		AccessToken: resp.AccessToken,
-	})
-	if err != nil {
-		return nil, err
+	isPGNS := l.pgnsFQDN != "" || (resp.Namespace == types.LocalTLSNamespaceV1 && resp.LegacyCanonicalHostname == "")
+	var legacy *keyless.Client
+	var legacyHostname string
+	if !isPGNS {
+		legacyHostname = resp.CanonicalHostname
+		if resp.Namespace == types.LocalTLSNamespaceV1 {
+			legacyHostname = resp.LegacyCanonicalHostname
+		}
+		client, err := keyless.NewClient(ctx, keyless.ClientConfig{
+			RelayURL:    l.api.relayURL.String(),
+			Hostname:    legacyHostname,
+			AccessToken: resp.AccessToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		legacy = client
 	}
 	if resp.Namespace != types.LocalTLSNamespaceV1 {
 		return legacy, nil
 	}
 	l.api.mu.RLock()
-	issuanceDisabled := l.api.issuanceDisabled
+	issuanceDisabled := l.api.issuanceDisabled || isPGNS
 	l.api.mu.RUnlock()
 	local, err := localtls.NewClient(ctx, localtls.ClientConfig{
 		RelayURL:              l.api.relayURL.String(),
@@ -1267,7 +1287,9 @@ func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterR
 		InstalledCertificates: observer.Events(),
 	})
 	if err != nil {
-		_ = legacy.Close()
+		if legacy != nil {
+			_ = legacy.Close()
+		}
 		return nil, err
 	}
 	if l.http2Enabled.Load() {
@@ -1511,7 +1533,7 @@ func (c *namespaceTLS) TerminateConn(ctx context.Context, conn net.Conn, binding
 	if hostname == c.hostname {
 		return c.local.TerminateConn(ctx, buffered, binding)
 	}
-	if hostname == "" || (hostname != c.legacyHostname && hostname != c.aliasHostname) {
+	if c.legacy == nil || hostname == "" || (hostname != c.legacyHostname && hostname != c.aliasHostname) {
 		_ = buffered.Close()
 		return nil, errTLSNameOutsideLease
 	}
@@ -1521,15 +1543,26 @@ func (c *namespaceTLS) TerminateConn(ctx context.Context, conn net.Conn, binding
 func (c *namespaceTLS) TenantTLSConfig() *tls.Config   { return c.local.TenantTLSConfig() }
 func (c *namespaceTLS) TenantCertPool() *x509.CertPool { return c.local.TenantCertPool() }
 func (c *namespaceTLS) SetAccessToken(token string) {
-	c.legacy.SetAccessToken(token)
+	if c.legacy != nil {
+		c.legacy.SetAccessToken(token)
+	}
 	c.local.SetAccessToken(token)
 }
 func (c *namespaceTLS) RefreshChain(ctx context.Context) (bool, error) {
-	a, aerr := c.legacy.RefreshChain(ctx)
+	var a bool
+	var aerr error
+	if c.legacy != nil {
+		a, aerr = c.legacy.RefreshChain(ctx)
+	}
 	b, berr := c.local.RefreshChain(ctx)
 	return a || b, errors.Join(aerr, berr)
 }
-func (c *namespaceTLS) Close() error { return errors.Join(c.local.Close(), c.legacy.Close()) }
+func (c *namespaceTLS) Close() error {
+	if c.legacy != nil {
+		return errors.Join(c.local.Close(), c.legacy.Close())
+	}
+	return c.local.Close()
+}
 
 // enableHTTP2 is called by the HTTP consumer, never by the raw stream API.
 func (e *Exposure) enableHTTP2() {

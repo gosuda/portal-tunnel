@@ -16,14 +16,41 @@ func TestReadRawStartSkipsKeepaliveAndPreservesPayload(t *testing.T) {
 	defer relay.Close()
 	defer client.Close()
 	written := relayRawSequence(t, relay)
-	binding, err := ReadStart(context.Background(), client, time.Second)
-	if err != nil || binding != nil {
-		t.Fatalf("raw start = %x, %v", binding, err)
+	mode, binding, err := ReadStartMode(context.Background(), client, time.Second)
+	if err != nil || mode != ReverseStartRaw || binding != nil {
+		t.Fatalf("raw start = (%v, %x, %v)", mode, binding, err)
 	}
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
 	var payload [3]byte
 	if _, err := io.ReadFull(client, payload[:]); err != nil || string(payload[:]) != "raw" {
 		t.Fatalf("raw payload = %q, %v", payload, err)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadLocalTLSStartPreservesPayload(t *testing.T) {
+	relay, client := net.Pipe()
+	defer relay.Close()
+	defer client.Close()
+	written := make(chan error, 1)
+	go func() {
+		if err := WriteLocalTLSStart(relay); err != nil {
+			written <- err
+			return
+		}
+		_, err := relay.Write([]byte("hello"))
+		written <- err
+	}()
+	mode, binding, err := ReadStartMode(context.Background(), client, time.Second)
+	if err != nil || mode != ReverseStartLocalTLS || binding != nil {
+		t.Fatalf("local tls start = (%v, %x, %v)", mode, binding, err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	var payload [5]byte
+	if _, err := io.ReadFull(client, payload[:]); err != nil || string(payload[:]) != "hello" {
+		t.Fatalf("local tls payload = %q, %v", payload, err)
 	}
 	if err := <-written; err != nil {
 		t.Fatal(err)
@@ -52,7 +79,7 @@ func TestReadStartRejectsMalformedFraming(t *testing.T) {
 	for _, frame := range [][]byte{{0xff}, {types.ReverseMarkerTLSStart, 1, 2}} {
 		relay, client := net.Pipe()
 		go func() { _, _ = relay.Write(frame); _ = relay.Close() }()
-		if _, err := ReadStart(context.Background(), client, time.Second); err == nil {
+		if _, _, err := ReadStartMode(context.Background(), client, time.Second); err == nil {
 			t.Fatalf("accepted invalid frame %x", frame)
 		}
 		if err := client.SetDeadline(time.Now()); err == nil {
@@ -68,7 +95,7 @@ func TestReadStartRequiresFullTLSBinding(t *testing.T) {
 		_, _ = relay.Write(bytes.Repeat([]byte{0x61}, types.TLSBindingSize-1))
 		_ = relay.Close()
 	}()
-	if _, err := ReadStart(context.Background(), client, time.Second); err == nil {
+	if _, _, err := ReadStartMode(context.Background(), client, time.Second); err == nil {
 		t.Fatal("short TLS binding accepted")
 	}
 	if err := client.SetDeadline(time.Now()); err == nil {
@@ -84,9 +111,9 @@ func TestReadStartPreservesBytesAfterBinding(t *testing.T) {
 	go func() {
 		_, _ = relay.Write(append([]byte{types.ReverseMarkerTLSStart}, append(binding, []byte("payload")...)...))
 	}()
-	got, err := ReadStart(context.Background(), client, time.Second)
-	if err != nil || !bytes.Equal(got, binding) {
-		t.Fatalf("binding = %x, %v", got, err)
+	mode, got, err := ReadStartMode(context.Background(), client, time.Second)
+	if err != nil || mode != ReverseStartTLS || !bytes.Equal(got, binding) {
+		t.Fatalf("binding = (%v, %x, %v)", mode, got, err)
 	}
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
 	var trailing [7]byte
@@ -101,7 +128,7 @@ func TestReadStartCancellationInterruptsIdleRead(t *testing.T) {
 	defer client.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { _, err := ReadStart(ctx, client, time.Hour); done <- err }()
+	go func() { _, _, err := ReadStartMode(ctx, client, time.Hour); done <- err }()
 	cancel()
 	select {
 	case err := <-done:

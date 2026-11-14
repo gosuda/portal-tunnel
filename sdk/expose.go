@@ -40,6 +40,10 @@ var (
 	errPortalSDKLeastOneInitialRelay       = errors.New("portal sdk: at least one initial relay is required")
 	errExposureDoesNotHaveUDPEnabled       = errors.New("exposure does not have udp enabled")
 	errExposureDoesNotHaveTCPEnabled       = errors.New("exposure does not have tcp enabled")
+	errPGNSFQDNRequired                    = errors.New("PGNS requires a non-empty FQDN")
+	errPGNSModeUnsupported                 = errors.New("PGNS cannot be combined with relay static cache, raw TCP, automatic relay TLS, or the browser runtime")
+	errPGNSRequiresLocalCertificate        = errors.New("PGNS requires local TLS certificate files")
+	errPGNSProviderRequired                = errors.New("PGNS requires a registration proof provider")
 )
 
 // RelayState is the lifecycle state of one relay.
@@ -187,6 +191,9 @@ type options struct {
 	TLSRequireLocal    bool
 	TLSCertFile        string
 	TLSKeyFile         string
+	PGNSFQDN           string
+	PGNSProvider       func(context.Context) (*types.PGNSRegistrationProof, error)
+	pgnsConfigured     bool
 	Cache              *cache.SourceConfig
 	UDPEnabled         bool
 	TCPEnabled         bool
@@ -248,6 +255,16 @@ func WithCertificateMonitoring(stateDir, baselineFile, dnsResolver string) Optio
 		opts.CertificateMonitor = &certmonitor.MonitorConfig{
 			StateDir: stateDir, BaselineFile: baselineFile, DNSResolver: dnsResolver,
 		}
+	}
+}
+
+// WithPGNS opts an exposure into a PGNS-owned global FQDN using local TLS
+// certificates and offline witness-verified registration proofs.
+func WithPGNS(fqdn string, proofProvider func(context.Context) (*types.PGNSRegistrationProof, error)) Option {
+	return func(opts *options) {
+		opts.pgnsConfigured = true
+		opts.PGNSFQDN = utils.NormalizeHostname(fqdn)
+		opts.PGNSProvider = proofProvider
 	}
 }
 
@@ -405,7 +422,21 @@ func validateExposeConfig(cfg options) error {
 	if err := cfg.Metadata.Validate(); err != nil {
 		return err
 	}
-	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
+	if cfg.pgnsConfigured {
+		if cfg.PGNSFQDN == "" {
+			return errPGNSFQDNRequired
+		}
+		if cfg.PGNSProvider == nil {
+			return errPGNSProviderRequired
+		}
+		if cfg.Cache != nil || cfg.TCPEnabled || cfg.AutomaticTLS || runtime.GOOS == "js" {
+			return errPGNSModeUnsupported
+		}
+		if cfg.TLSCertFile == "" {
+			return errPGNSRequiresLocalCertificate
+		}
+	}
+	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM || cfg.pgnsConfigured
 	if runtime.GOOS == "js" && requiresSocketTransport {
 		return errPortalSDKThisRuntimeSupportsHTTPS
 	}
@@ -899,6 +930,8 @@ func (e *Exposure) publishRelayListenerLocked(relayURL string) (bool, error) {
 		TLSKeyFile:         e.options.TLSKeyFile,
 		TLSStateDir:        e.options.TLSStateDir,
 		TLSRequireLocal:    e.options.TLSRequireLocal,
+		PGNSFQDN:           e.options.PGNSFQDN,
+		PGNSProvider:       e.options.PGNSProvider,
 		CertificateMonitor: e.options.CertificateMonitor,
 		Cache:              e.cache,
 		Identity:           e.identity,
@@ -916,6 +949,65 @@ func (e *Exposure) publishRelayListenerLocked(relayURL string) (bool, error) {
 		listener.enableHTTP2()
 	}
 	return e.publishCreatedListener(relayURL, listener), nil
+}
+
+// RefreshCertificates reloads local TLS certificate material across active
+// relay listeners after on-disk renewal.
+func (e *Exposure) RefreshCertificates(ctx context.Context) error {
+	if e == nil || e.closed() {
+		return net.ErrClosed
+	}
+	e.mu.RLock()
+	listeners := make([]*listener, 0, len(e.relayListeners))
+	for _, l := range e.relayListeners {
+		if l != nil {
+			listeners = append(listeners, l)
+		}
+	}
+	e.mu.RUnlock()
+	var refreshErr error
+	for _, l := range listeners {
+		lease, ok := l.leaseSnapshot()
+		if !ok || lease.tenantTLS == nil {
+			continue
+		}
+		if _, err := lease.tenantTLS.RefreshChain(ctx); err != nil {
+			refreshErr = errors.Join(refreshErr, err)
+		}
+	}
+	return refreshErr
+}
+
+// ProbeRelayPGNS executes a direct ALPN portal-cb-v1 self-probe against one
+// active relay listener to verify end-to-end passthrough health.
+func (e *Exposure) ProbeRelayPGNS(ctx context.Context, relayURL string) error {
+	if e == nil || e.closed() {
+		return net.ErrClosed
+	}
+	if ctx == nil {
+		return errPortalSDKContextIsNil
+	}
+	normalized, err := utils.NormalizeRelayURL(relayURL)
+	if err != nil {
+		return err
+	}
+	e.mu.RLock()
+	l := e.relayListeners[normalized]
+	e.mu.RUnlock()
+	if l == nil || l.mitmManager == nil {
+		return errListenerIsNotReady
+	}
+	report, err := l.mitmManager.probePGNS(ctx)
+	if err != nil {
+		return err
+	}
+	if report.Detected {
+		return fmt.Errorf("tls termination suspected: %s", report.Reason)
+	}
+	if report.Reason != "" {
+		return fmt.Errorf("pgns relay self-probe failed: %s", report.Reason)
+	}
+	return nil
 }
 
 func logReconciledRelays(relayURLs []string, staleListeners map[string]*listener, addedRelayURLs []string) {

@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/gosuda/portal-tunnel/v2/pgns"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
@@ -60,6 +61,9 @@ type ServerConfig struct {
 	MinPort            int
 	MaxPort            int
 	ACME               acme.Config
+	// PGNSWitnesses configures the witness public keys and quorum threshold used
+	// to verify PGNS registration proofs offline during /sdk/register.
+	PGNSWitnesses pgns.WitnessSet
 	// UnapprovedLeasesPerSource bounds the leases one source can hold without
 	// being routable. Zero disables the bound.
 	UnapprovedLeasesPerSource int
@@ -203,6 +207,9 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 			return ServerConfig{}, fmt.Errorf("TENANT_CERTIFICATES requires usable TENANT_ISSUANCE_STATE_DIR: %w", err)
 		}
 	}
+	if len(cfg.PGNSWitnesses.Witnesses) > 0 && (cfg.PGNSWitnesses.Threshold <= 0 || cfg.PGNSWitnesses.Threshold > len(cfg.PGNSWitnesses.Witnesses)) {
+		return ServerConfig{}, fmt.Errorf("invalid pgns witness threshold %d for %d witnesses", cfg.PGNSWitnesses.Threshold, len(cfg.PGNSWitnesses.Witnesses))
+	}
 	if cfg.SNIPort == 0 {
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
 	}
@@ -232,6 +239,7 @@ func DefaultSNIPort(portalURL string) int {
 
 func (cfg ServerConfig) snapshot() ServerConfig {
 	cfg.Bootstraps = slices.Clone(cfg.Bootstraps)
+	cfg.PGNSWitnesses.Witnesses = slices.Clone(cfg.PGNSWitnesses.Witnesses)
 	return cfg
 }
 
@@ -497,6 +505,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	registry.unapprovedPerSource = validated.UnapprovedLeasesPerSource
+	registry.pgnsWitnesses = pgns.WitnessSet{
+		Threshold: validated.PGNSWitnesses.Threshold,
+		Witnesses: slices.Clone(validated.PGNSWitnesses.Witnesses),
+	}
 	return completeNewServer(validated, registry, relayIdentity, relayAuthority)
 }
 
@@ -1284,7 +1296,7 @@ func (s *Server) closeIngress() {
 	}
 }
 
-func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte) error {
+func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte, localTLS bool) error {
 	bridge, err := s.registry.admitBridge(ctx, record, conn)
 	if err != nil {
 		return err
@@ -1292,8 +1304,11 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 	defer record.releaseBridge(bridge)
 	claimCtx, cancel := context.WithTimeout(bridge.ctx, defaultClaimTimeout)
 	defer cancel()
-	binding := s.registry.bindings.Issue(record.id, helloSpan)
-	defer s.registry.bindings.Discard(binding)
+	var binding []byte
+	if !localTLS {
+		binding = s.registry.bindings.Issue(record.id, helloSpan)
+		defer s.registry.bindings.Discard(binding)
+	}
 	for {
 		session, err := record.reverse.Acquire(claimCtx)
 		if err != nil {
@@ -1303,7 +1318,12 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 			_ = session.Close()
 			return err
 		}
-		if err := transport.WriteTLSStart(session, binding); err != nil {
+		if localTLS {
+			err = transport.WriteLocalTLSStart(session)
+		} else {
+			err = transport.WriteTLSStart(session, binding)
+		}
+		if err != nil {
 			_ = session.Close()
 			continue
 		}
@@ -1489,7 +1509,8 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 		_ = wrappedConn.Close()
 		return
 	}
-	if err := s.bridgeLeaseConn(ctx, wrappedConn, record, helloSpan); err != nil {
+	useLocalTLS := record.pgnsFQDN != "" || (record.Namespace == types.LocalTLSNamespaceV1 && serverName == record.CanonicalHostname)
+	if err := s.bridgeLeaseConn(ctx, wrappedConn, record, helloSpan, useLocalTLS); err != nil {
 		log.Warn().Err(err).Msg("bridge public ingress")
 		_ = wrappedConn.Close()
 		return

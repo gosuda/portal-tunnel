@@ -12,11 +12,21 @@ import (
 
 const defaultSessionWriteLimit = 5 * time.Second
 
-// ReadStart skips keepalives and returns the TLS binding, or nil for raw
-// traffic. The caller retains conn; invalid or interrupted framing closes it.
-func ReadStart(ctx context.Context, conn net.Conn, timeout time.Duration) (binding []byte, err error) {
+// ReverseStartMode identifies the framing mode signaled at the start of a reverse stream.
+type ReverseStartMode uint8
+
+const (
+	ReverseStartTLS ReverseStartMode = iota + 1
+	ReverseStartRaw
+	ReverseStartLocalTLS
+)
+
+// ReadStartMode skips keepalives and returns the stream framing mode along with
+// the TLS binding for ReverseStartTLS streams. The caller retains conn; invalid
+// or interrupted framing closes it.
+func ReadStartMode(ctx context.Context, conn net.Conn, timeout time.Duration) (mode ReverseStartMode, binding []byte, err error) {
 	if conn == nil {
-		return nil, net.ErrClosed
+		return 0, nil, net.ErrClosed
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer func() {
@@ -27,16 +37,16 @@ func ReadStart(ctx context.Context, conn net.Conn, timeout time.Duration) (bindi
 	}()
 	marker, markerErr := nextReverseMarker(ctx, conn, timeout)
 	if markerErr != nil {
-		return nil, markerErr
+		return 0, nil, markerErr
 	}
-	startBinding, bindingErr := decodeReverseBinding(conn, marker)
+	mode, startBinding, bindingErr := decodeReverseStart(conn, marker)
 	if bindingErr != nil {
-		return nil, bindingErr
+		return 0, nil, bindingErr
 	}
 	if deadlineErr := conn.SetReadDeadline(time.Time{}); deadlineErr != nil {
-		return nil, deadlineErr
+		return 0, nil, deadlineErr
 	}
-	return startBinding, nil
+	return mode, startBinding, nil
 }
 
 func nextReverseMarker(ctx context.Context, conn net.Conn, timeout time.Duration) (byte, error) {
@@ -52,18 +62,20 @@ func nextReverseMarker(ctx context.Context, conn net.Conn, timeout time.Duration
 	}
 }
 
-func decodeReverseBinding(conn net.Conn, marker byte) ([]byte, error) {
+func decodeReverseStart(conn net.Conn, marker byte) (ReverseStartMode, []byte, error) {
 	switch marker {
 	case types.ReverseMarkerTLSStart:
 		binding := make([]byte, types.TLSBindingSize)
 		if _, err := io.ReadFull(conn, binding); err != nil {
-			return nil, err
+			return 0, nil, err
 		}
-		return binding, nil
+		return ReverseStartTLS, binding, nil
 	case types.ReverseMarkerRawStart:
-		return nil, nil
+		return ReverseStartRaw, nil, nil
+	case types.ReverseMarkerLocalTLSStart:
+		return ReverseStartLocalTLS, nil, nil
 	default:
-		return nil, fmt.Errorf("unexpected reverse marker: 0x%02x", marker)
+		return 0, nil, fmt.Errorf("unexpected reverse marker: 0x%02x", marker)
 	}
 }
 
@@ -85,6 +97,10 @@ func WriteTLSStart(conn net.Conn, binding [types.TLSBindingSize]byte) error {
 	frame := [1 + types.TLSBindingSize]byte{types.ReverseMarkerTLSStart}
 	copy(frame[1:], binding[:])
 	return writeStartFrame(conn, frame[:])
+}
+
+func WriteLocalTLSStart(conn net.Conn) error {
+	return writeStartFrame(conn, []byte{types.ReverseMarkerLocalTLSStart})
 }
 
 func WriteRawStart(conn net.Conn) error {

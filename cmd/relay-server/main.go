@@ -41,21 +41,23 @@ func main() {
 }
 
 type appConfig struct {
-	Relay             portal.ServerConfig
-	UDPEnabled        bool
-	TCPEnabled        bool
-	PreAuth           policy.PreAuthConfig
-	ApprovalMode      string
-	TrustProxyHeaders bool
-	TrustedProxyCIDRs string
-	TunnelSourceCIDRs string
-	FrontendDir       string
-	AdminToken        string
-	PprofEnabled      bool
-	PprofListenAddr   string
-	X402Enabled       bool
-	X402Testnet       bool
-	X402PayTo         string
+	Relay                portal.ServerConfig
+	PGNSWitnesses        []string
+	PGNSWitnessThreshold int
+	UDPEnabled           bool
+	TCPEnabled           bool
+	PreAuth              policy.PreAuthConfig
+	ApprovalMode         string
+	TrustProxyHeaders    bool
+	TrustedProxyCIDRs    string
+	TunnelSourceCIDRs    string
+	FrontendDir          string
+	AdminToken           string
+	PprofEnabled         bool
+	PprofListenAddr      string
+	X402Enabled          bool
+	X402Testnet          bool
+	X402PayTo            string
 }
 
 func resolveAppConfig(args []string, environ []string) (appConfig, *cli.Env, error) {
@@ -95,6 +97,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.CSV(fs, &cfg.Relay.Bootstraps, "bootstraps", "", "bootstrap relay API URLs; merged with bootstrap relays when discovery is enabled", "BOOTSTRAPS")
 	env.Bool(fs, &cfg.Relay.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
 	env.String(fs, &cfg.Relay.IVNPConfigPath, "ivnp-config", "", "optional IVNP RouterConfig JSON file; {} uses in-memory defaults; requires discovery", "IVNP_CONFIG")
+	env.CSV(fs, &cfg.PGNSWitnesses, "pgns-witnesses", "", "comma-separated PGNS witness keys formatted as name=hex_ed25519_pubkey for offline PGNS registration verification", "PGNS_WITNESSES")
+	env.Int(fs, &cfg.PGNSWitnessThreshold, "pgns-witness-threshold", 0, nil, "required quorum threshold for PGNS witness cosignatures (0 defaults to all configured witnesses)", "PGNS_WITNESS_THRESHOLD")
 
 	env.Bool(fs, &cfg.Relay.HTTPRedirect.Enabled, "http-redirect-enabled", false, "enable HTTP redirects to the canonical HTTPS portal URL (not tenant hosts)", "HTTP_REDIRECT_ENABLED")
 	env.String(fs, &cfg.Relay.HTTPRedirect.Addr, "http-redirect-addr", portal.DefaultHTTPRedirectAddr, "HTTP redirect listen address when enabled", "HTTP_REDIRECT_ADDR")

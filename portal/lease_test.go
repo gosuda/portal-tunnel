@@ -321,7 +321,7 @@ func registerUnapprovedSlotLease(t *testing.T, registry *leaseRegistry, leaseIde
 	if err != nil {
 		t.Fatal(err)
 	}
-	challenge, asked, err := registry.consumeVerifiedRegisterChallenge(types.RegisterRequest{ChallengeID: issued.ChallengeID, SIWEMessage: issued.SIWEMessage, SIWESignature: signature})
+	challenge, asked, _, err := registry.consumeVerifiedRegisterChallenge(types.RegisterRequest{ChallengeID: issued.ChallengeID, SIWEMessage: issued.SIWEMessage, SIWESignature: signature})
 	if err != nil {
 		t.Fatalf("%s: %v", leaseIdentity.Name, err)
 	}

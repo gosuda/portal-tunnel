@@ -115,6 +115,14 @@ func (m *mitmManager) reset() {
 }
 
 func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport, error) {
+	return m.probePassthrough(ctx, false)
+}
+
+func (m *mitmManager) probePGNS(ctx context.Context) (mitmProbeReport, error) {
+	return m.probePassthrough(ctx, true)
+}
+
+func (m *mitmManager) probePassthrough(ctx context.Context, pgnsOnly bool) (mitmProbeReport, error) {
 	l := m.listener
 	if l == nil || l.api == nil || l.api.relayURL == nil {
 		return mitmProbeReport{}, errListenerIsNotReady
@@ -124,17 +132,26 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	if !ok {
 		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
+	isPGNS := lease.pgnsFQDN != "" || pgnsOnly
 	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
 		// Probe the relay-owned certificate path even before local issuance is
-		// ready. The canonical hostname uses independent local TLS material.
-		lease.hostname = lease.legacyHostname
-		lease.tenantTLS = endpoint.legacy
+		// ready. For PGNS leases (legacy == nil), probe the local PGNS FQDN directly.
+		if !isPGNS && endpoint.legacy != nil {
+			lease.hostname = lease.legacyHostname
+			lease.tenantTLS = endpoint.legacy
+		} else {
+			lease.tenantTLS = endpoint.local
+			isPGNS = isPGNS || endpoint.legacy == nil
+		}
 	}
 	if lease.hostname == "" {
 		return mitmProbeReport{}, errListenerHostnameIsUnavailable
 	}
 
-	publicURL := l.publicURLForLease(lease)
+	publicURL := l.leaseURL(lease.hostname)
+	if !isPGNS {
+		publicURL = l.publicURLForLease(lease)
+	}
 	if publicURL == "" {
 		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
@@ -147,7 +164,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 
 	probeCtx, cancel := context.WithTimeout(ctx, defaultMITMProbeTimeout)
 	defer cancel()
-	nonce, frame, dialAddr, probeTLSConf, err := m.prepareprobeTLSPassthroughDial(publicURL, lease)
+	nonce, frame, dialAddr, probeTLSConf, err := m.prepareprobeTLSPassthroughDial(publicURL, lease, isPGNS)
 	if err != nil {
 		return report, err
 	}
@@ -165,26 +182,27 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	return collectProbeResult(probeCtx, resultCh, report)
 }
 
-func (m *mitmManager) prepareprobeTLSPassthroughDial(publicURL string, lease listenerSnapshot) (mitmProbeNonce, []byte, string, *tls.Config, error) {
+func (m *mitmManager) prepareprobeTLSPassthroughDial(publicURL string, lease listenerSnapshot, directRelay bool) (mitmProbeNonce, []byte, string, *tls.Config, error) {
 	var nonce mitmProbeNonce
-	var frame []byte
-	n, f, err := generateProbeFrame()
+	n, frame, err := generateProbeFrame()
 	if err != nil {
 		return nonce, nil, "", nil, err
 	}
-	nonce, frame = n, f
+	nonce = n
 	var dialAddr string
-	d, err := m.probeDialAddress(publicURL)
+	if directRelay {
+		dialAddr = utils.EnsurePort(m.listener.api.relayURL.Host)
+	} else {
+		var err error
+		dialAddr, err = m.probeDialAddress(publicURL)
+		if err != nil {
+			return nonce, nil, "", nil, err
+		}
+	}
+	probeTLSConf, err := probeTLSConfig(lease, directRelay)
 	if err != nil {
 		return nonce, nil, "", nil, err
 	}
-	dialAddr = d
-	var probeTLSConf *tls.Config
-	c, err := probeTLSConfig(lease)
-	if err != nil {
-		return nonce, nil, "", nil, err
-	}
-	probeTLSConf = c
 	return nonce, frame, dialAddr, probeTLSConf, nil
 }
 
@@ -241,11 +259,19 @@ func generateProbeFrame() (mitmProbeNonce, []byte, error) {
 	return nonce, frame, nil
 }
 
-func probeTLSConfig(lease listenerSnapshot) (*tls.Config, error) {
+func probeTLSConfig(lease listenerSnapshot, forceCBALPN bool) (*tls.Config, error) {
 	if lease.tenantTLS == nil {
 		return nil, errListenerRelayMaterialsAreUnavailable
 	}
-	return lease.tenantTLS.TenantTLSConfig(), nil
+	conf := lease.tenantTLS.TenantTLSConfig()
+	if conf == nil {
+		return nil, errListenerRelayMaterialsAreUnavailable
+	}
+	if forceCBALPN {
+		conf = conf.Clone()
+		conf.NextProtos = []string{types.ALPNPortalCBV1}
+	}
+	return conf, nil
 }
 
 func dialProbeTLS(probeCtx context.Context, dialAddr string, probeTLSConf *tls.Config) (net.Conn, *tls.Conn, func() bool, error) {
@@ -458,14 +484,48 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	if conn == nil {
 		return errTLSConnectionIsRequired
 	}
-	var clientExporter []byte
-	var expectedAddr string
-	var nonce [types.TLSChannelBindingNonceSize]byte
-	c, e, n, err := prepareChannelBindingClient(conn, hostname)
+	expectedAddr, err := namespace.CanonicalAddress(hostname)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	return verifyChannelBinding(ctx, conn, hostname, func(compressedPubKey [33]byte) error {
+		recoveredAddr, err := identity.AddressFromCompressedPublicKeyHex(hex.EncodeToString(compressedPubKey[:]))
+		if err != nil {
+			return fmt.Errorf("resolve channel binding signer address: %w", err)
+		}
+		if !strings.EqualFold(recoveredAddr, expectedAddr) {
+			return fmt.Errorf("tls channel binding signer %s does not match canonical hostname identity %s", recoveredAddr, expectedAddr)
+		}
+		return nil
+	})
+}
+
+// VerifyPGNSChannelBinding performs the portal-cb-v1 TLS channel binding
+// handshake for a PGNS hostname and verifies that the tunnel signed
+// (context || fqdn || nonce || Et) with expectedOwnerPubKey.
+func VerifyPGNSChannelBinding(ctx context.Context, conn net.Conn, fqdn string, expectedOwnerPubKey [33]byte) error {
+	if conn == nil {
+		return errTLSConnectionIsRequired
+	}
+	normalizedHost := utils.NormalizeHostWithoutPort(fqdn)
+	if normalizedHost == "" {
+		_ = conn.Close()
+		return errTLSNameOutsideLease
+	}
+	return verifyChannelBinding(ctx, conn, normalizedHost, func(compressedPubKey [33]byte) error {
+		if subtle.ConstantTimeCompare(compressedPubKey[:], expectedOwnerPubKey[:]) != 1 {
+			return fmt.Errorf("tls channel binding signer %x does not match pgns leaf owner_pubkey %x", compressedPubKey, expectedOwnerPubKey)
+		}
+		return nil
+	})
+}
+
+func verifyChannelBinding(ctx context.Context, conn net.Conn, hostname string, checkSigner func([33]byte) error) error {
+	clientExporter, nonce, err := prepareChannelBindingClient(conn)
 	if err != nil {
 		return err
 	}
-	clientExporter, expectedAddr, nonce = c, e, n
 	_ = conn.SetDeadline(time.Now().Add(defaultChannelBindingTimeout))
 	defer conn.SetDeadline(time.Time{})
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
@@ -475,38 +535,29 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 		hostname:       hostname,
 		nonce:          nonce,
 		clientExporter: clientExporter,
-		expectedAddr:   expectedAddr,
+		checkSigner:    checkSigner,
 		stop:           stop,
 	}
 	return flow.completeVerifyTLSChannelBinding(ctx)
 }
 
-func prepareChannelBindingClient(conn net.Conn, hostname string) ([]byte, string, [types.TLSChannelBindingNonceSize]byte, error) {
+func prepareChannelBindingClient(conn net.Conn) ([]byte, [types.TLSChannelBindingNonceSize]byte, error) {
 	var nonce [types.TLSChannelBindingNonceSize]byte
-	var expectedAddr string
-	e, err := namespace.CanonicalAddress(hostname)
-	if err != nil {
-		_ = conn.Close()
-		return nil, "", nonce, err
-	}
-	expectedAddr = e
 	exportFn, ok := probeExporter(conn)
 	if !ok {
 		_ = conn.Close()
-		return nil, "", nonce, errTLSConnectionDoesNotSupportKeying
+		return nil, nonce, errTLSConnectionDoesNotSupportKeying
 	}
-	var clientExporter []byte
-	c, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
+	clientExporter, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
 	if err != nil {
 		_ = conn.Close()
-		return nil, "", nonce, fmt.Errorf("export client tls keying material: %w", err)
+		return nil, nonce, fmt.Errorf("export client tls keying material: %w", err)
 	}
-	clientExporter = c
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		_ = conn.Close()
-		return nil, "", nonce, fmt.Errorf("generate channel binding nonce: %w", err)
+		return nil, nonce, fmt.Errorf("generate channel binding nonce: %w", err)
 	}
-	return clientExporter, expectedAddr, nonce, nil
+	return clientExporter, nonce, nil
 }
 
 type exchangeVerifyTLSChannelBindingFlow struct {
@@ -514,7 +565,7 @@ type exchangeVerifyTLSChannelBindingFlow struct {
 	hostname       string
 	nonce          [types.TLSChannelBindingNonceSize]byte
 	clientExporter []byte
-	expectedAddr   string
+	checkSigner    func([33]byte) error
 	stop           func() bool
 }
 
@@ -526,13 +577,16 @@ func (f *exchangeVerifyTLSChannelBindingFlow) completeVerifyTLSChannelBinding(ct
 		_ = f.conn.Close()
 		return fmt.Errorf("write channel binding request: %w", cmp.Or(ctx.Err(), err))
 	}
-	var compactSig []byte
-	s, err := f.readBindingFlowAnswer(ctx)
+	compactSig, err := f.readBindingFlowAnswer(ctx)
 	if err != nil {
 		return err
 	}
-	compactSig = s
-	if err := verifyChannelBindingSigner(f.hostname, f.nonce[:], f.clientExporter, f.expectedAddr, compactSig); err != nil {
+	recoveredPub, err := recoverChannelBindingSigner(f.hostname, f.nonce[:], f.clientExporter, compactSig)
+	if err != nil {
+		_ = f.conn.Close()
+		return err
+	}
+	if err := f.checkSigner(recoveredPub); err != nil {
 		_ = f.conn.Close()
 		return err
 	}
@@ -604,17 +658,18 @@ func buildDialCanonicalTLSConfig(normalizedHost string, baseTLSConfig *tls.Confi
 	if tlsConf.MinVersion < tls.VersionTLS13 {
 		tlsConf.MinVersion = tls.VersionTLS13
 	}
+	if len(tlsConf.NextProtos) == 0 {
+		tlsConf.NextProtos = []string{types.ALPNPortalCBV1}
+	}
 	return tlsConf
 }
 
 func dialCanonicalTLSTransport(ctx context.Context, addr string, tlsConf *tls.Config) (*tls.Conn, error) {
-	var rawConn net.Conn
 	c, err := (&net.Dialer{Timeout: defaultDialTimeout}).DialContext(ctx, "tcp", utils.EnsurePort(addr))
 	if err != nil {
 		return nil, err
 	}
-	rawConn = c
-	tlsConn := tls.Client(rawConn, tlsConf)
+	tlsConn := tls.Client(c, tlsConf)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		_ = tlsConn.Close()
 		return nil, err
@@ -633,13 +688,24 @@ func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
 	buf = append(buf, exported...)
 	return buf
 }
-func verifyChannelBindingSigner(hostname string, nonce, clientExporter []byte, expectedAddr string, compactSig []byte) error {
+
+func recoverChannelBindingSigner(hostname string, nonce, clientExporter, compactSig []byte) ([33]byte, error) {
+	var out [33]byte
 	payload := tlsChannelBindingPayload(hostname, nonce, clientExporter)
 	pubKey, err := identity.RecoverSHA256Secp256k1Compact(payload, compactSig)
 	if err != nil {
-		return fmt.Errorf("recover channel binding signer: %w", err)
+		return out, fmt.Errorf("recover channel binding signer: %w", err)
 	}
-	recoveredAddr, err := identity.AddressFromCompressedPublicKeyHex(hex.EncodeToString(pubKey.SerializeCompressed()))
+	copy(out[:], pubKey.SerializeCompressed())
+	return out, nil
+}
+
+func verifyChannelBindingSigner(hostname string, nonce, clientExporter []byte, expectedAddr string, compactSig []byte) error {
+	compressed, err := recoverChannelBindingSigner(hostname, nonce, clientExporter, compactSig)
+	if err != nil {
+		return err
+	}
+	recoveredAddr, err := identity.AddressFromCompressedPublicKeyHex(hex.EncodeToString(compressed[:]))
 	if err != nil {
 		return fmt.Errorf("resolve channel binding signer address: %w", err)
 	}
@@ -648,6 +714,7 @@ func verifyChannelBindingSigner(hostname string, nonce, clientExporter []byte, e
 	}
 	return nil
 }
+
 func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.Reader, exportFn func(string, []byte, int) ([]byte, error)) (net.Conn, error) {
 	l := m.listener
 	hostname := ""
@@ -655,7 +722,7 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		hostname = lease.hostname
 		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
 			if sni := utils.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
-				if sni != lease.hostname && sni != lease.legacyHostname {
+				if sni != lease.hostname && sni != lease.legacyHostname && (lease.pgnsFQDN == "" || sni != lease.pgnsFQDN) {
 					_ = conn.Close()
 					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
 				}
@@ -673,36 +740,30 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		return nil, fmt.Errorf("read channel binding request: %w", err)
 	}
 	nonce := bytes.Clone(reqFrame[len(types.TLSChannelBindingRequestMagic):])
-	var exported []byte
-	e, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
+	exported, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("export server channel binding keying material: %w", err)
 	}
-	exported = e
-	var compactSig []byte
-	s, err := signChannelBindingPayload(hostname, nonce, exported, l.identity)
+	compactSig, err := signChannelBindingPayload(hostname, nonce, exported, l.identity)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	compactSig = s
 	return m.writeChannelBindingAnswer(conn, reader, exported, compactSig)
 }
 
 func signChannelBindingPayload(hostname string, nonce, exported []byte, id types.Identity) ([]byte, error) {
 	payload := tlsChannelBindingPayload(hostname, nonce, exported)
 	authority := identity.NewLocalAuthority(id)
-	var compactSig []byte
 	sig, err := authority.SignSHA256Secp256k1(payload)
 	if err != nil {
 		return nil, fmt.Errorf("sign channel binding payload: %w", err)
 	}
-	c, err := sig.Compact()
+	compactSig, err := sig.Compact()
 	if err != nil {
 		return nil, fmt.Errorf("encode channel binding signature: %w", err)
 	}
-	compactSig = c
 	return compactSig, nil
 }
 
@@ -723,10 +784,14 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	if conn == nil {
 		return conn, false, nil
 	}
-	// HTTP/2 framing starts immediately after ALPN. Native channel binding
-	// uses the HTTP/1.1/raw path, never an h2 application stream.
-	if conn, ok := conn.(*tls.Conn); ok && conn.ConnectionState().NegotiatedProtocol == "h2" {
-		return conn, false, nil
+	// HTTP/2 and stock browser HTTP/1.1 connections return the unwrapped
+	// *tls.Conn directly without peeking so net/http preserves native TLS/h2.
+	// Channel binding and self-probes run on ALPN portal-cb-v1 (or raw test conns).
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		switch tlsConn.ConnectionState().NegotiatedProtocol {
+		case "h2", "http/1.1":
+			return tlsConn, false, nil
+		}
 	}
 
 	exportFn, ok := probeExporter(conn)
@@ -741,9 +806,9 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	canChannelBind := m.listener != nil && m.listener.cache == nil
 	if m.listener != nil && m.listener.cache != nil {
 		if lease, ok := m.listener.leaseSnapshot(); ok {
-			if conn, ok := conn.(*tls.Conn); ok {
+			if tlsConn, ok := conn.(*tls.Conn); ok {
 				_, canonical := lease.tenantTLS.(*namespaceTLS)
-				canChannelBind = canonical && utils.NormalizeHostname(conn.ConnectionState().ServerName) == lease.hostname
+				canChannelBind = canonical && utils.NormalizeHostname(tlsConn.ConnectionState().ServerName) == lease.hostname
 			}
 		}
 	}
@@ -762,7 +827,6 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 	defer conn.SetDeadline(time.Time{})
 
 	if canChannelBind && bytes.HasPrefix(peeked, []byte(types.TLSChannelBindingRequestMagic)) {
-
 		_ = conn.SetReadDeadline(time.Now().Add(channelBindingRequestTimeout))
 		boundConn, err := m.serveChannelBindingHandshake(conn, reader, exportFn)
 		if err != nil {

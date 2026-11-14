@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -207,6 +208,58 @@ func (w WitnessKey) KeyID() [4]byte {
 type WitnessSet struct {
 	Threshold int
 	Witnesses []WitnessKey
+}
+
+// ParseWitnessSet parses "<name>=<hex-ed25519-pubkey>" witness specs and validates threshold k-of-m.
+func ParseWitnessSet(specs []string, threshold int) (WitnessSet, error) {
+	if len(specs) == 0 {
+		if threshold != 0 {
+			return WitnessSet{}, fmt.Errorf("%w: threshold %d set with no witnesses", ErrInvalidCheckpoint, threshold)
+		}
+		return WitnessSet{}, nil
+	}
+	seen := make(map[string]struct{}, len(specs))
+	witnesses := make([]WitnessKey, 0, len(specs))
+	for _, rawSpec := range specs {
+		spec := strings.TrimSpace(rawSpec)
+		if spec == "" {
+			continue
+		}
+		name, hexKey, ok := strings.Cut(spec, "=")
+		name = strings.TrimSpace(name)
+		hexKey = strings.TrimSpace(strings.TrimPrefix(hexKey, "0x"))
+		if !ok || name == "" {
+			return WitnessSet{}, fmt.Errorf("%w: invalid witness spec %q (expected name=hexpubkey)", ErrInvalidCheckpoint, rawSpec)
+		}
+		if _, dup := seen[name]; dup {
+			return WitnessSet{}, fmt.Errorf("%w: duplicate witness %q", ErrInvalidCheckpoint, name)
+		}
+		pubBytes, err := hex.DecodeString(hexKey)
+		if err != nil || len(pubBytes) != ed25519.PublicKeySize {
+			return WitnessSet{}, fmt.Errorf("%w: invalid witness %q public key", ErrInvalidCheckpoint, name)
+		}
+		seen[name] = struct{}{}
+		witnesses = append(witnesses, WitnessKey{
+			Name:      name,
+			PublicKey: ed25519.PublicKey(pubBytes),
+		})
+	}
+	if len(witnesses) == 0 {
+		if threshold != 0 {
+			return WitnessSet{}, fmt.Errorf("%w: threshold %d set with no witnesses", ErrInvalidCheckpoint, threshold)
+		}
+		return WitnessSet{}, nil
+	}
+	if threshold <= 0 {
+		threshold = len(witnesses)
+	}
+	if threshold > len(witnesses) {
+		return WitnessSet{}, fmt.Errorf("%w: witness threshold %d exceeds witness count %d", ErrInvalidCheckpoint, threshold, len(witnesses))
+	}
+	return WitnessSet{
+		Threshold: threshold,
+		Witnesses: witnesses,
+	}, nil
 }
 
 // WitnessCosignature holds one verified C2SP cosignature/v1 line.

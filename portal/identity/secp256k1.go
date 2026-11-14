@@ -168,14 +168,17 @@ func ethereumPersonalMessageHash(message string) []byte {
 	return hasher.Sum(nil)
 }
 
-func recoverEthereumPersonalMessage(message, signature string) (string, error) {
+// RecoverEthereumPersonalMessagePublicKey recovers the 33-byte compressed
+// secp256k1 public key and checksummed EVM address from an EIP-191 personal_sign signature.
+func RecoverEthereumPersonalMessagePublicKey(message, signature string) ([33]byte, string, error) {
+	var pub33 [33]byte
 	encoded := strings.TrimSpace(signature)
 	if len(encoded) != 2+compactSecp256k1SignatureSize*2 || !strings.HasPrefix(strings.ToLower(encoded), "0x") {
-		return "", ErrSecp256k1SignatureInvalid
+		return pub33, "", ErrSecp256k1SignatureInvalid
 	}
 	raw, err := hex.DecodeString(encoded[2:])
 	if err != nil {
-		return "", ErrSecp256k1SignatureInvalid
+		return pub33, "", ErrSecp256k1SignatureInvalid
 	}
 	v := raw[64]
 	switch v {
@@ -183,16 +186,27 @@ func recoverEthereumPersonalMessage(message, signature string) (string, error) {
 		v += 27
 	case 27, 28:
 	default:
-		return "", ErrSecp256k1SignatureInvalid
+		return pub33, "", ErrSecp256k1SignatureInvalid
 	}
 	compact := make([]byte, compactSecp256k1SignatureSize)
 	compact[0] = v
 	copy(compact[1:], raw[:64])
 	publicKey, _, err := ecdsa.RecoverCompact(compact, ethereumPersonalMessageHash(message))
-	if err != nil {
-		return "", ErrSecp256k1SignatureInvalid
+	if err != nil || publicKey == nil {
+		return pub33, "", ErrSecp256k1SignatureInvalid
 	}
-	return AddressFromCompressedPublicKeyHex(hex.EncodeToString(publicKey.SerializeCompressed()))
+	compressed := publicKey.SerializeCompressed()
+	copy(pub33[:], compressed)
+	addr, err := AddressFromCompressedPublicKeyHex(hex.EncodeToString(compressed))
+	if err != nil {
+		return [33]byte{}, "", err
+	}
+	return pub33, addr, nil
+}
+
+func recoverEthereumPersonalMessage(message, signature string) (string, error) {
+	_, addr, err := RecoverEthereumPersonalMessagePublicKey(message, signature)
+	return addr, err
 }
 
 func ResolveSecp256k1Identity(rawPrivateKey string) (types.Identity, error) {

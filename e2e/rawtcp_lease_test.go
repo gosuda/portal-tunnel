@@ -206,8 +206,9 @@ func (h *tcpLeaseHarness) connect() (*net.TCPConn, net.Conn) {
 		h.t.Fatal(err)
 	}
 	h.t.Cleanup(func() { _ = public.Close() })
-	if _, err := transport.ReadStart(h.t.Context(), reverse, 5*time.Second); err != nil {
-		h.t.Fatal(err)
+	mode, _, err := transport.ReadStartMode(h.t.Context(), reverse, 5*time.Second)
+	if err != nil || mode != transport.ReverseStartRaw {
+		h.t.Fatalf("ReadStartMode() = (%v, %v), want ReverseStartRaw", mode, err)
 	}
 	return public, reverse
 }

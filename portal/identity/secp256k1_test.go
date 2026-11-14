@@ -75,3 +75,25 @@ func TestSecp256k1LowSSignatureInvariant(t *testing.T) {
 		t.Fatal("expected ParseSecp256k1CompressedPubKey33 to reject uncompressed prefix")
 	}
 }
+
+func TestRecoverEthereumPersonalMessagePublicKey(t *testing.T) {
+	id, err := ResolveSecp256k1Identity("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := "portal PGNS test message"
+	sig, err := signEthereumPersonalMessage(msg, id.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub33, addr, err := RecoverEthereumPersonalMessagePublicKey(msg, sig)
+	if err != nil {
+		t.Fatalf("RecoverEthereumPersonalMessagePublicKey: %v", err)
+	}
+	if hex.EncodeToString(pub33[:]) != id.PublicKey {
+		t.Fatalf("recovered pubkey = %x, want %s", pub33, id.PublicKey)
+	}
+	if addr != id.Address {
+		t.Fatalf("recovered addr = %s, want %s", addr, id.Address)
+	}
+}

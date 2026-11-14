@@ -30,6 +30,8 @@ type leaseRecord struct {
 	Namespace               string
 	LegacyCanonicalHostname string
 	CanonicalHostname       string
+	pgnsFQDN                string
+	pgnsSeq                 uint64
 	localTLSNotAfter        time.Time
 	Metadata                types.LeaseMetadata
 	Overlay                 bool
@@ -203,7 +205,7 @@ func (r *leaseRecord) detachReverseMux(mux *transport.ReverseMux) {
 }
 
 func (r *leaseRecord) syncENSGaslessDNS(ctx context.Context, manager *acme.Manager) error {
-	if r == nil || manager == nil {
+	if r == nil || manager == nil || r.pgnsFQDN != "" {
 		return nil
 	}
 	for _, hostname := range r.hostnames() {
@@ -231,7 +233,7 @@ func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
 // dnsAddressParent is shared by Local TLS services using the same wallet.
 // It is not a routed hostname unless an unnamed lease owns it.
 func (r *leaseRecord) dnsAddressParent() string {
-	if r == nil || r.Namespace != types.LocalTLSNamespaceV1 {
+	if r == nil || r.Namespace != types.LocalTLSNamespaceV1 || r.pgnsFQDN != "" {
 		return ""
 	}
 	return namespace.AddressParent(r.CanonicalHostname)
@@ -255,7 +257,7 @@ func (s *Server) isDNSHostnameOwnedLocked(hostname string, now time.Time) bool {
 }
 
 func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
-	if s == nil || record == nil || s.acmeManager == nil || s.registry == nil {
+	if s == nil || record == nil || s.acmeManager == nil || s.registry == nil || record.pgnsFQDN != "" {
 		return
 	}
 	registry := s.registry

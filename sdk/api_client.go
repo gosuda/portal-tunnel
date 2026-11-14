@@ -37,7 +37,9 @@ const (
 var errRelayIncompatible = errors.New("relay is incompatible")
 
 type apiClient struct {
-	relayURL *url.URL
+	relayURL     *url.URL
+	pgnsFQDN     string
+	pgnsProvider func(context.Context) (*types.PGNSRegistrationProof, error)
 
 	mu               sync.RWMutex
 	http             *http.Client
@@ -150,6 +152,9 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	supported := slices.Contains(c.namespaces, registerReq.Namespace)
 	c.mu.RUnlock()
 	if registerReq.Namespace != "" && !supported {
+		if c.pgnsFQDN != "" {
+			return types.RegisterResponse{}, fmt.Errorf("%w: relay does not support required %s namespace for pgns", errRelayIncompatible, registerReq.Namespace)
+		}
 		registerReq.Namespace = ""
 	}
 	resp, err := c.exchangeRegister(ctx, registerReq, reportedIP)
@@ -177,6 +182,13 @@ func (c *apiClient) exchangeRegister(ctx context.Context, registerReq types.Regi
 				return types.RegisterResponse{}, reloadErr
 			}
 			continue
+		}
+		if c.pgnsProvider != nil {
+			proof, err := c.pgnsProvider(ctx)
+			if err != nil {
+				return types.RegisterResponse{}, err
+			}
+			request.PGNSProof = proof
 		}
 		submitErr := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, request, nil, &resp)
 		if submitErr == nil {
@@ -244,15 +256,23 @@ func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registe
 	}
 	aliasCanonical := resp.CanonicalHostname
 	if resp.Namespace == types.LocalTLSNamespaceV1 {
-		aliasCanonical = resp.LegacyCanonicalHostname
-		_, root, ok := strings.Cut(aliasCanonical, ".")
-		expected, err := namespace.LocalTLSHostname(registerReq.Identity.Name, registerReq.Identity.Address, root)
-		if !ok || err != nil || expected != resp.CanonicalHostname {
-			_ = c.unregister(context.Background(), resp.AccessToken)
-			return types.RegisterResponse{}, fmt.Errorf("%w: invalid canonical namespace", errRelayIncompatible)
+		if c.pgnsFQDN != "" {
+			if resp.CanonicalHostname != c.pgnsFQDN || resp.LegacyCanonicalHostname != "" {
+				_ = c.unregister(context.Background(), resp.AccessToken)
+				return types.RegisterResponse{}, fmt.Errorf("%w: invalid pgns canonical namespace", errRelayIncompatible)
+			}
+			aliasCanonical = ""
+		} else {
+			aliasCanonical = resp.LegacyCanonicalHostname
+			_, root, ok := strings.Cut(aliasCanonical, ".")
+			expected, err := namespace.LocalTLSHostname(registerReq.Identity.Name, registerReq.Identity.Address, root)
+			if !ok || err != nil || expected != resp.CanonicalHostname {
+				_ = c.unregister(context.Background(), resp.AccessToken)
+				return types.RegisterResponse{}, fmt.Errorf("%w: invalid canonical namespace", errRelayIncompatible)
+			}
 		}
 	}
-	if !namespace.MatchesAlias(resp.Hostname, registerReq.Identity.Name, aliasCanonical) {
+	if aliasCanonical == "" || !namespace.MatchesAlias(resp.Hostname, registerReq.Identity.Name, aliasCanonical) {
 		resp.Hostname = ""
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)

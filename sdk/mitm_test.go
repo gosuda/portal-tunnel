@@ -5,8 +5,15 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"net/url"
 	"strings"
@@ -953,4 +960,164 @@ func TestCanonicalBindingCoversSiblingNonceAndExporter(t *testing.T) {
 			}
 		})
 	}
+}
+
+func makeSelfSignedTLSCert(t *testing.T, dnsName string) tls.Certificate {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		DNSNames:     []string{dnsName},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  priv,
+	}
+}
+
+func TestMaybeHandleConnPreservesNativeTLSForBrowserALPN(t *testing.T) {
+	const fqdn = "myapp.app.portal.gosuda.org"
+	cert := makeSelfSignedTLSCert(t, fqdn)
+	for _, alpn := range []string{"h2", "http/1.1"} {
+		t.Run(alpn, func(t *testing.T) {
+			l := newChannelBindingListener(t, "c", fqdn)
+			l.lease.Store(listenerSnapshot{hostname: fqdn, pgnsFQDN: fqdn})
+			// Arm a pending probe to prove browser ALPNs still bypass bufferedConn sniffing.
+			l.mitmManager.reserveProbe(mitmProbeNonce{9})
+
+			cRaw, sRaw := net.Pipe()
+			defer cRaw.Close()
+			serverTLS := tls.Server(sRaw, &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				NextProtos:   []string{"h2", "http/1.1", types.ALPNPortalCBV1},
+				MinVersion:   tls.VersionTLS13,
+			})
+			clientTLS := tls.Client(cRaw, &tls.Config{
+				ServerName:         fqdn,
+				NextProtos:         []string{alpn},
+				MinVersion:         tls.VersionTLS13,
+				InsecureSkipVerify: true,
+			})
+
+			handshakeErr := make(chan error, 1)
+			go func() {
+				handshakeErr <- clientTLS.Handshake()
+			}()
+			if err := serverTLS.Handshake(); err != nil {
+				t.Fatalf("server TLS handshake: %v", err)
+			}
+			if err := <-handshakeErr; err != nil {
+				t.Fatalf("client TLS handshake: %v", err)
+			}
+
+			nextConn, handled, err := l.mitmManager.maybeHandleConn(serverTLS)
+			if err != nil || handled {
+				t.Fatalf("maybeHandleConn() = (handled=%v, err=%v), want passthrough", handled, err)
+			}
+			if nextConn != serverTLS {
+				t.Fatalf("maybeHandleConn() wrapped %T, want unwrapped *tls.Conn", nextConn)
+			}
+			_ = serverTLS.Close()
+			_ = clientTLS.Close()
+		})
+	}
+}
+
+func TestPGNSChannelBindingALPNAndOwnerPubKey(t *testing.T) {
+	const fqdn = "myapp.app.portal.gosuda.org"
+	cert := makeSelfSignedTLSCert(t, fqdn)
+	l := newChannelBindingListener(t, "d", fqdn)
+	l.lease.Store(listenerSnapshot{hostname: fqdn, pgnsFQDN: fqdn})
+
+	pubBytes, err := hex.DecodeString(strings.TrimPrefix(l.identity.PublicKey, "0x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expectedOwnerPub [33]byte
+	copy(expectedOwnerPub[:], pubBytes)
+
+	openTLS := func() (*tls.Conn, chan error) {
+		cRaw, sRaw := net.Pipe()
+		serverTLS := tls.Server(sRaw, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			NextProtos:   []string{"h2", "http/1.1", types.ALPNPortalCBV1},
+			MinVersion:   tls.VersionTLS13,
+		})
+		clientTLS := tls.Client(cRaw, &tls.Config{
+			ServerName:         fqdn,
+			NextProtos:         []string{types.ALPNPortalCBV1},
+			MinVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+		})
+		serverErr := make(chan error, 1)
+		go func() {
+			if err := serverTLS.Handshake(); err != nil {
+				serverErr <- err
+				return
+			}
+			nextConn, handled, err := l.mitmManager.maybeHandleConn(serverTLS)
+			if err != nil {
+				serverErr <- err
+				return
+			}
+			if handled {
+				serverErr <- errors.New("handled unexpectedly true")
+				return
+			}
+			defer nextConn.Close()
+			var buf [4]byte
+			if _, err := io.ReadFull(nextConn, buf[:]); err != nil {
+				serverErr <- err
+				return
+			}
+			_, err = nextConn.Write(buf[:])
+			serverErr <- err
+		}()
+		if err := clientTLS.Handshake(); err != nil {
+			t.Fatalf("client handshake: %v", err)
+		}
+		return clientTLS, serverErr
+	}
+
+	clientTLS, serverErr := openTLS()
+	if err := VerifyPGNSChannelBinding(t.Context(), clientTLS, fqdn, expectedOwnerPub); err != nil {
+		t.Fatalf("VerifyPGNSChannelBinding() error = %v", err)
+	}
+	if _, err := clientTLS.Write([]byte("ping")); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+	var got [4]byte
+	if _, err := io.ReadFull(clientTLS, got[:]); err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	if string(got[:]) != "ping" {
+		t.Fatalf("echo = %q, want ping", got[:])
+	}
+	_ = clientTLS.Close()
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error = %v", err)
+	}
+
+	// Wrong owner pubkey must fail closed and close clientTLS.
+	badClient, badServerErr := openTLS()
+	wrongKey := expectedOwnerPub
+	wrongKey[1] ^= 0x01
+	if err := VerifyPGNSChannelBinding(t.Context(), badClient, fqdn, wrongKey); err == nil {
+		t.Fatal("VerifyPGNSChannelBinding() accepted mismatched owner_pubkey")
+	}
+	if _, err := badClient.Write([]byte("blocked")); err == nil {
+		t.Fatal("client conn stayed open after owner_pubkey mismatch")
+	}
+	<-badServerErr
 }

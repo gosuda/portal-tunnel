@@ -14,6 +14,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
+	"github.com/gosuda/portal-tunnel/v2/pgns"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 )
 
@@ -43,6 +44,11 @@ func prepareAppConfig(cfg *appConfig, issues []cli.EnvIssue) (*policy.Ingress, x
 	if err := envIssueError(issues); err != nil {
 		return nil, x402FacilitatorSettings{}, err
 	}
+	witnessSet, err := pgns.ParseWitnessSet(cfg.PGNSWitnesses, cfg.PGNSWitnessThreshold)
+	if err != nil {
+		return nil, x402FacilitatorSettings{}, err
+	}
+	cfg.Relay.PGNSWitnesses = witnessSet
 	relay, err := portal.ValidateServerConfig(cfg.Relay)
 	if err != nil {
 		return nil, x402FacilitatorSettings{}, err

@@ -98,7 +98,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	if len(client.nextProtos) == 0 {
-		client.nextProtos = []string{"http/1.1"}
+		client.nextProtos = []string{"http/1.1", types.ALPNPortalCBV1}
 	}
 	if (config.CertFile == "") != (config.KeyFile == "") {
 		return nil, errTenantCertificatePairRequired
@@ -393,9 +393,20 @@ func (c *Client) publishInstalled(pin *pinnedChain) {
 
 // SetNextProtos selects ALPN for future connections once the HTTP consumer is ready.
 func (c *Client) SetNextProtos(protos []string) {
+	next := append([]string(nil), protos...)
+	hasCB := false
+	for _, proto := range next {
+		if proto == types.ALPNPortalCBV1 {
+			hasCB = true
+			break
+		}
+	}
+	if !hasCB {
+		next = append(next, types.ALPNPortalCBV1)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.nextProtos = append([]string(nil), protos...)
+	c.nextProtos = next
 }
 
 // Ready reports whether a new canonical connection can use a current local certificate.

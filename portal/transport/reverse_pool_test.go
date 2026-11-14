@@ -128,12 +128,12 @@ func startBindingClaim(t *testing.T, relay *ReversePool, binding [16]byte) (<-ch
 
 func verifyBindingRoundTrip(t *testing.T, clientConn net.Conn, binding [16]byte, claimed <-chan net.Conn, claimErr <-chan error) {
 	t.Helper()
-	gotBinding, err := ReadStart(context.Background(), clientConn, time.Second)
+	mode, gotBinding, err := ReadStartMode(context.Background(), clientConn, time.Second)
 	if err != nil {
 		t.Fatalf("RunSession: %v", err)
 	}
-	if !bytes.Equal(gotBinding, binding[:]) {
-		t.Fatalf("session binding = %#x, want %#x", gotBinding, binding[:])
+	if mode != ReverseStartTLS || !bytes.Equal(gotBinding, binding[:]) {
+		t.Fatalf("session start = (%v, %#x), want (%v, %#x)", mode, gotBinding, ReverseStartTLS, binding[:])
 	}
 	select {
 	case conn := <-claimed:
