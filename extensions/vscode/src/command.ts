@@ -64,7 +64,7 @@ export function buildCommand(
   const { host, name, relayList, thumbnail } = opts;
   const hostError = validateHost(host);
   if (hostError !== undefined) {
-    throw new Error("Invalid tunnel host: " + hostError);
+    throw new Error(`Invalid tunnel host: ${hostError}`);
   }
   const target: ShellTarget = runtime.platform === "win32" ? "windows" : "unix";
   const tunnelInstallerURL = resolveTunnelInstallerURL(runtime.platform, runtime.arch);

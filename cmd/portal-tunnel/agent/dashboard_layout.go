@@ -260,9 +260,12 @@ func (v *agentDashboardView) addFrame(th *agentDashboardTheme, title string, act
 	g := th.glyph
 	inner := max(0, width-agentDashboardFrameWidth)
 	edge := max(0, width-2)
-	border, labelStyle, open, closing := th.rule, th.muted, " ", " "
+	var border, labelStyle lipgloss.Style
+	var open, closing string
 	if active {
-		border, labelStyle, open, closing = th.strong, th.selected, g.activeOpen, g.activeClose
+		border, labelStyle, open, closing = th.strong, th.selected, th.glyph.activeOpen, th.glyph.activeClose
+	} else {
+		border, labelStyle, open, closing = th.rule, th.muted, " ", " "
 	}
 	label := open + agentDashboardFit(title, max(1, edge-1-lipgloss.Width(g.activeOpen+g.activeClose))) + closing
 	labelWidth := lipgloss.Width(label)
@@ -275,13 +278,7 @@ func (v *agentDashboardView) addFrame(th *agentDashboardTheme, title string, act
 	content = content.window(0, rows)
 	startY := len(v.lines)
 	side := border.Render(g.vertical)
-	for i := range rows {
-		line := ""
-		if i < len(content.lines) {
-			line = content.lines[i]
-		}
-		v.addLine(side + " " + agentDashboardPadLine(line, inner) + " " + side)
-	}
+	v.addFrameRows(side, inner, content, rows)
 	for _, region := range content.regions {
 		region.x0 += agentDashboardFrameWidth / 2
 		region.x1 += agentDashboardFrameWidth / 2
@@ -290,6 +287,16 @@ func (v *agentDashboardView) addFrame(th *agentDashboardTheme, title string, act
 	}
 	v.addLine(border.Render(g.bottomLeft + strings.Repeat(g.horizontal, edge) + g.bottomRight))
 	return 2, 2 + labelWidth
+}
+
+func (v *agentDashboardView) addFrameRows(side string, inner int, content agentDashboardView, rows int) {
+	for i := range rows {
+		line := ""
+		if i < len(content.lines) {
+			line = content.lines[i]
+		}
+		v.addLine(side + " " + agentDashboardPadLine(line, inner) + " " + side)
+	}
 }
 
 func (v agentDashboardView) window(focus, rows int) agentDashboardView {
@@ -328,18 +335,30 @@ func agentDashboardJoinHorizontal(left, right agentDashboardView, leftWidth, gut
 			agentDashboardPadLine(leftLine, leftWidth)+gap+agentDashboardPadLine(rightLine, rightWidth),
 		)
 	}
-	for _, region := range left.regions {
+	out.regions = append(out.regions, clipAgentDashboardRegions(left.regions, height)...)
+	out.regions = append(out.regions, shiftAgentDashboardRegions(right.regions, leftWidth+gutter, height)...)
+	return out
+}
+
+func clipAgentDashboardRegions(regions []agentDashboardRegion, height int) []agentDashboardRegion {
+	var out []agentDashboardRegion
+	for _, region := range regions {
 		if height <= 0 || region.y < height {
-			out.regions = append(out.regions, region)
+			out = append(out, region)
 		}
 	}
-	for _, region := range right.regions {
+	return out
+}
+
+func shiftAgentDashboardRegions(regions []agentDashboardRegion, dx, height int) []agentDashboardRegion {
+	var out []agentDashboardRegion
+	for _, region := range regions {
 		if height > 0 && region.y >= height {
 			continue
 		}
-		region.x0 += leftWidth + gutter
-		region.x1 += leftWidth + gutter
-		out.regions = append(out.regions, region)
+		region.x0 += dx
+		region.x1 += dx
+		out = append(out, region)
 	}
 	return out
 }
@@ -381,57 +400,6 @@ func (v *agentDashboardView) addInputRow(th *agentDashboardTheme, width int, lab
 		action: action,
 		field:  field,
 	})
-}
-
-func agentDashboardRenderButtons(th *agentDashboardTheme, width, y, x int, buttons ...agentDashboardButton) ([]string, []agentDashboardRegion) {
-	if width <= 0 {
-		width = 1
-	}
-	var line strings.Builder
-	var lines []string
-	var regions []agentDashboardRegion
-	lineY := y
-	lineX := x
-	for i, button := range buttons {
-		open, closing, style := th.glyph.buttonOpen, th.glyph.buttonClose, th.strong
-		if button.disabled {
-			open, closing, style = th.glyph.buttonOffOpen, th.glyph.buttonOffClose, th.muted
-		}
-		plain := open + button.label + closing
-		if lipgloss.Width(plain) > width {
-			plain = agentDashboardFit(plain, width)
-		}
-		plainWidth := lipgloss.Width(plain)
-		space := 0
-		if i > 0 && line.Len() > 0 {
-			space = 1
-		}
-		if line.Len() > 0 && lineX+space+plainWidth > width {
-			lines = append(lines, line.String())
-			line.Reset()
-			lineY++
-			lineX = x
-			space = 0
-		}
-		if space > 0 {
-			line.WriteString(" ")
-			lineX++
-		}
-		if !button.disabled {
-			regions = append(regions, agentDashboardRegion{
-				x0:     lineX,
-				x1:     min(lineX+plainWidth, width),
-				y:      lineY,
-				action: button.action,
-			})
-		}
-		line.WriteString(style.Render(plain))
-		lineX += plainWidth
-	}
-	if line.Len() > 0 || len(lines) == 0 {
-		lines = append(lines, line.String())
-	}
-	return lines, regions
 }
 
 func agentDashboardColumnWidths(width int) (int, int, int) {

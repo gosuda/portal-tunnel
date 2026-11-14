@@ -32,18 +32,23 @@ func TestClientIPDoesNotTrustImplicitProxies(t *testing.T) {
 		"169.254.0.9", "100.64.0.9", "::1", "fd00::9", "fe80::9",
 		"203.0.113.9",
 	} {
-		t.Run(peer, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/api/connect", nil)
-			req.RemoteAddr = net.JoinHostPort(peer, "12345")
-			for _, claimed := range []string{"198.51.100.1", "198.51.100.2"} {
-				req.Header.Set("X-Forwarded-For", claimed)
-				req.Header.Set("X-Real-IP", claimed)
-				if got := ingress.ClientIP(req); got != peer {
-					t.Fatalf("claimed IP %q changed source key to %q, want socket peer %q", claimed, got, peer)
-				}
-			}
-		})
+		checkIngressUntrustedPeer(t, ingress, peer)
 	}
+}
+
+func checkIngressUntrustedPeer(t *testing.T, ingress *Ingress, peer string) {
+	t.Helper()
+	t.Run(peer, func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/connect", nil)
+		req.RemoteAddr = net.JoinHostPort(peer, "12345")
+		for _, claimed := range []string{"198.51.100.1", "198.51.100.2"} {
+			req.Header.Set("X-Forwarded-For", claimed)
+			req.Header.Set("X-Real-IP", claimed)
+			if got := ingress.ClientIP(req); got != peer {
+				t.Fatalf("claimed IP %q changed source key to %q, want socket peer %q", claimed, got, peer)
+			}
+		}
+	})
 }
 
 func TestClientIPHonorsConfiguredProxyBoundary(t *testing.T) {
@@ -114,6 +119,11 @@ func TestTunnelSourceMatchesResolvedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkIngressTunnelSourceAllows(t, listed, open)
+}
+
+func checkIngressTunnelSourceAllows(t *testing.T, listed, open *Ingress) {
+	t.Helper()
 	for _, tc := range []struct {
 		peer, forwarded string
 		want            bool

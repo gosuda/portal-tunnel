@@ -17,7 +17,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
+func bootSNIRelay(t *testing.T) (*portal.Server, context.Context, string) {
+	t.Helper()
 	port := harnessPort(t, "127.0.0.1")
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	relay, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://" + addr, StateDir: t.TempDir(), SNIListenAddr: addr, SNIPort: port})
@@ -25,7 +26,6 @@ func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +38,11 @@ func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	return relay, ctx, addr
+}
+
+func fillSNIConnections(t *testing.T, addr string) []net.Conn {
+	t.Helper()
 	var peers []net.Conn
 	for range 129 {
 		peer, err := net.DialTimeout("tcp", addr, time.Second)
@@ -47,9 +52,14 @@ func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
 		t.Cleanup(func() { _ = peer.Close() })
 		peers = append(peers, peer)
 	}
+	return peers
+}
+
+func assertSNIBackpressure(t *testing.T, peers []net.Conn) {
+	t.Helper()
 	var buf [1]byte
 	_ = peers[128].SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	_, err = peers[128].Read(buf[:])
+	_, err := peers[128].Read(buf[:])
 	var netErr net.Error
 	if err == nil || (errors.As(err, &netErr) && netErr.Timeout()) {
 		t.Fatalf("over-capacity SNI connection not promptly closed: %v", err)
@@ -61,6 +71,10 @@ func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
 	for _, peer := range peers {
 		_ = peer.Close()
 	}
+}
+
+func awaitSNIAdmissionRecovery(t *testing.T, ctx context.Context, addr string) {
+	t.Helper()
 	recoveryCtx, recoveryCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer recoveryCancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -78,11 +92,10 @@ func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
 		case <-ticker.C:
 		}
 	}
-	pending, err := net.DialTimeout("tcp", addr, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pending.Close()
+}
+
+func assertShutdownClosesPending(t *testing.T, relay *portal.Server, pending net.Conn) {
+	t.Helper()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer shutdownCancel()
 	if err := relay.Shutdown(shutdownCtx); err != nil {
@@ -91,13 +104,29 @@ func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
 	if err := relay.Wait(); err != nil {
 		t.Fatal(err)
 	}
+	var buf [1]byte
 	_ = pending.SetReadDeadline(time.Now().Add(time.Second))
+	var netErr net.Error
 	if _, err := pending.Read(buf[:]); err == nil || (errors.As(err, &netErr) && netErr.Timeout()) {
 		t.Fatalf("shutdown left SNI socket open: %v", err)
 	}
 }
 
-func TestTenantSaturationPreservesControlPlane(t *testing.T) {
+func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
+	relay, ctx, addr := bootSNIRelay(t)
+	peers := fillSNIConnections(t, addr)
+	assertSNIBackpressure(t, peers)
+	awaitSNIAdmissionRecovery(t, ctx, addr)
+	pending, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pending.Close()
+	assertShutdownClosesPending(t, relay, pending)
+}
+
+func bootSaturationRelay(t *testing.T) (context.Context, *http.Client, *url.URL) {
+	t.Helper()
 	minPort := harnessPort(t, "127.0.0.1")
 	maxPort := minPort
 	for range 8 {
@@ -113,14 +142,17 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	if err := server.Start(ctx, relayHandler(server, nil)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cancel(); _ = server.Shutdown(context.Background()); _ = server.Wait() })
 	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, DisableKeepAlives: true}
-	defer tr.CloseIdleConnections()
-	client := &http.Client{Transport: tr, Timeout: 3 * time.Second}
+	t.Cleanup(func() { tr.CloseIdleConnections() })
+	return ctx, &http.Client{Transport: tr, Timeout: 3 * time.Second}, base
+}
+
+func registerSaturationLeases(t *testing.T, ctx context.Context, client *http.Client, base *url.URL) []types.RegisterResponse {
+	t.Helper()
 	leases := make([]types.RegisterResponse, 9)
 	for i := range leases {
 		id, err := identity.Generate("saturation-" + strconv.Itoa(i))
@@ -139,9 +171,28 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var pending []net.Conn
+	return leases
+}
+
+func assertLeasePortOverflowRejected(t *testing.T, addr string) {
+	t.Helper()
+	extra, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var byteBuf [1]byte
-	fillStarted := time.Now()
+	_ = extra.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, err = extra.Read(byteBuf[:])
+	_ = extra.Close()
+	var netErr net.Error
+	if err == nil || (errors.As(err, &netErr) && netErr.Timeout()) {
+		t.Fatalf("lease overflow not rejected: %v", err)
+	}
+}
+
+func saturateTCPPorts(t *testing.T, leases []types.RegisterResponse) []net.Conn {
+	t.Helper()
+	var pending []net.Conn
 	for _, lease := range leases[:8] {
 		_, rawPort, err := net.SplitHostPort(lease.TCPAddr)
 		if err != nil {
@@ -156,18 +207,13 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 			t.Cleanup(func() { _ = conn.Close() })
 			pending = append(pending, conn)
 		}
-		extra, err := net.DialTimeout("tcp", addr, time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = extra.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		_, err = extra.Read(byteBuf[:])
-		_ = extra.Close()
-		var netErr net.Error
-		if err == nil || (errors.As(err, &netErr) && netErr.Timeout()) {
-			t.Fatalf("lease overflow not rejected: %v", err)
-		}
+		assertLeasePortOverflowRejected(t, addr)
 	}
+	return pending
+}
+
+func assertAggregateOverflowRejected(t *testing.T, leases []types.RegisterResponse) {
+	t.Helper()
 	_, ninthPort, err := net.SplitHostPort(leases[8].TCPAddr)
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +222,7 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var byteBuf [1]byte
 	_ = overflow.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	_, err = overflow.Read(byteBuf[:])
 	_ = overflow.Close()
@@ -183,6 +230,10 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 	if err == nil || (errors.As(err, &netErr) && netErr.Timeout()) {
 		t.Fatalf("aggregate overflow not rejected: %v", err)
 	}
+}
+
+func renewAndConnectUnderSaturation(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, leases []types.RegisterResponse, fillStarted time.Time) {
+	t.Helper()
 	var renewal types.RenewResponse
 	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRenew, types.RenewRequest{AccessToken: leases[0].AccessToken, TTL: 60}, nil, &renewal); err != nil {
 		t.Fatalf("tenant saturation blocked fresh root TLS/renew: %v", err)
@@ -205,8 +256,24 @@ func TestTenantSaturationPreservesControlPlane(t *testing.T) {
 	if time.Since(fillStarted) >= 10*time.Second {
 		t.Fatal("control-plane assertion exceeded the reverse-wait budget")
 	}
+}
+
+func assertControlPlanePendingExpired(t *testing.T, pending []net.Conn) {
+	t.Helper()
+	var byteBuf [1]byte
 	_ = pending[0].SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	var netErr net.Error
 	if _, err := pending[0].Read(byteBuf[:]); !errors.As(err, &netErr) || !netErr.Timeout() {
 		t.Fatalf("saturation expired before control-plane assertion: %v", err)
 	}
+}
+
+func TestTenantSaturationPreservesControlPlane(t *testing.T) {
+	ctx, client, base := bootSaturationRelay(t)
+	leases := registerSaturationLeases(t, ctx, client, base)
+	fillStarted := time.Now()
+	pending := saturateTCPPorts(t, leases)
+	assertAggregateOverflowRejected(t, leases)
+	renewAndConnectUnderSaturation(t, ctx, client, base, leases, fillStarted)
+	assertControlPlanePendingExpired(t, pending)
 }

@@ -117,6 +117,28 @@ func (s *Source) Wait() {
 	<-s.done
 }
 
+func (snapshot *sourceSnapshot) hashFile(root *os.Root, path string, limits types.StaticCacheLimits, total *int64) error {
+	file, err := root.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() > limits.MaxObjectSize || info.Size() > limits.MaxExposureBytes-*total {
+		return fmt.Errorf("cache source %q exceeds relay limits or is not a regular file", path)
+	}
+	hash := sha256.New()
+	if _, err := io.CopyN(hash, file, info.Size()); err != nil {
+		return err
+	}
+	snapshot.manifest.Files = append(snapshot.manifest.Files, types.StaticCacheFile{Path: path, Size: info.Size(), SHA256: hex.EncodeToString(hash.Sum(nil))})
+	*total += info.Size()
+	return nil
+}
+
 func (s *Source) scan(ctx context.Context, limits types.StaticCacheLimits) *sourceSnapshot {
 	snapshot := &sourceSnapshot{root: s.root, manifest: types.StaticCacheManifest{Index: s.index}}
 	root, err := os.OpenRoot(s.root)
@@ -126,7 +148,17 @@ func (s *Source) scan(ctx context.Context, limits types.StaticCacheLimits) *sour
 	}
 	defer root.Close()
 	var total int64
-	snapshot.err = fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+	snapshot.err = walkSnapshotTree(ctx, root, snapshot, limits, &total)
+	if snapshot.err != nil {
+		return snapshot
+	}
+	slices.SortFunc(snapshot.manifest.Files, func(a, b types.StaticCacheFile) int { return cmp.Compare(a.Path, b.Path) })
+	_, _, snapshot.err = manifestDigest(snapshot.manifest, limits.MaxObjectSize, limits.MaxExposureBytes)
+	return snapshot
+}
+
+func walkSnapshotTree(ctx context.Context, root *os.Root, snapshot *sourceSnapshot, limits types.StaticCacheLimits, total *int64) error {
+	return fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -142,30 +174,6 @@ func (s *Source) scan(ctx context.Context, limits types.StaticCacheLimits) *sour
 		if len(snapshot.manifest.Files) >= types.StaticCacheMaxFiles {
 			return errTooManyStaticCacheFiles
 		}
-		file, err := root.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		info, err := file.Stat()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() || info.Size() > limits.MaxObjectSize || info.Size() > limits.MaxExposureBytes-total {
-			return fmt.Errorf("cache source %q exceeds relay limits or is not a regular file", path)
-		}
-		hash := sha256.New()
-		if _, err := io.CopyN(hash, file, info.Size()); err != nil {
-			return err
-		}
-		snapshot.manifest.Files = append(snapshot.manifest.Files, types.StaticCacheFile{Path: path, Size: info.Size(), SHA256: hex.EncodeToString(hash.Sum(nil))})
-		total += info.Size()
-		return nil
+		return snapshot.hashFile(root, path, limits, total)
 	})
-	if snapshot.err != nil {
-		return snapshot
-	}
-	slices.SortFunc(snapshot.manifest.Files, func(a, b types.StaticCacheFile) int { return cmp.Compare(a.Path, b.Path) })
-	_, _, snapshot.err = manifestDigest(snapshot.manifest, limits.MaxObjectSize, limits.MaxExposureBytes)
-	return snapshot
 }

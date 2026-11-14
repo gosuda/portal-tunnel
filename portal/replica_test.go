@@ -15,7 +15,7 @@ import (
 
 func registerHTTPReplica(t *testing.T, registry *leaseRegistry, identity types.Identity) (*leaseRecord, types.RegisterResponse) {
 	t.Helper()
-	record, response, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestAliasEpochFollowsOwnershipRatherThanLeases(t *testing.T) {
 	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: first.AccessToken}); err != nil {
 		t.Fatal(err)
 	}
-	_, replacement, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, replacement, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestAliasEpochFollowsOwnershipRatherThanLeases(t *testing.T) {
 		t.Fatal("replacing a live lease changed uninterrupted ownership")
 	}
 	other := newTestLeaseIdentity(t, owner.Name)
-	_, fallback, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true, AllowCanonicalFallback: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, fallback, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true, AllowCanonicalFallback: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestExclusiveRegistrationReplacesAllReplicas(t *testing.T) {
 	identity := newTestLeaseIdentity(t, "exclusive")
 	_, first := registerHTTPReplica(t, registry, identity)
 	_, second := registerHTTPReplica(t, registry, identity)
-	_, exclusive, err := registry.Register(types.RegisterChallengeRequest{Identity: identity}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, exclusive, err := registry.Register(types.RegisterChallengeRequest{Identity: identity}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestExclusiveRegistrationReplacesAllReplicas(t *testing.T) {
 			t.Fatalf("replaced token remains valid: %v", err)
 		}
 	}
-	if _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errReplicaConflict) {
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errReplicaConflict) {
 		t.Fatalf("replica joined exclusive lease: %v", err)
 	}
 	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: exclusive.AccessToken}, netip.Addr{}, nil); err != nil {
@@ -244,7 +244,7 @@ func TestReplicaRegistrationIsBoundedPerIdentity(t *testing.T) {
 		record, _ := registerHTTPReplica(t, registry, identity)
 		t.Cleanup(record.Close)
 	}
-	_, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if !errors.Is(err, errReplicaLimit) {
 		t.Fatalf("replica beyond the per-identity limit: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestReplicaRegistrationRejectsUnsupportedTransports(t *testing.T) {
 		{Replica: true, Overlay: true},
 	} {
 		request.Identity = identity
-		if _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errReplicaMode) {
+		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errReplicaMode) {
 			t.Fatalf("unsupported replica request accepted: %+v, %v", request, err)
 		}
 	}

@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import type { BanFilter } from "@/types/filters";
 import clsx from "clsx";
 
@@ -11,7 +12,7 @@ export const BanStatusButtons = ({
   banFilter,
   onBanFilterChange,
   className,
-}: BanStatusButtonsProps) => (
+}: BanStatusButtonsProps): JSX.Element => (
   <div
     className={clsx(
       "flex rounded-lg overflow-hidden border border-foreground/20",

@@ -104,6 +104,26 @@ func TestStaticSiteHandlerRejectsTraversal(t *testing.T) {
 func TestStaticSiteHandlerRejectsOutOfRootSymlinks(t *testing.T) {
 	t.Parallel()
 
+	root := createStaticOutOfRootFixture(t)
+	handler := staticsite.NewHandler("/", root, utils.DefaultStaticIndex)
+	for _, target := range []string{"/direct.txt", "/parent/secret.txt"} {
+		t.Run(target, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://public.example"+target, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("%s status = %d, want 404; body = %q", target, rec.Code, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "TOP-SECRET") {
+				t.Fatalf("%s leaked a file outside the static root", target)
+			}
+		})
+	}
+}
+
+func createStaticOutOfRootFixture(t *testing.T) string {
+	t.Helper()
 	parent := t.TempDir()
 	root := filepath.Join(parent, "site")
 	if err := os.Mkdir(root, 0o755); err != nil {
@@ -122,22 +142,7 @@ func TestStaticSiteHandlerRejectsOutOfRootSymlinks(t *testing.T) {
 	if err := os.Symlink("..", filepath.Join(root, "parent")); err != nil {
 		t.Fatalf("Symlink(parent) error = %v", err)
 	}
-
-	handler := staticsite.NewHandler("/", root, utils.DefaultStaticIndex)
-	for _, target := range []string{"/direct.txt", "/parent/secret.txt"} {
-		t.Run(target, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "https://public.example"+target, nil)
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-
-			if rec.Code != http.StatusNotFound {
-				t.Fatalf("%s status = %d, want 404; body = %q", target, rec.Code, rec.Body.String())
-			}
-			if strings.Contains(rec.Body.String(), "TOP-SECRET") {
-				t.Fatalf("%s leaked a file outside the static root", target)
-			}
-		})
-	}
+	return root
 }
 
 func TestStaticSiteHandlerRejectsOutOfRootIndexSymlink(t *testing.T) {

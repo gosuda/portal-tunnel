@@ -34,28 +34,31 @@ const (
 )
 
 type Config struct {
-	BaseDomain         string
-	KeyDir             string
-	CADirURL           string
-	DNSProvider        string
-	ENSGaslessEnabled  bool
-	ENSGaslessAddress  string
-	EmbeddedDNSPort    int
-	CloudflareToken    string
-	GCPProjectID       string
-	GCPManagedZone     string
-	HetznerAPIToken    string
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSSessionToken    string
-	AWSRegion          string
-	AWSHostedZoneID    string
-	AWSKMSKeyARN       string
-	VultrAPIKey        string
-	NjallaToken        string
+	// TenantIssuanceStateDir must be shared by every relay consuming the same CA quota.
+	TenantIssuanceStateDir string
+	BaseDomain             string
+	KeyDir                 string
+	CADirURL               string
+	DNSProvider            string
+	ENSGaslessEnabled      bool
+	ENSGaslessAddress      string
+	EmbeddedDNSPort        int
+	CloudflareToken        string
+	GCPProjectID           string
+	GCPManagedZone         string
+	HetznerAPIToken        string
+	AWSAccessKeyID         string
+	AWSSecretAccessKey     string
+	AWSSessionToken        string
+	AWSRegion              string
+	AWSHostedZoneID        string
+	AWSKMSKeyARN           string
+	VultrAPIKey            string
+	NjallaToken            string
 }
 
 type Manager struct {
+	issuanceMu   sync.Mutex
 	stopCh       chan struct{}
 	stopCtx      context.Context
 	stopErr      error
@@ -85,6 +88,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.DNSProvider == "" {
 		cfg.DNSProvider = TypeEmbedded
 	}
+
 	cfg.ENSGaslessAddress = strings.TrimSpace(cfg.ENSGaslessAddress)
 	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
 	cfg.GCPProjectID = strings.TrimSpace(cfg.GCPProjectID)
@@ -98,6 +102,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	cfg.AWSKMSKeyARN = strings.TrimSpace(cfg.AWSKMSKeyARN)
 	cfg.VultrAPIKey = strings.TrimSpace(cfg.VultrAPIKey)
 	cfg.NjallaToken = strings.TrimSpace(cfg.NjallaToken)
+
 	if cfg.ENSGaslessEnabled {
 		if cfg.ENSGaslessAddress == "" {
 			return nil, errEnsGaslessAddressRequiredWhenEns
@@ -123,7 +128,6 @@ func NewManager(cfg Config) (*Manager, error) {
 			material:  utils.NewSnapshot(servedMaterial{}),
 		}, nil
 	}
-
 	manager := &Manager{
 		cfg:         cfg,
 		stopCh:      make(chan struct{}),
@@ -131,13 +135,11 @@ func NewManager(cfg Config) (*Manager, error) {
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 		material:    utils.NewSnapshot(servedMaterial{}),
 	}
-
 	acmeDNS, err := newDNSProvider(cfg.DNSProvider, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create acme dns provider: %w", err)
 	}
 	manager.dns = acmeDNS
-
 	return manager, nil
 }
 
@@ -145,7 +147,6 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if m == nil {
 		return "", "", errACMEManagerIsNil
 	}
-
 	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
 			return "", "", err
@@ -168,11 +169,9 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if manual {
 		return certFile, keyFile, nil
 	}
-
 	if certFile, keyFile, ok := m.reusableCertificate(time.Now()); ok {
 		return certFile, keyFile, nil
 	}
-
 	if err := m.provision(ctx, ""); err != nil {
 		return "", "", err
 	}
@@ -267,10 +266,10 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 }
 
 func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
+	m.issuanceMu.Lock()
+	defer m.issuanceMu.Unlock()
 	certFile, keyFile := m.certificateFiles()
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
-	domains := certificateDomains(m.cfg.BaseDomain)
-
 	for _, path := range []string{keyFile, certFile, accountKeyFile} {
 		if err := utils.EnsureParentDir(path); err != nil {
 			return err
@@ -279,12 +278,11 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("acme provisioning canceled: %w", err)
 	}
-
 	client, err := m.newClient(ctx)
 	if err != nil {
 		return err
 	}
-
+	domains := certificateDomains(m.cfg.BaseDomain)
 	obtained, err := client.Certificate.Obtain(certificate.ObtainRequest{
 		Domains:        domains,
 		Bundle:         true,
@@ -296,7 +294,6 @@ func (m *Manager) provision(ctx context.Context, replacesCertID string) error {
 	if len(obtained.Certificate) == 0 || len(obtained.PrivateKey) == 0 {
 		return errACMEObtainResponseMissingCertificateOr
 	}
-
 	material, err := newTLSMaterial(obtained.Certificate, obtained.PrivateKey)
 	if err != nil {
 		return err

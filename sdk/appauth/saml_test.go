@@ -23,9 +23,10 @@ import (
 	"time"
 
 	"github.com/beevik/etree"
-	dsig "github.com/russellhaering/goxmldsig"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+
+	dsig "github.com/russellhaering/goxmldsig"
 )
 
 const (
@@ -145,7 +146,6 @@ func setSAMLTestAttr(el *etree.Element, name, value string) {
 		el.CreateAttr(name, value)
 	}
 }
-
 func (p *samlTestIdP) sign(t *testing.T, r samlTestResponse, el *etree.Element) *etree.Element {
 	t.Helper()
 	key, cert := p.key, p.cert
@@ -164,15 +164,19 @@ func (p *samlTestIdP) sign(t *testing.T, r samlTestResponse, el *etree.Element) 
 	return signed
 }
 
-func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
+func newSAMLAssertionShellForEncodeSAML(t *testing.T, r samlTestResponse, now time.Time) *etree.Element {
 	t.Helper()
-	now := time.Now()
 	assertion := etree.NewElement("saml:Assertion")
 	assertion.CreateAttr("xmlns:saml", samlTestAssertNS)
 	setSAMLTestAttr(assertion, "ID", r.assertionID)
 	assertion.CreateAttr("Version", "2.0")
 	assertion.CreateAttr("IssueInstant", samlTestInstant(now))
 	assertion.CreateElement("saml:Issuer").SetText(r.issuer)
+	return assertion
+}
+
+func appendSAMLSubjectForEncodeSAML(t *testing.T, assertion *etree.Element, r samlTestResponse) {
+	t.Helper()
 	subject := assertion.CreateElement("saml:Subject")
 	if r.nameID != "" {
 		subject.CreateElement("saml:NameID").SetText(r.nameID)
@@ -183,6 +187,10 @@ func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
 	data.CreateAttr("NotOnOrAfter", samlTestInstant(r.confirmationExpiry))
 	setSAMLTestAttr(data, "Recipient", r.recipient)
 	setSAMLTestAttr(data, "InResponseTo", r.confirmationAnswer)
+}
+
+func appendSAMLConditionsForEncodeSAML(t *testing.T, assertion *etree.Element, r samlTestResponse, now time.Time) {
+	t.Helper()
 	conditions := assertion.CreateElement("saml:Conditions")
 	if !r.notBefore.IsZero() {
 		conditions.CreateAttr("NotBefore", samlTestInstant(r.notBefore))
@@ -198,20 +206,37 @@ func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
 	if !r.sessionNotOnOrAfter.IsZero() {
 		statement.CreateAttr("SessionNotOnOrAfter", samlTestInstant(r.sessionNotOnOrAfter))
 	}
-	if len(r.attributes) > 0 {
-		attributes := assertion.CreateElement("saml:AttributeStatement")
-		for name, values := range r.attributes {
-			attribute := attributes.CreateElement("saml:Attribute")
-			attribute.CreateAttr("Name", name)
-			for _, value := range values {
-				attribute.CreateElement("saml:AttributeValue").SetText(value)
-			}
+}
+
+func appendSAMLAttributesForEncodeSAML(t *testing.T, assertion *etree.Element, r samlTestResponse) {
+	t.Helper()
+	if len(r.attributes) == 0 {
+		return
+	}
+	attributes := assertion.CreateElement("saml:AttributeStatement")
+	for name, values := range r.attributes {
+		attribute := attributes.CreateElement("saml:Attribute")
+		attribute.CreateAttr("Name", name)
+		for _, value := range values {
+			attribute.CreateElement("saml:AttributeValue").SetText(value)
 		}
 	}
+}
+
+func (p *samlTestIdP) buildSAMLAssertionForEncodeSAML(t *testing.T, r samlTestResponse, now time.Time) *etree.Element {
+	t.Helper()
+	assertion := newSAMLAssertionShellForEncodeSAML(t, r, now)
+	appendSAMLSubjectForEncodeSAML(t, assertion, r)
+	appendSAMLConditionsForEncodeSAML(t, assertion, r, now)
+	appendSAMLAttributesForEncodeSAML(t, assertion, r)
 	if r.signAssertion {
 		assertion = p.sign(t, r, assertion)
 	}
+	return assertion
+}
 
+func (p *samlTestIdP) buildSAMLResponseForEncodeSAML(t *testing.T, r samlTestResponse, now time.Time, assertion *etree.Element) *etree.Element {
+	t.Helper()
 	response := etree.NewElement("samlp:Response")
 	response.CreateAttr("xmlns:samlp", samlTestProtocolNS)
 	response.CreateAttr("xmlns:saml", samlTestAssertNS)
@@ -229,6 +254,14 @@ func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
 	if r.tamper != nil {
 		r.tamper(response)
 	}
+	return response
+}
+
+func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
+	t.Helper()
+	now := time.Now()
+	assertion := p.buildSAMLAssertionForEncodeSAML(t, r, now)
+	response := p.buildSAMLResponseForEncodeSAML(t, r, now, assertion)
 	doc := etree.NewDocument()
 	doc.SetRoot(response)
 	raw, err := doc.WriteToBytes()
@@ -237,155 +270,18 @@ func (p *samlTestIdP) encode(t *testing.T, r samlTestResponse) string {
 	}
 	return base64.StdEncoding.EncodeToString(raw)
 }
-
-func newSAMLTestGate(t *testing.T, idp *samlTestIdP, next http.Handler, configure func(*Config)) *applicationAuth {
-	t.Helper()
-	cfg := Config{
-		Provider:   ProviderSAML,
-		Allow:      []string{"alice@example.com"},
-		SAMLConfig: SAMLConfig{SAMLMetadataURL: idp.metadataURL()},
-	}
-	if configure != nil {
-		configure(&cfg)
-	}
-	if next == nil {
-		next = http.NotFoundHandler()
-	}
-	handler, err := New(next, applicationAuthTestIdentity(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return handler.(*applicationAuth)
-}
-
-type samlLogin struct {
-	requestID string
-	cookie    *http.Cookie
-	request   *etree.Element
-}
-
-func startSAMLLogin(t *testing.T, gate *applicationAuth, target string) samlLogin {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+target, nil))
-	location, err := url.Parse(rec.Header().Get("Location"))
-	if err != nil || rec.Code != http.StatusSeeOther {
-		t.Fatalf("login = %d, %q, %v", rec.Code, rec.Header().Get("Location"), err)
-	}
-	cookies := rec.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != applicationAuthSAMLStateCookie {
-		t.Fatalf("login cookies = %#v", cookies)
-	}
-	deflated, err := base64.StdEncoding.DecodeString(location.Query().Get("SAMLRequest"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	inflated, err := io.ReadAll(flate.NewReader(bytes.NewReader(deflated)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc := etree.NewDocument()
-	if err := doc.ReadFromBytes(inflated); err != nil {
-		t.Fatal(err)
-	}
-	return samlLogin{requestID: doc.Root().SelectAttrValue("ID", ""), cookie: cookies[0], request: doc.Root()}
-}
-
-func (l samlLogin) post(gate *applicationAuth, encoded string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, samlTestACSURL, strings.NewReader(url.Values{"SAMLResponse": {encoded}}.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if l.cookie != nil {
-		req.AddCookie(l.cookie)
-	}
-	rec := httptest.NewRecorder()
-	gate.ServeHTTP(rec, req)
-	return rec
-}
-
-func assertSAMLACS(t *testing.T, rec *httptest.ResponseRecorder, want int) *http.Cookie {
-	t.Helper()
-	if rec.Code != want {
-		t.Fatalf("acs status = %d, body %q; want %d", rec.Code, strings.TrimSpace(rec.Body.String()), want)
-	}
-	var session *http.Cookie
-	clearedState := false
-	for _, c := range rec.Result().Cookies() {
-		switch c.Name {
-		case applicationAuthCookieName:
-			if c.MaxAge >= 0 && c.Value != "" {
-				session = c
-			}
-		case applicationAuthSAMLStateCookie:
-			clearedState = c.MaxAge < 0
-		}
-	}
-	if (session != nil) != (want == http.StatusSeeOther) {
-		t.Fatalf("session cookie issued = %v for status %d", session != nil, rec.Code)
-	}
-	if !clearedState {
-		t.Fatal("one-time state cookie was not cleared")
-	}
-	return session
-}
-
 func TestApplicationAuthSAMLLogin(t *testing.T) {
 	t.Parallel()
 
 	idp := newSAMLTestIdP(t)
 	var upstream http.Header
-	gate := newSAMLTestGate(t, idp, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		upstream = r.Header.Clone()
-	}), func(cfg *Config) { cfg.IdentityHeaders = true })
-
-	rec := httptest.NewRecorder()
-	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/reports?year=2026", nil))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != types.PathApplicationAuthLogin+"?next="+url.QueryEscape("/reports?year=2026") {
-		t.Fatalf("unauthenticated GET = %d, %q", rec.Code, rec.Header().Get("Location"))
-	}
-
+	gate := newSAMLLoginGateSAML(t, idp, &upstream)
+	rec := checkSAMLLoginUnauthenticatedSAML(t, gate)
 	login := startSAMLLogin(t, gate, rec.Header().Get("Location"))
-	if login.cookie.SameSite != http.SameSiteNoneMode || !login.cookie.Secure || !login.cookie.HttpOnly {
-		t.Fatalf("state cookie = %+v; the identity provider's cross-site POST must carry it", login.cookie)
-	}
-	for attr, want := range map[string]string{
-		"Destination":                 idp.server.URL + "/sso",
-		"AssertionConsumerServiceURL": samlTestACSURL,
-		"ProtocolBinding":             "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
-	} {
-		if got := login.request.SelectAttrValue(attr, ""); got != want {
-			t.Fatalf("AuthnRequest %s = %q; want %q", attr, got, want)
-		}
-	}
-	if issuer := login.request.FindElement("./Issuer"); issuer == nil || issuer.Text() != samlTestAudience {
-		t.Fatal("AuthnRequest does not name this service provider as its issuer")
-	}
-	if login.requestID == "" || login.request.FindElement("./Signature") != nil {
-		t.Fatalf("AuthnRequest ID = %q; it must be set and the request unsigned", login.requestID)
-	}
+	checkSAMLLoginRequestSAML(t, login, idp)
 
 	session := assertSAMLACS(t, login.post(gate, idp.encode(t, idp.validResponse(login))), http.StatusSeeOther)
-	req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/reports?year=2026", nil)
-	req.AddCookie(session)
-	req.Header.Set(types.HeaderPortalUser, "mallory@example.com")
-	req.Header.Set(types.HeaderPortalAuth, "credential")
-	req.Header.Set(types.HeaderPortalProof, "forged-proof-0123456789")
-	rec = httptest.NewRecorder()
-	gate.ServeHTTP(rec, req)
-	if upstream == nil {
-		t.Fatalf("session request = %d; it did not reach the application", rec.Code)
-	}
-	if got := upstream.Get(types.HeaderPortalUser); got != "alice@example.com" {
-		t.Fatalf("%s = %q; want alice@example.com", types.HeaderPortalUser, got)
-	}
-	if got := upstream.Get(types.HeaderPortalAuth); got != ProviderSAML {
-		t.Fatalf("%s = %q; want saml", types.HeaderPortalAuth, got)
-	}
-	if got := upstream.Values(types.HeaderPortalProof); len(got) != 0 {
-		t.Fatalf("%s = %q; the inbound copy must not reach the application", types.HeaderPortalProof, got)
-	}
-	if strings.Contains(upstream.Get("Cookie"), applicationAuthCookieName) {
-		t.Fatal("the session cookie reached the application")
-	}
+	checkSAMLLoginSessionSAML(t, gate, session, &upstream)
 }
 
 func TestApplicationAuthSAMLLandsOnNext(t *testing.T) {
@@ -404,6 +300,61 @@ func TestApplicationAuthSAMLLandsOnNext(t *testing.T) {
 			t.Fatalf("login from %q lands on %q; want %q", target, got, want)
 		}
 	}
+}
+
+func assertSAMLRefusalSAML(t *testing.T, change func(*samlTestResponse)) {
+	t.Helper()
+	idp := newSAMLTestIdP(t)
+	gate := newSAMLTestGate(t, idp, nil, nil)
+	login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
+	response := idp.validResponse(login)
+	change(&response)
+	assertSAMLACS(t, login.post(gate, idp.encode(t, response)), http.StatusUnauthorized)
+}
+
+func assertSAMLRefusalWithoutCookieSAML(t *testing.T) {
+	t.Helper()
+	idp := newSAMLTestIdP(t)
+	gate := newSAMLTestGate(t, idp, nil, nil)
+	login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
+	encoded := idp.encode(t, idp.validResponse(login))
+	login.cookie = nil
+	assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
+}
+
+func assertSAMLRefusalExpiredStateSAML(t *testing.T) {
+	t.Helper()
+	idp := newSAMLTestIdP(t)
+	gate := newSAMLTestGate(t, idp, nil, nil)
+	login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
+	var state samlStateClaims
+	if err := decodeSignedApplicationAuthJSON(gate.saml.stateKey, login.cookie.Value, &state); err != nil {
+		t.Fatal(err)
+	}
+	state.ExpiresAt = time.Now().Add(-time.Second).Unix()
+	expired, err := encodeSignedApplicationAuthJSON(gate.saml.stateKey, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := idp.encode(t, idp.validResponse(login))
+	login.cookie = &http.Cookie{Name: applicationAuthSAMLStateCookie, Value: expired}
+	assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
+}
+
+func assertSAMLRefusalForeignHostSAML(t *testing.T) {
+	t.Helper()
+	idp := newSAMLTestIdP(t)
+	gate := newSAMLTestGate(t, idp, nil, nil)
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://other.example"+types.PathApplicationAuthLogin, nil))
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("login cookies = %#v", cookies)
+	}
+	login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
+	encoded := idp.encode(t, idp.validResponse(login))
+	login.cookie = cookies[0]
+	assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
 }
 
 func TestApplicationAuthSAMLRefusals(t *testing.T) {
@@ -460,56 +411,21 @@ func TestApplicationAuthSAMLRefusals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			idp := newSAMLTestIdP(t)
-			gate := newSAMLTestGate(t, idp, nil, nil)
-			login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
-			response := idp.validResponse(login)
-			tt.change(&response)
-			assertSAMLACS(t, login.post(gate, idp.encode(t, response)), http.StatusUnauthorized)
+			assertSAMLRefusalSAML(t, tt.change)
 		})
 	}
 
 	t.Run("response without the login state of this browser", func(t *testing.T) {
 		t.Parallel()
-		idp := newSAMLTestIdP(t)
-		gate := newSAMLTestGate(t, idp, nil, nil)
-		login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
-		encoded := idp.encode(t, idp.validResponse(login))
-		login.cookie = nil
-		assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
+		assertSAMLRefusalWithoutCookieSAML(t)
 	})
 	t.Run("expired login state", func(t *testing.T) {
 		t.Parallel()
-		idp := newSAMLTestIdP(t)
-		gate := newSAMLTestGate(t, idp, nil, nil)
-		login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
-		var state samlStateClaims
-		if err := decodeSignedApplicationAuthJSON(gate.saml.stateKey, login.cookie.Value, &state); err != nil {
-			t.Fatal(err)
-		}
-		state.ExpiresAt = time.Now().Add(-time.Second).Unix()
-		expired, err := encodeSignedApplicationAuthJSON(gate.saml.stateKey, state)
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded := idp.encode(t, idp.validResponse(login))
-		login.cookie = &http.Cookie{Name: applicationAuthSAMLStateCookie, Value: expired}
-		assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
+		assertSAMLRefusalExpiredStateSAML(t)
 	})
 	t.Run("login state of another host", func(t *testing.T) {
 		t.Parallel()
-		idp := newSAMLTestIdP(t)
-		gate := newSAMLTestGate(t, idp, nil, nil)
-		rec := httptest.NewRecorder()
-		gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://other.example"+types.PathApplicationAuthLogin, nil))
-		cookies := rec.Result().Cookies()
-		if len(cookies) != 1 {
-			t.Fatalf("login cookies = %#v", cookies)
-		}
-		login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
-		encoded := idp.encode(t, idp.validResponse(login))
-		login.cookie = cookies[0]
-		assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
+		assertSAMLRefusalForeignHostSAML(t)
 	})
 }
 
@@ -545,7 +461,6 @@ func TestApplicationAuthSAMLRefusesReplay(t *testing.T) {
 	assertSAMLACS(t, login.post(gate, encoded), http.StatusSeeOther)
 	assertSAMLACS(t, login.post(gate, encoded), http.StatusUnauthorized)
 }
-
 func TestSAMLReplaySetIsBounded(t *testing.T) {
 	t.Parallel()
 
@@ -571,16 +486,68 @@ func TestSAMLReplaySetIsBounded(t *testing.T) {
 	}
 }
 
+type samlPrincipalCase struct {
+	name      string
+	allow     []string
+	attribute string
+	change    func(*samlTestResponse)
+	want      string
+}
+
+func assertSAMLPrincipalCaseSAML(t *testing.T, tt samlPrincipalCase) {
+	t.Helper()
+	idp := newSAMLTestIdP(t)
+	gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) {
+		cfg.Allow, cfg.SAMLSubjectAttribute = tt.allow, tt.attribute
+	})
+	login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
+	response := idp.validResponse(login)
+	if tt.change != nil {
+		tt.change(&response)
+	}
+	rec := login.post(gate, idp.encode(t, response))
+	if tt.want == "" {
+		assertSAMLACS(t, rec, http.StatusUnauthorized)
+		return
+	}
+	session := assertSAMLACS(t, rec, http.StatusSeeOther)
+	req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
+	req.AddCookie(session)
+	if got, ok := gate.authenticateSession(req); !ok || got.Subject != tt.want || got.Provider != ProviderSAML {
+		t.Fatalf("session = (%+v, %v); want %q from saml", got, ok, tt.want)
+	}
+}
+
+func assertSAMLPrincipalRevocationSAML(t *testing.T) {
+	t.Helper()
+	idp := newSAMLTestIdP(t)
+	gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) {
+		cfg.Allow = []string{"alice@example.com", "bob@example.com"}
+	})
+	login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
+	session := assertSAMLACS(t, login.post(gate, idp.encode(t, idp.validResponse(login))), http.StatusSeeOther)
+	for name, configure := range map[string]func(*Config){
+		"same settings": func(cfg *Config) {
+			cfg.Allow = []string{"alice@example.com", "bob@example.com"}
+		},
+		"entry removed":          func(cfg *Config) { cfg.Allow = []string{"bob@example.com"} },
+		"another subject source": func(cfg *Config) { cfg.SAMLSubjectAttribute = "email" },
+		"another SP entity ID":   func(cfg *Config) { cfg.SAMLEntityID = "urn:portal:other" },
+	} {
+		restarted := newSAMLTestGate(t, idp, nil, configure)
+		req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
+		req.AddCookie(session)
+		_, ok := restarted.authenticateSession(req)
+		if ok != (name == "same settings") {
+			t.Errorf("%s: session accepted = %v", name, ok)
+		}
+	}
+}
+
 func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		allow     []string
-		attribute string
-		change    func(*samlTestResponse)
-		want      string
-	}{
+	tests := []samlPrincipalCase{
 		{"email NameID matches its email entry", []string{"alice@example.com"}, "", func(r *samlTestResponse) { r.nameID = "Alice@Example.com" }, "alice@example.com"},
 		{"email NameID matches its domain", []string{"@example.com"}, "", nil, "alice@example.com"},
 		{"domain excludes subdomains", []string{"@example.com"}, "", func(r *samlTestResponse) { r.nameID = "bob@sub.example.com" }, ""},
@@ -604,53 +571,13 @@ func TestApplicationAuthSAMLPrincipals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			idp := newSAMLTestIdP(t)
-			gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) {
-				cfg.Allow, cfg.SAMLSubjectAttribute = tt.allow, tt.attribute
-			})
-			login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
-			response := idp.validResponse(login)
-			if tt.change != nil {
-				tt.change(&response)
-			}
-			rec := login.post(gate, idp.encode(t, response))
-			if tt.want == "" {
-				assertSAMLACS(t, rec, http.StatusUnauthorized)
-				return
-			}
-			session := assertSAMLACS(t, rec, http.StatusSeeOther)
-			req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
-			req.AddCookie(session)
-			if got, ok := gate.authenticateSession(req); !ok || got.Subject != tt.want || got.Provider != ProviderSAML {
-				t.Fatalf("session = (%+v, %v); want %q from saml", got, ok, tt.want)
-			}
+			assertSAMLPrincipalCaseSAML(t, tt)
 		})
 	}
 
 	t.Run("removing an entry ends its sessions", func(t *testing.T) {
 		t.Parallel()
-		idp := newSAMLTestIdP(t)
-		gate := newSAMLTestGate(t, idp, nil, func(cfg *Config) {
-			cfg.Allow = []string{"alice@example.com", "bob@example.com"}
-		})
-		login := startSAMLLogin(t, gate, types.PathApplicationAuthLogin)
-		session := assertSAMLACS(t, login.post(gate, idp.encode(t, idp.validResponse(login))), http.StatusSeeOther)
-		for name, configure := range map[string]func(*Config){
-			"same settings": func(cfg *Config) {
-				cfg.Allow = []string{"alice@example.com", "bob@example.com"}
-			},
-			"entry removed":          func(cfg *Config) { cfg.Allow = []string{"bob@example.com"} },
-			"another subject source": func(cfg *Config) { cfg.SAMLSubjectAttribute = "email" },
-			"another SP entity ID":   func(cfg *Config) { cfg.SAMLEntityID = "urn:portal:other" },
-		} {
-			restarted := newSAMLTestGate(t, idp, nil, configure)
-			req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/", nil)
-			req.AddCookie(session)
-			_, ok := restarted.authenticateSession(req)
-			if ok != (name == "same settings") {
-				t.Errorf("%s: session accepted = %v", name, ok)
-			}
-		}
+		assertSAMLPrincipalRevocationSAML(t)
 	})
 }
 
@@ -743,27 +670,30 @@ func TestApplicationAuthSAMLSessionLifetime(t *testing.T) {
 	}
 }
 
-func TestCheckApplicationAuthProviderSAML(t *testing.T) {
-	t.Parallel()
-
-	idp := newSAMLTestIdP(t)
-	samlConfig := func(configure func(*Config)) Config {
-		cfg := Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}}
-		configure(&cfg)
-		return cfg
-	}
-	file := filepath.Join(t.TempDir(), "idp.xml")
+func writeSAMLCheckFixturesSAML(t *testing.T, idp *samlTestIdP) (file, noKey, expired string) {
+	t.Helper()
+	file = filepath.Join(t.TempDir(), "idp.xml")
 	if err := os.WriteFile(file, []byte(idp.metadata), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	noKey := filepath.Join(t.TempDir(), "no-key.xml")
+	noKey = filepath.Join(t.TempDir(), "no-key.xml")
 	if err := os.WriteFile(noKey, []byte(strings.Replace(idp.metadata, `use="signing"`, `use="encryption"`, 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, expiredCert := newSAMLTestKey(t, time.Now().Add(-time.Minute))
-	expired := filepath.Join(t.TempDir(), "expired.xml")
+	expired = filepath.Join(t.TempDir(), "expired.xml")
 	if err := os.WriteFile(expired, []byte(idp.metadataXML(base64.StdEncoding.EncodeToString(expiredCert))), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	return file, noKey, expired
+}
+
+func runSAMLProviderChecksSAML(t *testing.T, idp *samlTestIdP, file, noKey, expired string) {
+	t.Helper()
+	samlConfig := func(configure func(*Config)) Config {
+		cfg := Config{Provider: ProviderSAML, Allow: []string{"alice@example.com"}}
+		configure(&cfg)
+		return cfg
 	}
 	for name, tt := range map[string]struct {
 		cfg    Config
@@ -782,6 +712,14 @@ func TestCheckApplicationAuthProviderSAML(t *testing.T) {
 			t.Errorf("%s: Check() = %v; want usable = %v", name, err, tt.usable)
 		}
 	}
+}
+
+func TestCheckApplicationAuthProviderSAML(t *testing.T) {
+	t.Parallel()
+
+	idp := newSAMLTestIdP(t)
+	file, noKey, expired := writeSAMLCheckFixturesSAML(t, idp)
+	runSAMLProviderChecksSAML(t, idp, file, noKey, expired)
 }
 
 func TestSAMLPrincipalCarriesTheVouchedEmail(t *testing.T) {
@@ -811,5 +749,176 @@ func TestSAMLPrincipalCarriesTheVouchedEmail(t *testing.T) {
 				t.Fatalf("principal = (%+v, %v); want %+v", got, ok, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseSAMLMetadataSelectsRedirectBinding(t *testing.T) {
+	t.Parallel()
+
+	idp := newSAMLTestIdP(t)
+	parsed, err := parseSAMLMetadata([]byte(idp.metadata))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.ssoURL != idp.server.URL+"/sso" {
+		t.Fatalf("ssoURL = %q; want the HTTP-Redirect service at %q", parsed.ssoURL, idp.server.URL+"/sso")
+	}
+	postOnly := strings.Replace(idp.metadata, ` Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"`, ``, 1)
+	if _, err := parseSAMLMetadata([]byte(postOnly)); !errors.Is(err, errSAMLMetadataNoRedirectSSO) {
+		t.Fatalf("metadata without a redirect binding: error = %v; want %v", err, errSAMLMetadataNoRedirectSSO)
+	}
+}
+func newSAMLTestGate(t *testing.T, idp *samlTestIdP, next http.Handler, configure func(*Config)) *applicationAuth {
+	t.Helper()
+	cfg := Config{
+		Provider:   ProviderSAML,
+		Allow:      []string{"alice@example.com"},
+		SAMLConfig: SAMLConfig{SAMLMetadataURL: idp.metadataURL()},
+	}
+	if configure != nil {
+		configure(&cfg)
+	}
+	if next == nil {
+		next = http.NotFoundHandler()
+	}
+	handler, err := New(next, applicationAuthTestIdentity(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler.(*applicationAuth)
+}
+
+type samlLogin struct {
+	requestID string
+	cookie    *http.Cookie
+	request   *etree.Element
+}
+
+func startSAMLLogin(t *testing.T, gate *applicationAuth, target string) samlLogin {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+target, nil))
+	location, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil || rec.Code != http.StatusSeeOther {
+		t.Fatalf("login = %d, %q, %v", rec.Code, rec.Header().Get("Location"), err)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != applicationAuthSAMLStateCookie {
+		t.Fatalf("login cookies = %#v", cookies)
+	}
+	deflated, err := base64.StdEncoding.DecodeString(location.Query().Get("SAMLRequest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inflated, err := io.ReadAll(flate.NewReader(bytes.NewReader(deflated)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := etree.NewDocument()
+	if err := doc.ReadFromBytes(inflated); err != nil {
+		t.Fatal(err)
+	}
+	return samlLogin{requestID: doc.Root().SelectAttrValue("ID", ""), cookie: cookies[0], request: doc.Root()}
+}
+
+func (l samlLogin) post(gate *applicationAuth, encoded string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, samlTestACSURL, strings.NewReader(url.Values{"SAMLResponse": {encoded}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if l.cookie != nil {
+		req.AddCookie(l.cookie)
+	}
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, req)
+	return rec
+}
+
+func assertSAMLACS(t *testing.T, rec *httptest.ResponseRecorder, want int) *http.Cookie {
+	t.Helper()
+	if rec.Code != want {
+		t.Fatalf("acs status = %d, body %q; want %d", rec.Code, strings.TrimSpace(rec.Body.String()), want)
+	}
+	var session *http.Cookie
+	clearedState := false
+	for _, c := range rec.Result().Cookies() {
+		switch c.Name {
+		case applicationAuthCookieName:
+			if c.MaxAge >= 0 && c.Value != "" {
+				session = c
+			}
+		case applicationAuthSAMLStateCookie:
+			clearedState = c.MaxAge < 0
+		}
+	}
+	if (session != nil) != (want == http.StatusSeeOther) {
+		t.Fatalf("session cookie issued = %v for status %d", session != nil, rec.Code)
+	}
+	if !clearedState {
+		t.Fatal("one-time state cookie was not cleared")
+	}
+	return session
+}
+
+func newSAMLLoginGateSAML(t *testing.T, idp *samlTestIdP, upstream *http.Header) *applicationAuth {
+	t.Helper()
+	return newSAMLTestGate(t, idp, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		*upstream = r.Header.Clone()
+	}), func(cfg *Config) { cfg.IdentityHeaders = true })
+}
+
+func checkSAMLLoginUnauthenticatedSAML(t *testing.T, gate *applicationAuth) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/reports?year=2026", nil))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != types.PathApplicationAuthLogin+"?next="+url.QueryEscape("/reports?year=2026") {
+		t.Fatalf("unauthenticated GET = %d, %q", rec.Code, rec.Header().Get("Location"))
+	}
+	return rec
+}
+
+func checkSAMLLoginRequestSAML(t *testing.T, login samlLogin, idp *samlTestIdP) {
+	t.Helper()
+	if login.cookie.SameSite != http.SameSiteNoneMode || !login.cookie.Secure || !login.cookie.HttpOnly {
+		t.Fatalf("state cookie = %+v; the identity provider's cross-site POST must carry it", login.cookie)
+	}
+	for attr, want := range map[string]string{
+		"Destination":                 idp.server.URL + "/sso",
+		"AssertionConsumerServiceURL": samlTestACSURL,
+		"ProtocolBinding":             "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
+	} {
+		if got := login.request.SelectAttrValue(attr, ""); got != want {
+			t.Fatalf("AuthnRequest %s = %q; want %q", attr, got, want)
+		}
+	}
+	if issuer := login.request.FindElement("./Issuer"); issuer == nil || issuer.Text() != samlTestAudience {
+		t.Fatal("AuthnRequest does not name this service provider as its issuer")
+	}
+	if login.requestID == "" || login.request.FindElement("./Signature") != nil {
+		t.Fatalf("AuthnRequest ID = %q; it must be set and the request unsigned", login.requestID)
+	}
+}
+
+func checkSAMLLoginSessionSAML(t *testing.T, gate *applicationAuth, session *http.Cookie, upstream *http.Header) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "https://"+samlTestHost+"/reports?year=2026", nil)
+	req.AddCookie(session)
+	req.Header.Set(types.HeaderPortalUser, "mallory@example.com")
+	req.Header.Set(types.HeaderPortalAuth, "credential")
+	req.Header.Set(types.HeaderPortalProof, "forged-proof-0123456789")
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, req)
+	if *upstream == nil {
+		t.Fatalf("session request = %d; it did not reach the application", rec.Code)
+	}
+	if got := (*upstream).Get(types.HeaderPortalUser); got != "alice@example.com" {
+		t.Fatalf("%s = %q; want alice@example.com", types.HeaderPortalUser, got)
+	}
+	if got := (*upstream).Get(types.HeaderPortalAuth); got != ProviderSAML {
+		t.Fatalf("%s = %q; want saml", types.HeaderPortalAuth, got)
+	}
+	if got := (*upstream).Values(types.HeaderPortalProof); len(got) != 0 {
+		t.Fatalf("%s = %q; the inbound copy must not reach the application", types.HeaderPortalProof, got)
+	}
+	if strings.Contains((*upstream).Get("Cookie"), applicationAuthCookieName) {
+		t.Fatal("the session cookie reached the application")
 	}
 }

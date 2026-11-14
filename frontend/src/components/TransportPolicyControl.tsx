@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { useState } from "react";
 import type { PortSettings } from "@/hooks/useAdmin";
 
@@ -13,7 +14,7 @@ const SEGMENT_CLASS =
 const SELECTED_CLASS = "bg-primary text-primary-foreground";
 const UNSELECTED_CLASS = "bg-secondary text-secondary-foreground hover:bg-secondary/80";
 
-export function TransportPolicyControl({ label, settings, disabled, onChange }: TransportPolicyControlProps) {
+export function TransportPolicyControl({ label, settings, disabled, onChange }: TransportPolicyControlProps): JSX.Element {
   const [maxLeasesInput, setMaxLeasesInput] = useState(String(settings.maxLeases));
   const [savedMaxLeases, setSavedMaxLeases] = useState(settings.maxLeases);
   if (savedMaxLeases !== settings.maxLeases) {

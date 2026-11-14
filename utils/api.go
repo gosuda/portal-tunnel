@@ -154,6 +154,10 @@ func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, m
 	}
 	defer resp.Body.Close()
 
+	return decodeAPIResponse(resp, path, out)
+}
+
+func decodeAPIResponse(resp *http.Response, path string, out any) error {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return DecodeAPIRequestError(resp)
 	}

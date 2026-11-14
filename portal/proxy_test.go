@@ -2,6 +2,8 @@ package portal
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"testing"
 	"testing/synctest"
@@ -35,16 +37,15 @@ func TestIdentityBPSDefaultAndOverrides(t *testing.T) {
 	}
 }
 
+type sharedBudgetStreamResult struct {
+	key     types.ServiceIdentityKey
+	elapsed time.Duration
+}
+
 func TestConcurrentStreamsShareDefaultIdentityBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		manager := NewBPSManager(100)
-		shared := types.NewServiceIdentityKey("shared", "address")
-		other := types.NewServiceIdentityKey("other", "address")
-		type completion struct {
-			key     types.ServiceIdentityKey
-			elapsed time.Duration
-		}
-		done := make(chan completion, 3)
+		manager, shared, other := newSharedBudgetManager(t)
+		done := make(chan sharedBudgetStreamResult, 3)
 		start := time.Now()
 		for _, key := range []types.ServiceIdentityKey{shared, shared, other} {
 			go func() {
@@ -56,22 +57,35 @@ func TestConcurrentStreamsShareDefaultIdentityBudget(t *testing.T) {
 					}
 					remaining -= n
 				}
-				done <- completion{key: key, elapsed: time.Since(start)}
+				done <- sharedBudgetStreamResult{key: key, elapsed: time.Since(start)}
 			}()
 		}
-		var sharedElapsed time.Duration
-		for range 3 {
-			finished := <-done
-			if finished.key == shared {
-				sharedElapsed = max(sharedElapsed, finished.elapsed)
-			} else if finished.elapsed != 500*time.Millisecond {
-				t.Errorf("independent identity's 50 bytes took %v, want 500ms", finished.elapsed)
-			}
-		}
-		if sharedElapsed != time.Second {
-			t.Fatalf("two streams' combined 100 bytes took %v, want 1s", sharedElapsed)
-		}
+		checkSharedBudgetElapsed(t, done, shared)
 	})
+}
+
+func newSharedBudgetManager(t *testing.T) (*BPSManager, types.ServiceIdentityKey, types.ServiceIdentityKey) {
+	t.Helper()
+	manager := NewBPSManager(100)
+	shared := types.NewServiceIdentityKey("shared", "address")
+	other := types.NewServiceIdentityKey("other", "address")
+	return manager, shared, other
+}
+
+func checkSharedBudgetElapsed(t *testing.T, done <-chan sharedBudgetStreamResult, shared types.ServiceIdentityKey) {
+	t.Helper()
+	var sharedElapsed time.Duration
+	for range 3 {
+		finished := <-done
+		if finished.key == shared {
+			sharedElapsed = max(sharedElapsed, finished.elapsed)
+		} else if finished.elapsed != 500*time.Millisecond {
+			t.Errorf("independent identity's 50 bytes took %v, want 500ms", finished.elapsed)
+		}
+	}
+	if sharedElapsed != time.Second {
+		t.Fatalf("two streams' combined 100 bytes took %v, want 1s", sharedElapsed)
+	}
 }
 
 func TestDefaultBPSRetainsCreditAcrossPolicyUpdates(t *testing.T) {
@@ -172,4 +186,36 @@ func TestBridgeCancellationInterruptsThrottle(t *testing.T) {
 			t.Fatal("bridge retained workers while throttle canceled")
 		}
 	})
+}
+
+type proxyShortWriteConn struct {
+	net.Conn
+}
+
+func (c *proxyShortWriteConn) Write(b []byte) (int, error) {
+	return 0, nil
+}
+
+func TestCopyProxyZeroWriteReturnsShortWrite(t *testing.T) {
+	var p proxy
+	bps := NewBPSManager(0)
+	key := types.NewServiceIdentityKey("tenant", "address")
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	dst := &proxyShortWriteConn{Conn: local}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- p.copyProxyDrain(ctx, dst, key, bps, []byte("proxy-short-write"))
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("copyProxyDrain() error = %v, want %v", err, io.ErrShortWrite)
+		}
+	case <-ctx.Done():
+		t.Fatal("copyProxyDrain() did not return on zero-byte write")
+	}
 }

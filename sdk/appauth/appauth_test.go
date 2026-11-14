@@ -2,24 +2,17 @@ package appauth
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	jose "github.com/go-jose/go-jose/v4"
-	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -58,7 +51,31 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	challengeBody, _ := json.Marshal(applicationAuthChallengeRequest{Address: wallet.Identity().Address})
+	challenge := fetchApplicationAuthSIWEChallenge(t, handler, wallet.Identity().Address)
+	cookies, verifyBody := redeemApplicationAuthSIWEChallenge(t, handler, wallet, challenge)
+	protectedRec := serveApplicationAuthSIWEProtected(t, handler, cookies[0])
+	if protectedRec.Code != http.StatusNoContent {
+		t.Fatalf("protected status = %d", protectedRec.Code)
+	}
+	if upstreamUser != wallet.Identity().Address || upstreamAuth != "siwe" {
+		t.Fatalf("identity headers = %q, %q", upstreamUser, upstreamAuth)
+	}
+	if want := []string{types.HeaderPortalAuth, types.HeaderPortalUser}; !slices.Equal(upstreamPortalNames, want) {
+		t.Fatalf("portal headers at the upstream = %q; want only %q", upstreamPortalNames, want)
+	}
+
+	replayRec := serveApplicationAuthSIWEReplay(t, handler, verifyBody)
+	if replayRec.Code != http.StatusOK {
+		t.Fatalf("challenge replay status = %d; want %d", replayRec.Code, http.StatusOK)
+	}
+	if len(replayRec.Result().Cookies()) != 1 {
+		t.Fatalf("challenge replay session cookie missing")
+	}
+}
+
+func fetchApplicationAuthSIWEChallenge(t *testing.T, handler http.Handler, address string) applicationAuthChallengeResponse {
+	t.Helper()
+	challengeBody, _ := json.Marshal(applicationAuthChallengeRequest{Address: address})
 	challengeReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthChallenge, bytes.NewReader(challengeBody))
 	challengeReq.Header.Set("Origin", "https://app.example")
 	challengeRec := httptest.NewRecorder()
@@ -70,6 +87,11 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	if err := json.NewDecoder(challengeRec.Body).Decode(&challenge); err != nil {
 		t.Fatal(err)
 	}
+	return challenge
+}
+
+func redeemApplicationAuthSIWEChallenge(t *testing.T, handler http.Handler, wallet identity.LocalAuthority, challenge applicationAuthChallengeResponse) ([]*http.Cookie, []byte) {
+	t.Helper()
 	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
 	if err != nil {
 		t.Fatal(err)
@@ -82,40 +104,33 @@ func TestApplicationAuthSIWEAndIdentityHeaders(t *testing.T) {
 	if verifyRec.Code != http.StatusOK {
 		t.Fatalf("verify status = %d, body = %s", verifyRec.Code, verifyRec.Body.String())
 	}
-	response := verifyRec.Result()
-	cookies := response.Cookies()
+	cookies := verifyRec.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
 		t.Fatalf("session cookie = %#v", cookies)
 	}
+	return cookies, verifyBody
+}
 
+func serveApplicationAuthSIWEProtected(t *testing.T, handler http.Handler, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
 	protectedReq := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
-	protectedReq.AddCookie(cookies[0])
+	protectedReq.AddCookie(cookie)
 	protectedReq.Header.Set(types.HeaderPortalUser, "attacker")
 	protectedReq.Header.Set(types.HeaderPortalAuth, "attacker")
 	protectedReq.Header["X_Portal_User"] = []string{"attacker"}
 	protectedReq.Header["X_portal_auth"] = []string{"attacker"}
 	protectedRec := httptest.NewRecorder()
 	handler.ServeHTTP(protectedRec, protectedReq)
-	if protectedRec.Code != http.StatusNoContent {
-		t.Fatalf("protected status = %d", protectedRec.Code)
-	}
-	if upstreamUser != wallet.Identity().Address || upstreamAuth != "siwe" {
-		t.Fatalf("identity headers = %q, %q", upstreamUser, upstreamAuth)
-	}
-	if want := []string{types.HeaderPortalAuth, types.HeaderPortalUser}; !slices.Equal(upstreamPortalNames, want) {
-		t.Fatalf("portal headers at the upstream = %q; want only %q", upstreamPortalNames, want)
-	}
+	return protectedRec
+}
 
+func serveApplicationAuthSIWEReplay(t *testing.T, handler http.Handler, verifyBody []byte) *httptest.ResponseRecorder {
+	t.Helper()
 	replayReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthVerify, bytes.NewReader(verifyBody))
 	replayReq.Header.Set("Origin", "https://app.example")
 	replayRec := httptest.NewRecorder()
 	handler.ServeHTTP(replayRec, replayReq)
-	if replayRec.Code != http.StatusOK {
-		t.Fatalf("challenge replay status = %d; want %d", replayRec.Code, http.StatusOK)
-	}
-	if len(replayRec.Result().Cookies()) != 1 {
-		t.Fatalf("challenge replay session cookie missing")
-	}
+	return replayRec
 }
 
 func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
@@ -129,14 +144,8 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 	})
 	handler := newApplicationAuthTestHandler(t, nil, false, next)
 	gate := handler.(*applicationAuth)
-	token, err := gate.issueSession(Principal{Provider: ProviderSIWE, Subject: applicationAuthTestWallet(t, "2").Identity().Address}, "app.example", time.Now(), applicationAuthTestTime().Add(applicationAuthSessionTTL))
-	if err != nil {
-		t.Fatal(err)
-	}
-	providerlessToken, err := encodeSignedApplicationAuthJSON(gate.signingKey, applicationAuthClaims{Subject: applicationAuthTestWallet(t, "2").Identity().Address, Host: "app.example", ExpiresAt: applicationAuthTestTime().Add(applicationAuthSessionTTL).Unix()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	token := issueStrippedHeaderSession(t, gate)
+	providerlessToken := issueProviderlessSession(t, gate)
 	req := httptest.NewRequest(http.MethodGet, "https://app.example/", nil)
 	req.AddCookie(&http.Cookie{Name: "app_session", Value: "abc"})
 	req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: token})
@@ -157,22 +166,54 @@ func TestApplicationAuthStripsPortalCredentials(t *testing.T) {
 		"missing provider": providerlessToken,
 	} {
 		t.Run(name, func(t *testing.T) {
-			host := "app.example"
-			if name == "other host" {
-				host = "other.example"
-			}
-			req := httptest.NewRequest(http.MethodGet, "https://"+host+"/", nil)
-			req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: requestToken})
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if rec.Code != http.StatusSeeOther {
-				t.Fatalf("status = %d; want %d", rec.Code, http.StatusSeeOther)
-			}
+			checkRejectedSessionRedirects(t, handler, name, requestToken)
 		})
 	}
 	if requests != 1 {
 		t.Fatalf("upstream requests = %d; want 1", requests)
 	}
+}
+
+func issueStrippedHeaderSession(t *testing.T, gate *applicationAuth) string {
+	t.Helper()
+	token, err := gate.issueSession(Principal{Provider: ProviderSIWE, Subject: applicationAuthTestWallet(t, "2").Identity().Address}, "app.example", time.Now(), applicationAuthTestTime().Add(applicationAuthSessionTTL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+func issueProviderlessSession(t *testing.T, gate *applicationAuth) string {
+	t.Helper()
+	providerlessToken, err := encodeSignedApplicationAuthJSON(gate.signingKey, applicationAuthClaims{Subject: applicationAuthTestWallet(t, "2").Identity().Address, Host: "app.example", ExpiresAt: applicationAuthTestTime().Add(applicationAuthSessionTTL).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return providerlessToken
+}
+
+func checkRejectedSessionRedirects(t *testing.T, handler http.Handler, name, requestToken string) {
+	t.Helper()
+	host := "app.example"
+	if name == "other host" {
+		host = "other.example"
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://"+host+"/", nil)
+	req.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: requestToken})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d; want %d", rec.Code, http.StatusSeeOther)
+	}
+}
+
+func issueAppCredential(t *testing.T, tunnelIdentity types.Identity, subject string) string {
+	t.Helper()
+	credential, err := IssueCredential(tunnelIdentity, "app.example", subject, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential
 }
 
 func TestApplicationAuthCredential(t *testing.T) {
@@ -188,10 +229,29 @@ func TestApplicationAuthCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
+	credential := issueAppCredential(t, tunnelIdentity, "alice")
+	cookies := redeemCredentialForCookies(t, handler, credential)
+	protectedRec := serveProtectedWithCookie(t, handler, cookies[0])
+	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ProviderCredential {
+		t.Fatalf("protected status = %d, identity = %q/%q", protectedRec.Code, upstreamUser, upstreamAuth)
 	}
+	directRec := serveProtectedWithCredential(t, handler, credential)
+	if directRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ProviderCredential || upstreamCredential != "" {
+		t.Fatalf("credential header status = %d, identity = %q/%q, upstream credential = %q", directRec.Code, upstreamUser, upstreamAuth, upstreamCredential)
+	}
+	bobCredential := issueAppCredential(t, tunnelIdentity, "bob")
+	credentialAndCookieRec := serveCookiePlusCredential(t, handler, cookies[0], bobCredential)
+	if credentialAndCookieRec.Code != http.StatusNoContent || upstreamUser != "bob" {
+		t.Fatalf("credential with cookie status = %d, user = %q; want bob", credentialAndCookieRec.Code, upstreamUser)
+	}
+	invalidRec := serveCookiePlusCredential(t, handler, cookies[0], "invalid")
+	if invalidRec.Code == http.StatusNoContent || upstreamRequests != 3 {
+		t.Fatalf("invalid credential with cookie status = %d, upstream requests = %d; want rejection", invalidRec.Code, upstreamRequests)
+	}
+}
+
+func redeemCredentialForCookies(t *testing.T, handler http.Handler, credential string) []*http.Cookie {
+	t.Helper()
 	body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
 	req := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(body))
 	req.Header.Set("Origin", "https://app.example")
@@ -204,935 +264,36 @@ func TestApplicationAuthCredential(t *testing.T) {
 	if len(cookies) != 1 {
 		t.Fatalf("cookies = %#v", cookies)
 	}
+	return cookies
+}
+
+func serveProtectedWithCookie(t *testing.T, handler http.Handler, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
 	protected := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
-	protected.AddCookie(cookies[0])
+	protected.AddCookie(cookie)
 	protectedRec := httptest.NewRecorder()
 	handler.ServeHTTP(protectedRec, protected)
-	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ProviderCredential {
-		t.Fatalf("protected status = %d, identity = %q/%q", protectedRec.Code, upstreamUser, upstreamAuth)
-	}
+	return protectedRec
+}
+
+func serveProtectedWithCredential(t *testing.T, handler http.Handler, credential string) *httptest.ResponseRecorder {
+	t.Helper()
 	direct := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
 	direct.Header.Set(types.HeaderAccessCredential, credential)
 	directRec := httptest.NewRecorder()
 	handler.ServeHTTP(directRec, direct)
-	if directRec.Code != http.StatusNoContent || upstreamUser != "alice" || upstreamAuth != ProviderCredential || upstreamCredential != "" {
-		t.Fatalf("credential header status = %d, identity = %q/%q, upstream credential = %q", directRec.Code, upstreamUser, upstreamAuth, upstreamCredential)
-	}
-	bobCredential, err := IssueCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	credentialAndCookie := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
-	credentialAndCookie.AddCookie(cookies[0])
-	credentialAndCookie.Header.Set(types.HeaderAccessCredential, bobCredential)
-	credentialAndCookieRec := httptest.NewRecorder()
-	handler.ServeHTTP(credentialAndCookieRec, credentialAndCookie)
-	if credentialAndCookieRec.Code != http.StatusNoContent || upstreamUser != "bob" {
-		t.Fatalf("credential with cookie status = %d, user = %q; want bob", credentialAndCookieRec.Code, upstreamUser)
-	}
-	invalidCredential := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
-	invalidCredential.AddCookie(cookies[0])
-	invalidCredential.Header.Set(types.HeaderAccessCredential, "invalid")
-	invalidCredentialRec := httptest.NewRecorder()
-	handler.ServeHTTP(invalidCredentialRec, invalidCredential)
-	if invalidCredentialRec.Code == http.StatusNoContent || upstreamRequests != 3 {
-		t.Fatalf("invalid credential with cookie status = %d, upstream requests = %d; want rejection", invalidCredentialRec.Code, upstreamRequests)
-	}
+	return directRec
 }
 
-func TestApplicationSessionRefusesOtherOrigins(t *testing.T) {
-	t.Parallel()
-
-	tunnelIdentity := applicationAuthTestIdentity()
-	upstreamRequests := 0
-	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamRequests++
-		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, Config{Provider: ProviderCredential})
-	if err != nil {
-		t.Fatal(err)
-	}
-	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
-	redeem := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(body))
-	redeem.Header.Set("Origin", "https://app.example")
-	redeemRec := httptest.NewRecorder()
-	handler.ServeHTTP(redeemRec, redeem)
-	if redeemRec.Code != http.StatusOK || len(redeemRec.Result().Cookies()) != 1 {
-		t.Fatalf("redeem status = %d, cookies = %#v", redeemRec.Code, redeemRec.Result().Cookies())
-	}
-	session := redeemRec.Result().Cookies()[0]
-
-	const self, other = "https://app.example", "https://other.example"
-	upgrade := func(origin string) http.Header {
-		return http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}, "Origin": {origin}}
-	}
-	from := func(origin string) http.Header { return http.Header{"Origin": {origin}} }
-	fetched := func(origin, site string) http.Header {
-		return http.Header{"Origin": {origin}, "Sec-Fetch-Site": {site}}
-	}
-	for _, tt := range []struct {
-		name       string
-		method     string
-		headers    http.Header
-		wantStatus int
-	}{
-		{"upgrade from own origin", http.MethodGet, upgrade(self), http.StatusNoContent},
-		{"upgrade from another origin", http.MethodGet, upgrade(other), http.StatusForbidden},
-		{"upgrade with another port", http.MethodGet, upgrade(self + ":8443"), http.StatusForbidden},
-		{"upgrade from plain http", http.MethodGet, upgrade("http://app.example"), http.StatusForbidden},
-		{"upgrade from opaque origin", http.MethodGet, upgrade("null"), http.StatusForbidden},
-		{"upgrade without origin", http.MethodGet, http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}}, http.StatusNoContent},
-		{"post from own origin", http.MethodPost, from(self), http.StatusNoContent},
-		{"post from another origin", http.MethodPost, from(other), http.StatusForbidden},
-		{"post from opaque origin", http.MethodPost, from("null"), http.StatusForbidden},
-		{"post without origin", http.MethodPost, http.Header{}, http.StatusNoContent},
-		{"form post from a no-referrer page of the own origin", http.MethodPost, fetched("null", "same-origin"), http.StatusNoContent},
-		{"form post from a no-referrer page elsewhere", http.MethodPost, fetched("null", "cross-site"), http.StatusForbidden},
-		{"same-origin mark on a real origin", http.MethodPost, fetched(other, "same-origin"), http.StatusForbidden},
-		{"same-origin mark on an upgrade", http.MethodGet, http.Header{"Upgrade": {"websocket"}, "Origin": {"null"}, "Sec-Fetch-Site": {"same-origin"}}, http.StatusForbidden},
-		{"post from a sibling host", http.MethodPost, fetched(other, "same-site"), http.StatusForbidden},
-		{"post from a sandboxed frame", http.MethodPost, fetched("null", "same-site"), http.StatusForbidden},
-		{"put from another origin", http.MethodPut, from(other), http.StatusForbidden},
-		{"patch from another origin", http.MethodPatch, from(other), http.StatusForbidden},
-		{"delete from another origin", http.MethodDelete, from(other), http.StatusForbidden},
-		{"get from another origin", http.MethodGet, from(other), http.StatusNoContent},
-		{"head from another origin", http.MethodHead, from(other), http.StatusNoContent},
-		{"options from another origin", http.MethodOptions, from(other), http.StatusNoContent},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, "https://app.example/private", nil)
-			req.Header = tt.headers.Clone()
-			req.AddCookie(session)
-			before := upstreamRequests
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d; want %d", rec.Code, tt.wantStatus)
-			}
-			if reached := upstreamRequests > before; reached != (tt.wantStatus == http.StatusNoContent) {
-				t.Fatalf("upstream reached = %v with status %d", reached, rec.Code)
-			}
-		})
-	}
-}
-
-func TestGateAnswersOnlyForHostsItHolds(t *testing.T) {
-	t.Parallel()
-
-	const canonical, alias = "app.example", "alias.example"
-	now := time.Now().UTC()
-	hostsWithAlias := []PublicHost{{URL: "https://" + canonical}, {URL: "https://" + alias, Since: now.Add(-time.Hour)}}
-	var hosts atomic.Value
-	hosts.Store(hostsWithAlias)
-	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, Config{Provider: ProviderCredential, PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	gate := handler.(*applicationAuth)
-	session := func(host string, issuedAt time.Time) func(*http.Request) {
-		t.Helper()
-		value, err := gate.issueSession(Principal{Provider: ProviderCredential, Subject: "alice"}, host, issuedAt, now.Add(time.Hour))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: value}) }
-	}
-	credential, err := IssueCredential(tunnelIdentity, alias, "alice", now.Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	presentCredential := func(r *http.Request) { r.Header.Set(types.HeaderAccessCredential, credential) }
-	open := func(host, path string, send func(*http.Request)) int {
-		req := httptest.NewRequest(http.MethodGet, "https://"+host+path, nil)
-		send(req)
-		rec := httptest.NewRecorder()
-		gate.ServeHTTP(rec, req)
-		return rec.Code
-	}
-
-	longAgo := now.Add(-23 * time.Hour)
-	held := hostsWithAlias[1].Since
-	for _, tt := range []struct {
-		name string
-		host string
-		send func(*http.Request)
-		want int
-	}{
-		{"a session from this hold of the alias", alias, session(alias, now), http.StatusNoContent},
-		{"a session from the start of this hold", alias, session(alias, held), http.StatusNoContent},
-		{"a session from just before this hold", alias, session(alias, held.Add(-time.Millisecond)), http.StatusSeeOther},
-		{"a session from an earlier hold of the alias", alias, session(alias, longAgo), http.StatusSeeOther},
-		{"a session too old to carry its date", alias, session(alias, time.Unix(0, 0)), http.StatusSeeOther},
-		{"an old session on a host that cannot change hands", canonical, session(canonical, longAgo), http.StatusNoContent},
-		{"a credential for the alias", alias, presentCredential, http.StatusNoContent},
-		{"a host the application never held", "attacker.example", session("attacker.example", now), http.StatusMisdirectedRequest},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := open(tt.host, "/private", tt.send); got != tt.want {
-				t.Fatalf("status = %d; want %d", got, tt.want)
-			}
-		})
-	}
-
-	hosts.Store(hostsWithAlias[:1])
-	for name, send := range map[string]func(*http.Request){
-		"session":    session(alias, now),
-		"credential": presentCredential,
-	} {
-		if got := open(alias, "/private", send); got != http.StatusMisdirectedRequest {
-			t.Fatalf("%s on a lost alias = %d; want 421", name, got)
-		}
-	}
-	if got := open(alias, types.PathApplicationAuthLogin, func(*http.Request) {}); got != http.StatusMisdirectedRequest {
-		t.Fatalf("login page on a lost alias = %d; want 421", got)
-	}
-	if got := open(canonical, "/private", session(canonical, now)); got != http.StatusNoContent {
-		t.Fatalf("losing the alias touched the canonical host: %d", got)
-	}
-}
-
-func TestLoginStateFromAnEarlierHoldIsRefused(t *testing.T) {
-	t.Parallel()
-
-	const alias = "alias.example"
-	now := time.Now().UTC()
-	expires := now.Add(applicationAuthLoginStateTTL).Unix()
-	finish := func(gate *applicationAuth, since time.Time, req *http.Request) string {
-		gate.publicHosts = func() []PublicHost { return []PublicHost{{URL: "https://" + alias, Since: since}} }
-		rec := httptest.NewRecorder()
-		gate.ServeHTTP(rec, req)
-		return rec.Body.String()
-	}
-
-	oidcGate := newOIDCTestGate(t, newOIDCTestIdP(t, nil), "alice@example.com")
-	oidcState, err := encodeSignedApplicationAuthJSON(oidcGate.oidc.stateKey, oidcStateClaims{State: "state", Nonce: "nonce", CodeVerifier: "verifier", Host: alias, Next: "/", ExpiresAt: expires})
-	if err != nil {
-		t.Fatal(err)
-	}
-	callback := func() *http.Request {
-		req := httptest.NewRequest(http.MethodGet, "https://"+alias+types.PathApplicationAuthCallback+"?state=state&code=code", nil)
-		req.AddCookie(&http.Cookie{Name: applicationAuthOIDCStateCookie, Value: oidcState})
-		return req
-	}
-	samlGate := newSAMLTestGate(t, newSAMLTestIdP(t), http.NotFoundHandler(), nil)
-	samlState, err := encodeSignedApplicationAuthJSON(samlGate.saml.stateKey, samlStateClaims{RequestID: "request", Host: alias, Next: "/", ExpiresAt: expires})
-	if err != nil {
-		t.Fatal(err)
-	}
-	acs := func() *http.Request {
-		req := httptest.NewRequest(http.MethodPost, "https://"+alias+types.PathApplicationAuthSAMLACS, strings.NewReader("SAMLResponse=x"))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.AddCookie(&http.Cookie{Name: applicationAuthSAMLStateCookie, Value: samlState})
-		return req
-	}
-
-	for _, tt := range []struct {
-		name    string
-		gate    *applicationAuth
-		request func() *http.Request
-		refused string
-	}{
-		{"oidc", oidcGate, callback, "invalid or expired oidc login state"},
-		{"saml", samlGate, acs, "invalid or expired saml login state"},
-	} {
-		if body := finish(tt.gate, now.Add(time.Minute), tt.request()); !strings.Contains(body, tt.refused) {
-			t.Errorf("%s login from an earlier hold: %s", tt.name, body)
-		}
-		if body := finish(tt.gate, now.Add(-time.Minute), tt.request()); strings.Contains(body, tt.refused) {
-			t.Errorf("%s login from this hold was refused: %s", tt.name, body)
-		}
-	}
-}
-
-func TestSIWEChallengeFromAnEarlierHoldIsRefused(t *testing.T) {
-	t.Parallel()
-
-	const alias = "alias.example"
-	wallet := applicationAuthTestWallet(t, "1")
-	since := time.Now().UTC().Add(-time.Minute)
-	var hosts atomic.Value
-	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: since}})
-	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{
-		Provider:    ProviderSIWE,
-		Allow:       []string{wallet.Identity().Address},
-		PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	post := func(path string, body any) *httptest.ResponseRecorder {
-		t.Helper()
-		raw, err := json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req := httptest.NewRequest(http.MethodPost, "https://"+alias+path, bytes.NewReader(raw))
-		req.Header.Set("Origin", "https://"+alias)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		return rec
-	}
-	asked := post(types.PathApplicationAuthChallenge, applicationAuthChallengeRequest{Address: wallet.Identity().Address})
-	var challenge applicationAuthChallengeResponse
-	if err := json.NewDecoder(asked.Body).Decode(&challenge); err != nil {
-		t.Fatal(err)
-	}
-	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verify := applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature}
-
-	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: time.Now().UTC().Add(time.Minute)}})
-	if rec := post(types.PathApplicationAuthVerify, verify); rec.Code == http.StatusOK {
-		t.Fatalf("a challenge from an earlier hold signed in: %s", rec.Body)
-	}
-	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: since}})
-	if rec := post(types.PathApplicationAuthVerify, verify); rec.Code != http.StatusOK {
-		t.Fatalf("a challenge from this hold = %d: %s", rec.Code, rec.Body)
-	}
-}
-
-func TestSIWEReplicasShareChallengesAndAliasSessions(t *testing.T) {
-	const host = "alias.example"
-	wallet := applicationAuthTestWallet(t, "1")
-	var hosts atomic.Value
-	hosts.Store([]PublicHost{{URL: "https://" + host, Epoch: "ownership-one", Since: time.Now().Add(time.Hour)}})
-	id := applicationAuthTestIdentity()
-	newGate := func() http.Handler {
-		t.Helper()
-		gate, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		}), id, Config{Provider: ProviderSIWE, Allow: []string{wallet.Identity().Address}, PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) }})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return gate
-	}
-	first, second := newGate(), newGate()
-	post := func(gate http.Handler, path string, value any) *httptest.ResponseRecorder {
-		t.Helper()
-		body, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req := httptest.NewRequest(http.MethodPost, "https://"+host+path, bytes.NewReader(body))
-		req.Header.Set("Origin", "https://"+host)
-		rec := httptest.NewRecorder()
-		gate.ServeHTTP(rec, req)
-		return rec
-	}
-	asked := post(first, types.PathApplicationAuthChallenge, applicationAuthChallengeRequest{Address: wallet.Identity().Address})
-	var challenge applicationAuthChallengeResponse
-	if asked.Code != http.StatusOK {
-		t.Fatalf("challenge: %d %s", asked.Code, asked.Body)
-	}
-	if err := json.Unmarshal(asked.Body.Bytes(), &challenge); err != nil {
-		t.Fatal(err)
-	}
-	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proof := applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature}
-	signedIn := post(second, types.PathApplicationAuthVerify, proof)
-	if signedIn.Code != http.StatusOK {
-		t.Fatalf("challenge from another replica: %d %s", signedIn.Code, signedIn.Body)
-	}
-	cookies := signedIn.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("expected a session cookie: %v", cookies)
-	}
-	open := func(gate http.Handler) int {
-		req := httptest.NewRequest(http.MethodGet, "https://"+host+"/private", nil)
-		req.AddCookie(cookies[0])
-		rec := httptest.NewRecorder()
-		gate.ServeHTTP(rec, req)
-		return rec.Code
-	}
-	for _, gate := range []http.Handler{first, second, newGate()} {
-		if status := open(gate); status != http.StatusNoContent {
-			t.Fatalf("session at an existing or restarted replica: %d", status)
-		}
-	}
-	hosts.Store([]PublicHost{{URL: "https://" + host, Epoch: "ownership-two"}})
-	if status := open(first); status != http.StatusSeeOther {
-		t.Fatalf("session from an earlier ownership: %d", status)
-	}
-	if rec := post(second, types.PathApplicationAuthVerify, proof); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("challenge from an earlier ownership: %d %s", rec.Code, rec.Body)
-	}
-}
-
-func TestApplicationCredentialHeaderPassesFromAnyOrigin(t *testing.T) {
-	t.Parallel()
-
-	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, Config{Provider: ProviderCredential})
-	if err != nil {
-		t.Fatal(err)
-	}
-	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "https://app.example/private", nil)
-	req.Header.Set("Origin", "https://other.example")
+func serveCookiePlusCredential(t *testing.T, handler http.Handler, cookie *http.Cookie, credential string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	req.AddCookie(cookie)
 	req.Header.Set(types.HeaderAccessCredential, credential)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d; want %d", rec.Code, http.StatusNoContent)
-	}
+	return rec
 }
-
-func TestApplicationAuthWithoutSessionIgnoresOrigin(t *testing.T) {
-	t.Parallel()
-
-	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{Provider: ProviderCredential})
-	if err != nil {
-		t.Fatal(err)
-	}
-	upgrade := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
-	upgrade.Header = http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}, "Origin": {"https://other.example"}}
-	upgradeRec := httptest.NewRecorder()
-	handler.ServeHTTP(upgradeRec, upgrade)
-	if upgradeRec.Code != http.StatusSeeOther {
-		t.Fatalf("upgrade status = %d; want %d", upgradeRec.Code, http.StatusSeeOther)
-	}
-	post := httptest.NewRequest(http.MethodPost, "https://app.example/private", nil)
-	post.Header.Set("Origin", "https://other.example")
-	postRec := httptest.NewRecorder()
-	handler.ServeHTTP(postRec, post)
-	if postRec.Code != http.StatusUnauthorized {
-		t.Fatalf("post status = %d; want %d", postRec.Code, http.StatusUnauthorized)
-	}
-}
-
-func portalHeaderNames(h http.Header) []string {
-	var names []string
-	for key := range h {
-		if strings.HasPrefix(strings.ToLower(strings.ReplaceAll(key, "_", "-")), "x-portal-") {
-			names = append(names, key)
-		}
-	}
-	slices.Sort(names)
-	return names
-}
-
-func TestSameApplicationHost(t *testing.T) {
-	t.Parallel()
-
-	for _, tt := range []struct {
-		a, b string
-		want bool
-	}{
-		{"app.example", "app.example", true},
-		{"app.example", "App.Example", true},
-		{"app.example", "app.example.", true},
-		{"app.example:443", "app.example", true},
-		{"App.Example.:443", "app.example", true},
-		{"app.example:8443", "app.example:8443", true},
-		{"app.example:8443", "app.example", false},
-		{"app.example:1443", "app.example", false},
-		{"app.example", "other.example", false},
-		{"", "", false},
-		{"app.example", "", false},
-		{"app.example", "app example", false},
-		{"app example", "app example", false},
-		{"https://app.example/", "app.example", false},
-		{"app.example", "https://app.example", false},
-		{"app.example/", "app.example", false},
-		{"https://app.example/", "https://app.example/", false},
-	} {
-		if got := sameApplicationHost(tt.a, tt.b); got != tt.want {
-			t.Errorf("sameApplicationHost(%q, %q) = %v; want %v", tt.a, tt.b, got, tt.want)
-		}
-	}
-}
-
-func TestApplicationSessionFollowsTheHostNotItsSpelling(t *testing.T) {
-	t.Parallel()
-
-	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, Config{Provider: ProviderCredential})
-	if err != nil {
-		t.Fatal(err)
-	}
-	redeem := func(host string) *http.Cookie {
-		t.Helper()
-		credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
-		if err != nil {
-			t.Fatal(err)
-		}
-		body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
-		req := httptest.NewRequest(http.MethodPost, "https://"+host+types.PathApplicationAuthRedeem, bytes.NewReader(body))
-		req.Header.Set("Origin", "https://"+host)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		cookies := rec.Result().Cookies()
-		if rec.Code != http.StatusOK || len(cookies) != 1 {
-			t.Fatalf("redeem at %q: status = %d, cookies = %v", host, rec.Code, cookies)
-		}
-		return cookies[0]
-	}
-	status := func(cookie *http.Cookie, host string) int {
-		req := httptest.NewRequest(http.MethodGet, "https://"+host+"/private", nil)
-		req.AddCookie(cookie)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		return rec.Code
-	}
-
-	for _, issuedAt := range []string{"app.example", "app.example:443"} {
-		cookie := redeem(issuedAt)
-		for _, usedAt := range []string{"app.example", "app.example:443", "App.Example", "app.example."} {
-			if got := status(cookie, usedAt); got != http.StatusNoContent {
-				t.Errorf("a session issued at %q, used at %q: status = %d; want %d", issuedAt, usedAt, got, http.StatusNoContent)
-			}
-		}
-		for _, usedAt := range []string{"app.example:8443", "other.example"} {
-			if got := status(cookie, usedAt); got == http.StatusNoContent {
-				t.Errorf("a session issued at %q was accepted at %q", issuedAt, usedAt)
-			}
-		}
-	}
-}
-
-const identityProofTestValue = "test-proof-0123456789"
-
-func TestApplicationAuthIdentityProof(t *testing.T) {
-	t.Parallel()
-
-	tunnelIdentity := applicationAuthTestIdentity()
-	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tt := range []struct {
-		name      string
-		cfg       Config
-		wantProof []string
-	}{
-		{"configured", Config{IdentityHeaders: true, IdentityProof: identityProofTestValue}, []string{identityProofTestValue}},
-		{"not configured", Config{IdentityHeaders: true}, nil},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			reached := false
-			var gotProof []string
-			tt.cfg.Provider = ProviderCredential
-			handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				reached = true
-				gotProof = r.Header.Values(types.HeaderPortalProof)
-				w.WriteHeader(http.StatusNoContent)
-			}), tunnelIdentity, tt.cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
-			req.Header.Set(types.HeaderAccessCredential, credential)
-			req.Header.Set(types.HeaderPortalProof, "forged-proof-value")
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if rec.Code != http.StatusNoContent || !slices.Equal(gotProof, tt.wantProof) {
-				t.Fatalf("authenticated request: status = %d, upstream %s = %q; want %q", rec.Code, types.HeaderPortalProof, gotProof, tt.wantProof)
-			}
-
-			reached = false
-			req = httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
-			req.Header.Set(types.HeaderPortalProof, identityProofTestValue)
-			rec = httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if reached || rec.Code != http.StatusSeeOther {
-				t.Fatalf("unauthenticated request: reached upstream = %v, status = %d; want a login redirect", reached, rec.Code)
-			}
-		})
-	}
-}
-
-func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
-	tunnelIdentity := applicationAuthTestIdentity()
-	aliceCredential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bobCredential, err := IssueCredential(tunnelIdentity, "app.example", "bob", time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	initialGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, Config{
-		Provider:        ProviderCredential,
-		Allow:           []string{"alice", "bob"},
-		IdentityHeaders: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	redeemBody, _ := json.Marshal(applicationAuthRedeemRequest{Credential: aliceCredential})
-	redeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(redeemBody))
-	redeemReq.Header.Set("Origin", "https://app.example")
-	redeemRec := httptest.NewRecorder()
-	initialGate.ServeHTTP(redeemRec, redeemReq)
-	if redeemRec.Code != http.StatusOK {
-		t.Fatalf("alice redeem status = %d", redeemRec.Code)
-	}
-	aliceCookie := redeemRec.Result().Cookies()[0]
-
-	revokedGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, Config{
-		Provider:        ProviderCredential,
-		Allow:           []string{"bob"},
-		IdentityHeaders: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	revokedRedeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(redeemBody))
-	revokedRedeemReq.Header.Set("Origin", "https://app.example")
-	revokedRedeemRec := httptest.NewRecorder()
-	revokedGate.ServeHTTP(revokedRedeemRec, revokedRedeemReq)
-	if revokedRedeemRec.Code != http.StatusUnauthorized {
-		t.Fatalf("revoked redeem status = %d; want 401", revokedRedeemRec.Code)
-	}
-
-	revokedCookieReq := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
-	revokedCookieReq.AddCookie(aliceCookie)
-	revokedCookieRec := httptest.NewRecorder()
-	revokedGate.ServeHTTP(revokedCookieRec, revokedCookieReq)
-	if revokedCookieRec.Code != http.StatusSeeOther {
-		t.Fatalf("revoked session status = %d; want 303", revokedCookieRec.Code)
-	}
-
-	revokedHeaderReq := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
-	revokedHeaderReq.Header.Set(types.HeaderAccessCredential, aliceCredential)
-	revokedHeaderRec := httptest.NewRecorder()
-	revokedGate.ServeHTTP(revokedHeaderRec, revokedHeaderReq)
-	if revokedHeaderRec.Code != http.StatusSeeOther {
-		t.Fatalf("revoked header status = %d; want 303", revokedHeaderRec.Code)
-	}
-
-	bobHeaderReq := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
-	bobHeaderReq.Header.Set(types.HeaderAccessCredential, bobCredential)
-	bobHeaderRec := httptest.NewRecorder()
-	revokedGate.ServeHTTP(bobHeaderRec, bobHeaderReq)
-	if bobHeaderRec.Code != http.StatusNoContent {
-		t.Fatalf("allowed bob header status = %d; want 204", bobHeaderRec.Code)
-	}
-}
-
-func TestApplicationAuthOIDCPKCEAndRevocation(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	jwk := jose.JSONWebKey{Key: &privateKey.PublicKey, KeyID: "k1", Algorithm: string(jose.ES256), Use: "sig"}
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: privateKey}, (&jose.SignerOptions{}).WithHeader("kid", "k1").WithType("JWT"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var (
-		issuerURL         string
-		capturedChallenge string
-		capturedNonce     string
-	)
-	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/.well-known/openid-configuration":
-			_ = json.NewEncoder(w).Encode(oidcDiscoveryDocument{
-				Issuer:                issuerURL,
-				AuthorizationEndpoint: issuerURL + "/authorize",
-				TokenEndpoint:         issuerURL + "/token",
-				JWKSURI:               issuerURL + "/jwks",
-			})
-		case "/jwks":
-			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{jwk}})
-		case "/token":
-			if err := r.ParseForm(); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			verifier := r.FormValue("code_verifier")
-			sum := sha256.Sum256([]byte(verifier))
-			if got := base64.RawURLEncoding.EncodeToString(sum[:]); got != capturedChallenge {
-				http.Error(w, "pkce mismatch", http.StatusBadRequest)
-				return
-			}
-			now := time.Now().UTC()
-			idToken, err := jwt.Signed(signer).Claims(oidcIDTokenClaims{
-				Claims: jwt.Claims{
-					Issuer:   issuerURL,
-					Subject:  "user-123",
-					Audience: jwt.Audience{"portal-client"},
-					IssuedAt: jwt.NewNumericDate(now),
-					Expiry:   jwt.NewNumericDate(now.Add(time.Hour)),
-				},
-				Nonce:         capturedNonce,
-				Email:         "Alice@Example.com",
-				EmailVerified: true,
-			}).Serialize()
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"access_token": "at_123",
-				"token_type":   "Bearer",
-				"expires_in":   3600,
-				"id_token":     idToken,
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer idp.Close()
-	issuerURL = idp.URL
-
-	tunnelIdentity := applicationAuthTestIdentity()
-	var upstreamUser, upstreamAuth string
-	gate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamUser = r.Header.Get(types.HeaderPortalUser)
-		upstreamAuth = r.Header.Get(types.HeaderPortalAuth)
-		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, Config{
-		Provider:        ProviderOIDC,
-		Allow:           []string{"alice@example.com"},
-		IdentityHeaders: true,
-		OIDCConfig:      OIDCConfig{OIDCIssuerURL: issuerURL, OIDCClientID: "portal-client", OIDCClientSecret: "portal-secret"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	loginReq := httptest.NewRequest(http.MethodGet, "https://app.example"+types.PathApplicationAuthLogin+"?next=%2Fdashboard", nil)
-	loginRec := httptest.NewRecorder()
-	gate.ServeHTTP(loginRec, loginReq)
-	if loginRec.Code != http.StatusSeeOther {
-		t.Fatalf("login status = %d; want 303", loginRec.Code)
-	}
-	authRedirect, err := url.Parse(loginRec.Header().Get("Location"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := authRedirect.Query().Get("code_challenge_method"); got != "S256" {
-		t.Fatalf("code_challenge_method = %q; want S256", got)
-	}
-	capturedChallenge = authRedirect.Query().Get("code_challenge")
-	capturedNonce = authRedirect.Query().Get("nonce")
-	state := authRedirect.Query().Get("state")
-	stateCookies := loginRec.Result().Cookies()
-	if len(stateCookies) != 1 || stateCookies[0].Name != applicationAuthOIDCStateCookie {
-		t.Fatalf("state cookies = %#v", stateCookies)
-	}
-	if c := stateCookies[0]; c.Path != "/" || !c.Secure || c.Domain != "" {
-		t.Fatalf("state cookie attributes = path %q, secure %v, domain %q; want Path=/, Secure, no Domain", c.Path, c.Secure, c.Domain)
-	}
-
-	cbReq := httptest.NewRequest(http.MethodGet, "https://app.example"+types.PathApplicationAuthCallback+"?code=authcode&state="+url.QueryEscape(state), nil)
-	cbReq.AddCookie(stateCookies[0])
-	cbRec := httptest.NewRecorder()
-	gate.ServeHTTP(cbRec, cbReq)
-	if cbRec.Code != http.StatusSeeOther || cbRec.Header().Get("Location") != "/dashboard" {
-		t.Fatalf("callback status = %d, location = %q", cbRec.Code, cbRec.Header().Get("Location"))
-	}
-	var sessionCookie *http.Cookie
-	for _, c := range cbRec.Result().Cookies() {
-		switch c.Name {
-		case applicationAuthCookieName:
-			sessionCookie = c
-		case applicationAuthOIDCStateCookie:
-			if c.Path != "/" || c.MaxAge >= 0 {
-				t.Fatalf("state cookie expiry = path %q, max-age %d; want Path=/ and deletion", c.Path, c.MaxAge)
-			}
-		}
-	}
-	if sessionCookie == nil {
-		t.Fatal("missing session cookie from OIDC callback")
-	}
-
-	protectedReq := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
-	protectedReq.AddCookie(sessionCookie)
-	protectedRec := httptest.NewRecorder()
-	gate.ServeHTTP(protectedRec, protectedReq)
-	if protectedRec.Code != http.StatusNoContent || upstreamUser != "alice@example.com" || upstreamAuth != ProviderOIDC {
-		t.Fatalf("protected status = %d, user = %q, auth = %q", protectedRec.Code, upstreamUser, upstreamAuth)
-	}
-
-	revokedGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}), tunnelIdentity, Config{
-		Provider:        ProviderOIDC,
-		Allow:           []string{"bob@example.com"},
-		IdentityHeaders: true,
-		OIDCConfig:      OIDCConfig{OIDCIssuerURL: issuerURL, OIDCClientID: "portal-client", OIDCClientSecret: "portal-secret"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	revokedReq := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
-	revokedReq.AddCookie(sessionCookie)
-	revokedRec := httptest.NewRecorder()
-	revokedGate.ServeHTTP(revokedRec, revokedReq)
-	if revokedRec.Code != http.StatusSeeOther {
-		t.Fatalf("revoked OIDC session status = %d; want 303", revokedRec.Code)
-	}
-}
-
-func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
-	t.Parallel()
-
-	newGate := func(t *testing.T, provider string, allow ...string) *applicationAuth {
-		t.Helper()
-		cfg := Config{Provider: provider, Allow: allow}
-		if provider == ProviderOIDC {
-			cfg.OIDCIssuerURL = "https://idp.example"
-			cfg.OIDCClientID = "portal-client"
-		}
-		handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return handler.(*applicationAuth)
-	}
-
-	tests := []struct {
-		name   string
-		allow  []string
-		sub    string
-		email  string
-		status oidcEmailVerified
-		want   string
-	}{
-		{"verified email exact", []string{"alice@example.com"}, "s1", "Alice@Example.com", true, "alice@example.com"},
-		{"absent email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", false, ""},
-		{"false email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", false, ""},
-		{"sub allowlist ignores email_verified", []string{"sub:s1"}, "s1", "alice@example.com", false, "sub:s1"},
-		{"subject with leading space cannot impersonate an allowed subject", []string{"sub:s1"}, " s1", "", false, ""},
-		{"subject with trailing space cannot impersonate an allowed subject", []string{"sub:s1"}, "s1 ", "", false, ""},
-		{"subject with surrounding Unicode space cannot impersonate an allowed subject", []string{"sub:s1"}, "\u00a0s1\u00a0", "", false, ""},
-		{"email-shaped sub cannot satisfy an email entry", []string{"alice@example.com"}, "alice@example.com", "", false, ""},
-		{"email-shaped sub cannot satisfy an email entry without email_verified", []string{"alice@example.com"}, "alice@example.com", "", false, ""},
-		{"email-shaped sub matches a sub: entry", []string{"sub:alice@example.com"}, "alice@example.com", "", false, "sub:alice@example.com"},
-		{"sub: entry matches the subject in exactly its case", []string{"sub:Alice@Example.com"}, "Alice@Example.com", "", false, "sub:Alice@Example.com"},
-		{"sub: entry rejects a subject that differs only in case", []string{"sub:Alice@Example.com"}, "alice@example.com", "", false, ""},
-		{"lowercase sub: entry rejects an uppercase subject", []string{"sub:alice@example.com"}, "Alice@Example.com", "", false, ""},
-		{"sub: prefix case does not change the subject case", []string{"SUB:Alice@Example.com"}, "Alice@Example.com", "", false, "sub:Alice@Example.com"},
-		{"non-ASCII sub matches only itself", []string{"sub:Kevin"}, "Kevin", "", false, "sub:Kevin"},
-		{"ASCII sub: entry rejects a Kelvin-sign lookalike subject", []string{"sub:kevin"}, "Kevin", "", false, ""},
-		{"Kelvin-sign email cannot stand in for an ASCII email", []string{"kevin@example.com"}, "s1", "Kevin@example.com", true, ""},
-		{"dotted capital I domain cannot stand in for an ASCII domain", []string{"@github.com"}, "s1", "bob@gİthub.com", true, ""},
-		{"verified email matches domain", []string{"@Example.com"}, "s1", "bob@example.com", true, "bob@example.com"},
-		{"absent email_verified does not match domain", []string{"@example.com"}, "s1", "bob@example.com", false, ""},
-		{"domain excludes subdomains", []string{"@example.com"}, "s1", "bob@sub.example.com", true, ""},
-		{"domain excludes other domains", []string{"@example.com"}, "s1", "bob@example.org", true, ""},
-		{"email-shaped sub never matches a domain", []string{"@example.com"}, "mallory@example.com", "", false, ""},
-		{"sub cannot impersonate a domain entry", []string{"@example.com"}, "@example.com", "", false, ""},
-		{"verified email claim cannot impersonate a sub: entry", []string{"sub:alice@example.com"}, "s9", "sub:alice@example.com", true, ""},
-		{"verified email claim cannot impersonate a sub: entry in another case", []string{"sub:alice@example.com"}, "s9", "SUB:Alice@Example.com", true, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			gate := newGate(t, ProviderOIDC, tt.allow...)
-			claims := oidcIDTokenClaims{
-				Claims:        jwt.Claims{Subject: tt.sub},
-				Email:         tt.email,
-				EmailVerified: tt.status,
-			}
-			got, ok := gate.resolveAllowedPrincipal(claims.vouchedEmail(), claims.Subject)
-			if got != tt.want || ok != (tt.want != "") {
-				t.Fatalf("resolveAllowedPrincipal = (%q, %v); want %q", got, ok, tt.want)
-			}
-		})
-	}
-
-	t.Run("domain session remains valid", func(t *testing.T) {
-		t.Parallel()
-		if !newGate(t, ProviderOIDC, "@example.com").subjectAllowed("bob@example.com") {
-			t.Fatal("domain-authorized subject rejected on session validation")
-		}
-	})
-	t.Run("sub session remains valid", func(t *testing.T) {
-		t.Parallel()
-		gate := newGate(t, ProviderOIDC, "sub:alice@example.com")
-		if !gate.subjectAllowed("sub:alice@example.com") {
-			t.Fatal("sub:-authorized subject rejected on session validation")
-		}
-		if gate.subjectAllowed("sub:mallory@example.com") {
-			t.Fatal("unlisted sub: subject accepted on session validation")
-		}
-	})
-	t.Run("sub session cannot widen to a domain entry", func(t *testing.T) {
-		t.Parallel()
-		if newGate(t, ProviderOIDC, "@example.com").subjectAllowed("sub:mallory@example.com") {
-			t.Fatal("sub: session subject honored an @domain entry")
-		}
-	})
-	t.Run("credential subjects ignore domain entries", func(t *testing.T) {
-		t.Parallel()
-		if newGate(t, ProviderCredential, "@example.com").subjectAllowed("bob@example.com") {
-			t.Fatal("credential provider honored an @domain entry")
-		}
-	})
-	t.Run("malformed domain entries are rejected", func(t *testing.T) {
-		t.Parallel()
-		for _, entry := range []string{"@", "@a@b", "@ex ample.com"} {
-			if _, err := normalizeProviderPrincipals([]string{entry}); err == nil {
-				t.Fatalf("normalizeProviderPrincipals(%q) = nil error", entry)
-			}
-		}
-	})
-	t.Run("untyped or malformed entries are rejected", func(t *testing.T) {
-		t.Parallel()
-		for _, entry := range []string{"alice", "sub:", "sub: ", "alice@", "alice@a@b", "Kevin@example.com", "@gİthub.com"} {
-			if _, err := normalizeProviderPrincipals([]string{entry}); err == nil {
-				t.Fatalf("normalizeProviderPrincipals(%q) = nil error", entry)
-			}
-		}
-	})
-}
-
-func TestNormalizeProviderPrincipalKeepsSubjectCase(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		raw  string
-		want string
-	}{
-		{"sub:Alice@Example.com", "sub:Alice@Example.com"},
-		{"  sub:Alice@Example.com ", "sub:Alice@Example.com"},
-		{"SUB:Alice@Example.com", "sub:Alice@Example.com"},
-		{"sub:AbC123", "sub:AbC123"},
-		{"Alice@Example.com", "alice@example.com"},
-	}
-	for _, tt := range tests {
-		got, err := normalizeProviderPrincipal(tt.raw)
-		if err != nil || got != tt.want {
-			t.Errorf("normalizeProviderPrincipal(%q) = (%q, %v); want %q", tt.raw, got, err, tt.want)
-		}
-	}
-}
-
 func TestApplicationCredentialRejectsOtherHostAndExpiry(t *testing.T) {
 	tunnelIdentity := applicationAuthTestIdentity()
 	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
@@ -1155,10 +316,23 @@ func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 	t.Parallel()
 
 	tunnelIdentity := applicationAuthTestIdentity()
+	key := deriveCredentialHostKey(t, tunnelIdentity)
+	checkCredentialHostPortPairs(t, tunnelIdentity, key)
+	checkClaimedHostAccepted(t, tunnelIdentity, key)
+	checkRedeemURLDropsPort(t)
+}
+
+func deriveCredentialHostKey(t *testing.T, tunnelIdentity types.Identity) []byte {
+	t.Helper()
 	key, err := identity.DeriveToken(tunnelIdentity, applicationCredentialKeyUse)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return []byte(key)
+}
+
+func checkCredentialHostPortPairs(t *testing.T, tunnelIdentity types.Identity, key []byte) {
+	t.Helper()
 	for _, tt := range []struct {
 		issuedFor   string
 		requestHost string
@@ -1179,14 +353,17 @@ func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 		if err != nil {
 			t.Fatalf("IssueCredential(%q) error = %v", tt.issuedFor, err)
 		}
-		_, err = verifyApplicationCredential([]byte(key), tunnelIdentity, tt.requestHost, credential, time.Now().UTC())
+		_, err = verifyApplicationCredential(key, tunnelIdentity, tt.requestHost, credential, time.Now().UTC())
 		if (err == nil) != tt.want {
 			t.Errorf("a credential issued for %q, redeemed at Host %q: error = %v; want accepted %v", tt.issuedFor, tt.requestHost, err, tt.want)
 		}
 	}
+}
 
+func checkClaimedHostAccepted(t *testing.T, tunnelIdentity types.Identity, key []byte) {
+	t.Helper()
 	for _, claimedHost := range []string{"app.example:443", "App.Example.:443"} {
-		token, err := encodeSignedApplicationAuthJSON([]byte(key), applicationCredentialClaims{
+		token, err := encodeSignedApplicationAuthJSON(key, applicationCredentialClaims{
 			Version: applicationCredentialVersion, Subject: "alice", Tunnel: tunnelIdentity.Key(), Host: claimedHost,
 			ExpiresAt: time.Now().UTC().Add(time.Hour).Unix(),
 		})
@@ -1194,49 +371,23 @@ func TestApplicationCredentialHostIgnoresTheDefaultPort(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, requestHost := range []string{"app.example", "app.example:443"} {
-			if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, requestHost, applicationCredentialPrefix+token, time.Now().UTC()); err != nil {
+			if _, err := verifyApplicationCredential(key, tunnelIdentity, requestHost, applicationCredentialPrefix+token, time.Now().UTC()); err != nil {
 				t.Errorf("a credential issued for %q, redeemed at Host %q: %v; want accepted", claimedHost, requestHost, err)
 			}
 		}
-		if _, err := verifyApplicationCredential([]byte(key), tunnelIdentity, "app.example:8443", applicationCredentialPrefix+token, time.Now().UTC()); err == nil {
+		if _, err := verifyApplicationCredential(key, tunnelIdentity, "app.example:8443", applicationCredentialPrefix+token, time.Now().UTC()); err == nil {
 			t.Errorf("a credential issued for %q accepted at another port", claimedHost)
 		}
 	}
+}
 
+func checkRedeemURLDropsPort(t *testing.T) {
+	t.Helper()
 	redeemURL, err := CredentialRedeemURL("https://app.example:443", "portal_cred_x")
 	if err != nil || !strings.HasPrefix(redeemURL, "https://app.example/") {
 		t.Errorf("CredentialRedeemURL() = %q, %v; want a URL on app.example without the default port", redeemURL, err)
 	}
 }
-
-func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
-	t.Helper()
-	tunnelIdentity := applicationAuthTestIdentity()
-	handler, err := New(next, tunnelIdentity, Config{Provider: ProviderSIWE, Allow: allowed, IdentityHeaders: identityHeaders})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return handler
-}
-
-func applicationAuthTestIdentity() types.Identity {
-	return types.Identity{Name: "application-auth-test", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat("k", 32)}
-}
-
-func applicationAuthTestWallet(t *testing.T, digit string) identity.LocalAuthority {
-	t.Helper()
-	resolved, err := identity.ResolveSecp256k1Identity(strings.Repeat("0", 63) + digit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved.Name = "application-auth-test"
-	return identity.NewLocalAuthority(resolved)
-}
-
-func applicationAuthTestTime() time.Time {
-	return time.Now().UTC()
-}
-
 func TestSanitizeApplicationAuthNext(t *testing.T) {
 	t.Parallel()
 
@@ -1275,10 +426,7 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 	t.Parallel()
 
 	const mixedCaseWallet = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
-	wallet, err := identity.NormalizeEVMAddress(mixedCaseWallet)
-	if err != nil {
-		t.Fatal(err)
-	}
+	wallet := normalizeMixedCaseWallet(t, mixedCaseWallet)
 	tests := []struct {
 		name    string
 		cfg     Config
@@ -1456,126 +604,1004 @@ func TestResolveApplicationAuthConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := resolveApplicationAuthConfig(tt.cfg)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("resolveApplicationAuthConfig() error = %v; want one containing %q", err, tt.wantErr)
-				}
-				if tt.cfg.IdentityProof != "" && strings.Contains(err.Error(), tt.cfg.IdentityProof) {
-					t.Fatalf("resolveApplicationAuthConfig() error %q contains the identity proof", err)
-				}
-				if validateErr := Validate(tt.cfg); validateErr == nil || validateErr.Error() != err.Error() {
-					t.Fatalf("Validate() = %v; want the resolver's error %v", validateErr, err)
-				}
-				return
-			}
-			if err != nil || !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("resolveApplicationAuthConfig() = %+v, %v; want %+v", got, err, tt.want)
-			}
-			if validateErr := Validate(tt.cfg); validateErr != nil {
-				t.Fatalf("Validate() = %v; want nil for a config the resolver accepts", validateErr)
-			}
+			checkResolvedConfigCase(t, tt.cfg, tt.want, tt.wantErr)
 		})
 	}
 }
 
-func TestApplicationAuthOIDCLongSubSurvivesRevalidation(t *testing.T) {
+func normalizeMixedCaseWallet(t *testing.T, mixedCaseWallet string) string {
+	t.Helper()
+	wallet, err := identity.NormalizeEVMAddress(mixedCaseWallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wallet
+}
+
+func checkResolvedConfigCase(t *testing.T, cfg Config, want applicationAuthSettings, wantErr string) {
+	t.Helper()
+	got, err := resolveApplicationAuthConfig(cfg)
+	if wantErr != "" {
+		if err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("resolveApplicationAuthConfig() error = %v; want one containing %q", err, wantErr)
+		}
+		if cfg.IdentityProof != "" && strings.Contains(err.Error(), cfg.IdentityProof) {
+			t.Fatalf("resolveApplicationAuthConfig() error %q contains the identity proof", err)
+		}
+		if validateErr := Validate(cfg); validateErr == nil || validateErr.Error() != err.Error() {
+			t.Fatalf("Validate() = %v; want the resolver's error %v", validateErr, err)
+		}
+		return
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveApplicationAuthConfig() = %+v, %v; want %+v", got, err, want)
+	}
+	if validateErr := Validate(cfg); validateErr != nil {
+		t.Fatalf("Validate() = %v; want nil for a config the resolver accepts", validateErr)
+	}
+}
+func portalHeaderNames(h http.Header) []string {
+	var names []string
+	for key := range h {
+		if strings.HasPrefix(strings.ToLower(strings.ReplaceAll(key, "_", "-")), "x-portal-") {
+			names = append(names, key)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+const identityProofTestValue = "test-proof-0123456789"
+
+func newApplicationAuthTestHandler(t *testing.T, allowed []string, identityHeaders bool, next http.Handler) http.Handler {
+	t.Helper()
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler, err := New(next, tunnelIdentity, Config{Provider: ProviderSIWE, Allow: allowed, IdentityHeaders: identityHeaders})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
+func applicationAuthTestIdentity() types.Identity {
+	return types.Identity{Name: "application-auth-test", Address: "0x0000000000000000000000000000000000000001", TokenSecret: strings.Repeat("k", 32)}
+}
+
+func applicationAuthTestWallet(t *testing.T, digit string) identity.LocalAuthority {
+	t.Helper()
+	resolved, err := identity.ResolveSecp256k1Identity(strings.Repeat("0", 63) + digit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.Name = "application-auth-test"
+	return identity.NewLocalAuthority(resolved)
+}
+
+func applicationAuthTestTime() time.Time {
+	return time.Now().UTC()
+}
+func TestLoginStateFromAnEarlierHoldIsRefused(t *testing.T) {
 	t.Parallel()
 
-	sub := strings.Repeat("a", 255)
+	const alias = "alias.example"
+	now := time.Now().UTC()
+	expires := now.Add(applicationAuthLoginStateTTL).Unix()
+	checkLoginStateHoldRefusals(t, alias, expires, now)
+}
+
+func serveLoginStateAtHold(gate *applicationAuth, since time.Time, req *http.Request) string {
+	const alias = "alias.example"
+	gate.publicHosts = func() []PublicHost { return []PublicHost{{URL: "https://" + alias, Since: since}} }
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, req)
+	return rec.Body.String()
+}
+
+func seedOIDCLoginStateCase(t *testing.T, alias string, expires int64) (*applicationAuth, func() *http.Request, string) {
+	t.Helper()
+	oidcGate := newOIDCTestGate(t, newOIDCTestIdP(t, nil), "alice@example.com")
+	oidcState, err := encodeSignedApplicationAuthJSON(oidcGate.oidc.stateKey, oidcStateClaims{State: "state", Nonce: "nonce", CodeVerifier: "verifier", Host: alias, Next: "/", ExpiresAt: expires})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "https://"+alias+types.PathApplicationAuthCallback+"?state=state&code=code", nil)
+		req.AddCookie(&http.Cookie{Name: applicationAuthOIDCStateCookie, Value: oidcState})
+		return req
+	}
+	return oidcGate, callback, "invalid or expired oidc login state"
+}
+
+func seedSAMLLoginStateCase(t *testing.T, alias string, expires int64) (*applicationAuth, func() *http.Request, string) {
+	t.Helper()
+	samlGate := newSAMLTestGate(t, newSAMLTestIdP(t), http.NotFoundHandler(), nil)
+	samlState, err := encodeSignedApplicationAuthJSON(samlGate.saml.stateKey, samlStateClaims{RequestID: "request", Host: alias, Next: "/", ExpiresAt: expires})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acs := func() *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "https://"+alias+types.PathApplicationAuthSAMLACS, strings.NewReader("SAMLResponse=x"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: applicationAuthSAMLStateCookie, Value: samlState})
+		return req
+	}
+	return samlGate, acs, "invalid or expired saml login state"
+}
+
+func checkLoginStateHoldRefusals(t *testing.T, alias string, expires int64, now time.Time) {
+	t.Helper()
+	oidcGate, oidcCallback, oidcRefused := seedOIDCLoginStateCase(t, alias, expires)
+	samlGate, samlCallback, samlRefused := seedSAMLLoginStateCase(t, alias, expires)
+	for _, tt := range []struct {
+		name    string
+		gate    *applicationAuth
+		request func() *http.Request
+		refused string
+	}{
+		{"oidc", oidcGate, oidcCallback, oidcRefused},
+		{"saml", samlGate, samlCallback, samlRefused},
+	} {
+		if body := serveLoginStateAtHold(tt.gate, now.Add(time.Minute), tt.request()); !strings.Contains(body, tt.refused) {
+			t.Errorf("%s login from an earlier hold: %s", tt.name, body)
+		}
+		if body := serveLoginStateAtHold(tt.gate, now.Add(-time.Minute), tt.request()); strings.Contains(body, tt.refused) {
+			t.Errorf("%s login from this hold was refused: %s", tt.name, body)
+		}
+	}
+}
+
+func postSIWEChallengeRequest(t *testing.T, handler http.Handler, alias, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://"+alias+path, bytes.NewReader(raw))
+	req.Header.Set("Origin", "https://"+alias)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func seedSIWEStaleHoldGate(t *testing.T, hosts *atomic.Value, allow string) http.Handler {
+	t.Helper()
 	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{
-		Provider:   ProviderOIDC,
-		Allow:      []string{"sub:" + sub},
-		OIDCConfig: OIDCConfig{OIDCIssuerURL: "https://idp.example", OIDCClientID: oidcTestClientID},
+		Provider:    ProviderSIWE,
+		Allow:       []string{allow},
+		PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate := handler.(*applicationAuth)
-	subject, ok := gate.resolveAllowedPrincipal("", sub)
-	if !ok {
-		t.Fatal("maximum-length sub was not authorized at login")
-	}
+	return handler
+}
 
-	rec := httptest.NewRecorder()
-	if err := gate.setSession(rec, Principal{Provider: ProviderOIDC, Subject: subject}, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
+func buildSIWEVerifyRequest(t *testing.T, handler http.Handler, wallet identity.LocalAuthority, alias string) applicationAuthVerifyRequest {
+	t.Helper()
+	asked := postSIWEChallengeRequest(t, handler, alias, types.PathApplicationAuthChallenge, applicationAuthChallengeRequest{Address: wallet.Identity().Address})
+	var challenge applicationAuthChallengeResponse
+	if err := json.NewDecoder(asked.Body).Decode(&challenge); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
-	for _, c := range rec.Result().Cookies() {
-		req.AddCookie(c)
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, ok := gate.authenticateSession(req); !ok || got.Subject != subject {
-		t.Fatalf("authenticateSession = (%q, %v); want the session to stay valid for %q", got, ok, subject)
+	return applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature}
+}
+
+type staleSIWEHold struct {
+	handler http.Handler
+	hosts   *atomic.Value
+	alias   string
+	since   time.Time
+}
+
+func checkStaleSIWEHoldRefused(t *testing.T, hold staleSIWEHold, verify applicationAuthVerifyRequest) {
+	t.Helper()
+	hold.hosts.Store([]PublicHost{{URL: "https://" + hold.alias, Since: time.Now().UTC().Add(time.Minute)}})
+	if rec := postSIWEChallengeRequest(t, hold.handler, hold.alias, types.PathApplicationAuthVerify, verify); rec.Code == http.StatusOK {
+		t.Fatalf("a challenge from an earlier hold signed in: %s", rec.Body)
 	}
 }
 
-func TestApplicationAuthOIDCSessionIsBoundToIssuerAndClient(t *testing.T) {
+func checkCurrentSIWEHoldAccepted(t *testing.T, hold staleSIWEHold, verify applicationAuthVerifyRequest) {
+	t.Helper()
+	hold.hosts.Store([]PublicHost{{URL: "https://" + hold.alias, Since: hold.since}})
+	if rec := postSIWEChallengeRequest(t, hold.handler, hold.alias, types.PathApplicationAuthVerify, verify); rec.Code != http.StatusOK {
+		t.Fatalf("a challenge from this hold = %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestSIWEChallengeFromAnEarlierHoldIsRefused(t *testing.T) {
 	t.Parallel()
 
-	newGate := func(t *testing.T, issuer, clientID, clientSecret string) *applicationAuth {
+	const alias = "alias.example"
+	wallet := applicationAuthTestWallet(t, "1")
+	since := time.Now().UTC().Add(-time.Minute)
+	var hosts atomic.Value
+	hosts.Store([]PublicHost{{URL: "https://" + alias, Since: since}})
+	handler := seedSIWEStaleHoldGate(t, &hosts, wallet.Identity().Address)
+	verify := buildSIWEVerifyRequest(t, handler, wallet, alias)
+	hold := staleSIWEHold{handler: handler, hosts: &hosts, alias: alias, since: since}
+	checkStaleSIWEHoldRefused(t, hold, verify)
+	checkCurrentSIWEHoldAccepted(t, hold, verify)
+}
+
+func TestSIWEReplicasShareChallengesAndAliasSessions(t *testing.T) {
+	const host = "alias.example"
+	wallet := applicationAuthTestWallet(t, "1")
+	var hosts atomic.Value
+	hosts.Store([]PublicHost{{URL: "https://" + host, Epoch: "ownership-one", Since: time.Now().Add(time.Hour)}})
+	id := applicationAuthTestIdentity()
+	newGate := func() http.Handler {
 		t.Helper()
-		handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{
-			Provider:   ProviderOIDC,
-			Allow:      []string{"alice@example.com"},
-			OIDCConfig: OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: clientID, OIDCClientSecret: clientSecret},
-		})
+		gate, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}), id, Config{Provider: ProviderSIWE, Allow: []string{wallet.Identity().Address}, PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) }})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return handler.(*applicationAuth)
+		return gate
 	}
-	sessionRequest := func(cookies []*http.Cookie) *http.Request {
-		req := httptest.NewRequest(http.MethodGet, "https://app.example/dashboard", nil)
-		for _, c := range cookies {
-			req.AddCookie(c)
+	first, second := newGate(), newGate()
+	post := func(gate http.Handler, path string, value any) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return req
+		req := httptest.NewRequest(http.MethodPost, "https://"+host+path, bytes.NewReader(body))
+		req.Header.Set("Origin", "https://"+host)
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		return rec
 	}
-
-	issuer := newGate(t, "https://idp.example", "portal-client", "secret")
-	rec := httptest.NewRecorder()
-	if err := issuer.setSession(rec, Principal{Provider: ProviderOIDC, Subject: "alice@example.com"}, "app.example", time.Now(), time.Now().Add(time.Hour)); err != nil {
+	asked := post(first, types.PathApplicationAuthChallenge, applicationAuthChallengeRequest{Address: wallet.Identity().Address})
+	var challenge applicationAuthChallengeResponse
+	if asked.Code != http.StatusOK {
+		t.Fatalf("challenge: %d %s", asked.Code, asked.Body)
+	}
+	if err := json.Unmarshal(asked.Body.Bytes(), &challenge); err != nil {
 		t.Fatal(err)
 	}
-	cookies := rec.Result().Cookies()
+	signature, err := wallet.SignEthereumPersonalMessage(challenge.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := applicationAuthVerifyRequest{ChallengeID: challenge.ChallengeID, Message: challenge.Message, Signature: signature}
+	signedIn := post(second, types.PathApplicationAuthVerify, proof)
+	if signedIn.Code != http.StatusOK {
+		t.Fatalf("challenge from another replica: %d %s", signedIn.Code, signedIn.Body)
+	}
+	cookies := signedIn.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected a session cookie: %v", cookies)
+	}
+	open := func(gate http.Handler) int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+host+"/private", nil)
+		req.AddCookie(cookies[0])
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, gate := range []http.Handler{first, second, newGate()} {
+		if status := open(gate); status != http.StatusNoContent {
+			t.Fatalf("session at an existing or restarted replica: %d", status)
+		}
+	}
+	hosts.Store([]PublicHost{{URL: "https://" + host, Epoch: "ownership-two"}})
+	if status := open(first); status != http.StatusSeeOther {
+		t.Fatalf("session from an earlier ownership: %d", status)
+	}
+	if rec := post(second, types.PathApplicationAuthVerify, proof); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("challenge from an earlier ownership: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestApplicationCredentialHeaderPassesFromAnyOrigin(t *testing.T) {
+	t.Parallel()
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, Config{Provider: ProviderCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://app.example/private", nil)
+	req.Header.Set("Origin", "https://other.example")
+	req.Header.Set(types.HeaderAccessCredential, credential)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d; want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+func TestApplicationAuthWithoutSessionIgnoresOrigin(t *testing.T) {
+	t.Parallel()
+
+	handler, err := New(http.NotFoundHandler(), applicationAuthTestIdentity(), Config{Provider: ProviderCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upgrade := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
+	upgrade.Header = http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}, "Origin": {"https://other.example"}}
+	upgradeRec := httptest.NewRecorder()
+	handler.ServeHTTP(upgradeRec, upgrade)
+	if upgradeRec.Code != http.StatusSeeOther {
+		t.Fatalf("upgrade status = %d; want %d", upgradeRec.Code, http.StatusSeeOther)
+	}
+	post := httptest.NewRequest(http.MethodPost, "https://app.example/private", nil)
+	post.Header.Set("Origin", "https://other.example")
+	postRec := httptest.NewRecorder()
+	handler.ServeHTTP(postRec, post)
+	if postRec.Code != http.StatusUnauthorized {
+		t.Fatalf("post status = %d; want %d", postRec.Code, http.StatusUnauthorized)
+	}
+}
+func TestSameApplicationHost(t *testing.T) {
+	t.Parallel()
 
 	for _, tt := range []struct {
-		name         string
-		issuer       string
-		clientID     string
-		clientSecret string
-		want         bool
+		a, b string
+		want bool
 	}{
-		{"same configuration after a restart", "https://idp.example", "portal-client", "secret", true},
-		{"issuer written with a trailing slash", "https://idp.example/", "portal-client", "secret", true},
-		{"rotated client secret", "https://idp.example", "portal-client", "rotated", true},
-		{"different issuer", "https://other-idp.example", "portal-client", "secret", false},
-		{"different client id", "https://idp.example", "other-client", "secret", false},
+		{"app.example", "app.example", true},
+		{"app.example", "App.Example", true},
+		{"app.example", "app.example.", true},
+		{"app.example:443", "app.example", true},
+		{"App.Example.:443", "app.example", true},
+		{"app.example:8443", "app.example:8443", true},
+		{"app.example:8443", "app.example", false},
+		{"app.example:1443", "app.example", false},
+		{"app.example", "other.example", false},
+		{"", "", false},
+		{"app.example", "", false},
+		{"app.example", "app example", false},
+		{"app example", "app example", false},
+		{"https://app.example/", "app.example", false},
+		{"app.example", "https://app.example", false},
+		{"app.example/", "app.example", false},
+		{"https://app.example/", "https://app.example/", false},
+	} {
+		if got := sameApplicationHost(tt.a, tt.b); got != tt.want {
+			t.Errorf("sameApplicationHost(%q, %q) = %v; want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+func seedHostSpellingGate(t *testing.T, tunnelIdentity types.Identity) http.Handler {
+	t.Helper()
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, Config{Provider: ProviderCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
+func redeemHostSpellingSession(t *testing.T, handler http.Handler, tunnelIdentity types.Identity, host string) *http.Cookie {
+	t.Helper()
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
+	req := httptest.NewRequest(http.MethodPost, "https://"+host+types.PathApplicationAuthRedeem, bytes.NewReader(body))
+	req.Header.Set("Origin", "https://"+host)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	cookies := rec.Result().Cookies()
+	if rec.Code != http.StatusOK || len(cookies) != 1 {
+		t.Fatalf("redeem at %q: status = %d, cookies = %v", host, rec.Code, cookies)
+	}
+	return cookies[0]
+}
+
+func fetchHostSpellingStatus(handler http.Handler, cookie *http.Cookie, host string) int {
+	req := httptest.NewRequest(http.MethodGet, "https://"+host+"/private", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func checkHostSpellingAccepted(t *testing.T, handler http.Handler, cookie *http.Cookie, issuedAt string) {
+	t.Helper()
+	for _, usedAt := range []string{"app.example", "app.example:443", "App.Example", "app.example."} {
+		if got := fetchHostSpellingStatus(handler, cookie, usedAt); got != http.StatusNoContent {
+			t.Errorf("a session issued at %q, used at %q: status = %d; want %d", issuedAt, usedAt, got, http.StatusNoContent)
+		}
+	}
+}
+
+func checkHostSpellingRejected(t *testing.T, handler http.Handler, cookie *http.Cookie, issuedAt string) {
+	t.Helper()
+	for _, usedAt := range []string{"app.example:8443", "other.example"} {
+		if got := fetchHostSpellingStatus(handler, cookie, usedAt); got == http.StatusNoContent {
+			t.Errorf("a session issued at %q was accepted at %q", issuedAt, usedAt)
+		}
+	}
+}
+
+func TestApplicationSessionFollowsTheHostNotItsSpelling(t *testing.T) {
+	t.Parallel()
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler := seedHostSpellingGate(t, tunnelIdentity)
+	for _, issuedAt := range []string{"app.example", "app.example:443"} {
+		cookie := redeemHostSpellingSession(t, handler, tunnelIdentity, issuedAt)
+		checkHostSpellingAccepted(t, handler, cookie, issuedAt)
+		checkHostSpellingRejected(t, handler, cookie, issuedAt)
+	}
+}
+
+type identityProofGate struct {
+	handler  http.Handler
+	reached  *bool
+	gotProof *[]string
+}
+
+func seedIdentityProofGate(t *testing.T, tunnelIdentity types.Identity, cfg Config) identityProofGate {
+	t.Helper()
+	reached := false
+	var gotProof []string
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		gotProof = r.Header.Values(types.HeaderPortalProof)
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identityProofGate{handler: handler, reached: &reached, gotProof: &gotProof}
+}
+
+func checkIdentityProofAuthenticated(t *testing.T, gate identityProofGate, credential string, wantProof []string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	req.Header.Set(types.HeaderAccessCredential, credential)
+	req.Header.Set(types.HeaderPortalProof, "forged-proof-value")
+	rec := httptest.NewRecorder()
+	gate.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || !slices.Equal(*gate.gotProof, wantProof) {
+		t.Fatalf("authenticated request: status = %d, upstream %s = %q; want %q", rec.Code, types.HeaderPortalProof, *gate.gotProof, wantProof)
+	}
+}
+
+func checkIdentityProofRedirected(t *testing.T, gate identityProofGate) {
+	t.Helper()
+	*gate.reached = false
+	req := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	req.Header.Set(types.HeaderPortalProof, identityProofTestValue)
+	rec := httptest.NewRecorder()
+	gate.handler.ServeHTTP(rec, req)
+	if *gate.reached || rec.Code != http.StatusSeeOther {
+		t.Fatalf("unauthenticated request: reached upstream = %v, status = %d; want a login redirect", *gate.reached, rec.Code)
+	}
+}
+
+func TestApplicationAuthIdentityProof(t *testing.T) {
+	t.Parallel()
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name      string
+		cfg       Config
+		wantProof []string
+	}{
+		{"configured", Config{IdentityHeaders: true, IdentityProof: identityProofTestValue}, []string{identityProofTestValue}},
+		{"not configured", Config{IdentityHeaders: true}, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			gate := newGate(t, tt.issuer, tt.clientID, tt.clientSecret)
-			if _, ok := gate.authenticateSession(sessionRequest(cookies)); ok != tt.want {
-				t.Fatalf("authenticateSession ok = %v; want %v", ok, tt.want)
+
+			tt.cfg.Provider = ProviderCredential
+			gate := seedIdentityProofGate(t, tunnelIdentity, tt.cfg)
+			checkIdentityProofAuthenticated(t, gate, credential, tt.wantProof)
+			checkIdentityProofRedirected(t, gate)
+		})
+	}
+}
+
+func issueAllowlistCredential(t *testing.T, tunnelIdentity types.Identity, subject string) string {
+	t.Helper()
+	credential, err := IssueCredential(tunnelIdentity, "app.example", subject, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential
+}
+
+func seedAllowlistInitialGate(t *testing.T, tunnelIdentity types.Identity) http.Handler {
+	t.Helper()
+	initialGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, Config{
+		Provider:        ProviderCredential,
+		Allow:           []string{"alice", "bob"},
+		IdentityHeaders: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return initialGate
+}
+
+func redeemAllowlistAliceCookie(t *testing.T, initialGate http.Handler, redeemBody []byte) *http.Cookie {
+	t.Helper()
+	redeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(redeemBody))
+	redeemReq.Header.Set("Origin", "https://app.example")
+	redeemRec := httptest.NewRecorder()
+	initialGate.ServeHTTP(redeemRec, redeemReq)
+	if redeemRec.Code != http.StatusOK {
+		t.Fatalf("alice redeem status = %d", redeemRec.Code)
+	}
+	return redeemRec.Result().Cookies()[0]
+}
+
+func seedAllowlistRevokedGate(t *testing.T, tunnelIdentity types.Identity) http.Handler {
+	t.Helper()
+	revokedGate, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, Config{
+		Provider:        ProviderCredential,
+		Allow:           []string{"bob"},
+		IdentityHeaders: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return revokedGate
+}
+
+func checkRevokedAllowlistRedeem(t *testing.T, revokedGate http.Handler, redeemBody []byte) {
+	t.Helper()
+	revokedRedeemReq := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(redeemBody))
+	revokedRedeemReq.Header.Set("Origin", "https://app.example")
+	revokedRedeemRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(revokedRedeemRec, revokedRedeemReq)
+	if revokedRedeemRec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked redeem status = %d; want 401", revokedRedeemRec.Code)
+	}
+}
+
+func checkRevokedAllowlistCookie(t *testing.T, revokedGate http.Handler, aliceCookie *http.Cookie) {
+	t.Helper()
+	revokedCookieReq := httptest.NewRequest(http.MethodGet, "https://app.example/private", nil)
+	revokedCookieReq.AddCookie(aliceCookie)
+	revokedCookieRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(revokedCookieRec, revokedCookieReq)
+	if revokedCookieRec.Code != http.StatusSeeOther {
+		t.Fatalf("revoked session status = %d; want 303", revokedCookieRec.Code)
+	}
+}
+
+func checkRevokedAllowlistHeader(t *testing.T, revokedGate http.Handler, aliceCredential string) {
+	t.Helper()
+	revokedHeaderReq := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	revokedHeaderReq.Header.Set(types.HeaderAccessCredential, aliceCredential)
+	revokedHeaderRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(revokedHeaderRec, revokedHeaderReq)
+	if revokedHeaderRec.Code != http.StatusSeeOther {
+		t.Fatalf("revoked header status = %d; want 303", revokedHeaderRec.Code)
+	}
+}
+
+func checkAllowlistBobAccepted(t *testing.T, revokedGate http.Handler, bobCredential string) {
+	t.Helper()
+	bobHeaderReq := httptest.NewRequest(http.MethodGet, "https://app.example/api", nil)
+	bobHeaderReq.Header.Set(types.HeaderAccessCredential, bobCredential)
+	bobHeaderRec := httptest.NewRecorder()
+	revokedGate.ServeHTTP(bobHeaderRec, bobHeaderReq)
+	if bobHeaderRec.Code != http.StatusNoContent {
+		t.Fatalf("allowed bob header status = %d; want 204", bobHeaderRec.Code)
+	}
+}
+
+func TestApplicationAuthCredentialAllowlistAndRevocation(t *testing.T) {
+	tunnelIdentity := applicationAuthTestIdentity()
+	aliceCredential := issueAllowlistCredential(t, tunnelIdentity, "alice")
+	bobCredential := issueAllowlistCredential(t, tunnelIdentity, "bob")
+	initialGate := seedAllowlistInitialGate(t, tunnelIdentity)
+	redeemBody, _ := json.Marshal(applicationAuthRedeemRequest{Credential: aliceCredential})
+	aliceCookie := redeemAllowlistAliceCookie(t, initialGate, redeemBody)
+	revokedGate := seedAllowlistRevokedGate(t, tunnelIdentity)
+	checkRevokedAllowlistRedeem(t, revokedGate, redeemBody)
+	checkRevokedAllowlistCookie(t, revokedGate, aliceCookie)
+	checkRevokedAllowlistHeader(t, revokedGate, aliceCredential)
+	checkAllowlistBobAccepted(t, revokedGate, bobCredential)
+}
+func TestApplicationSessionRefusesOtherOrigins(t *testing.T) {
+	t.Parallel()
+
+	tunnelIdentity := applicationAuthTestIdentity()
+	upstreamRequests := 0
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, Config{Provider: ProviderCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := issueOriginCredential(t, tunnelIdentity)
+	session := redeemOriginCookie(t, handler, credential)
+
+	checkOriginPolicyTable(t, handler, session, &upstreamRequests)
+}
+
+func issueOriginCredential(t *testing.T, tunnelIdentity types.Identity) string {
+	t.Helper()
+	credential, err := IssueCredential(tunnelIdentity, "app.example", "alice", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential
+}
+
+func redeemOriginCookie(t *testing.T, handler http.Handler, credential string) *http.Cookie {
+	t.Helper()
+	body, _ := json.Marshal(applicationAuthRedeemRequest{Credential: credential})
+	redeem := httptest.NewRequest(http.MethodPost, "https://app.example"+types.PathApplicationAuthRedeem, bytes.NewReader(body))
+	redeem.Header.Set("Origin", "https://app.example")
+	redeemRec := httptest.NewRecorder()
+	handler.ServeHTTP(redeemRec, redeem)
+	if redeemRec.Code != http.StatusOK || len(redeemRec.Result().Cookies()) != 1 {
+		t.Fatalf("redeem status = %d, cookies = %#v", redeemRec.Code, redeemRec.Result().Cookies())
+	}
+	return redeemRec.Result().Cookies()[0]
+}
+
+func upgradeOriginHeaders(origin string) http.Header {
+	return http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}, "Origin": {origin}}
+}
+
+func buildOriginHeader(origin string) http.Header {
+	return http.Header{"Origin": {origin}}
+}
+
+func fetchSiteOriginHeaders(origin, site string) http.Header {
+	return http.Header{"Origin": {origin}, "Sec-Fetch-Site": {site}}
+}
+
+func checkOriginPolicyTable(t *testing.T, handler http.Handler, session *http.Cookie, upstream *int) {
+	t.Helper()
+	const self, other = "https://app.example", "https://other.example"
+	for _, tt := range []struct {
+		name       string
+		method     string
+		headers    http.Header
+		wantStatus int
+	}{
+		{"upgrade from own origin", http.MethodGet, upgradeOriginHeaders(self), http.StatusNoContent},
+		{"upgrade from another origin", http.MethodGet, upgradeOriginHeaders(other), http.StatusForbidden},
+		{"upgrade with another port", http.MethodGet, upgradeOriginHeaders(self + ":8443"), http.StatusForbidden},
+		{"upgrade from plain http", http.MethodGet, upgradeOriginHeaders("http://app.example"), http.StatusForbidden},
+		{"upgrade from opaque origin", http.MethodGet, upgradeOriginHeaders("null"), http.StatusForbidden},
+		{"upgrade without origin", http.MethodGet, http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}}, http.StatusNoContent},
+		{"post from own origin", http.MethodPost, buildOriginHeader(self), http.StatusNoContent},
+		{"post from another origin", http.MethodPost, buildOriginHeader(other), http.StatusForbidden},
+		{"post from opaque origin", http.MethodPost, buildOriginHeader("null"), http.StatusForbidden},
+		{"post without origin", http.MethodPost, http.Header{}, http.StatusNoContent},
+		{"form post from a no-referrer page of the own origin", http.MethodPost, fetchSiteOriginHeaders("null", "same-origin"), http.StatusNoContent},
+		{"form post from a no-referrer page elsewhere", http.MethodPost, fetchSiteOriginHeaders("null", "cross-site"), http.StatusForbidden},
+		{"same-origin mark on a real origin", http.MethodPost, fetchSiteOriginHeaders(other, "same-origin"), http.StatusForbidden},
+		{"same-origin mark on an upgrade", http.MethodGet, http.Header{"Upgrade": {"websocket"}, "Origin": {"null"}, "Sec-Fetch-Site": {"same-origin"}}, http.StatusForbidden},
+		{"post from a sibling host", http.MethodPost, fetchSiteOriginHeaders(other, "same-site"), http.StatusForbidden},
+		{"post from a sandboxed frame", http.MethodPost, fetchSiteOriginHeaders("null", "same-site"), http.StatusForbidden},
+		{"put from another origin", http.MethodPut, buildOriginHeader(other), http.StatusForbidden},
+		{"patch from another origin", http.MethodPatch, buildOriginHeader(other), http.StatusForbidden},
+		{"delete from another origin", http.MethodDelete, buildOriginHeader(other), http.StatusForbidden},
+		{"get from another origin", http.MethodGet, buildOriginHeader(other), http.StatusNoContent},
+		{"head from another origin", http.MethodHead, buildOriginHeader(other), http.StatusNoContent},
+		{"options from another origin", http.MethodOptions, buildOriginHeader(other), http.StatusNoContent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "https://app.example/private", nil)
+			req.Header = tt.headers.Clone()
+			req.AddCookie(session)
+			before := *upstream
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d; want %d", rec.Code, tt.wantStatus)
+			}
+			if reached := *upstream > before; reached != (tt.wantStatus == http.StatusNoContent) {
+				t.Fatalf("upstream reached = %v with status %d", reached, rec.Code)
 			}
 		})
 	}
+}
 
-	t.Run("session carrying no binding", func(t *testing.T) {
-		t.Parallel()
-		token, err := encodeSignedApplicationAuthJSON(issuer.signingKey, applicationAuthClaims{
-			Subject:   "alice@example.com",
-			Provider:  ProviderOIDC,
-			Host:      "app.example",
-			ExpiresAt: time.Now().Add(time.Hour).Unix(),
+func TestGateAnswersOnlyForHostsItHolds(t *testing.T) {
+	t.Parallel()
+
+	const canonical, alias = "app.example", "alias.example"
+	now := time.Now().UTC()
+	hostsWithAlias := []PublicHost{{URL: "https://" + canonical}, {URL: "https://" + alias, Since: now.Add(-time.Hour)}}
+	var hosts atomic.Value
+	hosts.Store(hostsWithAlias)
+	tunnelIdentity := applicationAuthTestIdentity()
+	handler, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), tunnelIdentity, Config{Provider: ProviderCredential, PublicHosts: func() []PublicHost { return hosts.Load().([]PublicHost) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := handler.(*applicationAuth)
+	checkHeldGateSessions(t, gate, now, hostsWithAlias)
+	checkLostAliasRefused(t, gate, &hosts, hostsWithAlias, now)
+}
+
+func issueGateSessionSend(t *testing.T, gate *applicationAuth, host string, issuedAt, expires time.Time) func(*http.Request) {
+	t.Helper()
+	value, err := gate.issueSession(Principal{Provider: ProviderCredential, Subject: "alice"}, host, issuedAt, expires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: applicationAuthCookieName, Value: value}) }
+}
+
+func serveGateRequest(gate *applicationAuth, host, path string, send func(*http.Request)) int {
+	req := httptest.NewRequest(http.MethodGet, "https://"+host+path, nil)
+	send(req)
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func issueAliasCredential(t *testing.T, tunnelIdentity types.Identity, alias string, now time.Time) string {
+	t.Helper()
+	credential, err := IssueCredential(tunnelIdentity, alias, "alice", now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential
+}
+
+func presentGateCredential(credential string) func(*http.Request) {
+	return func(r *http.Request) { r.Header.Set(types.HeaderAccessCredential, credential) }
+}
+
+func checkHeldGateSessions(t *testing.T, gate *applicationAuth, now time.Time, hostsWithAlias []PublicHost) {
+	t.Helper()
+	const canonical, alias = "app.example", "alias.example"
+	credential := issueAliasCredential(t, applicationAuthTestIdentity(), alias, now)
+	presentCredential := presentGateCredential(credential)
+	longAgo := now.Add(-23 * time.Hour)
+	held := hostsWithAlias[1].Since
+	for _, tt := range []struct {
+		name string
+		host string
+		send func(*http.Request)
+		want int
+	}{
+		{"a session from this hold of the alias", alias, issueGateSessionSend(t, gate, alias, now, now.Add(time.Hour)), http.StatusNoContent},
+		{"a session from the start of this hold", alias, issueGateSessionSend(t, gate, alias, held, now.Add(time.Hour)), http.StatusNoContent},
+		{"a session from just before this hold", alias, issueGateSessionSend(t, gate, alias, held.Add(-time.Millisecond), now.Add(time.Hour)), http.StatusSeeOther},
+		{"a session from an earlier hold of the alias", alias, issueGateSessionSend(t, gate, alias, longAgo, now.Add(time.Hour)), http.StatusSeeOther},
+		{"a session too old to carry its date", alias, issueGateSessionSend(t, gate, alias, time.Unix(0, 0), now.Add(time.Hour)), http.StatusSeeOther},
+		{"an old session on a host that cannot change hands", canonical, issueGateSessionSend(t, gate, canonical, longAgo, now.Add(time.Hour)), http.StatusNoContent},
+		{"a credential for the alias", alias, presentCredential, http.StatusNoContent},
+		{"a host the application never held", "attacker.example", issueGateSessionSend(t, gate, "attacker.example", now, now.Add(time.Hour)), http.StatusMisdirectedRequest},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := serveGateRequest(gate, tt.host, "/private", tt.send); got != tt.want {
+				t.Fatalf("status = %d; want %d", got, tt.want)
+			}
 		})
-		if err != nil {
-			t.Fatal(err)
+	}
+}
+
+func checkLostAliasRefused(t *testing.T, gate *applicationAuth, hosts *atomic.Value, hostsWithAlias []PublicHost, now time.Time) {
+	t.Helper()
+	const canonical, alias = "app.example", "alias.example"
+	hosts.Store(hostsWithAlias[:1])
+	credential := issueAliasCredential(t, applicationAuthTestIdentity(), alias, now)
+	for name, send := range map[string]func(*http.Request){
+		"session":    issueGateSessionSend(t, gate, alias, now, now.Add(time.Hour)),
+		"credential": presentGateCredential(credential),
+	} {
+		if got := serveGateRequest(gate, alias, "/private", send); got != http.StatusMisdirectedRequest {
+			t.Fatalf("%s on a lost alias = %d; want 421", name, got)
 		}
-		cookie := &http.Cookie{Name: applicationAuthCookieName, Value: token}
-		if _, ok := issuer.authenticateSession(sessionRequest([]*http.Cookie{cookie})); ok {
-			t.Fatal("an OIDC session without an issuer and client binding was accepted")
+	}
+	if got := serveGateRequest(gate, alias, types.PathApplicationAuthLogin, func(*http.Request) {}); got != http.StatusMisdirectedRequest {
+		t.Fatalf("login page on a lost alias = %d; want 421", got)
+	}
+	if got := serveGateRequest(gate, canonical, "/private", issueGateSessionSend(t, gate, canonical, now, now.Add(time.Hour))); got != http.StatusNoContent {
+		t.Fatalf("losing the alias touched the canonical host: %d", got)
+	}
+}
+func loadFrontendFile(t *testing.T, name string, into any) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", "lib", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, into); err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+}
+
+type frontendAuthRules struct {
+	Allow []struct {
+		Method    string `json:"method"`
+		Typed     string `json:"typed"`
+		Valid     bool   `json:"valid"`
+		Canonical string `json:"canonical"`
+	} `json:"allow"`
+	Issuer []struct {
+		Value string `json:"value"`
+		Valid bool   `json:"valid"`
+	} `json:"issuer"`
+	SAMLMetadata []struct {
+		Value string `json:"value"`
+		Valid bool   `json:"valid"`
+	} `json:"samlMetadata"`
+	SMTPAddr []struct {
+		Value string `json:"value"`
+		Valid bool   `json:"valid"`
+	} `json:"emailSMTPAddr"`
+	SMTPFrom []struct {
+		Value string `json:"value"`
+		Valid bool   `json:"valid"`
+	} `json:"emailFrom"`
+	Host []struct {
+		Address string `json:"address"`
+		Host    string `json:"host"`
+	} `json:"host"`
+}
+
+func checkFrontendAuthRulesCounts(t *testing.T, rules frontendAuthRules) {
+	t.Helper()
+	for name, rows := range map[string]int{
+		"allow":         len(rules.Allow),
+		"issuer":        len(rules.Issuer),
+		"samlMetadata":  len(rules.SAMLMetadata),
+		"emailSMTPAddr": len(rules.SMTPAddr),
+		"emailFrom":     len(rules.SMTPFrom),
+		"host":          len(rules.Host),
+	} {
+		if rows == 0 {
+			t.Fatalf("authRuleVectors.json has no %s rows", name)
 		}
+	}
+}
+
+func checkFrontendAuthRulesAllowlist(t *testing.T, rules frontendAuthRules) {
+	t.Helper()
+	for _, row := range rules.Allow {
+		got, err := normalizeAllowed(row.Method, []string{row.Typed})
+		if (err == nil) != row.Valid {
+			t.Errorf("%s entry %q: error = %v; the frontend says valid = %v", row.Method, row.Typed, err, row.Valid)
+			continue
+		}
+		wantCanonical := row.Valid && row.Canonical != ""
+		canonicalMismatch := len(got) != 1 || got[0] != row.Canonical
+		if wantCanonical && canonicalMismatch {
+			t.Errorf("%s entry %q normalizes to %q; the frontend says %q", row.Method, row.Typed, got, row.Canonical)
+		}
+	}
+}
+
+func checkFrontendAuthRulesIssuers(t *testing.T, rules frontendAuthRules) {
+	t.Helper()
+	for _, row := range rules.Issuer {
+		err := Validate(Config{
+			Provider:   ProviderOIDC,
+			Allow:      []string{"alice@example.com"},
+			OIDCConfig: OIDCConfig{OIDCIssuerURL: row.Value, OIDCClientID: "client"},
+		})
+		if (err == nil) != row.Valid {
+			t.Errorf("issuer %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)
+		}
+	}
+}
+
+func checkFrontendAuthRulesSAMLMetadata(t *testing.T, rules frontendAuthRules) {
+	t.Helper()
+	for _, row := range rules.SAMLMetadata {
+		err := Validate(Config{
+			Provider:   ProviderSAML,
+			Allow:      []string{"alice@example.com"},
+			SAMLConfig: SAMLConfig{SAMLMetadataURL: row.Value},
+		})
+		if (err == nil) != row.Valid {
+			t.Errorf("metadata URL %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)
+		}
+	}
+}
+
+func checkFrontendAuthRulesSMTPAddr(t *testing.T, rules frontendAuthRules) {
+	t.Helper()
+	for _, row := range rules.SMTPAddr {
+		err := Validate(Config{
+			Provider:    ProviderEmail,
+			EmailList:   []string{"alice@example.com"},
+			EmailConfig: EmailConfig{SMTPAddr: row.Value, SMTPFrom: "login@example.com"},
+		})
+		if (err == nil) != row.Valid {
+			t.Errorf("SMTP address %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)
+		}
+	}
+}
+
+func checkFrontendAuthRulesSMTPFrom(t *testing.T, rules frontendAuthRules) {
+	t.Helper()
+	for _, row := range rules.SMTPFrom {
+		err := Validate(Config{
+			Provider:    ProviderEmail,
+			EmailList:   []string{"alice@example.com"},
+			EmailConfig: EmailConfig{SMTPAddr: "smtp.example.com:587", SMTPFrom: row.Value},
+		})
+		if (err == nil) != row.Valid {
+			t.Errorf("sender %q: error = %v; the frontend says valid = %v", row.Value, err, row.Valid)
+		}
+	}
+}
+
+func checkFrontendAuthRulesHosts(t *testing.T, rules frontendAuthRules) {
+	t.Helper()
+	for _, row := range rules.Host {
+		got, err := normalizeHost(row.Address)
+		if row.Host == "" {
+			if err == nil {
+				t.Errorf("address %q is accepted as %q; the frontend says it is unusable", row.Address, got)
+			}
+			continue
+		}
+		if err != nil || got != row.Host {
+			t.Errorf("address %q = %q, %v; the frontend says %q", row.Address, got, err, row.Host)
+		}
+	}
+}
+
+func TestFrontendAuthRulesMatchTheGateway(t *testing.T) {
+	t.Parallel()
+
+	var rules frontendAuthRules
+	loadFrontendFile(t, "authRuleVectors.json", &rules)
+	checkFrontendAuthRulesCounts(t, rules)
+
+	t.Run("allowlist entries", func(t *testing.T) {
+		t.Parallel()
+		checkFrontendAuthRulesAllowlist(t, rules)
+	})
+
+	t.Run("OIDC issuers", func(t *testing.T) {
+		t.Parallel()
+		checkFrontendAuthRulesIssuers(t, rules)
+	})
+
+	t.Run("SAML metadata URLs", func(t *testing.T) {
+		t.Parallel()
+		checkFrontendAuthRulesSAMLMetadata(t, rules)
+	})
+
+	t.Run("email SMTP addresses", func(t *testing.T) {
+		t.Parallel()
+		checkFrontendAuthRulesSMTPAddr(t, rules)
+	})
+
+	t.Run("email senders", func(t *testing.T) {
+		t.Parallel()
+		checkFrontendAuthRulesSMTPFrom(t, rules)
+	})
+
+	t.Run("hosts of a private link", func(t *testing.T) {
+		t.Parallel()
+		checkFrontendAuthRulesHosts(t, rules)
 	})
 }

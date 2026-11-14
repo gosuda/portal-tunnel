@@ -28,6 +28,181 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
+func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
+	fixture := newRenewLeaseHourlyFixture(t, "tenant.test.example")
+	checkHourlyLeaseKeepsPinnedChain(t, fixture)
+	checkHourlyLeaseRepinsAfterInterval(t, fixture)
+	checkHourlyLeaseDefersRecheck(t, fixture)
+}
+
+type renewLeaseHourlyFixture struct {
+	serving     *atomic.Pointer[tls.Certificate]
+	listener    *listener
+	tenantTLS   *keyless.Client
+	firstPool   *x509.CertPool
+	renewedPool *x509.CertPool
+	renewed     tls.Certificate
+	later       tls.Certificate
+}
+
+func newRenewLeaseHourlyFixture(t *testing.T, tenantHostname string) *renewLeaseHourlyFixture {
+	t.Helper()
+	first, firstPool := generateSelfSignedTenantCert(t, tenantHostname, 1)
+	renewed, renewedPool := generateSelfSignedTenantCert(t, tenantHostname, 2)
+	later, _ := generateSelfSignedTenantCert(t, tenantHostname, 3)
+	serving := &atomic.Pointer[tls.Certificate]{}
+	serving.Store(&first)
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	relay, relayURL, parsedRelayURL := startLeaseRenewRelay(t, expiresAt, serving)
+	t.Cleanup(relay.Close)
+	tenantTLS, err := keyless.NewClient(t.Context(), keyless.ClientConfig{RelayURL: relayURL, Hostname: tenantHostname, AccessToken: "access-token"})
+	if err != nil {
+		t.Fatalf("keyless.NewClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = tenantTLS.Close() })
+	if !tenantTLS.TenantCertPool().Equal(firstPool) {
+		t.Fatal("the tenant did not pin the certificate the relay served")
+	}
+	listener := &listener{
+		api: &apiClient{relayURL: parsedRelayURL, http: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}},
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken:    "access-token",
+			expiresAt:      expiresAt,
+			tenantTLS:      tenantTLS,
+			chainCheckedAt: time.Now(),
+		}),
+	}
+	return &renewLeaseHourlyFixture{serving: serving, listener: listener, tenantTLS: tenantTLS, firstPool: firstPool, renewedPool: renewedPool, renewed: renewed, later: later}
+}
+
+func renewHourlyLease(t *testing.T, fixture *renewLeaseHourlyFixture) {
+	t.Helper()
+	if err := fixture.listener.renewLease(context.Background()); err != nil {
+		t.Fatalf("renewLease() error = %v", err)
+	}
+}
+
+func checkHourlyLeaseKeepsPinnedChain(t *testing.T, fixture *renewLeaseHourlyFixture) {
+	t.Helper()
+	fixture.serving.Store(&fixture.renewed)
+	renewHourlyLease(t, fixture)
+	if !fixture.tenantTLS.TenantCertPool().Equal(fixture.firstPool) {
+		t.Fatal("renewLease() checked the relay chain again within the hour after it was found current")
+	}
+}
+
+func checkHourlyLeaseRepinsAfterInterval(t *testing.T, fixture *renewLeaseHourlyFixture) {
+	t.Helper()
+	fixture.listener.lease.Update(func(lease listenerSnapshot) listenerSnapshot {
+		lease.chainCheckedAt = time.Now().Add(-defaultChainCheckInterval)
+		return lease
+	})
+	renewHourlyLease(t, fixture)
+	if !fixture.tenantTLS.TenantCertPool().Equal(fixture.renewedPool) {
+		t.Fatal("renewLease() an hour after the last check left the tenant on the replaced relay certificate")
+	}
+}
+
+func checkHourlyLeaseDefersRecheck(t *testing.T, fixture *renewLeaseHourlyFixture) {
+	t.Helper()
+	fixture.serving.Store(&fixture.later)
+	renewHourlyLease(t, fixture)
+	if !fixture.tenantTLS.TenantCertPool().Equal(fixture.renewedPool) {
+		t.Fatal("renewLease() checked the relay chain again right after a scheduled check")
+	}
+}
+
+func generateSelfSignedTenantCert(t *testing.T, tenantHostname string, serial int64) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		DNSNames:     []string{tenantHostname},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pool
+}
+
+func startLeaseRenewRelay(t *testing.T, expiresAt time.Time, serving *atomic.Pointer[tls.Certificate]) (*httptest.Server, string, *url.URL) {
+	t.Helper()
+	var relayURL string
+	relay := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
+			AccessToken:     "renewed-token",
+			ExpiresAt:       expiresAt,
+			ReverseEndpoint: types.ReverseEndpoint{URL: relayURL + types.PathSDKConnect, Capability: "capability", ExpiresAt: expiresAt},
+		})
+	}))
+	relay.Listener = tls.NewListener(relay.Listener, &tls.Config{
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return serving.Load(), nil },
+		NextProtos:     []string{"http/1.1"},
+	})
+	relay.Start()
+	relayURL = "https://" + relay.Listener.Addr().String()
+	parsedRelayURL, err := url.Parse(relayURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return relay, relayURL, parsedRelayURL
+}
+
+func TestRenewLeaseSaysItRepinsTheRelayChain(t *testing.T) {
+	requests := make(chan types.RenewRequest, 1)
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	server := startRenewLeaseRepinsChainServer(t, requests, expiresAt)
+	defer server.Close()
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &listener{
+		api:   &apiClient{relayURL: relayURL, http: server.Client()},
+		lease: utils.NewSnapshot(listenerSnapshot{accessToken: "access-token", expiresAt: expiresAt}),
+	}
+	_ = listener.renewLease(context.Background())
+	checkRenewLeaseRepinsChainRequest(t, <-requests)
+}
+
+func startRenewLeaseRepinsChainServer(t *testing.T, requests chan types.RenewRequest, expiresAt time.Time) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req types.RenewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode renew request: %v", err)
+		}
+		requests <- req
+		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
+			AccessToken:     "renewed-token",
+			ExpiresAt:       expiresAt,
+			ReverseEndpoint: types.ReverseEndpoint{URL: "http://" + r.Host + types.PathSDKConnect, Capability: "capability", ExpiresAt: expiresAt},
+		})
+	}))
+}
+
+func checkRenewLeaseRepinsChainRequest(t *testing.T, req types.RenewRequest) {
+	t.Helper()
+	if !req.RepinsChain {
+		t.Fatal("renew request does not say the SDK re-pins the relay chain")
+	}
+}
+
 func TestValidateReverseEndpoint(t *testing.T) {
 	t.Parallel()
 	leaseExpiry := time.Now().UTC().Add(time.Minute)
@@ -48,6 +223,11 @@ func TestValidateReverseEndpoint(t *testing.T) {
 		t.Fatalf("gateway reverse endpoint rejected: %v", err)
 	}
 
+	checkReverseEndpointRejects(t, leaseExpiry)
+}
+
+func checkReverseEndpointRejects(t *testing.T, leaseExpiry time.Time) {
+	t.Helper()
 	for name, invalid := range map[string]types.ReverseEndpoint{
 		"wrong path":  {URL: "https://relay.example/sdk/renew", Capability: "cap", ExpiresAt: leaseExpiry},
 		"lease bound": {URL: "https://relay.example/sdk/connect", Capability: "cap", ExpiresAt: leaseExpiry.Add(time.Second)},
@@ -82,6 +262,212 @@ func TestAPIClientRejectsTunnelProtocolMismatch(t *testing.T) {
 	client := &apiClient{relayURL: relayURL}
 	if err := client.initHTTPTransport(context.Background()); !errors.Is(err, errRelayIncompatible) {
 		t.Fatalf("initHTTPTransport() error = %v, want relay incompatibility", err)
+	}
+}
+
+func TestAPIClientRenewUsesExplicitRequestValues(t *testing.T) {
+	t.Parallel()
+
+	want := types.RenewRequest{
+		AccessToken: "access-token",
+		TTL:         90,
+		ReportedIP:  "192.0.2.10",
+		Metadata: types.LeaseMetadata{
+			Description: "updated description",
+			Tags:        []string{"api", "renew"},
+		},
+	}
+	requestCh := make(chan types.RenewRequest, 1)
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	server := startAPIClientRenewExplicitServer(t, requestCh, expiresAt)
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &apiClient{relayURL: relayURL, http: server.Client()}
+	resp, err := client.renew(context.Background(), want)
+	if err != nil {
+		t.Fatalf("renew() error = %v", err)
+	}
+	if resp.AccessToken != "renewed-token" || resp.ReverseEndpoint.Capability != "capability" {
+		t.Fatalf("renew() response = %+v", resp)
+	}
+	got := <-requestCh
+	checkAPIClientRenewExplicitRequest(t, got, want)
+}
+
+func startAPIClientRenewExplicitServer(t *testing.T, requestCh chan types.RenewRequest, expiresAt time.Time) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req types.RenewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode renew request: %v", err)
+		}
+		requestCh <- req
+		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
+			AccessToken: " renewed-token ",
+			ExpiresAt:   expiresAt,
+			ReverseEndpoint: types.ReverseEndpoint{
+				URL:        "https://relay.example/sdk/connect",
+				Capability: " capability ",
+				ExpiresAt:  expiresAt,
+			},
+		})
+	}))
+}
+
+func checkAPIClientRenewExplicitRequest(t *testing.T, got, want types.RenewRequest) {
+	t.Helper()
+	if got.AccessToken != want.AccessToken || got.TTL != want.TTL || got.ReportedIP != want.ReportedIP || got.Metadata.Description != want.Metadata.Description || len(got.Metadata.Tags) != len(want.Metadata.Tags) {
+		t.Fatalf("renew request = %+v, want %+v", got, want)
+	}
+}
+
+func TestTerminalRelayFailureClosesListener(t *testing.T) {
+	relayURL, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	listener := &listener{
+		api:           &apiClient{relayURL: relayURL},
+		cancel:        func() { close(done) },
+		doneCh:        done,
+		statusUpdates: make(chan listenerStatus, 1),
+	}
+	err = fmt.Errorf("%w: unsupported protocol", errRelayIncompatible)
+	if !listener.closeForTerminalRelayError(err) {
+		t.Fatal("terminal relay error was not handled")
+	}
+
+	select {
+	case <-done:
+	default:
+		t.Fatal("listener remains open after terminal relay failure")
+	}
+	if failure := (<-listener.statusUpdates).failure; failure != RelayFailureTerminal {
+		t.Fatalf("failure = %q, want terminal", failure)
+	}
+}
+
+func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, "lease not found")
+	}))
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse relay URL: %v", err)
+	}
+	listener := &listener{
+		api: &apiClient{relayURL: relayURL, http: server.Client()},
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "access-token",
+			reverse: types.ReverseEndpoint{
+				URL:        "https://gateway.example/sdk/connect",
+				Capability: "failed-capability",
+				ExpiresAt:  time.Now().UTC().Add(time.Minute),
+			},
+			expiresAt: time.Now().UTC().Add(time.Minute),
+		}),
+	}
+
+	err = listener.refreshReverseEndpointAfterFailure(context.Background(), "failed-capability")
+	if !errors.Is(err, errLeaseRefreshRequired) {
+		t.Fatalf("refreshReverseEndpointAfterFailure() error = %v, want lease refresh required", err)
+	}
+}
+
+func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")
+	}))
+	defer server.Close()
+
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse relay URL: %v", err)
+	}
+	listener := &listener{
+		api: &apiClient{relayURL: relayURL, http: server.Client()},
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "stale-access-token",
+			expiresAt:   time.Now().UTC().Add(time.Minute),
+		}),
+	}
+
+	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
+		t.Fatalf("renewLease() error = %v, want lease refresh required after authority rotation", err)
+	}
+}
+
+func TestRenewLeaseRegistersAgainWhenTheRelayAnswersLeaseNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, "lease not found")
+	}))
+	defer server.Close()
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &listener{
+		api: &apiClient{relayURL: relayURL, http: server.Client()},
+		lease: utils.NewSnapshot(listenerSnapshot{
+			accessToken: "pinned-once-access-token",
+			expiresAt:   time.Now().UTC().Add(time.Minute),
+		}),
+	}
+	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
+		t.Fatalf("renewLease() error = %v, want lease refresh required", err)
+	}
+}
+
+func TestRegisterRateLimitWaitIsCancelable(t *testing.T) {
+	t.Parallel()
+	limited := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "60")
+		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "try later")
+		close(limited)
+	}))
+	defer server.Close()
+	relayURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &apiClient{relayURL: relayURL, http: server.Client()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { _, err := client.register(ctx, types.RegisterChallengeRequest{}, ""); result <- err }()
+	<-limited
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel registration: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("registration ignored cancellation during rate-limit wait")
+	}
+}
+
+func TestRateLimitsNeverPermanentlyDisqualifyRelay(t *testing.T) {
+	for _, apiErr := range []*types.APIRequestError{
+		{StatusCode: http.StatusTooManyRequests},
+		{Code: types.APIErrorCodeRateLimited},
+		{StatusCode: http.StatusBadRequest, Code: types.APIErrorCodeRateLimited},
+		{StatusCode: http.StatusConflict, Code: types.APIErrorCodeReplicaConflict},
+	} {
+		if isTerminalRelayError(fmt.Errorf("register: %w", apiErr)) {
+			t.Fatalf("temporary admission error is terminal: %v", apiErr)
+		}
+	}
+	if !isTerminalRelayError(&types.APIRequestError{StatusCode: http.StatusForbidden, Code: types.APIErrorCodeUnauthorized}) {
+		t.Fatal("authorization rejection stopped being terminal")
 	}
 }
 
@@ -173,12 +559,17 @@ func TestValidateReverseEndpointTransport(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			listener := &listener{api: &apiClient{relayURL: relayURL}, overlay: test.enabled}
-			err := listener.validateReverseEndpointTransport(test.endpoint)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, test.wantErr)
-			}
+			checkReverseEndpointTransport(t, relayURL, test.enabled, test.endpoint, test.wantErr)
 		})
+	}
+}
+
+func checkReverseEndpointTransport(t *testing.T, relayURL *url.URL, enabled bool, endpoint types.ReverseEndpoint, wantErr bool) {
+	t.Helper()
+	listener := &listener{api: &apiClient{relayURL: relayURL}, overlay: enabled}
+	err := listener.validateReverseEndpointTransport(endpoint)
+	if (err != nil) != wantErr {
+		t.Fatalf("validateReverseEndpointTransport() error = %v, wantErr %v", err, wantErr)
 	}
 }
 
@@ -189,21 +580,28 @@ func TestReverseTCPDialerChecksResolvedAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer socket.Close()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, port, err := net.SplitHostPort(socket.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkLoopbackDialRejected(t, ctx, socket, port)
+	checkDirectDialSucceeds(t, ctx, socket)
+}
 
+func checkLoopbackDialRejected(t *testing.T, ctx context.Context, socket net.Listener, port string) {
+	t.Helper()
 	for _, address := range []string{socket.Addr().String(), net.JoinHostPort("localhost", port)} {
 		if conn, err := reverseTCPDialer(true).DialContext(ctx, "tcp", address); err == nil {
 			_ = conn.Close()
 			t.Fatalf("alternate gateway dial reached loopback address %q", address)
 		}
 	}
+}
 
+func checkDirectDialSucceeds(t *testing.T, ctx context.Context, socket net.Listener) {
+	t.Helper()
 	conn, err := reverseTCPDialer(false).DialContext(ctx, "tcp", socket.Addr().String())
 	if err != nil {
 		t.Fatalf("direct relay dial: %v", err)
@@ -224,360 +622,5 @@ func TestReverseTLSBootstrapRejectsAlternateLocalHost(t *testing.T) {
 	l := &listener{api: &apiClient{relayURL: relay}}
 	if _, err := l.reverseTLSConfig(context.Background(), endpoint); err == nil || !strings.Contains(err.Error(), "local-only") {
 		t.Fatalf("reverseTLSConfig() error = %v, want local host rejection before TLS bootstrap", err)
-	}
-}
-
-func TestAPIClientRenewUsesExplicitRequestValues(t *testing.T) {
-	t.Parallel()
-
-	want := types.RenewRequest{
-		AccessToken: "access-token",
-		TTL:         90,
-		ReportedIP:  "192.0.2.10",
-		Metadata: types.LeaseMetadata{
-			Description: "updated description",
-			Tags:        []string{"api", "renew"},
-		},
-	}
-	requestCh := make(chan types.RenewRequest, 1)
-	expiresAt := time.Now().UTC().Add(time.Minute)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req types.RenewRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Errorf("decode renew request: %v", err)
-		}
-		requestCh <- req
-		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
-			AccessToken: " renewed-token ",
-			ExpiresAt:   expiresAt,
-			ReverseEndpoint: types.ReverseEndpoint{
-				URL:        "https://relay.example/sdk/connect",
-				Capability: " capability ",
-				ExpiresAt:  expiresAt,
-			},
-		})
-	}))
-	defer server.Close()
-
-	relayURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &apiClient{relayURL: relayURL, http: server.Client()}
-	resp, err := client.renew(context.Background(), want)
-	if err != nil {
-		t.Fatalf("renew() error = %v", err)
-	}
-	if resp.AccessToken != "renewed-token" || resp.ReverseEndpoint.Capability != "capability" {
-		t.Fatalf("renew() response = %+v", resp)
-	}
-	got := <-requestCh
-	if got.AccessToken != want.AccessToken || got.TTL != want.TTL || got.ReportedIP != want.ReportedIP || got.Metadata.Description != want.Metadata.Description || len(got.Metadata.Tags) != len(want.Metadata.Tags) {
-		t.Fatalf("renew request = %+v, want %+v", got, want)
-	}
-}
-
-func TestTerminalRelayFailureClosesListener(t *testing.T) {
-	relayURL, err := url.Parse("https://relay.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan struct{})
-	listener := &listener{
-		api:           &apiClient{relayURL: relayURL},
-		cancel:        func() { close(done) },
-		doneCh:        done,
-		statusUpdates: make(chan listenerStatus, 1),
-	}
-	err = fmt.Errorf("%w: unsupported protocol", errRelayIncompatible)
-	if !listener.closeForTerminalRelayError(err) {
-		t.Fatal("terminal relay error was not handled")
-	}
-
-	select {
-	case <-done:
-	default:
-		t.Fatal("listener remains open after terminal relay failure")
-	}
-	if failure := (<-listener.statusUpdates).failure; failure != RelayFailureTerminal {
-		t.Fatalf("failure = %q, want terminal", failure)
-	}
-}
-
-func TestRefreshReverseEndpointAfterFailureReportsMissingLease(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, "lease not found")
-	}))
-	defer server.Close()
-
-	relayURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse relay URL: %v", err)
-	}
-	listener := &listener{
-		api: &apiClient{relayURL: relayURL, http: server.Client()},
-		lease: utils.NewSnapshot(listenerSnapshot{
-			accessToken: "access-token",
-			reverse: types.ReverseEndpoint{
-				URL:        "https://gateway.example/sdk/connect",
-				Capability: "failed-capability",
-				ExpiresAt:  time.Now().UTC().Add(time.Minute),
-			},
-			expiresAt: time.Now().UTC().Add(time.Minute),
-		}),
-	}
-
-	err = listener.refreshReverseEndpointAfterFailure(context.Background(), "failed-capability")
-	if !errors.Is(err, errLeaseRefreshRequired) {
-		t.Fatalf("refreshReverseEndpointAfterFailure() error = %v, want lease refresh required", err)
-	}
-}
-
-func TestRenewLeaseReportsStaleCredentialsAfterAuthorityRotation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		utils.WriteAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")
-	}))
-	defer server.Close()
-
-	relayURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse relay URL: %v", err)
-	}
-	listener := &listener{
-		api: &apiClient{relayURL: relayURL, http: server.Client()},
-		lease: utils.NewSnapshot(listenerSnapshot{
-			accessToken: "stale-access-token",
-			expiresAt:   time.Now().UTC().Add(time.Minute),
-		}),
-	}
-
-	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
-		t.Fatalf("renewLease() error = %v, want lease refresh required after authority rotation", err)
-	}
-}
-
-func TestRenewLeaseChecksTheRelayCertificateHourly(t *testing.T) {
-	const tenantHostname = "tenant.test.example"
-	selfSigned := func(serial int64) (tls.Certificate, *x509.CertPool) {
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		template := &x509.Certificate{
-			SerialNumber: big.NewInt(serial),
-			DNSNames:     []string{tenantHostname},
-			IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-			NotBefore:    time.Now().Add(-time.Hour),
-			NotAfter:     time.Now().Add(time.Hour),
-			KeyUsage:     x509.KeyUsageDigitalSignature,
-			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		}
-		der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		leaf, err := x509.ParseCertificate(der)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pool := x509.NewCertPool()
-		pool.AddCert(leaf)
-		return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pool
-	}
-	first, firstPool := selfSigned(1)
-	renewed, renewedPool := selfSigned(2)
-	later, _ := selfSigned(3)
-
-	var serving atomic.Pointer[tls.Certificate]
-	serving.Store(&first)
-	expiresAt := time.Now().UTC().Add(time.Minute)
-	var relayURL string
-	relay := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
-			AccessToken:     "renewed-token",
-			ExpiresAt:       expiresAt,
-			ReverseEndpoint: types.ReverseEndpoint{URL: relayURL + types.PathSDKConnect, Capability: "capability", ExpiresAt: expiresAt},
-		})
-	}))
-	// httptest's StartTLS installs its own certificate next to GetCertificate,
-	// and a client that sends no server name (an IP literal) would get that one.
-	relay.Listener = tls.NewListener(relay.Listener, &tls.Config{
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return serving.Load(), nil },
-		NextProtos:     []string{"http/1.1"},
-	})
-	relay.Start()
-	defer relay.Close()
-	relayURL = "https://" + relay.Listener.Addr().String()
-	parsedRelayURL, err := url.Parse(relayURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tenantTLS, err := keyless.NewClient(t.Context(), keyless.ClientConfig{RelayURL: relayURL, Hostname: tenantHostname, AccessToken: "access-token"})
-	if err != nil {
-		t.Fatalf("keyless.NewClient() error = %v", err)
-	}
-	defer tenantTLS.Close()
-	if !tenantTLS.RelayCertPool().Equal(firstPool) {
-		t.Fatal("the tenant did not pin the certificate the relay served")
-	}
-	listener := &listener{
-		api: &apiClient{relayURL: parsedRelayURL, http: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}},
-		lease: utils.NewSnapshot(listenerSnapshot{
-			accessToken:    "access-token",
-			expiresAt:      expiresAt,
-			tenantTLS:      tenantTLS,
-			chainCheckedAt: time.Now(),
-		}),
-	}
-	renew := func() {
-		t.Helper()
-		if err := listener.renewLease(context.Background()); err != nil {
-			t.Fatalf("renewLease() error = %v", err)
-		}
-	}
-
-	serving.Store(&renewed)
-	renew()
-	if !tenantTLS.RelayCertPool().Equal(firstPool) {
-		t.Fatal("renewLease() checked the relay chain again within the hour after it was found current")
-	}
-
-	listener.lease.Update(func(lease listenerSnapshot) listenerSnapshot {
-		lease.chainCheckedAt = time.Now().Add(-defaultChainCheckInterval)
-		return lease
-	})
-	renew()
-	if !tenantTLS.RelayCertPool().Equal(renewedPool) {
-		t.Fatal("renewLease() an hour after the last check left the tenant on the replaced relay certificate")
-	}
-
-	serving.Store(&later)
-	renew()
-	if !tenantTLS.RelayCertPool().Equal(renewedPool) {
-		t.Fatal("renewLease() checked the relay chain again right after a scheduled check")
-	}
-}
-
-func TestRenewLeaseSaysItRepinsTheRelayChain(t *testing.T) {
-	requests := make(chan types.RenewRequest, 1)
-	expiresAt := time.Now().UTC().Add(time.Minute)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req types.RenewRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Errorf("decode renew request: %v", err)
-		}
-		requests <- req
-		utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
-			AccessToken:     "renewed-token",
-			ExpiresAt:       expiresAt,
-			ReverseEndpoint: types.ReverseEndpoint{URL: "http://" + r.Host + types.PathSDKConnect, Capability: "capability", ExpiresAt: expiresAt},
-		})
-	}))
-	defer server.Close()
-	relayURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener := &listener{
-		api:   &apiClient{relayURL: relayURL, http: server.Client()},
-		lease: utils.NewSnapshot(listenerSnapshot{accessToken: "access-token", expiresAt: expiresAt}),
-	}
-
-	_ = listener.renewLease(context.Background())
-	if req := <-requests; !req.RepinsChain {
-		t.Fatal("renew request does not say the SDK re-pins the relay chain")
-	}
-}
-
-func TestRenewLeaseRegistersAgainWhenTheRelayAnswersLeaseNotFound(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, "lease not found")
-	}))
-	defer server.Close()
-	relayURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener := &listener{
-		api: &apiClient{relayURL: relayURL, http: server.Client()},
-		lease: utils.NewSnapshot(listenerSnapshot{
-			accessToken: "pinned-once-access-token",
-			expiresAt:   time.Now().UTC().Add(time.Minute),
-		}),
-	}
-	if err := listener.renewLease(context.Background()); !errors.Is(err, errLeaseRefreshRequired) {
-		t.Fatalf("renewLease() error = %v, want lease refresh required", err)
-	}
-}
-
-func TestRegisterRateLimitWaitIsCancelable(t *testing.T) {
-	t.Parallel()
-	limited := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Retry-After", "60")
-		utils.WriteAPIError(w, http.StatusTooManyRequests, types.APIErrorCodeRateLimited, "try later")
-		close(limited)
-	}))
-	defer server.Close()
-	relayURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &apiClient{relayURL: relayURL, http: server.Client()}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	result := make(chan error, 1)
-	go func() { _, err := client.register(ctx, types.RegisterChallengeRequest{}, ""); result <- err }()
-	<-limited
-	cancel()
-	select {
-	case err := <-result:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("cancel registration: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("registration ignored cancellation during rate-limit wait")
-	}
-}
-
-func TestRateLimitsNeverPermanentlyDisqualifyRelay(t *testing.T) {
-	for _, apiErr := range []*types.APIRequestError{
-		{StatusCode: http.StatusTooManyRequests},
-		{Code: types.APIErrorCodeRateLimited},
-		{StatusCode: http.StatusBadRequest, Code: types.APIErrorCodeRateLimited},
-		{StatusCode: http.StatusConflict, Code: types.APIErrorCodeReplicaConflict},
-	} {
-		if isTerminalRelayError(fmt.Errorf("register: %w", apiErr)) {
-			t.Fatalf("temporary admission error is terminal: %v", apiErr)
-		}
-	}
-	if !isTerminalRelayError(&types.APIRequestError{StatusCode: http.StatusForbidden, Code: types.APIErrorCodeUnauthorized}) {
-		t.Fatal("authorization rejection stopped being terminal")
-	}
-}
-
-func TestAliasHostnameMatches(t *testing.T) {
-	t.Parallel()
-
-	const canonical = "demo-0123456789abcdef0123456789abcdef01234567.relay.example"
-	tests := []struct {
-		name, hostname, service string
-		want                    bool
-	}{
-		{"no alias", "", "demo", true},
-		{"own alias", "demo.relay.example", "demo", true},
-		{"normalized name", "demo.relay.example", "Demo", true},
-		{"other name", "other.relay.example", "demo", false},
-		{"other root", "demo.other.example", "demo", false},
-		{"unnamed service", "demo.relay.example", "", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := aliasHostnameMatches(tc.hostname, tc.service, canonical); got != tc.want {
-				t.Fatalf("aliasHostnameMatches(%q, %q) = %v, want %v", tc.hostname, tc.service, got, tc.want)
-			}
-		})
 	}
 }

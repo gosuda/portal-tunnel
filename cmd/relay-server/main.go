@@ -14,9 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	facilitatorapi "github.com/gosuda/x402-facilitator/api"
-	suischeme "github.com/gosuda/x402-facilitator/scheme/sui"
-	suifacilitator "github.com/gosuda/x402-facilitator/scheme/sui/facilitator"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -24,12 +21,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
-	errX402FacilitatorRequiresValidSuiPay = errors.New("x402 facilitator requires a valid Sui pay-to address")
-	errOnlyOneHelpTopicSupported          = errors.New("only one help topic is supported")
+	errOnlyOneHelpTopicSupported = errors.New("only one help topic is supported")
 )
 
 func main() {
@@ -124,6 +119,8 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.Bool(fs, &cfg.X402Testnet, "x402-testnet", false, "use Sui testnet for relay-owned x402 facilitator payments", "X402_TESTNET")
 	env.String(fs, &cfg.X402PayTo, "x402-pay-to", "", "Sui payment recipient address for relay-owned control-plane x402 resources", "X402_PAY_TO")
 
+	env.Bool(fs, &cfg.Relay.TenantCertificates, "tenant-certificates", false, "allow explicitly approved tenants to request certificates using shared CA quota", "TENANT_CERTIFICATES")
+	env.String(fs, &cfg.Relay.ACME.TenantIssuanceStateDir, "tenant-issuance-state-dir", "", "durable lock-coherent directory shared by every relay using the same CA quota; required for public tenant issuance", "TENANT_ISSUANCE_STATE_DIR")
 	env.String(fs, &cfg.Relay.ACME.CADirURL, "acme-ca-dir-url", "", "ACME CA directory URL (https) for managed certificate issuance; the CA must not require External Account Binding; defaults to Let's Encrypt production when empty", "ACME_CA_DIR_URL")
 	env.String(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01 and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
 	env.Bool(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
@@ -140,175 +137,6 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.String(fs, &cfg.Relay.ACME.AWSKMSKeyARN, "aws-dnssec-kms-key-arn", "", "AWS KMS key ARN used to create a Route53 DNSSEC key-signing key when needed", "AWS_DNSSEC_KMS_KEY_ARN")
 	env.String(fs, &cfg.Relay.ACME.VultrAPIKey, "vultr-api-key", "", "Vultr API key for DNS automation (required when acme-dns-provider=vultr)", "VULTR_API_KEY")
 	env.String(fs, &cfg.Relay.ACME.NjallaToken, "njalla-token", "", "Njalla API token for DNS automation (required when acme-dns-provider=njalla)", "NJALLA_TOKEN")
-}
-
-func runServeCommand(args []string) error {
-	cfg, env, err := resolveAppConfig(args, os.Environ())
-	if err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	ingress, x402Settings, err := prepareAppConfig(&cfg, env.Issues)
-	if err != nil {
-		return err
-	}
-
-	log.Info().
-		Str("release_version", types.ReleaseVersion).
-		Str("state_dir", cfg.Relay.StateDir).
-		Int("sni_port", cfg.Relay.SNIPort).
-		Msg("starting relay server")
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-	defer stop()
-
-	return runServer(ctx, cfg, ingress, x402Settings)
-}
-
-func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402Settings x402FacilitatorSettings) error {
-	cfg.Relay.ApplicationOwnsDomainReport = true
-	server, err := portal.NewServer(cfg.Relay)
-	if err != nil {
-		return fmt.Errorf("create relay server: %w", err)
-	}
-	policies := policy.NewStore()
-	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
-	initialPolicy := types.PolicySettings{
-		ApprovalMode: cfg.ApprovalMode,
-		UDP:          types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
-		TCPPort:      types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
-	}
-	relayAPI, err := NewRelayAPI(server, policies, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
-	if err != nil {
-		return fmt.Errorf("create relay api: %w", err)
-	}
-	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && policies.Snapshot().Mode() == policy.ModeAuto {
-		log.Warn().Str("policy_path", policyPath).Msg("approval mode manual is ignored: policy.json saves auto, so every lease is approved; set the mode with the admin API")
-	}
-
-	appRoutes := relayAPI.Handler()
-	if err := mountRelayRoutes(x402Settings, server, appRoutes); err != nil {
-		return err
-	}
-	base := policy.ControlBodyHandler(appRoutes)
-	handler := policy.Mux(server, base, ingress,
-		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
-		policies, cfg.PreAuth)
-	handler = relayAPI.metrics.instrument(handler)
-	if !cfg.PprofEnabled {
-		return server.Serve(ctx, handler)
-	}
-
-	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofListenAddr))
-	if err != nil {
-		return err
-	}
-	log.Info().Str("pprof_addr", hostPortOrLoopback(bound.String())).Msg("starting pprof server")
-
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	relayResult := make(chan error, 1)
-	go func() {
-		relayResult <- server.Serve(runCtx, handler)
-	}()
-
-	var serveErr error
-	select {
-	case serveErr = <-relayResult:
-	case err := <-pprofErrs:
-		serveErr = fmt.Errorf("serve pprof: %w", err)
-		cancel()
-		relayErr := <-relayResult
-		serveErr = errors.Join(serveErr, relayErr)
-	}
-	cancel()
-
-	shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	if err := stopPprof(shutdownCtx); err != nil {
-		log.Warn().Err(err).Msg("shutdown pprof server")
-	}
-	stop()
-	return serveErr
-}
-
-type x402FacilitatorSettings struct {
-	Enabled bool
-	Testnet bool
-	PayTo   string
-}
-
-func resolveX402Facilitator(cfg appConfig) (x402FacilitatorSettings, error) {
-	if !cfg.X402Enabled {
-		return x402FacilitatorSettings{}, nil
-	}
-	payTo := suischeme.NormalizeAddress(cfg.X402PayTo)
-	if payTo == "" {
-		return x402FacilitatorSettings{}, errX402FacilitatorRequiresValidSuiPay
-	}
-	return x402FacilitatorSettings{Enabled: true, Testnet: cfg.X402Testnet, PayTo: payTo}, nil
-}
-
-const (
-	pathX402Facilitator = "/api/x402"
-	x402SupportedPath   = pathX402Facilitator + "/supported"
-)
-
-type x402FacilitatorInfo struct {
-	Enabled      bool   `json:"enabled"`
-	URL          string `json:"url,omitempty"`
-	Network      string `json:"network,omitempty"`
-	NetworkName  string `json:"network_name,omitempty"`
-	SupportedURL string `json:"supported_url,omitempty"`
-	PayTo        string `json:"pay_to,omitempty"`
-}
-
-type domainResponse struct {
-	types.DomainResponse
-	X402 x402FacilitatorInfo `json:"x402"`
-}
-
-func mountRelayRoutes(settings x402FacilitatorSettings, server *portal.Server, mux *http.ServeMux) error {
-	network := "sui:mainnet"
-	if settings.Testnet {
-		network = "sui:testnet"
-	}
-
-	if settings.Enabled {
-		asset, ok := suischeme.GetGaslessStablecoinType(network, "USDC")
-		if !ok {
-			return fmt.Errorf("x402 USDC is not registered on %s", network)
-		}
-		facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, "", "", suifacilitator.SuiFacilitatorOptions{
-			GaslessStablecoinTypes: []string{asset},
-		})
-		if err != nil {
-			return fmt.Errorf("mount x402 facilitator: %w", err)
-		}
-		mux.Handle(pathX402Facilitator+"/", http.StripPrefix(pathX402Facilitator, facilitatorapi.NewServer(facilitator)))
-		log.Info().Str("path", pathX402Facilitator).Str("network", network).Msg("relay-owned x402 facilitator enabled")
-	}
-
-	mux.HandleFunc(types.PathSDKDomain, func(w http.ResponseWriter, r *http.Request) {
-		if !utils.RequireMethod(w, r, http.MethodGet) {
-			return
-		}
-		report := domainResponse{DomainResponse: server.DomainReport()}
-		if settings.Enabled {
-			baseURL := strings.TrimRight(server.PortalURL(), "/")
-			report.X402 = x402FacilitatorInfo{
-				Enabled:      true,
-				URL:          baseURL + pathX402Facilitator,
-				Network:      network,
-				NetworkName:  suischeme.GetNetworkName(network),
-				SupportedURL: baseURL + x402SupportedPath,
-				PayTo:        settings.PayTo,
-			}
-		}
-		utils.WriteAPIData(w, http.StatusOK, report)
-	})
-	return nil
 }
 
 func runHelpCommand(args []string) error {
@@ -357,4 +185,108 @@ func printRootUsage(w io.Writer) {
 	cli.WriteHelpSection(w, "Ready", []string{
 		"After portal expose succeeds, it logs a line starting with: service ready at",
 	})
+}
+
+func runServeCommand(args []string) error {
+	cfg, env, err := resolveAppConfig(args, os.Environ())
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	ingress, x402Settings, err := prepareAppConfig(&cfg, env.Issues)
+	if err != nil {
+		return err
+	}
+
+	log.Info().
+		Str("release_version", types.ReleaseVersion).
+		Str("state_dir", cfg.Relay.StateDir).
+		Int("sni_port", cfg.Relay.SNIPort).
+		Str("tunnel_source_cidrs", cfg.TunnelSourceCIDRs).
+		Msg("starting relay server")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
+
+	return runServer(ctx, cfg, ingress, x402Settings)
+}
+
+func openRelayServer(cfg appConfig, ingress *policy.Ingress) (*portal.Server, *policy.Store, *RelayAPI, error) {
+	cfg.Relay.ApplicationOwnsDomainReport = true
+	server, err := portal.NewServer(cfg.Relay)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create relay server: %w", err)
+	}
+	policies := policy.NewStore()
+	policyPath := filepath.Join(cfg.Relay.StateDir, types.RelayPolicyFilename)
+	initialPolicy := types.PolicySettings{
+		ApprovalMode: cfg.ApprovalMode,
+		UDP:          types.PolicyPortSettings{Enabled: cfg.UDPEnabled},
+		TCPPort:      types.PolicyPortSettings{Enabled: cfg.TCPEnabled},
+	}
+	relayAPI, err := NewRelayAPI(server, policies, ingress, policyPath, cfg.AdminToken, cfg.FrontendDir, initialPolicy)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create relay api: %w", err)
+	}
+	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && policies.Snapshot().Mode() == policy.ModeAuto {
+		log.Warn().Str("policy_path", policyPath).Msg("approval mode manual is ignored: policy.json saves auto, so every lease is approved; set the mode with the admin API")
+	}
+	return server, policies, relayAPI, nil
+}
+
+func runServeRelayWithPprofUntilStopped(ctx context.Context, server *portal.Server, handler http.Handler, stopPprof func(context.Context) error, pprofErrs <-chan error) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	relayResult := make(chan error, 1)
+	go func() {
+		relayResult <- server.Serve(runCtx, handler)
+	}()
+
+	var serveErr error
+	select {
+	case serveErr = <-relayResult:
+	case err := <-pprofErrs:
+		serveErr = fmt.Errorf("serve pprof: %w", err)
+		cancel()
+		relayErr := <-relayResult
+		serveErr = errors.Join(serveErr, relayErr)
+	}
+	cancel()
+
+	shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	if err := stopPprof(shutdownCtx); err != nil {
+		log.Warn().Err(err).Msg("shutdown pprof server")
+	}
+	stop()
+	return serveErr
+}
+
+func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402Settings x402FacilitatorSettings) error {
+	server, policies, relayAPI, err := openRelayServer(cfg, ingress)
+	if err != nil {
+		return err
+	}
+
+	appRoutes := relayAPI.Handler()
+	if err := mountRelayRoutes(x402Settings, server, appRoutes); err != nil {
+		return err
+	}
+	base := policy.ControlBodyHandler(appRoutes)
+	handler := policy.Mux(server, base, ingress,
+		policy.NewSourceLimiter(cfg.PreAuth.SourcePerMinute, cfg.PreAuth.SourceBurst, cfg.PreAuth.GlobalPerMinute, cfg.PreAuth.GlobalBurst),
+		policies, cfg.PreAuth)
+	handler = relayAPI.metrics.instrument(handler)
+	if !cfg.PprofEnabled {
+		return server.Serve(ctx, handler)
+	}
+
+	bound, stopPprof, pprofErrs, err := startPprofServer(ctx, normalizePprofAddr(cfg.PprofListenAddr))
+	if err != nil {
+		return err
+	}
+	log.Info().Str("pprof_addr", hostPortOrLoopback(bound.String())).Msg("starting pprof server")
+
+	return runServeRelayWithPprofUntilStopped(ctx, server, handler, stopPprof, pprofErrs)
 }

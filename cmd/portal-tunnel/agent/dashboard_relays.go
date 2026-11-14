@@ -51,7 +51,7 @@ func (m agentDashboardModel) openRelayTunnelURL(tunnelID, relayURL string) (tea.
 		m.selectRelay(relayURL)
 	}
 	_, relay, ok := m.selectedTunnelRelay()
-	publicURL := relayDashboardPublicURL(cmp.Or(relay.AliasURL, relay.PublicURL))
+	publicURL := relayDashboardPublicURL(relayDashboardEndpoint(relay))
 	if !ok || publicURL == "" {
 		return m, nil
 	}
@@ -68,7 +68,6 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 		pane.addStyled(width, th.muted, "select a tunnel")
 		return pane
 	}
-
 	relay, hasRelay := m.selectedRelayStatus()
 	connectDisabled := !hasRelay || tunnel.State != "running" || relay.State == sdk.RelayReady || relay.State == sdk.RelayConnecting
 	disconnectDisabled := !hasRelay || tunnel.State != "running"
@@ -79,7 +78,6 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 	rowWidth := width - agentDashboardRelayLead
 	header := agentDashboardRelayRow(rowWidth, "STATUS", "VERSION", "TUNNEL URL")
 	pane.addLine(th.strong.Render(strings.Repeat(" ", agentDashboardRelayLead) + header))
-
 	if len(tunnel.Relays) == 0 {
 		pane.addStyled(width, th.muted, "no relays")
 		return pane
@@ -96,11 +94,7 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 		if i == selected {
 			marker = th.glyph.selected
 		}
-		line := marker + " " + agentDashboardRelayRow(rowWidth,
-			relayDashboardMode(relay),
-			relayDashboardVersion(relay),
-			relayDashboardURL(relay),
-		)
+		line := marker + " " + agentDashboardRelayRow(width-agentDashboardRelayLead, relayDashboardMode(relay), relayDashboardVersion(relay), relayDashboardURL(relay))
 		style := agentDashboardRelayStyle(th, i == selected, relay)
 		pane.addClickRow(line, width, style, agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
 	}
@@ -131,10 +125,17 @@ func relayDashboardVersion(relay AgentRelayStatus) string {
 }
 
 func relayDashboardURL(relay AgentRelayStatus) string {
-	if publicURL := relayDashboardPublicURL(cmp.Or(relay.AliasURL, relay.PublicURL)); publicURL != "" {
+	if publicURL := relayDashboardPublicURL(relayDashboardEndpoint(relay)); publicURL != "" {
 		return publicURL
 	}
 	return relayDashboardRelayLabel(relay.RelayURL)
+}
+
+func relayDashboardEndpoint(relay AgentRelayStatus) string {
+	if relay.State == sdk.RelayReady {
+		return cmp.Or(relay.AliasURL, relay.PublicURL, relay.LegacyURL)
+	}
+	return cmp.Or(relay.AliasURL, relay.PublicURL)
 }
 
 func relayDashboardPublicURL(rawURL string) string {
@@ -182,6 +183,8 @@ func relayDashboardMode(relay AgentRelayStatus) string {
 		return "refused"
 	case relay.State == sdk.RelayFailed:
 		return "failed"
+	case relay.State == sdk.RelayReady && relay.PublicURL == "" && relay.CertificateError != "":
+		return "legacy TLS"
 	case relay.State == sdk.RelayReady:
 		return "direct"
 	case relay.State == sdk.RelayConnecting:
@@ -243,11 +246,13 @@ func openDashboardURL(rawURL string) error {
 	if strings.TrimSpace(parsed.Host) == "" {
 		return fmt.Errorf("url host is required")
 	}
-
-	var cmd *exec.Cmd
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	return startDashboardURLProcess(ctx, rawURL)
+}
 
+func startDashboardURLProcess(ctx context.Context, rawURL string) error {
+	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
 		cmd = exec.CommandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", rawURL)

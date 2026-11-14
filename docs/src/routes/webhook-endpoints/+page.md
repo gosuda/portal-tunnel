@@ -20,7 +20,7 @@ portal expose 3000 --name discord-bot \
 ```
 
 - The identity file holds a private key. Keep it outside the repository and reuse it; a new file gets a new address.
-- `--name` applies only when the identity file is created. An existing file keeps its saved name.
+- Reuse the same explicit `--name`: it selects a service without rewriting the identity file. Omitting it uses a legacy saved name, or an unnamed service when no saved name exists.
 - Register the short URL that the CLI prints (`https://discord-bot.portal.example.com`) plus the path your app serves.
 - For an endpoint that must stay up, run the tunnel as a [Portal Agent](/portal-agent) service instead of a terminal session.
 

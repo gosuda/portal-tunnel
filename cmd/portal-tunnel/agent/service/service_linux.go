@@ -1,5 +1,3 @@
-//go:build linux
-
 package service
 
 import (
@@ -87,7 +85,7 @@ func runSystemctl(ctx context.Context, userMode bool, args ...string) error {
 	if userMode {
 		message += "; user systemd must be available for managed agent mode"
 	}
-	return fmt.Errorf("%s: %w", message, err)
+	return fmt.Errorf("run systemctl command %s: %w", message, err)
 }
 
 func systemdUnit(def Definition) string {

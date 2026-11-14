@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import {
   CopyLine,
   PROVIDERS,
@@ -34,7 +35,7 @@ export function OIDCSetup({
   discovery: boolean;
   name: string;
   os: TunnelCommandOS;
-}) {
+}): JSX.Element {
   const isGoogle = auth.oidcIssuer === GOOGLE_OIDC_ISSUER;
   const providers = useRadioGroup(
     PROVIDERS.map((provider) => provider.id),

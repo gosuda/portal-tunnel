@@ -200,31 +200,32 @@ func TestRebuiltGateKeepsItsSessionsAndChecksItsAllowlist(t *testing.T) {
 
 	first := startGate(t, appauth.Config{Provider: appauth.ProviderCredential}, failOnReach(t))
 	session := first.signIn(t, "alice")
-	rebuilt := func(id types.Identity, allow ...string) int {
-		handler, err := appauth.New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		}), id, appauth.Config{Provider: appauth.ProviderCredential, Allow: allow})
-		if err != nil {
-			t.Fatal(err)
-		}
-		req := httptest.NewRequest(http.MethodGet, "https://"+first.host+"/private", nil)
-		req.AddCookie(session)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		return rec.Code
-	}
-	if got := rebuilt(testIdentity("k")); got != http.StatusNoContent {
+	if got := checkRebuiltGateStatus(t, first, session, testIdentity("k")); got != http.StatusNoContent {
 		t.Errorf("same identity: status = %d; want %d", got, http.StatusNoContent)
 	}
-	if got := rebuilt(testIdentity("k"), "alice"); got != http.StatusNoContent {
+	if got := checkRebuiltGateStatus(t, first, session, testIdentity("k"), "alice"); got != http.StatusNoContent {
 		t.Errorf("subject still listed: status = %d; want %d", got, http.StatusNoContent)
 	}
-	if got := rebuilt(testIdentity("k"), "bob"); got != http.StatusSeeOther {
+	if got := checkRebuiltGateStatus(t, first, session, testIdentity("k"), "bob"); got != http.StatusSeeOther {
 		t.Errorf("subject no longer listed: status = %d; want %d", got, http.StatusSeeOther)
 	}
-	if got := rebuilt(testIdentity("x")); got != http.StatusSeeOther {
+	if got := checkRebuiltGateStatus(t, first, session, testIdentity("x")); got != http.StatusSeeOther {
 		t.Errorf("another token secret: status = %d; want %d", got, http.StatusSeeOther)
 	}
+}
+func checkRebuiltGateStatus(t *testing.T, first *gatedServer, session *http.Cookie, id types.Identity, allow ...string) int {
+	t.Helper()
+	handler, err := appauth.New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), id, appauth.Config{Provider: appauth.ProviderCredential, Allow: allow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://"+first.host+"/private", nil)
+	req.AddCookie(session)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Code
 }
 
 func TestGateRefusesAnIdentityWithoutItsTokenSecret(t *testing.T) {
@@ -291,14 +292,7 @@ func TestSecretsStayOutOfStatusAndErrors(t *testing.T) {
 	t.Parallel()
 
 	const proof, clientSecret, smtpPassword = "identity-proof-secret-value", "oidc-client-secret-value", "smtp-password-secret-value"
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	gone := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	gone := closedLoopbackAddr(t)
 	oidc := oidcWithIssuer("http://" + gone)
 	oidc.OIDCClientSecret, oidc.IdentityHeaders, oidc.IdentityProof = clientSecret, true, proof
 	email := appauth.Config{
@@ -319,13 +313,25 @@ func TestSecretsStayOutOfStatusAndErrors(t *testing.T) {
 		seen.WriteString(errorText(appauth.Check(t.Context(), cfg)))
 	}
 	seen.WriteString(errorText(appauth.Validate(badProof)))
-	_, err = appauth.New(http.NotFoundHandler(), testIdentity("k"), badProof)
+	_, err := appauth.New(http.NotFoundHandler(), testIdentity("k"), badProof)
 	seen.WriteString(errorText(err))
 	for _, secret := range []string{proof, clientSecret, smtpPassword} {
 		if strings.Contains(seen.String(), secret) {
 			t.Fatalf("a secret left the gate: %s", seen.String())
 		}
 	}
+}
+func closedLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
 }
 
 func errorText(err error) string {

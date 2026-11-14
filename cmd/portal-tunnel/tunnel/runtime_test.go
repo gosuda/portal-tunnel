@@ -6,6 +6,10 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
+func newHTTPFeatureSpec() Spec {
+	return Spec{Transport: TransportSpec{Target: "localhost:3000"}, HTTP: &HTTPConfig{}}
+}
+
 func TestSpecValidateModes(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -31,9 +35,6 @@ func TestSpecValidateModes(t *testing.T) {
 }
 
 func TestSpecValidateHTTPFeatures(t *testing.T) {
-	base := func() Spec {
-		return Spec{Transport: TransportSpec{Target: "localhost:3000"}, HTTP: &HTTPConfig{}}
-	}
 	tests := []struct {
 		name  string
 		edit  func(*Spec)
@@ -130,7 +131,7 @@ func TestSpecValidateHTTPFeatures(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			spec := base()
+			spec := newHTTPFeatureSpec()
 			test.edit(&spec)
 			if err := spec.Validate(); (err == nil) != test.valid {
 				t.Fatalf("Validate() = %v, want valid=%v", err, test.valid)

@@ -81,6 +81,26 @@ jobs:
           cache-from: type=gha,scope=portal-tunnel-ci
           cache-to: type=gha,mode=max,scope=portal-tunnel-ci
 
+  expose-stdin-lifetime:
+    name: Expose stdin lifetime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test application-owned expose lifetime
+        run: go test -count=1 -timeout=10m ./e2e -run '^TestPortalExposeStdinLifetime$'
+
   windows-acl:
     name: Windows agent ACL regression
     runs-on: windows-latest

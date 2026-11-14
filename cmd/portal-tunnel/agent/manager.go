@@ -31,8 +31,6 @@ var (
 	errTunnelIsNotRunning                 = errors.New("tunnel is not running")
 )
 
-const managedTunnelRetryInterval = 30 * time.Second
-
 type manager struct {
 	controlAddr string
 
@@ -142,31 +140,47 @@ func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 		return errTunnelUpdateRequiresLeastOneField
 	}
 	return m.updateTunnelConfig(id, func(tunnel *TunnelConfig) error {
-		if req.MaxActiveRelays != nil {
-			if *req.MaxActiveRelays <= 0 {
-				return errMaxActiveRelaysMustPositiveInteger
-			}
-			tunnel.MaxActiveRelays = *req.MaxActiveRelays
+		if err := applyTunnelMaxRelays(tunnel, req.MaxActiveRelays); err != nil {
+			return err
 		}
-		if req.Metadata != nil {
-			if req.Metadata.Description != nil {
-				tunnel.Description = *req.Metadata.Description
-			}
-			if req.Metadata.Owner != nil {
-				tunnel.Owner = *req.Metadata.Owner
-			}
-			if req.Metadata.Thumbnail != nil {
-				tunnel.Thumbnail = *req.Metadata.Thumbnail
-			}
-			if req.Metadata.Tags != nil {
-				tunnel.Tags = *req.Metadata.Tags
-			}
-			if req.Metadata.Hide != nil {
-				tunnel.Hide = *req.Metadata.Hide
-			}
+		if err := applyTunnelMetadata(tunnel, req.Metadata); err != nil {
+			return err
 		}
 		return req.applyAuth(&tunnel.AuthConfig)
 	})
+}
+
+func applyTunnelMaxRelays(tunnel *TunnelConfig, maxRelays *int) error {
+	if maxRelays == nil {
+		return nil
+	}
+	if *maxRelays <= 0 {
+		return errMaxActiveRelaysMustPositiveInteger
+	}
+	tunnel.MaxActiveRelays = *maxRelays
+	return nil
+}
+
+func applyTunnelMetadata(tunnel *TunnelConfig, metadata *AgentMetadataRequest) error {
+	if metadata == nil {
+		return nil
+	}
+	if metadata.Description != nil {
+		tunnel.Description = *metadata.Description
+	}
+	if metadata.Owner != nil {
+		tunnel.Owner = *metadata.Owner
+	}
+	if metadata.Thumbnail != nil {
+		tunnel.Thumbnail = *metadata.Thumbnail
+	}
+	if metadata.Tags != nil {
+		tunnel.Tags = *metadata.Tags
+	}
+	if metadata.Hide != nil {
+		tunnel.Hide = *metadata.Hide
+	}
+	return nil
 }
 
 func (m *manager) AddTunnel(req AgentTunnelRequest) error {
@@ -177,26 +191,38 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 	if err != nil {
 		return err
 	}
+	tunnelCfg, err := newTunnelConfig(req)
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
+		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
+	}
+	cfg.Tunnels = append(cfg.Tunnels, tunnelCfg)
+	return m.writeConfigAndApply(path, mode, cfg)
+}
+
+func newTunnelConfig(req AgentTunnelRequest) (TunnelConfig, error) {
 	id := strings.TrimSpace(req.ID)
 	name := strings.TrimSpace(req.Name)
 	id = cmp.Or(id, agentTunnelID(name))
 	if id == "" {
-		return errTunnelNameIsRequired
+		return TunnelConfig{}, errTunnelNameIsRequired
 	}
 	if err := validateAgentPathComponent("tunnel id", id); err != nil {
-		return err
+		return TunnelConfig{}, err
 	}
 	target := strings.TrimSpace(req.TargetAddr)
 	if target != "" && len(req.HTTPRoutes) > 0 {
-		return errTargetCannotCombinedHTTPRoutes
+		return TunnelConfig{}, errTargetCannotCombinedHTTPRoutes
 	}
 	if target == "" && strings.TrimSpace(req.Serve) == "" && len(req.HTTPRoutes) == 0 {
 		target = defaultTargetAddr
 	}
 	if req.MaxActiveRelays < 0 {
-		return errMaxActiveRelaysCannotNegative
+		return TunnelConfig{}, errMaxActiveRelaysCannotNegative
 	}
-	tunnelCfg := TunnelConfig{ID: id, Config: tunnel.Config{
+	return TunnelConfig{ID: id, Config: tunnel.Config{
 		Name:                cmp.Or(name, id),
 		TargetAddr:          target,
 		Serve:               req.Serve,
@@ -209,12 +235,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 		MaxActiveRelays:     req.MaxActiveRelays,
 		AuthConfig:          req.AuthConfig,
 		X402Config:          req.X402Config,
-	}}
-	if slices.ContainsFunc(cfg.Tunnels, func(tunnel TunnelConfig) bool { return tunnel.ID == tunnelCfg.ID }) {
-		return fmt.Errorf("tunnel %q already exists", tunnelCfg.ID)
-	}
-	cfg.Tunnels = append(cfg.Tunnels, tunnelCfg)
-	return m.writeConfigAndApply(path, mode, cfg)
+	}}, nil
 }
 
 func agentTunnelID(name string) string {
@@ -323,9 +344,26 @@ func (m *manager) applyConfig(cfg Config) error {
 	for _, tunnelCfg := range cfg.Tunnels {
 		next[tunnelCfg.ID] = tunnelCfg
 	}
-	toStop := make([]*managedTunnel, 0)
-	toStart := make([]*managedTunnel, 0)
-	toUpdate := make([]*managedTunnel, 0)
+	toStop, toStart, toUpdate := m.planTunnelUpdatesLocked(next)
+	m.mu.Unlock()
+
+	for _, tunnel := range toStop {
+		_ = tunnel.Stop(context.Background())
+	}
+	for _, tunnel := range toStart {
+		tunnel.Start(rootCtx)
+	}
+	var err error
+	for _, tunnel := range toUpdate {
+		err = errors.Join(err, tunnel.updateSettings())
+	}
+	return err
+}
+
+func (m *manager) planTunnelUpdatesLocked(next map[string]TunnelConfig) (toStop, toStart, toUpdate []*managedTunnel) {
+	toStop = make([]*managedTunnel, 0)
+	toStart = make([]*managedTunnel, 0)
+	toUpdate = make([]*managedTunnel, 0)
 	for id, tunnel := range m.tunnels {
 		tunnelCfg, ok := next[id]
 		if !ok {
@@ -354,19 +392,7 @@ func (m *manager) applyConfig(cfg Config) error {
 		m.tunnels[tunnelCfg.ID] = tunnel
 		toStart = append(toStart, tunnel)
 	}
-	m.mu.Unlock()
-
-	for _, tunnel := range toStop {
-		_ = tunnel.Stop(context.Background())
-	}
-	for _, tunnel := range toStart {
-		tunnel.Start(rootCtx)
-	}
-	var err error
-	for _, tunnel := range toUpdate {
-		err = errors.Join(err, tunnel.updateSettings())
-	}
-	return err
+	return toStop, toStart, toUpdate
 }
 
 func (m *manager) Snapshot() AgentStatusResponse {
@@ -392,6 +418,8 @@ func (m *manager) Snapshot() AgentStatusResponse {
 		Tunnels:     statuses,
 	}
 }
+
+const managedTunnelRetryInterval = 30 * time.Second
 
 type managedTunnel struct {
 	mu  sync.RWMutex
@@ -490,7 +518,10 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 	done := t.done
 	address := t.address
 	t.mu.RUnlock()
+	return cfg.renderTunnelStatus(runtime, done, address, lastError)
+}
 
+func (cfg TunnelConfig) renderTunnelStatus(runtime *tunnel.Runtime, done chan struct{}, address, lastError string) AgentTunnelStatus {
 	running := false
 	if done != nil {
 		select {
@@ -531,7 +562,12 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 		X402Config:              cfg.X402Config,
 	}
 	status.Endpoints = slices.Clone(status.Endpoints)
-	hasProviderCheck := cfg.Provider == appauth.ProviderOIDC || cfg.Provider == appauth.ProviderSAML || cfg.Provider == appauth.ProviderEmail
+	attachTunnelLiveStatus(&status, cfg.Provider, spec.HTTP, runtime)
+	return status
+}
+
+func attachTunnelLiveStatus(status *AgentTunnelStatus, provider string, httpSpec *tunnel.HTTPConfig, runtime *tunnel.Runtime) {
+	hasProviderCheck := provider == appauth.ProviderOIDC || provider == appauth.ProviderSAML || provider == appauth.ProviderEmail
 	if runtime != nil && hasProviderCheck {
 		checked, err := runtime.AuthProviderCheck()
 		status.AuthProviderChecked = checked
@@ -539,13 +575,12 @@ func (t *managedTunnel) Snapshot() AgentTunnelStatus {
 			status.AuthProviderError = err.Error()
 		}
 	}
-	if spec.HTTP != nil {
-		status.HTTPRoutes = spec.HTTP.Routes
+	if httpSpec != nil {
+		status.HTTPRoutes = httpSpec.Routes
 	}
 	if runtime != nil {
 		status.Relays = agentRelayStatuses(runtime.Exposure.Relays())
 	}
-	return status
 }
 
 func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
@@ -555,15 +590,21 @@ func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
 		if relay.State == sdk.RelayReady && !relay.Deselected {
 			aliasURL = relay.AliasURL
 		}
+		var certificateError string
+		if relay.CertificateError != nil {
+			certificateError = relay.CertificateError.Error()
+		}
 		statuses = append(statuses, AgentRelayStatus{
-			RelayURL:  relay.RelayURL,
-			PublicURL: relay.PublicURL,
-			AliasURL:  aliasURL,
-			TCPAddr:   relay.TCPAddr,
-			Version:   relay.Version,
-			State:     relay.State,
-			Failure:   relay.Failure,
-			Approval:  relay.Approval,
+			CertificateError: certificateError,
+			RelayURL:         relay.RelayURL,
+			PublicURL:        relay.PublicURL,
+			LegacyURL:        relay.LegacyURL,
+			AliasURL:         aliasURL,
+			TCPAddr:          relay.TCPAddr,
+			Version:          relay.Version,
+			State:            relay.State,
+			Failure:          relay.Failure,
+			Approval:         relay.Approval,
 		})
 	}
 	return statuses

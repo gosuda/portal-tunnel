@@ -26,6 +26,9 @@ Each capability lists its supported interfaces (**CLI**, **Agent**, **SDK**, **R
 | **Overlay** | IVNP-backed overlay networking | CLI, Agent, SDK, Relay | Portal selects endpoints; IVNP owns the network path | [Concepts: Overlay Networking](/concepts#ivnp-backed-overlay-networking) |
 | **TLS** | Endpoint tenant TLS | CLI, Agent, SDK | TLS terminates in tunnel process; relay never sees plaintext | [Security Model: Tenant TLS](/security-model#tenant-tls) |
 | **TLS** | Keyless certificate signing | CLI, Agent, SDK, Relay | Relay signs transcripts via `/v1/sign`; no private keys shared | [Security Model: Keyless Signing](/security-model#keyless-signing) |
+| **TLS** | Local TLS service namespace | CLI, Agent, native SDK, Relay | Exact service/address hostname, tunnel-held key, automatic CSR or manual material; never relay cached | [Local TLS](/cli-reference#tunnel-owned-local-tls) |
+| **HTTP** | Canonical HTTP/2 | CLI, Agent, native SDK HTTP handler | Local TLS h2 frontend with HTTP/1.1 backend translation; friendly/legacy paths retain h1 | [Security Model: Local TLS](/security-model#local-tls-service-namespace) |
+| **Security** | CT/CAA observations | CLI, Agent, native SDK | Opt-in warning-only monitoring and public evidence; independent of TLS readiness | [Certificate Monitoring](/keyless-tls#certificate-monitoring) |
 | **Security** | MITM self-probe | CLI, Agent, SDK | Compares exported TLS keying material; detects termination | [Security Model: MITM Probe](/security-model#mitm-self-probe) |
 | **Identity** | Local secp256k1 identity | CLI, Agent, SDK | Persisted in `identity.json`; cryptographic lease proof without accounts | [Wallet & ENS: Identities](/wallet-and-ens#identity-surfaces) |
 | **Auth** | Application authentication | CLI, Agent | Credential links, SIWE wallet login, OpenID Connect, SAML 2.0, or email links; allowlist and optional verified identity headers | [Application Access Authentication](/siwe-authentication) |

@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,19 +20,90 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal"
 )
 
+func exposeCommandPipes(t *testing.T, cmd *exec.Cmd) (io.Reader, io.Reader) {
+	t.Helper()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	return stdout, stderr
+}
+
+func launchJSONExpose(t *testing.T, portalBin, relayURL, identityPath, targetHost string) chan map[string]any {
+	t.Helper()
+	cmd := exec.Command(portalBin, "expose", "--log-format", "json",
+		"--relays", relayURL, "--discovery=false",
+		"--identity-path", identityPath, targetHost)
+	stdout, stderr := exposeCommandPipes(t, cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start portal expose: %v", err)
+	}
+	records := make(chan map[string]any, 64)
+	go readLifecycleRecords(t, stdout, records)
+	go drainLifecycleStderr(stderr)
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		for range records {
+		}
+		_ = cmd.Wait()
+	})
+	return records
+}
+
+func assertExposeReady(t *testing.T, records <-chan map[string]any, relayURL string) string {
+	t.Helper()
+	ready := waitLifecycleRecord(t, records, func(record map[string]any) bool {
+		return record["event"] == "relay_status" && record["state"] == "ready"
+	}, 60*time.Second)
+	advertised, _ := ready["relay_url"].(string)
+	if advertised != relayURL {
+		t.Fatalf("ready record = %v, want relay_url %s", ready, relayURL)
+	}
+	publicURL, _ := ready["public_url"].(string)
+	if publicURL == "" {
+		t.Fatalf("ready record = %v, want the tenant-ready canonical public_url", ready)
+	}
+	if alias, hasAlias := ready["alias_url"]; hasAlias && alias != "" {
+		t.Fatalf("ready record = %v, want no alias for an address-only identity", ready)
+	}
+	return publicURL
+}
+
+func assertExposeReconnecting(t *testing.T, records <-chan map[string]any, relayURL string) {
+	t.Helper()
+	connecting := waitLifecycleRecord(t, records, func(record map[string]any) bool {
+		return record["event"] == "relay_status" && record["state"] == "connecting"
+	}, 60*time.Second)
+	if connecting["relay_url"] != relayURL {
+		t.Fatalf("connecting record = %v, want relay_url %s", connecting, relayURL)
+	}
+	if _, ok := connecting["alias_url"]; ok {
+		t.Fatalf("connecting record = %v, want no alias while reconnecting", connecting)
+	}
+}
+
+func assertExposeReready(t *testing.T, records <-chan map[string]any, relayURL, publicURL string) {
+	t.Helper()
+	restarted := waitLifecycleRecord(t, records, func(record map[string]any) bool {
+		return record["event"] == "relay_status" && record["state"] == "ready"
+	}, 60*time.Second)
+	if restartedURL, _ := restarted["relay_url"].(string); restartedURL != relayURL {
+		t.Fatalf("re-ready record = %v, want relay_url %s", restarted, relayURL)
+	}
+	if restartedPublic, _ := restarted["public_url"].(string); restartedPublic != publicURL {
+		t.Fatalf("re-ready record = %v, want the same canonical public_url %s", restarted, publicURL)
+	}
+}
+
 func TestPortalExposeJSONRelayLifecycleLogs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the portal binary")
 	}
-	portalBin := filepath.Join(t.TempDir(), "portal")
-	if runtime.GOOS == "windows" {
-		portalBin += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", portalBin, "./cmd/portal-tunnel")
-	build.Dir = repoRoot(t)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build portal binary: %v\n%s", err, out)
-	}
+	portalBin := buildPortalTunnelBinary(t)
 
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, marker)
@@ -48,70 +118,17 @@ func TestPortalExposeJSONRelayLifecycleLogs(t *testing.T) {
 	defer relayCancel()
 	relayMembership := startMembershipRelay(t, relayCtx)
 
-	var identityPath = filepath.Join(t.TempDir(), "identity.json")
-	cmd := exec.Command(portalBin, "expose", "--log-format", "json",
-		"--relays", relayMembership.relayURL, "--discovery=false",
-		"--identity-path", identityPath, target.Host)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatalf("stdout pipe: %v", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("stderr pipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start portal expose: %v", err)
-	}
-	records := make(chan map[string]any, 64)
-	go readLifecycleRecords(t, stdout, records)
-	go drainLifecycleStderr(stderr)
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		for range records {
-		}
-		_ = cmd.Wait()
-	})
-
-	ready := waitLifecycleRecord(t, records, func(record map[string]any) bool {
-		return record["event"] == "relay_status" && record["state"] == "ready"
-	}, 60*time.Second)
-	relayURL, _ := ready["relay_url"].(string)
-	if relayURL != relayMembership.relayURL {
-		t.Fatalf("ready record = %v, want relay_url %s", ready, relayMembership.relayURL)
-	}
-	publicURL, _ := ready["public_url"].(string)
-	if publicURL == "" {
-		t.Fatalf("ready record = %v, want the tenant-ready canonical public_url", ready)
-	}
-	if alias, hasAlias := ready["alias_url"]; hasAlias && alias != "" {
-		t.Fatalf("ready record = %v, want no alias for an address-only identity", ready)
-	}
+	records := launchJSONExpose(t, portalBin, relayMembership.relayURL, filepath.Join(t.TempDir(), "identity.json"), target.Host)
+	publicURL := assertExposeReady(t, records, relayMembership.relayURL)
 
 	relayCancel()
 	stopJSONRelay(t, relayMembership.sniAddr)
-	connecting := waitLifecycleRecord(t, records, func(record map[string]any) bool {
-		return record["event"] == "relay_status" && record["state"] == "connecting"
-	}, 60*time.Second)
-	if connecting["relay_url"] != relayURL {
-		t.Fatalf("connecting record = %v, want relay_url %s", connecting, relayURL)
-	}
-	if _, ok := connecting["alias_url"]; ok {
-		t.Fatalf("connecting record = %v, want no alias while reconnecting", connecting)
-	}
+	assertExposeReconnecting(t, records, relayMembership.relayURL)
 	restartCtx, restartCancel := context.WithCancel(context.Background())
 	defer restartCancel()
 	restartJSONRelay(t, restartCtx, relayMembership.stateDir, relayMembership.sniAddr, relayMembership.sniPort)
 
-	restarted := waitLifecycleRecord(t, records, func(record map[string]any) bool {
-		return record["event"] == "relay_status" && record["state"] == "ready"
-	}, 60*time.Second)
-	if restartedURL, _ := restarted["relay_url"].(string); restartedURL != relayURL {
-		t.Fatalf("re-ready record = %v, want relay_url %s", restarted, relayURL)
-	}
-	if restartedPublic, _ := restarted["public_url"].(string); restartedPublic != publicURL {
-		t.Fatalf("re-ready record = %v, want the same canonical public_url %s", restarted, publicURL)
-	}
+	assertExposeReready(t, records, relayMembership.relayURL, publicURL)
 }
 
 func stopJSONRelay(t *testing.T, sniAddr string) {

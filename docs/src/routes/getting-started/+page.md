@@ -100,8 +100,9 @@ terminates in the tunnel process running on your machine.
 The same message also includes an identity-bound URL containing your Ethereum
 address. Use the short URL for sharing; use the identity-bound URL when you need
 an origin tied to your identity or opt-in relay caching. If the name is already
-taken, Portal provides only the identity-bound URL. An existing identity keeps
-its saved name; use a new `--identity-path` to choose a different name.
+taken, Portal provides only the identity-bound URL. An explicit `--name`
+selects a service without rewriting the existing identity file; omitting it
+keeps a legacy file's saved name as the default.
 
 ## Share A Static Site
 
@@ -177,15 +178,19 @@ portal expose 3000 \
   --identity-path ~/.config/portal/myapp.identity.json
 ```
 
-When `--name` is omitted, the service does not claim a friendly public name and
-publishes an address-only canonical hostname (`<address>.<relay-domain>`).
+In the default legacy mode, a service with neither an explicit name nor a
+legacy saved name claims no friendly alias and publishes an address-only
+canonical hostname (`<address>.<relay-domain>`).
 When `--name` is provided and available, share the short URL
 `https://<name>.<relay-domain>/`. Portal also publishes the identity-bound
 canonical hostname (`<name>-<address>.<relay-domain>`). If the short name is
 unavailable, the tunnel continues with only its identity-bound URL.
-An existing identity file or `--identity-json` supplies the saved name as well
-as the key. `--name` applies only when creating a new identity; it does not
-rename an existing one. Use a separate `--identity-path` for a new identity.
+An existing identity file or `--identity-json` supplies the signing key.
+Explicit `--name` selects a service without rewriting that identity. Omitting
+it keeps a legacy saved name as the default; new identity files store no name.
+Different explicit service names may share one signing key and have independent
+leases. For the optional two-label Local TLS namespace, automatic issuance, and
+origin migration rules, see [Local TLS](/cli-reference#tunnel-owned-local-tls).
 
 ## Update The CLI
 

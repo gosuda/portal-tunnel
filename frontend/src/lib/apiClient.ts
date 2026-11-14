@@ -7,7 +7,7 @@ export class APIClientError extends Error {
   readonly details: unknown;
   readonly status: number;
 
-  constructor(message: string, status: number, code = "request_failed", details?: unknown) {
+  constructor(message: string, status: number, code: string = "request_failed", details?: unknown) {
     super(message);
     this.name = "APIClientError";
     this.status = status;

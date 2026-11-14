@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -37,13 +39,15 @@ var errRelayIncompatible = errors.New("relay is incompatible")
 type apiClient struct {
 	relayURL *url.URL
 
-	mu             sync.RWMutex
-	http           *http.Client
-	transport      *http.Transport
-	tls            *tls.Config
-	releaseVersion string
-	cache          *types.StaticCacheLimits
-	replicas       bool
+	mu               sync.RWMutex
+	http             *http.Client
+	transport        *http.Transport
+	tls              *tls.Config
+	releaseVersion   string
+	cache            *types.StaticCacheLimits
+	namespaces       []string
+	issuanceDisabled bool
+	replicas         bool
 }
 
 func (c *apiClient) resetTransport() {
@@ -56,6 +60,8 @@ func (c *apiClient) resetTransport() {
 	c.transport = nil
 	c.tls = nil
 	c.cache = nil
+	c.namespaces = nil
+	c.issuanceDisabled = false
 	c.replicas = false
 }
 
@@ -95,6 +101,8 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 	c.releaseVersion = strings.TrimSpace(domainResp.ReleaseVersion)
 	c.cache = domainResp.Cache
 	c.replicas = domainResp.Replicas
+	c.namespaces = slices.Clone(domainResp.Namespaces)
+	c.issuanceDisabled = domainResp.TenantCertificateIssuance != nil && !*domainResp.TenantCertificateIssuance
 	c.http = httpClient
 	c.transport = httpTransport
 	c.tls = tlsConfig
@@ -142,51 +150,88 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 		return types.RegisterResponse{}, err
 	}
 	c.mu.RLock()
+	supported := slices.Contains(c.namespaces, registerReq.Namespace)
 	replicas := c.replicas
 	c.mu.RUnlock()
 	if registerReq.Replica && !replicas {
 		return types.RegisterResponse{}, fmt.Errorf("%w: relay does not support HTTP replicas", errRelayIncompatible)
 	}
+	if registerReq.Namespace != "" && !supported {
+		registerReq.Namespace = ""
+	}
+	resp, err := c.exchangeRegister(ctx, registerReq, reportedIP)
+	if err != nil {
+		return types.RegisterResponse{}, err
+	}
+	return c.confirmRegisterResponse(resp, registerReq)
+}
 
+func (c *apiClient) exchangeRegister(ctx context.Context, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterResponse, error) {
 	var challenge types.RegisterChallengeResponse
 	var request types.RegisterRequest
 	var resp types.RegisterResponse
 	for {
-		var err error
 		if request.ChallengeID == "" || !time.Now().Before(challenge.ExpiresAt) {
-			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge)
-			if err == nil {
-				if registerReq.Replica && !challenge.Replica {
-					return types.RegisterResponse{}, fmt.Errorf("%w: relay did not confirm replica registration", errRelayIncompatible)
-				}
-				if err := identity.ValidateRegisterSIWEChallenge(challenge, c.relayURL, registerReq.Identity.Address, time.Now()); err != nil {
-					return types.RegisterResponse{}, err
-				}
-				signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
-				if err != nil {
-					return types.RegisterResponse{}, err
-				}
-				request = types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature, ReportedIP: reportedIP}
-				continue
+			var reloadErr error
+			if err := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegisterChallenge, registerReq, nil, &challenge); err != nil {
+				reloadErr = pauseRegisterRetry(ctx, err)
+			} else if registerReq.Replica && !challenge.Replica {
+				reloadErr = fmt.Errorf("%w: relay did not confirm replica registration", errRelayIncompatible)
+			} else if signed, err := signRegisterChallenge(challenge, c.relayURL, registerReq, reportedIP); err != nil {
+				reloadErr = err
+			} else {
+				request = signed
 			}
-		} else {
-			err = utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, request, nil, &resp)
-			if err == nil {
-				break
+			if reloadErr != nil {
+				return types.RegisterResponse{}, reloadErr
 			}
+			continue
 		}
-		apiErr, ok := errors.AsType[*types.APIRequestError](err)
-		if !ok || !apiErr.IsRateLimited() {
-			return types.RegisterResponse{}, err
+		submitErr := utils.HTTPDoAPIPath(ctx, c.httpClient(), c.relayURL, http.MethodPost, types.PathSDKRegister, request, nil, &resp)
+		if submitErr == nil {
+			return resp, nil
 		}
-		delay := apiErr.RetryAfter
-		if delay <= 0 {
-			delay = defaultRetryWait
-		}
-		if !utils.SleepOrDone(ctx, delay) {
-			return types.RegisterResponse{}, ctx.Err()
+		if pauseErr := pauseRegisterRetry(ctx, submitErr); pauseErr != nil {
+			return types.RegisterResponse{}, pauseErr
 		}
 	}
+}
+
+func pauseRegisterRetry(ctx context.Context, err error) error {
+	delay, ok := registerRetryDelay(err)
+	if !ok {
+		return err
+	}
+	if !utils.SleepOrDone(ctx, delay) {
+		return ctx.Err()
+	}
+	return nil
+}
+
+func signRegisterChallenge(challenge types.RegisterChallengeResponse, relayURL *url.URL, registerReq types.RegisterChallengeRequest, reportedIP string) (types.RegisterRequest, error) {
+	if err := identity.ValidateRegisterSIWEChallenge(challenge, relayURL, registerReq.Identity.Address, time.Now()); err != nil {
+		return types.RegisterRequest{}, err
+	}
+	signature, err := identity.NewLocalAuthority(registerReq.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+	if err != nil {
+		return types.RegisterRequest{}, err
+	}
+	return types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature, ReportedIP: reportedIP}, nil
+}
+
+func registerRetryDelay(err error) (time.Duration, bool) {
+	apiErr, ok := errors.AsType[*types.APIRequestError](err)
+	if !ok || !apiErr.IsRateLimited() {
+		return 0, false
+	}
+	delay := apiErr.RetryAfter
+	if delay <= 0 {
+		delay = defaultRetryWait
+	}
+	return delay, true
+}
+
+func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registerReq types.RegisterChallengeRequest) (types.RegisterResponse, error) {
 	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
 	if resp.AccessToken == "" {
 		return types.RegisterResponse{}, errRelayDidNotReturnAccessToken
@@ -197,11 +242,26 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	}
 	resp.Hostname = utils.NormalizeHostname(resp.Hostname)
 	resp.CanonicalHostname = utils.NormalizeHostname(resp.CanonicalHostname)
+	resp.LegacyCanonicalHostname = utils.NormalizeHostname(resp.LegacyCanonicalHostname)
+	if resp.Namespace != registerReq.Namespace {
+		_ = c.unregister(context.Background(), resp.AccessToken)
+		return types.RegisterResponse{}, fmt.Errorf("%w: unexpected hostname namespace", errRelayIncompatible)
+	}
 	if resp.CanonicalHostname == "" {
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, errRelayDidNotReturnCanonicalHostname
 	}
-	if !aliasHostnameMatches(resp.Hostname, registerReq.Identity.Name, resp.CanonicalHostname) {
+	aliasCanonical := resp.CanonicalHostname
+	if resp.Namespace == types.LocalTLSNamespaceV1 {
+		aliasCanonical = resp.LegacyCanonicalHostname
+		_, root, ok := strings.Cut(aliasCanonical, ".")
+		expected, err := namespace.LocalTLSHostname(registerReq.Identity.Name, registerReq.Identity.Address, root)
+		if !ok || err != nil || expected != resp.CanonicalHostname {
+			_ = c.unregister(context.Background(), resp.AccessToken)
+			return types.RegisterResponse{}, fmt.Errorf("%w: invalid canonical namespace", errRelayIncompatible)
+		}
+	}
+	if !namespace.MatchesAlias(resp.Hostname, registerReq.Identity.Name, aliasCanonical) {
 		resp.Hostname = ""
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
@@ -211,18 +271,6 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 	}
 	resp.ReverseEndpoint = reverseEndpoint
 	return resp, nil
-}
-
-func aliasHostnameMatches(hostname, name, canonicalHostname string) bool {
-	if hostname == "" {
-		return true
-	}
-	label, err := utils.NormalizeDNSLabel(name)
-	if err != nil || label == "" {
-		return false
-	}
-	_, root, ok := strings.Cut(canonicalHostname, ".")
-	return ok && hostname == label+"."+root
 }
 
 func (c *apiClient) renew(ctx context.Context, req types.RenewRequest) (types.RenewResponse, error) {

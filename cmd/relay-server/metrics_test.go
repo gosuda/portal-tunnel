@@ -75,6 +75,41 @@ func TestRelayMetricsRegistriesAreIndependent(t *testing.T) {
 	}
 }
 
+func serveConcurrentRelayRequest(t *testing.T, handler http.Handler, wg *sync.WaitGroup) {
+	t.Helper()
+	defer wg.Done()
+	req := httptest.NewRequest(http.MethodGet, types.PathAdmin+"/unknown", nil)
+	req.Header.Set("Authorization", "Bearer admin-test")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("request status = %d", rec.Code)
+	}
+}
+
+func serveConcurrentMetricsScrape(t *testing.T, handler http.Handler, wg *sync.WaitGroup) {
+	t.Helper()
+	defer wg.Done()
+	req := httptest.NewRequest(http.MethodGet, types.PathAdmin+"/metrics", nil)
+	req.Header.Set("Authorization", "Bearer admin-test")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("scrape status = %d", rec.Code)
+	}
+}
+
+func checkConcurrentRequestCount(t *testing.T, handler http.Handler) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, types.PathAdmin+"/metrics", nil)
+	req.Header.Set("Authorization", "Bearer admin-test")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `portal_relay_http_requests_total{code="404",method="get"} 20`+"\n") {
+		t.Fatalf("concurrent request count missing from scrape: %s", rec.Body.String())
+	}
+}
+
 func TestRelayMetricsConcurrentRequestsAndScrapes(t *testing.T) {
 	api, _, err := newPolicyAPI(t, "")
 	if err != nil {
@@ -84,34 +119,10 @@ func TestRelayMetricsConcurrentRequestsAndScrapes(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, types.PathAdmin+"/unknown", nil)
-			req.Header.Set("Authorization", "Bearer admin-test")
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if rec.Code != http.StatusNotFound {
-				t.Errorf("request status = %d", rec.Code)
-			}
-		}()
+		go serveConcurrentRelayRequest(t, handler, &wg)
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, types.PathAdmin+"/metrics", nil)
-			req.Header.Set("Authorization", "Bearer admin-test")
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Errorf("scrape status = %d", rec.Code)
-			}
-		}()
+		go serveConcurrentMetricsScrape(t, handler, &wg)
 	}
 	wg.Wait()
-	req := httptest.NewRequest(http.MethodGet, types.PathAdmin+"/metrics", nil)
-	req.Header.Set("Authorization", "Bearer admin-test")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if !strings.Contains(rec.Body.String(), `portal_relay_http_requests_total{code="404",method="get"} 20`+"\n") {
-		t.Fatalf("concurrent request count missing from scrape: %s", rec.Body.String())
-	}
+	checkConcurrentRequestCount(t, handler)
 }

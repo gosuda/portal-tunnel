@@ -45,11 +45,23 @@ func TestDatagramSessionClearDiscardsPreviousLease(t *testing.T) {
 func TestDatagramSessionReconnectPreservesLease(t *testing.T) {
 	session := NewDatagramSession(4, false)
 	defer session.Close("test")
+	lease := bindInitialSession(t, session)
+	peer := bindReconnectSession(t, session, lease)
+	verifyLeaseRoundTrip(t, session, peer, lease)
+	verifyLeaseReplacement(t, session, lease)
+}
+
+func bindInitialSession(t *testing.T, session *DatagramSession) chan struct{} {
+	t.Helper()
 	first, _ := newAuthTestConnections(t)
 	if _, err := session.Bind(first); err != nil {
 		t.Fatal(err)
 	}
-	lease := session.leaseDone
+	return session.leaseDone
+}
+
+func bindReconnectSession(t *testing.T, session *DatagramSession, lease chan struct{}) *quic.Conn {
+	t.Helper()
 	second, peer := newAuthTestConnections(t)
 	if _, err := session.Bind(second); err != nil {
 		t.Fatal(err)
@@ -57,6 +69,11 @@ func TestDatagramSessionReconnectPreservesLease(t *testing.T) {
 	if session.leaseDone != lease {
 		t.Fatal("reconnect replaced lease ownership")
 	}
+	return peer
+}
+
+func verifyLeaseRoundTrip(t *testing.T, session *DatagramSession, peer *quic.Conn, lease chan struct{}) {
+	t.Helper()
 	frame := types.DatagramFrame{FlowID: 7, Payload: []byte("same lease"), LeaseDone: lease}
 	if err := session.SendFrame(frame); err != nil {
 		t.Fatal(err)
@@ -71,6 +88,11 @@ func TestDatagramSessionReconnectPreservesLease(t *testing.T) {
 	if err != nil || received.FlowID != frame.FlowID || string(received.Payload) != string(frame.Payload) {
 		t.Fatalf("reconnected reply: %+v %v", received, err)
 	}
+}
+
+func verifyLeaseReplacement(t *testing.T, session *DatagramSession, lease chan struct{}) {
+	t.Helper()
+	frame := types.DatagramFrame{FlowID: 7, Payload: []byte("same lease"), LeaseDone: lease}
 	session.Clear("new lease")
 	if err := session.SendFrame(frame); err == nil || errors.Is(err, errNoConnection) {
 		t.Fatalf("old reply accepted by replacement: %v", err)
@@ -126,22 +148,8 @@ func TestDatagramSessionRejectsPeerWithoutDatagrams(t *testing.T) {
 
 func newAuthTestConnections(t *testing.T, configs ...*quic.Config) (*quic.Conn, *quic.Conn) {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
-	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener, err := ListenQUICBackhaul("127.0.0.1:0", func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-		return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
+	key, der := generateAuthCertificate(t)
+	listener := openAuthListener(t, key, der)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	clientConfig := quicBackhaulConfig()
@@ -159,6 +167,32 @@ func newAuthTestConnections(t *testing.T, configs ...*quic.Config) (*quic.Conn, 
 	}
 	t.Cleanup(func() { _ = server.CloseWithError(0, "test finished") })
 	return server, client
+}
+
+func generateAuthCertificate(t *testing.T) (*ecdsa.PrivateKey, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key, der
+}
+
+func openAuthListener(t *testing.T, key *ecdsa.PrivateKey, der []byte) *quic.Listener {
+	t.Helper()
+	listener, err := ListenQUICBackhaul("127.0.0.1:0", func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener
 }
 
 func TestDatagramSessionCloseUnblocksAccept(t *testing.T) {

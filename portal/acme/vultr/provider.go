@@ -42,7 +42,7 @@ func (p *Provider) Name() string {
 	return "vultr"
 }
 
-func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error) {
+func (p *Provider) ChallengeProvider(ctx context.Context) (challenge.Provider, error) {
 	if p == nil {
 		return nil, errVultrProviderIsNil
 	}
@@ -51,13 +51,60 @@ func (p *Provider) ChallengeProvider(context.Context) (challenge.Provider, error
 	}
 
 	cfg := legovultr.NewDefaultConfig()
-	cfg.APIKey = p.apiKey
+	httpClient := legovultr.OAuthStaticAccessToken(cfg.HTTPClient, p.apiKey)
+	httpClient.Timeout = cfg.HTTPTimeout
+	client := govultr.NewClient(httpClient)
+	return dnsrecord.NewChallengeProvider(ctx, cfg.PropagationTimeout, cfg.PollingInterval,
+		func(ctx context.Context, fqdn, value string) (dnsrecord.Cleanup, error) {
+			zone, err := p.findZone(ctx, client, fqdn)
+			if err != nil {
+				return nil, err
+			}
+			return presentChallenge(ctx, client, zone, fqdn, value, cfg.TTL)
+		}), nil
+}
 
-	provider, err := legovultr.NewDNSProviderConfig(cfg)
+func presentChallenge(ctx context.Context, client *govultr.Client, zone, fqdn, value string, ttl int) (dnsrecord.Cleanup, error) {
+	name, err := dnsrecord.RelativeName("vultr", fqdn, zone)
 	if err != nil {
-		return nil, fmt.Errorf("create vultr lego provider: %w", err)
+		return nil, err
 	}
-	return provider, nil
+	existing, err := listRecords(ctx, client, zone, fqdn, "TXT")
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range existing {
+		if dnsrecord.TXTContent(rec.Data) == value {
+			return nil, nil
+		}
+	}
+	var recordID string
+	cleanup := func(ctx context.Context) error {
+		records, err := listRecords(ctx, client, zone, fqdn, "TXT")
+		if err != nil {
+			return err
+		}
+		for _, rec := range records {
+			if dnsrecord.TXTContent(rec.Data) != value || (recordID != "" && rec.ID != recordID) {
+				continue
+			}
+			if err := client.DomainRecord.Delete(ctx, zone, rec.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	priority := 0
+	rec, _, err := client.DomainRecord.Create(ctx, zone, &govultr.DomainRecordCreateReq{
+		Name: name, Type: "TXT", Data: `"` + value + `"`, TTL: ttl, Priority: &priority,
+	})
+	if rec != nil {
+		recordID = rec.ID
+	}
+	if ctx.Err() != nil {
+		return cleanup, ctx.Err()
+	}
+	return cleanup, err
 }
 
 func (p *Provider) EnsureAddressRecords(ctx context.Context, baseDomain, publicIP string) error {
@@ -178,7 +225,10 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 	if err != nil {
 		return "", "", "", err
 	}
+	return refreshEnsureDNSSECState(ctx, client, zone)
+}
 
+func refreshEnsureDNSSECState(ctx context.Context, client *govultr.Client, zone string) (state, dsRecord, message string, err error) {
 	domain, _, err := client.Domain.Get(ctx, zone)
 	if err != nil {
 		return "", "", "", fmt.Errorf("get vultr domain %s: %w", zone, err)
@@ -186,18 +236,8 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 	if domain != nil {
 		state = strings.TrimSpace(domain.DNSSec)
 	}
-	if !strings.EqualFold(state, "enabled") {
-		if err := client.Domain.Update(ctx, zone, "enabled"); err != nil {
-			return "", "", "", fmt.Errorf("enable vultr dnssec: %w", err)
-		}
-		domain, _, err = client.Domain.Get(ctx, zone)
-		if err != nil {
-			return "", "", "", fmt.Errorf("refresh vultr domain %s: %w", zone, err)
-		}
-		state = "enabled"
-		if domain != nil && strings.TrimSpace(domain.DNSSec) != "" {
-			state = strings.TrimSpace(domain.DNSSec)
-		}
+	if state, err = activateEnsureDNSSEC(ctx, client, zone, state); err != nil {
+		return "", "", "", err
 	}
 
 	records, _, err := client.Domain.GetDNSSec(ctx, zone)
@@ -211,6 +251,24 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (state, 
 		message = "wait for the active Vultr DS record before updating the registrar"
 	}
 	return state, dsRecord, message, nil
+}
+
+func activateEnsureDNSSEC(ctx context.Context, client *govultr.Client, zone, state string) (string, error) {
+	if strings.EqualFold(state, "enabled") {
+		return state, nil
+	}
+	if err := client.Domain.Update(ctx, zone, "enabled"); err != nil {
+		return "", fmt.Errorf("enable vultr dnssec: %w", err)
+	}
+	domain, _, err := client.Domain.Get(ctx, zone)
+	if err != nil {
+		return "", fmt.Errorf("refresh vultr domain %s: %w", zone, err)
+	}
+	state = "enabled"
+	if domain != nil && strings.TrimSpace(domain.DNSSec) != "" {
+		state = strings.TrimSpace(domain.DNSSec)
+	}
+	return state, nil
 }
 
 func (p *Provider) clientAndZone(ctx context.Context, domain string) (*govultr.Client, string, error) {
@@ -245,73 +303,102 @@ func (p *Provider) findZone(ctx context.Context, client *govultr.Client, domain 
 	for _, candidate := range candidates {
 		candidateSet[candidate] = struct{}{}
 	}
-
-	zones := p.zones.Load()
-	for _, candidate := range candidates {
-		if zone := zones[candidate]; zone != "" {
-			return zone, nil
-		}
+	if zone := p.zones.Load()[domain]; zone != "" {
+		return zone, nil
 	}
+	return searchFindZonePages(ctx, p, client, candidateSet, domain)
+}
 
+func searchFindZonePages(ctx context.Context, p *Provider, client *govultr.Client, candidateSet map[string]struct{}, domain string) (string, error) {
 	listOptions := &govultr.ListOptions{PerPage: 100}
+	var best string
 	for {
 		domains, meta, _, err := client.Domain.List(ctx, listOptions)
 		if err != nil {
 			return "", fmt.Errorf("list vultr domains: %w", err)
 		}
-		for _, item := range domains {
-			zone := utils.NormalizeBaseDomain(item.Domain)
-			if _, ok := candidateSet[zone]; !ok {
-				continue
-			}
-			p.zones.UpdateCopy(func(zones *map[string]string) {
-				if *zones == nil {
-					*zones = make(map[string]string)
-				}
-				(*zones)[zone] = zone
-			})
-			return zone, nil
+		if zone := matchFindZonePage(domains, candidateSet); len(zone) > len(best) {
+			best = zone
 		}
 		if meta == nil || meta.Links == nil || meta.Links.Next == "" {
 			break
 		}
 		listOptions.Cursor = meta.Links.Next
 	}
-
+	if best != "" {
+		storeFindZoneEntry(p, domain, best)
+		return best, nil
+	}
 	return "", fmt.Errorf("no vultr domain found for %s", domain)
 }
 
-func ensureRecord(ctx context.Context, client *govultr.Client, zone, fqdn, recordType, data string) error {
-	recordName, err := dnsrecord.RelativeName("vultr", fqdn, zone)
-	if err != nil {
-		return err
-	}
-	existing, err := listRecords(ctx, client, zone, fqdn, recordType)
-	if err != nil {
-		return err
-	}
-	for _, record := range existing {
-		if strings.TrimSpace(record.Data) == data {
-			return nil
+func matchFindZonePage(domains []govultr.Domain, candidateSet map[string]struct{}) string {
+	var best string
+	for _, item := range domains {
+		zone := utils.NormalizeBaseDomain(item.Domain)
+		if _, ok := candidateSet[zone]; ok && len(zone) > len(best) {
+			best = zone
 		}
 	}
+	return best
+}
+
+func storeFindZoneEntry(p *Provider, domain, zone string) {
+	p.zones.UpdateCopy(func(cached *map[string]string) {
+		if *cached == nil {
+			*cached = make(map[string]string)
+		}
+		(*cached)[domain] = zone
+	})
+}
+
+func ensureRecord(ctx context.Context, client *govultr.Client, zone, fqdn, recordType, data string) error {
+	recordName, existing, err := loadEnsureRecord(ctx, client, zone, fqdn, recordType)
+	if err != nil {
+		return err
+	}
+	if hasRecordDataVultr(existing, data) {
+		return nil
+	}
 	if len(existing) > 0 {
-		name := recordName
+		updateName := recordName
 		return client.DomainRecord.Update(ctx, zone, existing[0].ID, &govultr.DomainRecordUpdateReq{
-			Name: &name,
+			Name: &updateName,
 			Type: recordType,
 			Data: data,
 			TTL:  defaultRecordTTL,
 		})
 	}
-
-	_, _, err = client.DomainRecord.Create(ctx, zone, &govultr.DomainRecordCreateReq{
+	if _, _, err := client.DomainRecord.Create(ctx, zone, &govultr.DomainRecordCreateReq{
 		Name: recordName,
 		Type: recordType,
 		Data: data,
 		TTL:  defaultRecordTTL,
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadEnsureRecord(ctx context.Context, client *govultr.Client, zone, fqdn, recordType string) (string, []govultr.DomainRecord, error) {
+	recordName, err := dnsrecord.RelativeName("vultr", fqdn, zone)
+	if err != nil {
+		return "", nil, err
+	}
+	existing, err := listRecords(ctx, client, zone, fqdn, recordType)
+	if err != nil {
+		return "", nil, err
+	}
+	return recordName, existing, nil
+}
+
+func hasRecordDataVultr(existing []govultr.DomainRecord, data string) bool {
+	for _, record := range existing {
+		if strings.TrimSpace(record.Data) == data {
+			return true
+		}
+	}
+	return false
 }
 
 func ensureTXTRecord(ctx context.Context, client *govultr.Client, zone, fqdn, value string) error {
@@ -364,6 +451,7 @@ func listRecords(ctx context.Context, client *govultr.Client, zone, fqdn, record
 	}
 	recordType = strings.ToUpper(strings.TrimSpace(recordType))
 	listOptions := &govultr.ListOptions{PerPage: 100}
+	want := listRecordsFilterVultr{recordType: recordType, recordName: recordName, fqdn: fqdn, zone: zone}
 
 	var filtered []govultr.DomainRecord
 	for {
@@ -371,18 +459,30 @@ func listRecords(ctx context.Context, client *govultr.Client, zone, fqdn, record
 		if err != nil {
 			return nil, err
 		}
-		for _, record := range records {
-			if !strings.EqualFold(strings.TrimSpace(record.Type), recordType) || !dnsrecord.NameMatches(record.Name, recordName, fqdn, zone) {
-				continue
-			}
-			filtered = append(filtered, record)
-		}
+		filtered = appendListRecordsVultr(filtered, records, want)
 		if meta == nil || meta.Links == nil || meta.Links.Next == "" {
 			break
 		}
 		listOptions.Cursor = meta.Links.Next
 	}
 	return filtered, nil
+}
+
+type listRecordsFilterVultr struct {
+	recordType string
+	recordName string
+	fqdn       string
+	zone       string
+}
+
+func appendListRecordsVultr(filtered, records []govultr.DomainRecord, want listRecordsFilterVultr) []govultr.DomainRecord {
+	for _, record := range records {
+		if !strings.EqualFold(strings.TrimSpace(record.Type), want.recordType) || !dnsrecord.NameMatches(record.Name, want.recordName, want.fqdn, want.zone) {
+			continue
+		}
+		filtered = append(filtered, record)
+	}
+	return filtered
 }
 
 func preferredDSRecord(records []string) string {

@@ -11,10 +11,42 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+func checkRejectsNonPublicDescriptor(t *testing.T, signing types.Identity, relayURL string, now time.Time) {
+	t.Helper()
+	desc := mustSignedDescriptor(t, signing, relayURL, now)
+	announced := NewRelaySet(nil)
+	if err := announced.InsertCandidate(desc, now); err == nil {
+		t.Fatal("non-public announced descriptor accepted")
+	}
+	checkUntrustedAnnouncedEmpty(t, announced)
+	checkUntrustedGossipRejected(t, desc, now)
+}
+
+func checkUntrustedAnnouncedEmpty(t *testing.T, announced *RelaySet) {
+	t.Helper()
+	if states := relayStates(announced); len(states) != 0 {
+		t.Fatalf("announced candidates = %v, want none", states)
+	}
+}
+
+func checkUntrustedGossipRejected(t *testing.T, desc types.RelayDescriptor, now time.Time) {
+	t.Helper()
+	gossiped := NewRelaySet(nil)
+	changed, err := gossiped.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
+		ProtocolVersion: types.DiscoveryVersion,
+		Relays:          []types.RelayDescriptor{desc},
+	}, now)
+	if err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
+	}
+	if changed || len(relayStates(gossiped)) != 0 {
+		t.Fatal("non-public gossiped descriptor admitted into refresh state")
+	}
+}
+
 func TestUntrustedDiscoveryRejectsNonPublicDescriptor(t *testing.T) {
 	signing := mustSigningIdentity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-
 	for _, relayURL := range []string{
 		"https://localhost",
 		"https://sub.localhost",
@@ -30,27 +62,7 @@ func TestUntrustedDiscoveryRejectsNonPublicDescriptor(t *testing.T) {
 		"https://[2001:db8::1]",
 	} {
 		t.Run(relayURL, func(t *testing.T) {
-			desc := mustSignedDescriptor(t, signing, relayURL, now)
-
-			announced := NewRelaySet(nil)
-			if err := announced.InsertCandidate(desc, now); err == nil {
-				t.Fatal("non-public announced descriptor accepted")
-			}
-			if states := relayStates(announced); len(states) != 0 {
-				t.Fatalf("announced candidates = %v, want none", states)
-			}
-
-			gossiped := NewRelaySet(nil)
-			changed, err := gossiped.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
-				ProtocolVersion: types.DiscoveryVersion,
-				Relays:          []types.RelayDescriptor{desc},
-			}, now)
-			if err != nil {
-				t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
-			}
-			if changed || len(relayStates(gossiped)) != 0 {
-				t.Fatal("non-public gossiped descriptor admitted into refresh state")
-			}
+			checkRejectsNonPublicDescriptor(t, signing, relayURL, now)
 		})
 	}
 }
@@ -87,24 +99,20 @@ func TestPublicRelayDialRejectsResolvedLoopback(t *testing.T) {
 	}
 }
 
-func TestDiscoveryRedirectPolicyRejectsInternalService(t *testing.T) {
-	var internalRequests atomic.Int32
+func startRedirectPolicyServers(t *testing.T, internalRequests *atomic.Int32) (*httptest.Server, *httptest.Server) {
+	t.Helper()
 	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		internalRequests.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer internal.Close()
-
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.Redirect(w, req, internal.URL, http.StatusFound)
 	}))
-	defer source.Close()
-	client := &http.Client{CheckRedirect: rejectDiscoveryRedirect, Timeout: 3 * time.Second}
-	defer client.CloseIdleConnections()
-	resp, err := client.Get(source.URL)
-	if resp != nil {
-		_ = resp.Body.Close()
-	}
+	return internal, source
+}
+
+func checkRedirectPolicyBlocked(t *testing.T, resp *http.Response, err error, internalRequests *atomic.Int32) {
+	t.Helper()
 	if resp == nil || resp.StatusCode != http.StatusFound {
 		t.Fatalf("redirect response = %v, error = %v", resp, err)
 	}
@@ -116,20 +124,49 @@ func TestDiscoveryRedirectPolicyRejectsInternalService(t *testing.T) {
 	}
 }
 
-func TestLocalBootstrapDiscoveryRejectsRedirect(t *testing.T) {
+func TestDiscoveryRedirectPolicyRejectsInternalService(t *testing.T) {
 	var internalRequests atomic.Int32
+	internal, source := startRedirectPolicyServers(t, &internalRequests)
+	defer internal.Close()
+	defer source.Close()
+	client := &http.Client{CheckRedirect: rejectDiscoveryRedirect, Timeout: 3 * time.Second}
+	defer client.CloseIdleConnections()
+	resp, err := client.Get(source.URL)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	checkRedirectPolicyBlocked(t, resp, err, &internalRequests)
+}
+
+func startBootstrapRedirectServers(t *testing.T, internalRequests *atomic.Int32, bootstrapRequests *atomic.Int32) (*httptest.Server, *httptest.Server) {
+	t.Helper()
 	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		internalRequests.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer internal.Close()
-	var bootstrapRequests atomic.Int32
 	bootstrap := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		bootstrapRequests.Add(1)
 		http.Redirect(w, req, internal.URL, http.StatusFound)
 	}))
-	defer bootstrap.Close()
+	return internal, bootstrap
+}
 
+func checkBootstrapRedirectCounts(t *testing.T, internalRequests *atomic.Int32, bootstrapRequests *atomic.Int32) {
+	t.Helper()
+	if got := bootstrapRequests.Load(); got != 1 {
+		t.Fatalf("bootstrap received %d requests, want one", got)
+	}
+	if got := internalRequests.Load(); got != 0 {
+		t.Fatalf("internal service received %d redirected bootstrap requests, want zero", got)
+	}
+}
+
+func TestLocalBootstrapDiscoveryRejectsRedirect(t *testing.T) {
+	var internalRequests atomic.Int32
+	var bootstrapRequests atomic.Int32
+	internal, bootstrap := startBootstrapRedirectServers(t, &internalRequests, &bootstrapRequests)
+	defer internal.Close()
+	defer bootstrap.Close()
 	set := NewRelaySet([]string{bootstrap.URL})
 	refresher := NewRefresher(set)
 	defer refresher.httpClient.CloseIdleConnections()
@@ -137,10 +174,5 @@ func TestLocalBootstrapDiscoveryRejectsRedirect(t *testing.T) {
 	if err := refresher.refreshOneHTTPS(context.Background(), bootstrapRelayState(bootstrap.URL)); err != nil {
 		t.Fatalf("refreshOneHTTPS() error = %v", err)
 	}
-	if got := bootstrapRequests.Load(); got != 1 {
-		t.Fatalf("bootstrap received %d requests, want one", got)
-	}
-	if got := internalRequests.Load(); got != 0 {
-		t.Fatalf("internal service received %d redirected bootstrap requests, want zero", got)
-	}
+	checkBootstrapRedirectCounts(t, &internalRequests, &bootstrapRequests)
 }

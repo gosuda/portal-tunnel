@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import type { ReactNode } from "react";
 import {
   Dialog,
@@ -11,7 +12,7 @@ import { Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
 
-export function TunnelCommandModal({ trigger }: { trigger?: ReactNode }) {
+export function TunnelCommandModal({ trigger }: { trigger?: ReactNode }): JSX.Element {
   return (
     <Dialog>
       <DialogTrigger asChild>

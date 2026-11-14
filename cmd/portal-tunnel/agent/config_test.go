@@ -20,34 +20,29 @@ func TestStaticServeConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	for _, input := range []string{"./dist", "./dist/main.html", filepath.Join(dir, "absolute-site")} {
 		t.Run(input, func(t *testing.T) {
-			path := filepath.Join(dir, "config.toml")
-			data := fmt.Sprintf("[[tunnels]]\nid = \"site\"\nserve = %q\n", " "+input+" ")
-			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := LoadExistingConfig(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := input
-			if !filepath.IsAbs(want) {
-				want = filepath.Join(dir, want)
-			}
-			if got := cfg.Tunnels[0].Serve; got != want {
-				t.Fatalf("serve = %q, want %q", got, want)
-			}
-			cfg.Tunnels[0].Description = "updated metadata"
-			if err := writeConfigDocument(path, 0o600, cfg); err != nil {
-				t.Fatal(err)
-			}
-			reloaded, err := LoadExistingConfig(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := reloaded.Tunnels[0].Serve; got != want {
-				t.Fatalf("saved serve = %q, want %q", got, want)
-			}
+			checkStaticServeRoundTrip(t, dir, input)
 		})
+	}
+}
+
+func checkStaticServeRoundTrip(t *testing.T, dir, input string) {
+	t.Helper()
+	path := filepath.Join(dir, "config.toml")
+	data := fmt.Sprintf("[[tunnels]]\nid = \"site\"\nserve = %q\n", " "+input+" ")
+	writeConfigFixture(t, path, data)
+	cfg := loadConfigFixture(t, path)
+	want := input
+	if !filepath.IsAbs(want) {
+		want = filepath.Join(dir, want)
+	}
+	if got := cfg.Tunnels[0].Serve; got != want {
+		t.Fatalf("serve = %q, want %q", got, want)
+	}
+	cfg.Tunnels[0].Description = "updated metadata"
+	saveConfigFixture(t, path, 0o600, cfg)
+	reloaded := loadConfigFixture(t, path)
+	if got := reloaded.Tunnels[0].Serve; got != want {
+		t.Fatalf("saved serve = %q, want %q", got, want)
 	}
 }
 
@@ -61,6 +56,8 @@ relays = ["https://relay.example.com"]
 discovery = false
 overlay = true
 identity_path = "/absolute/identity.json"
+tls_cert = "cert.pem"
+tls_key = "key.pem"
 ban_mitm = true
 max_active_relays = 5
 description = "described"
@@ -77,6 +74,12 @@ auth_oidc_client_secret = "client-secret"
 
 [[tunnels]]
 id = "sso"
+tls_auto = true
+tls_state_dir = "certs"
+tls_require_local = true
+tls_monitor_state_dir = "evidence"
+tls_monitor_baseline = "baseline.json"
+tls_monitor_dns_resolver = "9.9.9.9:53"
 target = "localhost:3001"
 auth = "saml"
 auth_allowed_wallets = ["@example.com"]
@@ -114,6 +117,7 @@ x402_network = "base"
 x402_asset = "usdc"
 x402_endpoints = ["/paid"]
 x402_facilitator_token = "facilitator-token"
+x402_options = { nano_claims_file = "/var/lib/portal/claims.jsonl" }
 
 [[tunnels.http_routes]]
 prefix = "/api"
@@ -140,13 +144,8 @@ replica = true
 
 func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte(tunnelsDocument), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadExistingConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFixture(t, path, tunnelsDocument)
+	loaded := loadConfigFixture(t, path)
 
 	keys := tunnelConfigKeys(reflect.TypeOf(TunnelConfig{}))
 	for _, key := range keys {
@@ -155,22 +154,14 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 		}
 	}
 
-	if err := writeConfigDocument(path, 0o600, loaded); err != nil {
-		t.Fatal(err)
-	}
-	saved, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	saveConfigFixture(t, path, 0o600, loaded)
+	saved := readConfigFixture(t, path)
 	for _, key := range keys {
-		if !strings.Contains(string(saved), "\n"+key+" =") && !strings.Contains(string(saved), "\n[[tunnels."+key+"]]") {
+		if !strings.Contains(string(saved), "\n"+key+" =") && !strings.Contains(string(saved), "\n[[tunnels."+key+"]]") && !strings.Contains(string(saved), "\n[tunnels."+key+"]") {
 			t.Errorf("saved config does not keep %q:\n%s", key, saved)
 		}
 	}
-	reloaded, err := LoadExistingConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reloaded := loadConfigFixture(t, path)
 	if len(reloaded.Tunnels) != len(loaded.Tunnels) {
 		t.Fatalf("saved %d tunnels, reloaded %d", len(loaded.Tunnels), len(reloaded.Tunnels))
 	}
@@ -179,12 +170,42 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 			t.Errorf("tunnel %q changed by a save:\n before: %+v\n after:  %+v", loaded.Tunnels[i].ID, loaded.Tunnels[i], reloaded.Tunnels[i])
 		}
 	}
-	if err := writeConfigDocument(path, 0o600, reloaded); err != nil {
-		t.Fatal(err)
-	}
+	saveConfigFixture(t, path, 0o600, reloaded)
 	if again, err := os.ReadFile(path); err != nil || !bytes.Equal(again, saved) {
 		t.Fatalf("a second save wrote another document (err %v):\n%s", err, again)
 	}
+}
+
+func writeConfigFixture(t *testing.T, path, document string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func loadConfigFixture(t *testing.T, path string) Config {
+	t.Helper()
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func saveConfigFixture(t *testing.T, path string, mode os.FileMode, cfg Config) {
+	t.Helper()
+	if err := writeConfigDocument(path, mode, cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readConfigFixture(t *testing.T, path string) []byte {
+	t.Helper()
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return saved
 }
 
 func TestExistingConfigKeysFillComponents(t *testing.T) {
@@ -216,6 +237,7 @@ func TestExistingConfigKeysFillComponents(t *testing.T) {
 	payment := gateway.X402Config{
 		Testnet: true, Network: "base", Asset: "usdc", PayTo: "0x1234567890abcdef1234567890abcdef12345678",
 		Endpoints: []string{"/paid"}, FacilitatorToken: "facilitator-token",
+		Options: map[string]string{"nano_claims_file": "/var/lib/portal/claims.jsonl"},
 	}
 	if got := *specs["web"].HTTP.Auth; !reflect.DeepEqual(got, oidc) {
 		t.Errorf("web auth = %+v, want %+v", got, oidc)
@@ -249,20 +271,10 @@ discovery = true
 ban_mitm = false
 max_active_relays = 3
 `
-	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadExistingConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
-		t.Fatal(err)
-	}
-	saved, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeConfigFixture(t, path, document)
+	cfg := loadConfigFixture(t, path)
+	saveConfigFixture(t, path, 0o600, cfg)
+	saved := readConfigFixture(t, path)
 	web, explicit, ok := strings.Cut(string(saved), "id = 'explicit'")
 	if !ok {
 		t.Fatalf("saved config:\n%s", saved)
@@ -309,24 +321,25 @@ func TestSavedConfigHoldingASecretIsPrivate(t *testing.T) {
 		{"no secret", 0o644, plain, 0o644},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, nil, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Chmod(path, tt.before); err != nil {
-				t.Fatal(err)
-			}
-			if err := writeConfigDocument(path, tt.before, Config{Tunnels: []TunnelConfig{plain, tt.tunnel}}); err != nil {
-				t.Fatal(err)
-			}
-			info, err := os.Stat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := info.Mode().Perm(); got != tt.want {
-				t.Fatalf("mode after the save = %o; want %o", got, tt.want)
-			}
+			checkSecretFileMode(t, tt.before, plain, tt.tunnel, tt.want)
 		})
+	}
+}
+
+func checkSecretFileMode(t *testing.T, before os.FileMode, plain, tunnel TunnelConfig, want os.FileMode) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeConfigFixture(t, path, "")
+	if err := os.Chmod(path, before); err != nil {
+		t.Fatal(err)
+	}
+	saveConfigFixture(t, path, before, Config{Tunnels: []TunnelConfig{plain, tunnel}})
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode after the save = %o; want %o", got, want)
 	}
 }
 
@@ -337,7 +350,8 @@ func TestHoldsSecretCoversEveryCredentialKey(t *testing.T) {
 		credential := key == "identity_json" || slices.ContainsFunc([]string{"secret", "token", "key", "password"}, func(word string) bool {
 			return strings.Contains(key, word)
 		})
-		if !field.IsExported() || key == "" || key == "-" || !credential {
+		// tls_key stores a file path, not private key bytes.
+		if !field.IsExported() || key == "" || key == "-" || key == "tls_key" || !credential {
 			continue
 		}
 		found++
@@ -368,4 +382,100 @@ func tunnelConfigKeys(typ reflect.Type) []string {
 		}
 	}
 	return keys
+}
+
+func TestLocalTLSCertificateConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := "[[tunnels]]\nid = \"web\"\ntarget = \"3000\"\ntls_cert = \"certs/tenant.pem\"\ntls_key = \"certs/tenant.key\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := reloaded.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSCert != filepath.Join(dir, "certs", "tenant.pem") || spec.TLSKey != filepath.Join(dir, "certs", "tenant.key") {
+		t.Fatalf("certificate paths after restart = %q, %q", spec.TLSCert, spec.TLSKey)
+	}
+}
+
+func TestAutomaticTLSConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	data := "[[tunnels]]\nid = \"web\"\ntarget = \"3000\"\nidentity_path = \"identity.json\"\ntls_auto = true\ntls_require_local = true\ntls_state_dir = \"certs\"\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.TLSAuto || !spec.TLSRequireLocal || spec.TLSStateDir != filepath.Join(dir, "certs") {
+		t.Fatalf("persisted automatic TLS options = %+v", spec)
+	}
+	cfg.Tunnels[0].TLSStateDir = ""
+	spec, err = cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSStateDir != filepath.Join(dir, "identity.json")+".tls" {
+		t.Fatalf("identity-scoped default = %q", spec.TLSStateDir)
+	}
+}
+
+func TestCertificateMonitoringConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	data := `[[tunnels]]
+id = "web"
+target = "3000"
+tls_monitor_state_dir = "evidence"
+tls_monitor_baseline = "baseline.json"
+tls_monitor_dns_resolver = "9.9.9.9:53"
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigDocument(path, 0o600, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := cfg.Tunnels[0].Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor := spec.CertificateMonitor
+	if monitor == nil || monitor.StateDir != filepath.Join(dir, "evidence") || monitor.BaselineFile != filepath.Join(dir, "baseline.json") || monitor.DNSResolver != "9.9.9.9:53" {
+		t.Fatalf("persisted monitoring configuration = %+v", monitor)
+	}
 }

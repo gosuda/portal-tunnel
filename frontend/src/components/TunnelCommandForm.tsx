@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { useId, useMemo, useState } from "react";
 import { Check, ChevronDown, Copy, Settings2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -6,7 +7,7 @@ import {
   Chip,
   ChipField,
   Notice,
-  TUNNEL_FORM_STYLES as s,
+  TUNNEL_FORM_STYLES,
 } from "@/components/TunnelFormParts";
 import { cn } from "@/lib/utils";
 import {
@@ -27,10 +28,187 @@ const TARGET_KIND_LABEL: Record<ShareKind, string> = {
   file: "File",
   port: "Port",
 };
-
 const TARGET_PLACEHOLDER = "Port, URL, or file path";
 
-export function TunnelCommandForm() {
+function validateThumbnailURL(thumbnailURL: string, normalizedThumbnailURL: string): string {
+  if (thumbnailURL.trim() === "" || normalizedThumbnailURL !== "") {
+    return "";
+  }
+  return "Thumbnail must be an absolute http:// or https:// URL.";
+}
+
+function validatedRelayURL(url: string, relayUrls: string[]): string | null {
+  const trimmed = url.trim();
+  if (trimmed === "" || relayUrls.includes(trimmed)) {
+    return null;
+  }
+  try {
+    new URL(trimmed);
+    return trimmed;
+  } catch {
+    // Ignore invalid relay URL input.
+    return null;
+  }
+}
+
+function buildOSButtonClass(selected: boolean): string {
+  return cn(
+    "flex-1 rounded-sm px-3 py-2 text-sm font-semibold transition-colors",
+    selected
+      ? "bg-card text-foreground shadow-sm ring-1 ring-border/80 dark:bg-background dark:text-zinc-100 dark:ring-transparent"
+      : "text-muted-foreground hover:text-foreground dark:text-zinc-500 dark:hover:text-zinc-300"
+  );
+}
+
+function commitRelayURL(url: string, relayUrls: string[], setRelayUrls: (update: (prev: string[]) => string[]) => void, setUrlInput: (value: string) => void): void {
+  const trimmed = validatedRelayURL(url, relayUrls);
+  if (trimmed === null) {
+    return;
+  }
+  setRelayUrls((prev) => [...prev, trimmed]);
+  setUrlInput("");
+}
+
+function removeRelayURL(url: string, discoveryEnabled: boolean, relayUrls: string[], setRelayUrls: (update: (prev: string[]) => string[]) => void): void {
+  if (!discoveryEnabled && relayUrls.length <= 1) {
+    return;
+  }
+  setRelayUrls((prev) => prev.filter((candidate) => candidate !== url));
+}
+
+function applyDiscoveryToggle(nextEnabled: boolean, relayUrls: string[], currentOrigin: string, setDiscoveryEnabled: (value: boolean) => void, setRelayUrls: (value: string[]) => void): void {
+  setDiscoveryEnabled(nextEnabled);
+  if (!nextEnabled && relayUrls.length === 0) {
+    setRelayUrls([currentOrigin]);
+  }
+}
+
+function applyUDPToggle(nextEnabled: boolean, setEnableUDP: (value: boolean) => void, setUDPPort: (value: string) => void): void {
+  setEnableUDP(nextEnabled);
+  if (!nextEnabled) {
+    setUDPPort("");
+  }
+}
+
+function removeLastRelayURL(relayUrls: string[], setRelayUrls: (update: (prev: string[]) => string[]) => void): void {
+  if (relayUrls.length > 0) {
+    setRelayUrls((prev) => prev.slice(0, -1));
+  }
+}
+
+function AdvancedSection({ auth, setAuth, authIssues, relayUrls, discoveryEnabled, currentOrigin, urlInput, setUrlInput, enableUDP, udpBlocked, udpPort, setUDPPort, setEnableUDP, setDiscoveryEnabled, setRelayUrls, thumbnailURL, normalizedThumbnailURL, thumbnailError, setThumbnailURL, effectiveName, os, inputId, target }: { auth: Parameters<typeof TunnelAuthSection>[0]["auth"]; setAuth: Parameters<typeof TunnelAuthSection>[0]["onChange"]; authIssues: TunnelAuthIssue[]; relayUrls: string[]; discoveryEnabled: boolean; currentOrigin: string; urlInput: string; setUrlInput: (value: string) => void; enableUDP: boolean; udpBlocked: boolean; udpPort: string; setUDPPort: (value: string) => void; setEnableUDP: (value: boolean) => void; setDiscoveryEnabled: (value: boolean) => void; setRelayUrls: (update: string[] | ((prev: string[]) => string[])) => void; thumbnailURL: string; normalizedThumbnailURL: string; thumbnailError: string; setThumbnailURL: (value: string) => void; effectiveName: string; os: TunnelCommandOS; inputId: string; target: string }): JSX.Element {
+  const handleAddRelayURL = () => commitRelayURL(urlInput, relayUrls, setRelayUrls as (update: (prev: string[]) => string[]) => void, setUrlInput);
+  const handleRemoveLast = () => removeLastRelayURL(relayUrls, setRelayUrls as (update: (prev: string[]) => string[]) => void);
+  return (
+    <div className="mt-3 space-y-4 rounded-md border border-border bg-muted/45 px-4 py-4 dark:border-white/8 dark:bg-background/70">
+      <div className="space-y-2">
+        <p className={TUNNEL_FORM_STYLES.section}>Access</p>
+        <TunnelAuthSection
+          auth={auth}
+          onChange={setAuth}
+          issues={authIssues}
+          relayUrls={relayUrls}
+          discovery={discoveryEnabled}
+          name={effectiveName}
+          os={os}
+        />
+      </div>
+      <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
+        <input
+          type="checkbox"
+          checked={discoveryEnabled}
+          onChange={(event) => applyDiscoveryToggle(event.target.checked, relayUrls, currentOrigin, setDiscoveryEnabled, setRelayUrls as (value: string[]) => void)}
+          className="h-4 w-4"
+        />
+        <span>Enable relay discovery</span>
+      </label>
+      <div className="space-y-2">
+        <label className={TUNNEL_FORM_STYLES.section}>Relay URLs</label>
+        <ChipField
+          draft={urlInput}
+          placeholder="Relay URL (press Enter)"
+          onDraftChange={setUrlInput}
+          onCommit={handleAddRelayURL}
+          onRemoveLast={handleRemoveLast}
+          chips={relayUrls.map((url) => (
+            <Chip
+              key={url}
+              text={url}
+              removeLabel={`Remove ${url}`}
+              removeDisabled={!discoveryEnabled && relayUrls.length <= 1}
+              onRemove={() => removeRelayURL(url, discoveryEnabled, relayUrls, setRelayUrls as (update: (prev: string[]) => string[]) => void)}
+            />
+          ))}
+        />
+      </div>
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
+          <input
+            type="checkbox"
+            checked={enableUDP && !udpBlocked}
+            disabled={udpBlocked}
+            onChange={(event) => applyUDPToggle(event.target.checked, setEnableUDP, setUDPPort)}
+            className="h-4 w-4"
+          />
+          <span>
+            Enable UDP transport
+            {udpBlocked && (
+              <span className={cn("block", TUNNEL_FORM_STYLES.help)}>
+                Not available with sign-in: Portal can only check
+                visitors on web traffic.
+              </span>
+            )}
+          </span>
+        </label>
+        {enableUDP && !udpBlocked && (
+          <div className="space-y-1.5">
+            <Input
+              id={`${inputId}-udp-port`}
+              type="text"
+              value={udpPort}
+              onChange={(event) => setUDPPort(event.target.value)}
+              placeholder={target.trim() || DEFAULT_HOST}
+              className={TUNNEL_FORM_STYLES.input}
+            />
+            <p className={TUNNEL_FORM_STYLES.help}>
+              Local UDP port to forward. Defaults to the same as Target.
+            </p>
+          </div>
+        )}
+      </div>
+      <div className="space-y-2">
+        <label
+          htmlFor={`${inputId}-thumbnail`}
+          className="text-sm font-medium text-foreground dark:text-zinc-300"
+        >
+          Thumbnail URL
+        </label>
+        <Input
+          id={`${inputId}-thumbnail`}
+          type="url"
+          value={thumbnailURL}
+          onChange={(event) => setThumbnailURL(event.target.value)}
+          placeholder="https://cdn.example.com/thumb.png"
+          className={TUNNEL_FORM_STYLES.input}
+        />
+        {normalizedThumbnailURL && (
+          <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-background dark:border-white/10 dark:bg-background">
+            <img
+              src={normalizedThumbnailURL}
+              alt="Thumbnail preview"
+              className="h-full w-full object-cover"
+            />
+          </div>
+        )}
+        {thumbnailError && (
+          <p className="text-xs text-destructive">{thumbnailError}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function TunnelCommandForm(): JSX.Element {
   const inputId = useId();
   const [os, setOS] = useState<TunnelCommandOS>("unix");
   const currentOrigin = readCurrentOrigin();
@@ -49,13 +227,10 @@ export function TunnelCommandForm() {
     () => normalizeAbsoluteHTTPURL(thumbnailURL),
     [thumbnailURL]
   );
-  const thumbnailError = useMemo(() => {
-    if (thumbnailURL.trim() === "" || normalizedThumbnailURL !== "") {
-      return "";
-    }
-
-    return "Thumbnail must be an absolute http:// or https:// URL.";
-  }, [normalizedThumbnailURL, thumbnailURL]);
+  const thumbnailError = useMemo(
+    () => validateThumbnailURL(thumbnailURL, normalizedThumbnailURL),
+    [normalizedThumbnailURL, thumbnailURL]
+  );
 
   const {
     target,
@@ -81,45 +256,17 @@ export function TunnelCommandForm() {
   });
   const udpBlocked = authBlocksUDP(auth);
 
-  const addRelayURL = (url: string) => {
-    const trimmed = url.trim();
-    if (!trimmed || relayUrls.includes(trimmed)) {
-      return;
-    }
-
-    try {
-      new URL(trimmed);
-      setRelayUrls((prev) => [...prev, trimmed]);
-      setUrlInput("");
-    } catch {
-      // Ignore invalid relay URL input.
-    }
-  };
-
-  const removeRelayURL = (url: string) => {
-    if (!discoveryEnabled && relayUrls.length <= 1) {
-      return;
-    }
-    setRelayUrls((prev) => prev.filter((candidate) => candidate !== url));
-  };
-
   const inlineFieldClass = "flex items-center overflow-hidden rounded-md border border-border/80 bg-secondary/55 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30 dark:border-white/10 dark:bg-secondary/60";
   const inlineInputClass = "h-9 border-0 bg-transparent px-3 text-sm font-semibold text-foreground placeholder:text-text-muted shadow-none focus-visible:ring-0 dark:text-zinc-100 dark:placeholder:text-zinc-500";
   const osGroupClass = "flex rounded-md bg-border p-1 dark:bg-secondary/60";
-  const osButtonClass = (selected: boolean) =>
-    cn(
-      "flex-1 rounded-sm px-3 py-2 text-sm font-semibold transition-colors",
-      selected
-        ? "bg-card text-foreground shadow-sm ring-1 ring-border/80 dark:bg-background dark:text-zinc-100 dark:ring-transparent"
-        : "text-muted-foreground hover:text-foreground dark:text-zinc-500 dark:hover:text-zinc-300"
-    );
+  const osButtonClass = buildOSButtonClass;
   const commandPanelClass = "relative rounded-md bg-secondary/55 shadow-sm ring-1 ring-border/70 dark:bg-secondary/60 dark:ring-transparent";
   const commandPreClass = "overflow-x-auto whitespace-pre-wrap break-all p-3 pr-12 font-mono text-sm leading-7 text-foreground dark:text-zinc-100";
 
   return (
     <div className="space-y-4 py-1">
       <div className="space-y-2">
-        <label className={s.section}>Platform</label>
+        <label className={TUNNEL_FORM_STYLES.section}>Platform</label>
         <div className={osGroupClass}>
           <button
             type="button"
@@ -140,7 +287,7 @@ export function TunnelCommandForm() {
 
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <label htmlFor={`${inputId}-host`} className={s.section}>
+          <label htmlFor={`${inputId}-host`} className={TUNNEL_FORM_STYLES.section}>
             Target
           </label>
           {target.trim() !== "" && (
@@ -179,7 +326,7 @@ export function TunnelCommandForm() {
       <div className="space-y-2">
         <label
           htmlFor={`${inputId}-name`}
-          className={s.section}
+          className={TUNNEL_FORM_STYLES.section}
         >
           Name <span className="ml-1 text-xs font-normal text-muted-foreground">optional</span>
         </label>
@@ -196,7 +343,7 @@ export function TunnelCommandForm() {
       </div>
 
       <div className="space-y-2">
-        <label className={s.section}>
+        <label className={TUNNEL_FORM_STYLES.section}>
           Generated Command
         </label>
         <div>
@@ -235,130 +382,7 @@ export function TunnelCommandForm() {
           <ChevronDown className={cn("size-4 transition-transform", showAdvanced && "rotate-180")} aria-hidden="true" />
         </button>
         {showAdvanced && (
-          <div className="mt-3 space-y-4 rounded-md border border-border bg-muted/45 px-4 py-4 dark:border-white/8 dark:bg-background/70">
-            <div className="space-y-2">
-              <p className={s.section}>Access</p>
-              <TunnelAuthSection
-                auth={auth}
-                onChange={setAuth}
-                issues={authIssues}
-                relayUrls={relayUrls}
-                discovery={discoveryEnabled}
-                name={effectiveName}
-                os={os}
-              />
-            </div>
-            <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
-              <input
-                type="checkbox"
-                checked={discoveryEnabled}
-                onChange={(event) => {
-                  const nextEnabled = event.target.checked;
-                  setDiscoveryEnabled(nextEnabled);
-                  if (!nextEnabled && relayUrls.length === 0) {
-                    setRelayUrls([currentOrigin]);
-                  }
-                }}
-                className="h-4 w-4"
-              />
-              <span>Enable relay discovery</span>
-            </label>
-
-            <div className="space-y-2">
-              <label className={s.section}>Relay URLs</label>
-              <ChipField
-                draft={urlInput}
-                placeholder="Relay URL (press Enter)"
-                onDraftChange={setUrlInput}
-                onCommit={() => addRelayURL(urlInput)}
-                onRemoveLast={() => {
-                  if (relayUrls.length > 0) {
-                    setRelayUrls((prev) => prev.slice(0, -1));
-                  }
-                }}
-                chips={relayUrls.map((url) => (
-                  <Chip
-                    key={url}
-                    text={url}
-                    removeLabel={`Remove ${url}`}
-                    removeDisabled={!discoveryEnabled && relayUrls.length <= 1}
-                    onRemove={() => removeRelayURL(url)}
-                  />
-                ))}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 text-sm text-foreground dark:text-zinc-300">
-                <input
-                  type="checkbox"
-                  checked={enableUDP && !udpBlocked}
-                  disabled={udpBlocked}
-                  onChange={(event) => {
-                    const nextEnabled = event.target.checked;
-                    setEnableUDP(nextEnabled);
-                    if (!nextEnabled) {
-                      setUDPPort("");
-                    }
-                  }}
-                  className="h-4 w-4"
-                />
-                <span>
-                  Enable UDP transport
-                  {udpBlocked && (
-                    <span className={cn("block", s.help)}>
-                      Not available with sign-in: Portal can only check
-                      visitors on web traffic.
-                    </span>
-                  )}
-                </span>
-              </label>
-              {enableUDP && !udpBlocked && (
-                <div className="space-y-1.5">
-                  <Input
-                    id={`${inputId}-udp-port`}
-                    type="text"
-                    value={udpPort}
-                    onChange={(event) => setUDPPort(event.target.value)}
-                    placeholder={target.trim() || DEFAULT_HOST}
-                    className={s.input}
-                  />
-                  <p className={s.help}>
-                    Local UDP port to forward. Defaults to the same as Target.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <label
-                htmlFor={`${inputId}-thumbnail`}
-                className="text-sm font-medium text-foreground dark:text-zinc-300"
-              >
-                Thumbnail URL
-              </label>
-              <Input
-                id={`${inputId}-thumbnail`}
-                type="url"
-                value={thumbnailURL}
-                onChange={(event) => setThumbnailURL(event.target.value)}
-                placeholder="https://cdn.example.com/thumb.png"
-                className={s.input}
-              />
-              {normalizedThumbnailURL && (
-                <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-background dark:border-white/10 dark:bg-background">
-                  <img
-                    src={normalizedThumbnailURL}
-                    alt="Thumbnail preview"
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-              )}
-              {thumbnailError && (
-                <p className="text-xs text-destructive">{thumbnailError}</p>
-              )}
-            </div>
-          </div>
+          <AdvancedSection auth={auth} setAuth={setAuth} authIssues={authIssues} relayUrls={relayUrls} discoveryEnabled={discoveryEnabled} currentOrigin={currentOrigin} urlInput={urlInput} setUrlInput={setUrlInput} enableUDP={enableUDP} udpBlocked={udpBlocked} udpPort={udpPort} setUDPPort={setUDPPort} setEnableUDP={setEnableUDP} setDiscoveryEnabled={setDiscoveryEnabled} setRelayUrls={setRelayUrls} thumbnailURL={thumbnailURL} normalizedThumbnailURL={normalizedThumbnailURL} thumbnailError={thumbnailError} setThumbnailURL={setThumbnailURL} effectiveName={effectiveName} os={os} inputId={inputId} target={target} />
         )}
       </div>
     </div>

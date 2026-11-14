@@ -117,31 +117,35 @@ func RunDashboard(configPath, stateDir, themeName string, stopsAgent bool) error
 
 func newAgentDashboardModel(configPath, stateDir string, theme agentDashboardTheme) agentDashboardModel {
 	model := agentDashboardModel{
-		configPath:          configPath,
-		stateDir:            stateDir,
-		theme:               theme,
-		addName:             theme.newInput("myapp"),
-		addTarget:           theme.newInput("3000"),
-		addHTTPRoutes:       theme.newInput("/paid=3001 GET:0.01; /=5173"),
-		addX402PayTo:        theme.newInput("0x..."),
-		addX402Testnet:      theme.newInput("false"),
-		addX402Network:      theme.newInput("casper:casper-test"),
-		addX402Asset:        theme.newInput("hash-..."),
-		addX402Endpoints:    theme.newInput("https://x402-facilitator.cspr.cloud"),
-		addRelays:           theme.newInput("https://portal.example.com"),
-		addDiscovery:        theme.newInput("true"),
-		addMaxRelays:        theme.newInput("3"),
-		settingsMaxRelays:   theme.newInput("3"),
-		metadataDescription: theme.newInput("description"),
-		metadataTags:        theme.newInput("api,staging"),
-		metadataOwner:       theme.newInput("owner"),
-		metadataThumbnail:   theme.newInput("https://..."),
-		metadataHide:        theme.newInput("true or false"),
-		access:              newAgentDashboardAccess(theme),
+		configPath: configPath,
+		stateDir:   stateDir,
+		theme:      theme,
+		access:     newAgentDashboardAccess(theme),
 	}
+	model.setDashboardInputs(theme)
 	model.resetAddTunnelForm()
 	model.resizeInputs(0)
 	return model
+}
+
+func (m *agentDashboardModel) setDashboardInputs(theme agentDashboardTheme) {
+	m.addName = theme.newInput("myapp")
+	m.addTarget = theme.newInput("3000")
+	m.addHTTPRoutes = theme.newInput("/paid=3001 GET:0.01; /=5173")
+	m.addX402PayTo = theme.newInput("0x...")
+	m.addX402Testnet = theme.newInput("false")
+	m.addX402Network = theme.newInput("casper:casper-test")
+	m.addX402Asset = theme.newInput("hash-...")
+	m.addX402Endpoints = theme.newInput("https://x402-facilitator.cspr.cloud")
+	m.addRelays = theme.newInput("https://portal.example.com")
+	m.addDiscovery = theme.newInput("true")
+	m.addMaxRelays = theme.newInput("3")
+	m.settingsMaxRelays = theme.newInput("3")
+	m.metadataDescription = theme.newInput("description")
+	m.metadataTags = theme.newInput("api,staging")
+	m.metadataOwner = theme.newInput("owner")
+	m.metadataThumbnail = theme.newInput("https://...")
+	m.metadataHide = theme.newInput("true or false")
 }
 
 func (m agentDashboardModel) Init() tea.Cmd {
@@ -223,35 +227,40 @@ func (m agentDashboardModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 	}
 	for _, region := range m.layout().regions {
 		if event.Y == region.y && event.X >= region.x0 && event.X < region.x1 {
-			if m.confirming() && region.action != agentDashboardActionAnswerYes && region.action != agentDashboardActionAnswerNo {
-				return m, nil
-			}
-			if region.action == agentDashboardActionSelectPane {
-				m.setActivePane(region.pane)
-				return m, nil
-			}
-			if region.action == agentDashboardActionFocusSettingsField {
-				m.setActivePane(agentDashboardPaneSettings)
-				m.focusSettingsField(region.field)
-				return m, nil
-			}
-			if region.action == agentDashboardActionFocusAccessField {
-				m.access.moveFocus(region.field)
-				return m, nil
-			}
-			if region.action == agentDashboardActionFocusAddTunnelField {
-				m.setActivePane(agentDashboardPaneTunnels)
-				if !m.addingTunnel {
-					m.addingTunnel = true
-					m.resetAddTunnelForm()
-				}
-				m.focusAddTunnelField(region.field)
-				return m, nil
-			}
-			return m.runAction(region.action, region.tunnel, region.relay)
+			model, cmd := m.activateLayoutRegion(region)
+			return model, cmd
 		}
 	}
 	return m, nil
+}
+
+func (m agentDashboardModel) activateLayoutRegion(region agentDashboardRegion) (tea.Model, tea.Cmd) {
+	if m.confirming() && region.action != agentDashboardActionAnswerYes && region.action != agentDashboardActionAnswerNo {
+		return m, nil
+	}
+	if region.action == agentDashboardActionSelectPane {
+		m.setActivePane(region.pane)
+		return m, nil
+	}
+	if region.action == agentDashboardActionFocusSettingsField {
+		m.setActivePane(agentDashboardPaneSettings)
+		m.focusSettingsField(region.field)
+		return m, nil
+	}
+	if region.action == agentDashboardActionFocusAccessField {
+		m.access.moveFocus(region.field)
+		return m, nil
+	}
+	if region.action == agentDashboardActionFocusAddTunnelField {
+		m.setActivePane(agentDashboardPaneTunnels)
+		if !m.addingTunnel {
+			m.addingTunnel = true
+			m.resetAddTunnelForm()
+		}
+		m.focusAddTunnelField(region.field)
+		return m, nil
+	}
+	return m.runAction(region.action, region.tunnel, region.relay)
 }
 
 func (m agentDashboardModel) runAction(action agentDashboardAction, tunnelID, relayURL string) (tea.Model, tea.Cmd) {

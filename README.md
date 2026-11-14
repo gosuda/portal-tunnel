@@ -61,13 +61,17 @@ portal expose 3000
 ```
 
 Portal prints an HTTPS URL when the tunnel is ready. To get a short URL without
-an Ethereum address, use `--name myapp` when creating the identity. When that
+an Ethereum address, use `--name myapp` to select the service. When that
 name is available, share `https://myapp.<relay-domain>/`, printed as `short URL`
 in the readiness message (`alias_url` in JSON logs). The identity-bound URL is
 also available; it includes the Ethereum address and supports opt-in relay
 caching. If the name is already taken, Portal prints only the identity-bound URL.
-An existing identity keeps its saved name; use a new `--identity-path` to choose
-a different name. Additional common usages:
+The identity file supplies a reusable signing key. Repeat `--name myapp` on
+later runs to select the same service, or choose another name to serve a
+different service with that key. New files do not save the name; omitting it
+selects the unnamed service. Older files retain their saved name as the default.
+See [identity names](https://gosuda.github.io/portal-tunnel/cli-reference#identity-names)
+for URL behavior. Additional common usages:
 
 ```bash
 # Custom name and explicit relay

@@ -149,35 +149,48 @@ func TestMOLSCongestionModeExcludesFallbackRelays(t *testing.T) {
 	}
 }
 
+func loadMOLSPressureTopRelaySamples(state *relayState) {
+	for j := 0; j < 8; j++ {
+		state.RTTTracker.add(100 * time.Millisecond)
+	}
+	for j := 0; j < 4; j++ {
+		state.RTTTracker.add(200 * time.Millisecond)
+	}
+}
+
+func seedBaselineLatencySamples(state *relayState) {
+	for j := 0; j < 12; j++ {
+		state.RTTTracker.add(100 * time.Millisecond)
+	}
+}
+
+func applyMOLSPressureTopRelayLoad(pool []relayState, top string) {
+	for i := range pool {
+		if pool[i].Descriptor.APIHTTPSAddr == top {
+			loadMOLSPressureTopRelaySamples(&pool[i])
+			continue
+		}
+		seedBaselineLatencySamples(&pool[i])
+	}
+}
+
+func checkMOLSPressureSwappedOrder(t *testing.T, pool []relayState, base []string) {
+	t.Helper()
+	got := rankRelayPool(pool, "client-a", nil)
+	if got[0] != base[1] || got[1] != base[0] {
+		t.Fatalf("rankRelayPool() = %v, want adjacent swap of %v", got, base)
+	}
+}
+
 func TestMOLSPressureSwapsTopRelayOnly(t *testing.T) {
 	pool := []relayState{
 		verifiedRelayState(t, "https://relay-a.example"),
 		verifiedRelayState(t, "https://relay-b.example"),
 	}
-
 	base := rankRelayPool(pool, "client-a", nil)
 	if len(base) != 2 {
 		t.Fatalf("len(rankRelayPool()) = %d, want 2", len(base))
 	}
-
-	top := base[0]
-	for i := range pool {
-		if pool[i].Descriptor.APIHTTPSAddr == top {
-			for j := 0; j < 8; j++ {
-				pool[i].RTTTracker.add(100 * time.Millisecond)
-			}
-			for j := 0; j < 4; j++ {
-				pool[i].RTTTracker.add(200 * time.Millisecond)
-			}
-		} else {
-			for j := 0; j < 12; j++ {
-				pool[i].RTTTracker.add(100 * time.Millisecond)
-			}
-		}
-	}
-
-	got := rankRelayPool(pool, "client-a", nil)
-	if got[0] != base[1] || got[1] != base[0] {
-		t.Fatalf("rankRelayPool() = %v, want adjacent swap of %v", got, base)
-	}
+	applyMOLSPressureTopRelayLoad(pool, base[0])
+	checkMOLSPressureSwappedOrder(t, pool, base)
 }

@@ -228,6 +228,22 @@ func (s *RelaySet) crossIdentityTakeoverBlockedLocked(relayURL, address string, 
 	return differentIdentity && unexpired
 }
 
+func (s *RelaySet) trackDescriptorIdentityLocked(address string, issuedAt time.Time) {
+	tombstoneUntil := issuedAt.Add(AnnounceMaxValidity)
+	if prev, ok := s.keyIndex[address]; ok {
+		if prev.IssuedAt.After(issuedAt) {
+			issuedAt = prev.IssuedAt
+		}
+		if prev.TombstoneUntil.After(tombstoneUntil) {
+			tombstoneUntil = prev.TombstoneUntil
+		}
+	}
+	s.keyIndex[address] = keyIndexEntry{
+		IssuedAt:       issuedAt,
+		TombstoneUntil: tombstoneUntil,
+	}
+}
+
 func (s *RelaySet) upsertDescriptorLocked(record relayState, now time.Time, allowCrossIdentityTakeover bool) upsertResult {
 	relayURL := record.Descriptor.APIHTTPSAddr
 	if relayURL == "" {
@@ -255,20 +271,7 @@ func (s *RelaySet) upsertDescriptorLocked(record relayState, now time.Time, allo
 	}
 	s.relays[relayURL] = record
 	if address != "" {
-		issuedAt := record.Descriptor.IssuedAt
-		tombstoneUntil := issuedAt.Add(AnnounceMaxValidity)
-		if prev, ok := s.keyIndex[address]; ok {
-			if prev.IssuedAt.After(issuedAt) {
-				issuedAt = prev.IssuedAt
-			}
-			if prev.TombstoneUntil.After(tombstoneUntil) {
-				tombstoneUntil = prev.TombstoneUntil
-			}
-		}
-		s.keyIndex[address] = keyIndexEntry{
-			IssuedAt:       issuedAt,
-			TombstoneUntil: tombstoneUntil,
-		}
+		s.trackDescriptorIdentityLocked(address, record.Descriptor.IssuedAt)
 	}
 	s.enforceIdentityCapLocked(address)
 	return upsertAccepted
@@ -323,33 +326,34 @@ func (s *RelaySet) BootstrapRelayURLs() []string {
 	return out
 }
 
+func addDescriptorsRelaySet(seen map[string]struct{}, out []types.RelayDescriptor, desc types.RelayDescriptor, now time.Time) []types.RelayDescriptor {
+	relayURL := desc.APIHTTPSAddr
+	if relayURL == "" {
+		return out
+	}
+	if _, ok := seen[relayURL]; ok {
+		return out
+	}
+	if !desc.ExpiresAt.After(now) {
+		return out
+	}
+	seen[relayURL] = struct{}{}
+	return append(out, desc)
+}
+
 func (s *RelaySet) Descriptors(self types.RelayDescriptor) []types.RelayDescriptor {
 	now := time.Now().UTC()
 	out := make([]types.RelayDescriptor, 0, 1)
 	seen := make(map[string]struct{})
-	add := func(desc types.RelayDescriptor) {
-		relayURL := desc.APIHTTPSAddr
-		if relayURL == "" {
-			return
-		}
-		if _, ok := seen[relayURL]; ok {
-			return
-		}
-		if !desc.ExpiresAt.After(now) {
-			return
-		}
-		seen[relayURL] = struct{}{}
-		out = append(out, desc)
-	}
 
 	if self.APIHTTPSAddr != "" && self.ExpiresAt.After(now) {
-		add(self)
+		out = addDescriptorsRelaySet(seen, out, self, now)
 	}
 	for _, state := range s.currentRelayStates(now) {
 		if state.Banned || state.Dead || !state.hasObservedDescriptor() || state.Trust != relayVerified {
 			continue
 		}
-		add(state.Descriptor)
+		out = addDescriptorsRelaySet(seen, out, state.Descriptor, now)
 	}
 	return out
 }
@@ -430,6 +434,71 @@ func (s *RelaySet) discoveryRelayStateLocked(
 	return relayState{Descriptor: verified, LastSeenAt: now}, relayURL, true
 }
 
+func (s *RelaySet) collectDiscoveredRelaysLocked(resp types.DiscoveryResponse, targetURL string, now time.Time) (map[string]relayState, []string, bool) {
+	discoveredByURL := make(map[string]relayState, len(resp.Relays))
+	discoveredOrder := make([]string, 0, len(resp.Relays)+1)
+	targetFound := false
+	for _, descriptor := range resp.Relays {
+		relayState, relayURL, ok := s.discoveryRelayStateLocked(descriptor, now, targetURL)
+		if !ok {
+			continue
+		}
+		if targetURL != "" && relayURL == targetURL {
+			targetFound = true
+		}
+		if _, ok := discoveredByURL[relayURL]; !ok {
+			discoveredOrder = append(discoveredOrder, relayURL)
+		}
+		discoveredByURL[relayURL] = relayState
+	}
+	return discoveredByURL, discoveredOrder, targetFound
+}
+
+func (s *RelaySet) mergeTargetRelayLocked(relayURL string, record relayState, now time.Time) (bool, bool) {
+	existingAtURL, hasExistingAtURL := s.relays[relayURL]
+	record = mergeLocalRelayState(record, existingAtURL)
+	record = markDiscoveryVerified(record)
+	if upsert := s.upsertDescriptorLocked(record, now, true); upsert != upsertAccepted {
+		if upsert == upsertConflicting {
+			return false, true
+		}
+		if hasExistingAtURL {
+			if existingAtURL.discoveryFailures != 0 || !existingAtURL.nextDiscoveryRefreshAt.IsZero() || !existingAtURL.unhealthySince.IsZero() {
+				existingAtURL = markDiscoveryVerified(existingAtURL)
+				s.relays[relayURL] = existingAtURL
+				return true, false
+			}
+		}
+		return false, false
+	}
+	if !hasExistingAtURL || !reflect.DeepEqual(existingAtURL, record) {
+		return true, false
+	}
+	return false, false
+}
+
+func (s *RelaySet) mergeGossipRelayLocked(relayURL string, record relayState, now time.Time) (bool, bool) {
+	existingAtURL, hasExistingAtURL := s.relays[relayURL]
+	record = mergeLocalRelayState(record, existingAtURL)
+	if upsert := s.upsertDescriptorLocked(record, now, false); upsert != upsertAccepted {
+		return false, false
+	}
+	if !hasExistingAtURL || !reflect.DeepEqual(existingAtURL, record) {
+		return true, false
+	}
+	return false, false
+}
+
+func (s *RelaySet) recordTargetObservationsLocked(targetURL string, resp types.DiscoveryResponse, now time.Time) {
+	if targetURL == "" {
+		return
+	}
+	s.recordReleaseObservationLocked(targetURL, resp.ReleaseVersion, now)
+	if resp.ProtocolVersion != types.DiscoveryVersion {
+		s.recordIncompatibleRelayLocked(targetURL, resp.ProtocolVersion, now)
+	}
+}
+
 func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.DiscoveryResponse, now time.Time) (relaySetChanged bool, err error) {
 	if len(resp.Relays) > MaxAnnouncedRelays+1 || len(resp.IncompatibleRelays) > MaxAnnouncedRelays || len(resp.RelayReleaseVersions) > MaxAnnouncedRelays {
 		return false, fmt.Errorf("discovery response exceeds collection limits (relays: %d, metadata: %d)", MaxAnnouncedRelays+1, MaxAnnouncedRelays)
@@ -445,60 +514,22 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetURL string, resp types.Disc
 	defer s.mu.Unlock()
 	s.clearExpiredPoolBansLocked(now)
 
-	discoveredByURL := make(map[string]relayState, len(resp.Relays))
-	discoveredOrder := make([]string, 0, len(resp.Relays)+1)
-	targetFound := false
-	for _, descriptor := range resp.Relays {
-		relayState, relayURL, ok := s.discoveryRelayStateLocked(descriptor, now, targetURL)
-		if !ok {
-			continue
-		}
-		if authoritative && relayURL == targetURL {
-			targetFound = true
-		}
-		if _, ok := discoveredByURL[relayURL]; !ok {
-			discoveredOrder = append(discoveredOrder, relayURL)
-		}
-		discoveredByURL[relayURL] = relayState
-	}
+	discoveredByURL, discoveredOrder, targetFound := s.collectDiscoveredRelaysLocked(resp, targetURL, now)
 	missingTarget := authoritative && !targetFound
 	conflictingTarget := false
 
-	if authoritative {
-		s.recordReleaseObservationLocked(targetURL, resp.ReleaseVersion, now)
-		if protocolMismatch {
-			s.recordIncompatibleRelayLocked(targetURL, resp.ProtocolVersion, now)
-		}
-	}
+	s.recordTargetObservationsLocked(targetURL, resp, now)
 
 	for _, relayURL := range discoveredOrder {
-		record := discoveredByURL[relayURL]
-		existingAtURL, hasExistingAtURL := s.relays[relayURL]
-		record = mergeLocalRelayState(record, existingAtURL)
-
-		isAuthoritativeTarget := !protocolMismatch && !missingTarget && authoritative && relayURL == targetURL
-		if isAuthoritativeTarget {
-			record = markDiscoveryVerified(record)
-		}
-
-		if upsert := s.upsertDescriptorLocked(record, now, isAuthoritativeTarget); upsert != upsertAccepted {
-			if upsert == upsertConflicting {
-				conflictingTarget = conflictingTarget || isAuthoritativeTarget
-				continue
-			}
-			if isAuthoritativeTarget && hasExistingAtURL {
-				if existingAtURL.discoveryFailures != 0 || !existingAtURL.nextDiscoveryRefreshAt.IsZero() || !existingAtURL.unhealthySince.IsZero() {
-					existingAtURL = markDiscoveryVerified(existingAtURL)
-					s.relays[relayURL] = existingAtURL
-					relaySetChanged = true
-				}
-			}
+		if !protocolMismatch && !missingTarget && authoritative && relayURL == targetURL {
+			changed, conflicting := s.mergeTargetRelayLocked(relayURL, discoveredByURL[relayURL], now)
+			relaySetChanged = relaySetChanged || changed
+			conflictingTarget = conflictingTarget || conflicting
 			continue
 		}
-
-		if !hasExistingAtURL || !reflect.DeepEqual(existingAtURL, record) {
-			relaySetChanged = true
-		}
+		changed, conflicting := s.mergeGossipRelayLocked(relayURL, discoveredByURL[relayURL], now)
+		relaySetChanged = relaySetChanged || changed
+		conflictingTarget = conflictingTarget || conflicting
 	}
 	s.enforceCapLocked()
 	if protocolMismatch && authoritative {
@@ -766,28 +797,19 @@ func validateRelayDescriptorFreshness(desc types.RelayDescriptor, now time.Time)
 	return nil
 }
 
-func (s *RelaySet) enforceCapLocked() {
-	now := time.Now().UTC()
-	s.clearExpiredPoolBansLocked(now)
-	for address, entry := range s.keyIndex {
-		if !entry.TombstoneUntil.IsZero() && now.After(entry.TombstoneUntil) {
-			delete(s.keyIndex, address)
-		}
-	}
-	if len(s.relays) <= MaxAnnouncedRelays {
-		return
-	}
-	type ageEntry struct {
-		url       string
-		protected bool
-		seenAt    time.Time
-	}
-	candidates := make([]ageEntry, 0, len(s.relays))
+type enforceCapLockedAge struct {
+	url       string
+	protected bool
+	seenAt    time.Time
+}
+
+func (s *RelaySet) rankEvictionCandidatesLocked() []enforceCapLockedAge {
+	candidates := make([]enforceCapLockedAge, 0, len(s.relays))
 	for url, state := range s.relays {
 		if state.Bootstrap || state.Banned {
 			continue
 		}
-		candidates = append(candidates, ageEntry{
+		candidates = append(candidates, enforceCapLockedAge{
 			url:       url,
 			protected: state.Trust == relayVerified,
 			seenAt:    state.LastSeenAt,
@@ -799,12 +821,39 @@ func (s *RelaySet) enforceCapLocked() {
 		}
 		return candidates[i].seenAt.Before(candidates[j].seenAt)
 	})
-	for _, c := range candidates {
+	return candidates
+}
+
+func (s *RelaySet) enforceCapLocked() {
+	now := time.Now().UTC()
+	s.clearExpiredPoolBansLocked(now)
+	for address, entry := range s.keyIndex {
+		if !entry.TombstoneUntil.IsZero() && now.After(entry.TombstoneUntil) {
+			delete(s.keyIndex, address)
+		}
+	}
+	if len(s.relays) <= MaxAnnouncedRelays {
+		return
+	}
+	for _, c := range s.rankEvictionCandidatesLocked() {
 		if len(s.relays) <= MaxAnnouncedRelays {
 			return
 		}
 		delete(s.relays, c.url)
 	}
+}
+
+func (s *RelaySet) applyDiscoveryBackoffLocked(relayURL string, state relayState, now time.Time, recoveryFailures int) (bool, string, int) {
+	if recoveryFailures <= 0 || state.discoveryFailures < recoveryFailures {
+		s.relays[relayURL] = state
+		return false, "retry", state.discoveryFailures
+	}
+	failuresOverBudget := state.discoveryFailures - recoveryFailures
+	backoff := min(defaultDirectRecoveryBackoff<<min(failuresOverBudget, 3), maxDirectRecoveryBackoff)
+	state.Dead = true
+	state.nextDiscoveryRefreshAt = now.Add(backoff)
+	s.relays[relayURL] = state
+	return true, "discovery", state.discoveryFailures
 }
 
 func (s *RelaySet) RecordDiscoveryFailure(relayURL string, recoveryFailures int) (backedOff bool, backoffReason string, failureCount int) {
@@ -825,17 +874,7 @@ func (s *RelaySet) RecordDiscoveryFailure(relayURL string, recoveryFailures int)
 		s.banFromPoolLocked(relayURL, now)
 		return true, "unhealthy", state.discoveryFailures
 	}
-
-	if recoveryFailures <= 0 || state.discoveryFailures < recoveryFailures {
-		s.relays[relayURL] = state
-		return false, "retry", state.discoveryFailures
-	}
-	failuresOverBudget := state.discoveryFailures - recoveryFailures
-	backoff := min(defaultDirectRecoveryBackoff<<min(failuresOverBudget, 3), maxDirectRecoveryBackoff)
-	state.Dead = true
-	state.nextDiscoveryRefreshAt = now.Add(backoff)
-	s.relays[relayURL] = state
-	return true, "discovery", state.discoveryFailures
+	return s.applyDiscoveryBackoffLocked(relayURL, state, now, recoveryFailures)
 }
 
 func (s *RelaySet) RecordActiveFailure(relayURL string, recoveryFailures int) (backedOff bool, backoffReason string, failureCount int) {

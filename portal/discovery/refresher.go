@@ -128,32 +128,25 @@ func (r *Refresher) refreshHTTPS(ctx context.Context) error {
 	})
 }
 
-func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error {
-	relayURL := state.Descriptor.APIHTTPSAddr
-
-	baseURL, err := url.Parse(relayURL)
-	if err != nil {
-		r.logDiscoveryFailure(state, err)
-		return nil
-	}
-	client := r.httpClient
+func (r *Refresher) refreshOneHTTPSClient(ctx context.Context, state relayState, relayURL string, baseURL *url.URL) (*http.Client, *http.Transport, error) {
 	if !state.Bootstrap {
 		if err := requirePublicRelayURL(relayURL); err != nil {
-			r.logDiscoveryFailure(state, err)
-			return nil
+			return nil, nil, err
 		}
-		client = r.publicHTTPClient
-	} else if utils.IsLocalRelayHost(baseURL.Hostname()) {
-		_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
-		if err != nil {
-			r.logDiscoveryFailure(state, err)
-			return nil
-		}
-		localClient.CheckRedirect = rejectDiscoveryRedirect
-		client = localClient
-		defer transport.CloseIdleConnections()
+		return r.publicHTTPClient, nil, nil
 	}
+	if !utils.IsLocalRelayHost(baseURL.Hostname()) {
+		return r.httpClient, nil, nil
+	}
+	_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)
+	if err != nil {
+		return nil, nil, err
+	}
+	localClient.CheckRedirect = rejectDiscoveryRedirect
+	return localClient, transport, nil
+}
 
+func (r *Refresher) refreshOneHTTPSFetch(ctx context.Context, state relayState, relayURL string, baseURL *url.URL, client *http.Client) error {
 	startedAt := time.Now()
 	var resp types.DiscoveryResponse
 	if err := utils.HTTPDoAPIPath(ctx, client, baseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
@@ -164,7 +157,6 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error
 		return nil
 	}
 	measuredAt := time.Now().UTC()
-
 	if _, err := r.relaySet.ApplyRelayDiscoveryResponse(relayURL, resp, measuredAt); err != nil {
 		if errors.Is(err, ErrProtocolMismatch) {
 			log.Debug().Err(err).Str("relay", relayURL).Msg("discovery protocol mismatch; relay kept visible as incompatible")
@@ -175,6 +167,24 @@ func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error
 	}
 	r.relaySet.RecordDiscoveryRTT(relayURL, time.Since(startedAt), measuredAt)
 	return nil
+}
+
+func (r *Refresher) refreshOneHTTPS(ctx context.Context, state relayState) error {
+	relayURL := state.Descriptor.APIHTTPSAddr
+	baseURL, err := url.Parse(relayURL)
+	if err != nil {
+		r.logDiscoveryFailure(state, err)
+		return nil
+	}
+	client, transport, err := r.refreshOneHTTPSClient(ctx, state, relayURL, baseURL)
+	if err != nil {
+		r.logDiscoveryFailure(state, err)
+		return nil
+	}
+	if transport != nil {
+		defer transport.CloseIdleConnections()
+	}
+	return r.refreshOneHTTPSFetch(ctx, state, relayURL, baseURL, client)
 }
 
 func parallel[T any](items []T, limit int, fn func(T) error) error {

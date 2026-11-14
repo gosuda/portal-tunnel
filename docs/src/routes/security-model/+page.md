@@ -19,6 +19,26 @@ handshake flow, and browser-delegation context, read
 [Building End-to-End TLS Tunnels Without Delegated Credentials](/keyless-tls).
 Raw port transports and opt-in static caching have different boundaries below.
 
+## Local TLS service namespace
+
+`<service>.<40-lowercase-hex-address>.<relay-root>` is a tunnel-owned Local TLS
+endpoint with an exact per-service leaf certificate. It is advertised only after
+capability negotiation and certificate readiness. It never falls back to Keyless
+or redirects automatically; unavailable certificates fail closed. Friendly aliases
+and old one-label address-derived URLs retain their legacy Keyless behavior.
+Moving to a new URL requires explicit application origin and cookie migration.
+
+The relay's existing wildcard cannot cover this two-label namespace. The relay
+still controls DNS/ACME validation and may obtain a new competing certificate;
+CT/CAA observations do not prevent that attack. Native channel binding signs the
+entire hostname, nonce, and current TLS Exporter. Sibling services cannot substitute
+bindings. Standard browser JavaScript cannot obtain the exporter and has no
+identical authentication proof. Legacy relay-cached sessions are outside this
+live tunnel-terminated channel-binding guarantee.
+
+Local HTTP handlers support HTTP/2 with HTTP/1.1 backend translation, and retain
+HTTP/1.1. Raw decrypted stream consumers do not gain HTTP/2 merely from ALPN.
+Neither the friendly Keyless path nor relay-cache/control-plane ALPN changes.
 ## Opt-in Static Cache
 
 `portal expose --serve ./dist --cache` explicitly permits selected relays to
@@ -27,7 +47,9 @@ expose HTTP headers and content to the serving relay. If that connection falls
 back to the live origin, it still trusts the relay; browser-to-origin end-to-end
 TLS is not restored on an already terminated connection.
 
-Only the identity-bound canonical hostname is cacheable. Friendly hostnames
+Only eligible legacy identity-bound hostnames are cacheable. New canonical
+`<service>.<address>.<relay-root>` URLs never use relay static cache, retained
+snapshots, or fallback: their TLS endpoint stays in the tunnel. Friendly hostnames
 are reusable, first-come aliases, so they remain live-origin routes and do not
 serve retained content after the origin disconnects.
 
@@ -109,8 +131,8 @@ runtime does not provide.
 
 ## Keyless Signing
 
-For relay-hosted names, the SDK terminates tenant TLS 1.3 with a `keyless_tls`
-t13server backed by the relay's `/v1/sign` endpoint. The SDK generates the
+For friendly aliases and legacy canonical names, the SDK terminates tenant TLS
+1.3 with a `keyless_tls` t13server backed by the relay's `/v1/sign` endpoint. The SDK generates the
 ephemeral key material and derives the session keys; the relay supplies
 certificate signatures without receiving those traffic secrets.
 
@@ -214,6 +236,13 @@ Checks continue without visitor traffic and are skipped while no reverse
 connection is ready. Attempts run serially. Lease termination cancels and joins
 the loop before a replacement lease starts. Socket I/O shares the overall probe
 timeout and is closed on cancellation.
+
+With Local TLS enabled, the probe targets the legacy URL using its Keyless TLS
+configuration, including while the canonical certificate is unavailable. The
+legacy and alias endpoints use relay-owned certificate material; the canonical
+hostname uses the tunnel's independent local certificate. This probe samples the
+legacy connection and does not verify every alias or canonical connection.
+
 It cannot establish that other clients or connections were forwarded honestly.
 In particular, selective MITM and probe distinguishability remain limitations;
 random padding does not establish that probes are indistinguishable from normal
@@ -240,6 +269,24 @@ Both the trusted server identity and the verification code must come from a path
 outside the relay's control. A tunnel-owned certificate key alone is insufficient
 if the relay can retain or obtain another certificate covering the hostname; see
 [#541](https://github.com/gosuda/portal-tunnel/issues/541).
+
+## Certificate monitoring
+
+Opt-in [CAA and certificate transparency monitoring](/keyless-tls#certificate-monitoring)
+adds warning-only observations for canonical hostnames. It queries independent
+DNS and CertSpotter only when explicitly enabled; an absent operator-managed
+CAA baseline remains unconfigured. Observed DNS is never automatically accepted.
+Known local key history and explicitly approved SPKIs help identify competing
+certificate keys, but do not authenticate every visitor connection.
+
+This is a best-effort evaluation pilot using CertSpotter's unauthenticated API,
+not a production monitoring SLA, complete CT auditor, or pre-attack guarantee.
+Hourly polling, coalesced unexpired-only issuance results, merge/aggregation
+delays, source outages, and missing inclusion/consistency proofs limit coverage.
+Runtime findings never mutate DNS, replace certificates, block traffic, or switch
+relays. CAA does not revoke existing certificates or remove the DNS operator's
+issuance authority. A missing or failed observation is unknown, not evidence of
+safety.
 
 ## Relay Visibility
 

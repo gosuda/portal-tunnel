@@ -15,6 +15,98 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
+const testFromHeader = "X-Test-From"
+
+func marshalMuxRequest(t *testing.T, body any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func readMuxAnswer(t *testing.T, response *http.Response) []byte {
+	t.Helper()
+	defer func() { _ = response.Body.Close() }()
+	answer, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return answer
+}
+
+func postMuxRaw(t *testing.T, relay *httptest.Server, path, from string, raw []byte) (*http.Response, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, relay.URL+path, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(testFromHeader, from)
+	response, err := relay.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response, readMuxAnswer(t, response)
+}
+
+func postMuxJSON(t *testing.T, relay *httptest.Server, path, from string, body any) (*http.Response, []byte) {
+	t.Helper()
+	return postMuxRaw(t, relay, path, from, marshalMuxRequest(t, body))
+}
+
+func generateLeaseIdentity(t *testing.T, name string) types.Identity {
+	t.Helper()
+	leaseIdentity, err := identity.Generate(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return leaseIdentity
+}
+
+func startMuxRelay(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = r.Header.Get(testFromHeader) + ":1234"
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(relay.Close)
+	return relay
+}
+
+func completeBudgetRegistration(t *testing.T, relay *httptest.Server, asking, signing, name string) {
+	t.Helper()
+	leaseIdentity := generateLeaseIdentity(t, name)
+	asked, answer := postMuxJSON(t, relay, types.PathSDKRegisterChallenge, asking, types.RegisterChallengeRequest{Identity: leaseIdentity})
+	var challenge types.APIEnvelope[types.RegisterChallengeResponse]
+	if err := json.Unmarshal(answer, &challenge); err != nil || asked.StatusCode != http.StatusCreated {
+		t.Fatalf("%s challenge = %d, %v: %s", name, asked.StatusCode, err, answer)
+	}
+	signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(challenge.Data.SIWEMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := types.RegisterRequest{ChallengeID: challenge.Data.ChallengeID, SIWEMessage: challenge.Data.SIWEMessage, SIWESignature: signature}
+	if registered, answer := postMuxJSON(t, relay, types.PathSDKRegister, signing, request); registered.StatusCode != http.StatusCreated {
+		t.Fatalf("%s register = %d: %s", name, registered.StatusCode, answer)
+	}
+}
+
+func checkApprovedSpelledIdentity(t *testing.T, relay *httptest.Server, server *portal.Server, access *Store, asking string) {
+	t.Helper()
+	approved := generateLeaseIdentity(t, "budget-approved")
+	decision := access.Snapshot()
+	decision.Approve(approved.ServiceKey())
+	if committed := access.Commit(decision); !server.SetServiceIdentityAccess(approved.ServiceKey(), committed.Access(approved.ServiceKey()), committed.Revision()) {
+		t.Fatal("the approval was not applied")
+	}
+	spelled := approved
+	spelled.Name = "budget_approved"
+	if asked, answer := postMuxJSON(t, relay, types.PathSDKRegisterChallenge, asking, types.RegisterChallengeRequest{Identity: spelled}); asked.StatusCode != http.StatusCreated {
+		t.Fatalf("approved identity, spelled another way = %d: %s", asked.StatusCode, answer)
+	}
+}
+
 func TestMuxRejectsMethodBeforeAdmission(t *testing.T) {
 	for _, path := range []string{types.PathSDKRegisterChallenge, types.PathSDKRegister, types.PathDiscoveryAnnounce} {
 		t.Run(path, func(t *testing.T) {
@@ -38,7 +130,8 @@ func TestMuxRejectsMethodBeforeAdmission(t *testing.T) {
 	}
 }
 
-func TestMuxRefusesTunnelsFromOutsideAllowedNetworks(t *testing.T) {
+func openAllowedTunnelIngress(t *testing.T) (*portal.Server, *Ingress) {
+	t.Helper()
 	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -47,38 +140,19 @@ func TestMuxRefusesTunnelsFromOutsideAllowedNetworks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return server, ingress
+}
+
+func TestMuxRefusesTunnelsFromOutsideAllowedNetworks(t *testing.T) {
+	server, ingress := openAllowedTunnelIngress(t)
 	limiter := NewSourceLimiter(1, 1, 1, 1)
 	handler := Mux(server, http.NotFoundHandler(), ingress, limiter, NewStore(), PreAuthConfig{ChallengeCost: 1, RegisterCost: 1, AnnounceCost: 1})
-	leaseIdentity, err := identity.Generate("source-allowed")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := json.Marshal(types.RegisterChallengeRequest{Identity: leaseIdentity})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const fromHeader = "X-Test-From"
-	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.RemoteAddr = r.Header.Get(fromHeader) + ":1234"
-		handler.ServeHTTP(w, r)
-	}))
-	t.Cleanup(relay.Close)
+	leaseIdentity := generateLeaseIdentity(t, "source-allowed")
+	body := marshalMuxRequest(t, types.RegisterChallengeRequest{Identity: leaseIdentity})
+	relay := startMuxRelay(t, handler)
 	post := func(path, from string) (int, []byte) {
 		t.Helper()
-		req, err := http.NewRequest(http.MethodPost, relay.URL+path, bytes.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set(fromHeader, from)
-		response, err := relay.Client().Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = response.Body.Close() }()
-		answer, err := io.ReadAll(response.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+		response, answer := postMuxRaw(t, relay, path, from, body)
 		return response.StatusCode, answer
 	}
 
@@ -109,7 +183,7 @@ func TestMuxLeavesFallbackBodyLimitsToOwner(t *testing.T) {
 }
 
 func TestMuxUnapprovedLeaseBudget(t *testing.T) {
-	const asking, signing, fromHeader = "198.51.100.1", "198.51.100.2", "X-Test-From"
+	const asking, signing = "198.51.100.1", "198.51.100.2"
 	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: t.TempDir(), UnapprovedLeasesPerSource: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -119,77 +193,24 @@ func TestMuxUnapprovedLeaseBudget(t *testing.T) {
 	manual.SetMode(ModeManual)
 	access.Commit(manual)
 	handler := Mux(server, http.NotFoundHandler(), nil, nil, access, PreAuthConfig{})
-	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.RemoteAddr = r.Header.Get(fromHeader) + ":1234"
-		handler.ServeHTTP(w, r)
-	}))
-	t.Cleanup(relay.Close)
+	relay := startMuxRelay(t, handler)
 	post := func(path, from string, body any) (*http.Response, []byte) {
 		t.Helper()
-		raw, err := json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req, err := http.NewRequest(http.MethodPost, relay.URL+path, bytes.NewReader(raw))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set(fromHeader, from)
-		response, err := relay.Client().Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = response.Body.Close() }()
-		answer, err := io.ReadAll(response.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return response, answer
+		return postMuxJSON(t, relay, path, from, body)
 	}
 	ask := func(leaseIdentity types.Identity) (*http.Response, []byte) {
 		t.Helper()
 		return post(types.PathSDKRegisterChallenge, asking, types.RegisterChallengeRequest{Identity: leaseIdentity})
 	}
-	generate := func(name string) types.Identity {
-		t.Helper()
-		leaseIdentity, err := identity.Generate(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return leaseIdentity
-	}
 
 	for _, name := range []string{"budget-first", "budget-second"} {
-		leaseIdentity := generate(name)
-		asked, answer := ask(leaseIdentity)
-		var challenge types.APIEnvelope[types.RegisterChallengeResponse]
-		if err := json.Unmarshal(answer, &challenge); err != nil || asked.StatusCode != http.StatusCreated {
-			t.Fatalf("%s challenge = %d, %v: %s", name, asked.StatusCode, err, answer)
-		}
-		signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(challenge.Data.SIWEMessage)
-		if err != nil {
-			t.Fatal(err)
-		}
-		request := types.RegisterRequest{ChallengeID: challenge.Data.ChallengeID, SIWEMessage: challenge.Data.SIWEMessage, SIWESignature: signature}
-		if registered, answer := post(types.PathSDKRegister, signing, request); registered.StatusCode != http.StatusCreated {
-			t.Fatalf("%s register = %d: %s", name, registered.StatusCode, answer)
-		}
+		completeBudgetRegistration(t, relay, asking, signing, name)
 	}
-	if refused, answer := ask(generate("budget-third")); refused.StatusCode != http.StatusTooManyRequests || refused.Header.Get("Retry-After") == "" {
+	if refused, answer := ask(generateLeaseIdentity(t, "budget-third")); refused.StatusCode != http.StatusTooManyRequests || refused.Header.Get("Retry-After") == "" {
 		t.Fatalf("third unapproved lease = %d, Retry-After %q: %s", refused.StatusCode, refused.Header.Get("Retry-After"), answer)
 	}
 
-	approved := generate("budget-approved")
-	decision := access.Snapshot()
-	decision.Approve(approved.ServiceKey())
-	if committed := access.Commit(decision); !server.SetServiceIdentityAccess(approved.ServiceKey(), committed.Access(approved.ServiceKey()), committed.Revision()) {
-		t.Fatal("the approval was not applied")
-	}
-	spelled := approved
-	spelled.Name = "budget_approved"
-	if asked, answer := ask(spelled); asked.StatusCode != http.StatusCreated {
-		t.Fatalf("approved identity, spelled another way = %d: %s", asked.StatusCode, answer)
-	}
+	checkApprovedSpelledIdentity(t, relay, server, access, asking)
 }
 
 func TestMuxPreAuthBudgetExhaustionRefusesWithRetryAfter(t *testing.T) {
@@ -199,14 +220,8 @@ func TestMuxPreAuthBudgetExhaustionRefusesWithRetryAfter(t *testing.T) {
 	}
 	limiter := NewSourceLimiter(1, 1, 0, 0)
 	handler := Mux(server, http.NotFoundHandler(), nil, limiter, NewStore(), PreAuthConfig{ChallengeCost: 1})
-	leaseIdentity, err := identity.Generate("pre-auth-budget")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := json.Marshal(types.RegisterChallengeRequest{Identity: leaseIdentity})
-	if err != nil {
-		t.Fatal(err)
-	}
+	leaseIdentity := generateLeaseIdentity(t, "pre-auth-budget")
+	body := marshalMuxRequest(t, types.RegisterChallengeRequest{Identity: leaseIdentity})
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = "198.51.100.1:1234"
 		handler.ServeHTTP(w, r)
@@ -217,12 +232,7 @@ func TestMuxPreAuthBudgetExhaustionRefusesWithRetryAfter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = response.Body.Close() }()
-		answer, err := io.ReadAll(response.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return response.StatusCode, response.Header, string(answer)
+		return response.StatusCode, response.Header, string(readMuxAnswer(t, response))
 	}
 	if status, _, answer := challenge(); status != http.StatusCreated {
 		t.Fatalf("first challenge = %d, want 201: %s", status, answer)

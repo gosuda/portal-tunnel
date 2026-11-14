@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,7 +24,8 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
-	lego "github.com/go-acme/lego/v4/lego"
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
 
@@ -150,6 +152,146 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 	return true
 }
 
+func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
+	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
+	user, registrationFile, err := m.newClientLoadUser(email, true)
+	if err != nil {
+		return nil, err
+	}
+	return m.newClientWithLoadedUser(ctx, user, registrationFile)
+}
+
+func (m *Manager) newClientLoadUser(email string, createKey bool) (*acmeUser, string, error) {
+	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
+	registrationFile := registrationFilePath(m.cfg.KeyDir, m.cfg.CADirURL)
+	var accountKey crypto.PrivateKey
+	var err error
+	if createKey {
+		accountKey, err = loadOrCreateAccountKey(accountKeyFile)
+	} else {
+		var accountKeyPEM []byte
+		accountKeyPEM, err = os.ReadFile(accountKeyFile)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, "", ErrTenantIssuanceDisabled
+		}
+		if err == nil {
+			accountKey, err = parseAccountKeyPEM(accountKeyPEM)
+		}
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("load acme account key: %w", err)
+	}
+	var accountReg registration.Resource
+	accountRegPtr := (*registration.Resource)(nil)
+	ok, err := utils.ReadJSONFileIfExists(registrationFile, &accountReg)
+	if err != nil {
+		return nil, "", fmt.Errorf("load acme registration: %w", err)
+	}
+	if ok {
+		accountRegPtr = &accountReg
+	}
+	user := &acmeUser{
+		Email:        email,
+		Key:          accountKey,
+		Registration: accountRegPtr,
+	}
+	return user, registrationFile, nil
+}
+
+func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, registrationFile string) (*lego.Client, error) {
+	clientConfig := lego.NewConfig(user)
+	clientConfig.CADirURL = m.cfg.CADirURL
+	clientConfig.Certificate.KeyType = certcrypto.RSA2048
+	clientConfig.HTTPClient.Transport = acmeRequestTransport{ctx: ctx, transport: clientConfig.HTTPClient.Transport}
+	client, err := lego.NewClient(clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create acme client: %w", err)
+	}
+	if user.Registration == nil && client.GetExternalAccountRequired() {
+		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
+	}
+
+	challengeProvider, err := m.dns.ChallengeProvider(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create dns challenge provider: %w", err)
+	}
+	provider := dnsChallengeProvider{Provider: challengeProvider, ctx: ctx}
+	if err := client.Challenge.SetDNS01Provider(provider, dns01.WrapPreCheck(provider.checkPropagation)); err != nil {
+		return nil, fmt.Errorf("set dns01 provider: %w", err)
+	}
+
+	if user.Registration == nil {
+		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			return nil, fmt.Errorf("register acme account: %w", err)
+		}
+		user.Registration = reg
+		if err := utils.WriteJSONFile(registrationFile, reg, 0o600); err != nil {
+			return nil, fmt.Errorf("persist acme registration: %w", err)
+		}
+	}
+	return client, nil
+}
+
+func (u *acmeUser) GetEmail() string                        { return u.Email }
+func (u *acmeUser) GetRegistration() *registration.Resource { return u.Registration }
+func (u *acmeUser) GetPrivateKey() crypto.PrivateKey        { return u.Key }
+
+// acmeRequestTransport binds lego's context-free order API to the operation
+// lifetime, including account registration and order-finalization requests.
+type acmeRequestTransport struct {
+	ctx       context.Context
+	transport http.RoundTripper
+}
+
+func (t acmeRequestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.transport.RoundTrip(req.WithContext(t.ctx))
+}
+func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
+	keyPEM, err := os.ReadFile(path)
+	if err == nil {
+		return parseAccountKeyPEM(keyPEM)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate account key: %w", err)
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("marshal account key: %w", err)
+	}
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
+	if err := utils.WriteFileAtomic(path, keyPEM, 0o600); err != nil {
+		return nil, fmt.Errorf("persist account key: %w", err)
+	}
+	return key, nil
+}
+
+func parseAccountKeyPEM(keyPEM []byte) (crypto.PrivateKey, error) {
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, errInvalidPrivateKeyPEM
+	}
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		switch typed := key.(type) {
+		case *ecdsa.PrivateKey:
+			return typed, nil
+		case *rsa.PrivateKey:
+			return typed, nil
+		}
+	}
+	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	return nil, errUnsupportedPrivateKeyType
+}
+
 // NormalizeCADirURL validates an optional ACME CA directory URL and defaults
 // an empty value to Let's Encrypt production. Only HTTPS directories are
 // accepted; it returns the canonical form used to name the CA's files.
@@ -198,122 +340,47 @@ func (m *Manager) certificateFiles() (certFile, keyFile string) {
 	}
 	return certificateFilePaths(m.cfg.KeyDir, m.cfg.CADirURL)
 }
-
-func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
-	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
-	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
-	registrationFile := registrationFilePath(m.cfg.KeyDir, m.cfg.CADirURL)
-	accountKey, err := loadOrCreateAccountKey(accountKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load acme account key: %w", err)
-	}
-
-	var accountReg registration.Resource
-	accountRegPtr := (*registration.Resource)(nil)
-	ok, err := utils.ReadJSONFileIfExists(registrationFile, &accountReg)
-	if err != nil {
-		return nil, fmt.Errorf("load acme registration: %w", err)
-	}
-	if ok {
-		accountRegPtr = &accountReg
-	}
-
-	user := &acmeUser{
-		Email:        email,
-		Key:          accountKey,
-		Registration: accountRegPtr,
-	}
-
-	clientConfig := lego.NewConfig(user)
-	clientConfig.CADirURL = m.cfg.CADirURL
-	clientConfig.Certificate.KeyType = certcrypto.RSA2048
-
-	client, err := lego.NewClient(clientConfig)
-	if err != nil {
-		return nil, fmt.Errorf("create acme client: %w", err)
-	}
-	if user.Registration == nil && client.GetExternalAccountRequired() {
-		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
-	}
-
-	challengeProvider, err := m.dns.ChallengeProvider(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create dns challenge provider: %w", err)
-	}
-	if err := client.Challenge.SetDNS01Provider(challengeProvider); err != nil {
-		return nil, fmt.Errorf("set dns01 provider: %w", err)
-	}
-
-	if user.Registration == nil {
-		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-		if err != nil {
-			return nil, fmt.Errorf("register acme account: %w", err)
-		}
-		user.Registration = reg
-		if err := utils.WriteJSONFile(registrationFile, reg, 0o600); err != nil {
-			return nil, fmt.Errorf("persist acme registration: %w", err)
-		}
-	}
-
-	return client, nil
-}
-
-func (u *acmeUser) GetEmail() string                        { return u.Email }
-func (u *acmeUser) GetRegistration() *registration.Resource { return u.Registration }
-func (u *acmeUser) GetPrivateKey() crypto.PrivateKey        { return u.Key }
-
-func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
-	keyPEM, err := os.ReadFile(path)
-	if err == nil {
-		return parseAccountKeyPEM(keyPEM)
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate account key: %w", err)
-	}
-	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return nil, fmt.Errorf("marshal account key: %w", err)
-	}
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
-	if err := utils.WriteFileAtomic(path, keyPEM, 0o600); err != nil {
-		return nil, fmt.Errorf("persist account key: %w", err)
-	}
-	return key, nil
-}
-
 func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	domains := localDevelopmentDomains(baseHost)
 	keyFile := filepath.Join(keyDir, keyFileName)
 	certFile := filepath.Join(keyDir, fullChainFileName)
-
-	now := time.Now().UTC()
 	if utils.FileExists(keyFile) && utils.FileExists(certFile) {
-		cert, err := loadCertificate(certFile)
-		if err == nil && localDevelopmentCertificateReusable(cert, domains, now) {
+		if cert, err := loadCertificate(certFile); err == nil && localDevelopmentCertificateReusable(cert, domains, time.Now().UTC()) {
 			return nil
 		}
 	}
-
 	if err := utils.EnsureParentDir(keyFile); err != nil {
 		return err
 	}
-
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("generate local dev private key: %w", err)
 	}
+	return issueLocalDevCertWithKey(certFile, keyFile, baseHost, domains, privateKey)
+}
 
+func issueLocalDevCertWithKey(certFile, keyFile, baseHost string, domains []string, privateKey *ecdsa.PrivateKey) error {
 	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialLimit)
 	if err != nil {
 		return fmt.Errorf("generate local dev certificate serial: %w", err)
 	}
+	now := time.Now().UTC()
+	template := buildLocalDevCertTemplate(baseHost, domains, now, serialNumber)
+	certPEM, keyPEM, err := createLocalDevCertPEM(template, privateKey)
+	if err != nil {
+		return err
+	}
+	if err := utils.WriteFileAtomic(certFile, certPEM, 0o644); err != nil {
+		return fmt.Errorf("write local dev certificate: %w", err)
+	}
+	if err := utils.WriteFileAtomic(keyFile, keyPEM, 0o600); err != nil {
+		return fmt.Errorf("write local dev private key: %w", err)
+	}
+	return nil
+}
 
+func buildLocalDevCertTemplate(baseHost string, domains []string, now time.Time, serialNumber *big.Int) *x509.Certificate {
 	notBefore := now.Add(-1 * time.Hour)
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
@@ -328,7 +395,6 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
-
 	for _, domain := range domains {
 		if ip := net.ParseIP(domain); ip != nil {
 			template.IPAddresses = append(template.IPAddresses, ip)
@@ -336,26 +402,21 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 			template.DNSNames = append(template.DNSNames, domain)
 		}
 	}
+	return template
+}
 
+func createLocalDevCertPEM(template *x509.Certificate, privateKey *ecdsa.PrivateKey) ([]byte, []byte, error) {
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
 	if err != nil {
-		return fmt.Errorf("create local dev certificate: %w", err)
+		return nil, nil, fmt.Errorf("create local dev certificate: %w", err)
 	}
-
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
-		return fmt.Errorf("marshal local dev private key: %w", err)
+		return nil, nil, fmt.Errorf("marshal local dev private key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-
-	if err := utils.WriteFileAtomic(certFile, certPEM, 0o644); err != nil {
-		return fmt.Errorf("write local dev certificate: %w", err)
-	}
-	if err := utils.WriteFileAtomic(keyFile, keyPEM, 0o600); err != nil {
-		return fmt.Errorf("write local dev private key: %w", err)
-	}
-	return nil
+	return certPEM, keyPEM, nil
 }
 
 func localDevelopmentCertificateReusable(cert *x509.Certificate, domains []string, now time.Time) bool {
@@ -373,26 +434,4 @@ func localDevelopmentDomains(baseHost string) []string {
 		}
 	}
 	return domains
-}
-
-func parseAccountKeyPEM(keyPEM []byte) (crypto.PrivateKey, error) {
-	block, _ := pem.Decode(keyPEM)
-	if block == nil {
-		return nil, errInvalidPrivateKeyPEM
-	}
-	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-		switch typed := key.(type) {
-		case *ecdsa.PrivateKey:
-			return typed, nil
-		case *rsa.PrivateKey:
-			return typed, nil
-		}
-	}
-	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	return nil, errUnsupportedPrivateKeyType
 }

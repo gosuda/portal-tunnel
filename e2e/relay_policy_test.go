@@ -5,26 +5,19 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
-	"github.com/gosuda/portal-tunnel/v2/sdk/staticsite"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -108,6 +101,38 @@ func waitRelayReady(t *testing.T, client *http.Client, baseURL string, serveResu
 	}
 }
 
+func runPolicyRelayProcess(t *testing.T, ctx context.Context, bin string, commandArgs, args []string) (<-chan error, func()) {
+	t.Helper()
+	command := exec.CommandContext(ctx, bin, append(commandArgs, args...)...)
+	command.Dir = t.TempDir()
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	serveResult := make(chan error, 1)
+	exited := make(chan struct{})
+	go func() {
+		serveResult <- command.Wait()
+		close(exited)
+	}()
+	return serveResult, func() {
+		<-exited
+		if t.Failed() {
+			t.Log(output.String())
+		}
+	}
+}
+
+func openPolicyRelayControl(t *testing.T, stateDir string, base *url.URL, serveResult <-chan error) *http.Client {
+	t.Helper()
+	waitForRelayCertificateMaterial(t, stateDir)
+	client := relayControlClient(t, stateDir)
+	waitRelayReady(t, client, base.String(), serveResult)
+	return client
+}
+
 func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Context, *url.URL, *http.Client) {
 	t.Helper()
 	bin := buildRelayBinary(t)
@@ -127,444 +152,125 @@ func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Co
 		"--frontend-dir", frontend,
 		"--admin-token", "admin-test",
 	}
-	command := exec.CommandContext(ctx, bin, append(commandArgs, args...)...)
-	command.Dir = t.TempDir()
-	var output bytes.Buffer
-	command.Stdout = &output
-	command.Stderr = &output
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	serveResult := make(chan error, 1)
-	exited := make(chan struct{})
-	go func() {
-		serveResult <- command.Wait()
-		close(exited)
-	}()
+	serveResult, waitRelay := runPolicyRelayProcess(t, ctx, bin, commandArgs, args)
 	t.Cleanup(func() {
 		cancel()
-		<-exited
-		if t.Failed() {
-			t.Log(output.String())
-		}
+		waitRelay()
 	})
-	waitForRelayCertificateMaterial(t, stateDir)
-	client := relayControlClient(t, stateDir)
-	waitRelayReady(t, client, base.String(), serveResult)
-	return ctx, base, client
+	return ctx, base, openPolicyRelayControl(t, stateDir, base, serveResult)
 }
 
-func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
-	stateDir := t.TempDir()
-	identities := make([]types.Identity, 3)
-	for i, name := range []string{"upgraded", "unlimited", "inherited"} {
+func generatePolicyIdentities(t *testing.T, names ...string) []types.Identity {
+	t.Helper()
+	identities := make([]types.Identity, len(names))
+	for i, name := range names {
 		var err error
 		identities[i], err = identity.Generate(name)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	headers := http.Header{"Authorization": {"Bearer admin-test"}}
-	startPhase := func(t *testing.T, defaultBPS int) (context.Context, *url.URL, *http.Client, func([]int64)) {
-		t.Helper()
-		ctx, base, client := startPolicyRelay(t, stateDir, "--default-identity-bps", strconv.Itoa(defaultBPS))
-		for _, tenant := range identities {
-			exposure, err := sdk.Expose(ctx, tenant, []string{"https://localhost:" + base.Port()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = exposure.Close() })
-			readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			_, err = exposure.WaitReady(readyCtx)
-			cancel()
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		checkLimits := func(want []int64) {
-			t.Helper()
-			var state types.PolicyStateResponse
-			if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
-				t.Fatal(err)
-			}
-			got := make(map[string]int64)
-			for _, lease := range state.Leases {
-				got[lease.IdentityKey] = lease.BPS
-			}
-			for i, tenant := range identities {
-				if limit, found := got[tenant.Key()]; !found || limit != want[i] {
-					t.Fatalf("identity %s limit = %d (found %v), want %d", tenant.Name, limit, found, want[i])
-				}
-			}
-		}
-		return ctx, base, client, checkLimits
-	}
-
-	t.Run("initial defaults and overrides", func(t *testing.T) {
-		ctx, base, client, checkLimits := startPhase(t, types.DefaultIdentityBPS)
-		checkLimits([]int64{types.DefaultIdentityBPS, types.DefaultIdentityBPS, types.DefaultIdentityBPS})
-		for i, bps := range []int64{4 * types.DefaultIdentityBPS, 0} {
-			update := types.LeasePolicyUpdate{IdentityKey: identities[i].Key(), BPS: &bps}
-			if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, update, headers, nil); err != nil {
-				t.Fatal(err)
-			}
-		}
-		checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, types.DefaultIdentityBPS})
-	})
-
-	t.Run("survive restart and reset", func(t *testing.T) {
-		defaultBPS := 2 * types.DefaultIdentityBPS
-		ctx, base, client, checkLimits := startPhase(t, defaultBPS)
-		checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
-
-		zero := int64(0)
-		conflict := types.LeasePolicyUpdate{IdentityKey: identities[0].Key(), BPS: &zero, ResetBPS: true}
-		err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, conflict, headers, nil)
-		if apiErr, ok := errors.AsType[*types.APIRequestError](err); !ok || apiErr.StatusCode != http.StatusBadRequest {
-			t.Fatalf("conflicting bandwidth update: %v", err)
-		}
-		checkLimits([]int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
-
-		for _, tenant := range identities[:2] {
-			update := types.LeasePolicyUpdate{IdentityKey: tenant.Key(), ResetBPS: true}
-			if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, update, headers, nil); err != nil {
-				t.Fatal(err)
-			}
-		}
-		checkLimits([]int64{int64(defaultBPS), int64(defaultBPS), int64(defaultBPS)})
-	})
-
-	t.Run("restore inheritance after restart", func(t *testing.T) {
-		defaultBPS := 3 * types.DefaultIdentityBPS
-		_, _, _, checkLimits := startPhase(t, defaultBPS)
-		checkLimits([]int64{int64(defaultBPS), int64(defaultBPS), int64(defaultBPS)})
-	})
+	return identities
 }
 
-func TestRelayAccessPolicyTransaction(t *testing.T) {
-	leaseIdentity, err := identity.Generate("policy-transaction")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stateDir := t.TempDir()
-	policyPath := filepath.Join(stateDir, types.RelayPolicyFilename)
-	initial, err := json.Marshal(map[string]any{
-		"approval_mode": "auto", "banned_identity_keys": []string{leaseIdentity.Key()},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(policyPath, initial, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ctx, base, client := startPolicyRelay(t, stateDir, "--cache-enabled=false")
-
-	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-		t.Fatal(err)
-	}
-	signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(challenge.SIWEMessage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var registered types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}, nil, &registered); err != nil {
-		t.Fatal(err)
-	}
-	setPolicy := func(body string, status int) {
-		t.Helper()
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, base.String()+types.PathPolicyLeases, strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		request.Header.Set("Authorization", "Bearer admin-test")
-		request.Header.Set("Content-Type", "application/json")
-		response, err := client.Do(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		if response.StatusCode != status {
-			t.Fatalf("policy status = %d, want %d", response.StatusCode, status)
-		}
-	}
-	assertBlocked := func() {
-		t.Helper()
-		if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-			t.Fatal(err)
-		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+types.PathSDKConnect, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		request.Header.Set(types.HeaderReverseCapability, registered.ReverseEndpoint.Capability)
-		response, err := client.Do(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		if response.StatusCode != http.StatusForbidden {
-			t.Fatalf("connect status = %d, want forbidden", response.StatusCode)
-		}
-	}
-	assertBlocked()
-	setPolicy(`{"identity_key":"`+leaseIdentity.Key()+`","is_banned":false,"is_denied":true,"bps":10000}`, http.StatusOK)
-	assertBlocked()
-	headers := http.Header{"Authorization": {"Bearer admin-test"}}
-	var settings types.PolicySettings
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicy, nil, headers, &settings); err != nil {
-		t.Fatal(err)
-	}
-	settings.UDP.MaxLeases, settings.TCPPort.MaxLeases = 1, 2
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, settings, headers, nil); err != nil {
-		t.Fatal(err)
-	}
-	var afterSettings types.PolicyStateResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &afterSettings); err != nil {
-		t.Fatal(err)
-	}
-	if afterSettings.Policy.UDP.MaxLeases != 1 || afterSettings.Policy.TCPPort.MaxLeases != 2 ||
-		len(afterSettings.Leases) != 1 || !afterSettings.Leases[0].IsDenied || afterSettings.Leases[0].BPS != 10000 {
-		t.Fatalf("global policy update lost identity decisions or limits: %+v", afterSettings)
-	}
-	assertBlocked()
-
-	if err := os.Rename(policyPath, policyPath+".saved"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(policyPath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	setPolicy(`{"identity_key":"`+leaseIdentity.Key()+`","is_denied":false,"bps":20000}`, http.StatusInternalServerError)
-	assertBlocked()
-	var state types.PolicyStateResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
-		t.Fatal(err)
-	}
-	if len(state.Leases) != 1 || state.Leases[0].IsBanned || !state.Leases[0].IsDenied || state.Leases[0].BPS != 10000 {
-		t.Fatalf("failed save changed committed policy: %+v", state.Leases)
-	}
-	proposed := state.Policy
-	proposed.ApprovalMode = "manual"
-	proposed.UDP.MaxLeases = 4
-	proposed.TCPPort.MaxLeases = 5
-	err = utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, proposed, headers, nil)
-	var apiErr *types.APIRequestError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("policy save failure: %v", err)
-	}
-	var unchanged types.PolicySettings
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicy, nil, headers, &unchanged); err != nil {
-		t.Fatal(err)
-	}
-	if unchanged != state.Policy {
-		t.Fatalf("failed save changed transport policy: got %+v, want %+v", unchanged, state.Policy)
-	}
-}
-
-func TestRelayInitialApprovalMode(t *testing.T) {
-	headers := http.Header{"Authorization": {"Bearer admin-test"}}
-	effectiveMode := func(t *testing.T, ctx context.Context, base *url.URL, client *http.Client) string {
-		t.Helper()
-		var settings types.PolicySettings
-		if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicy, nil, headers, &settings); err != nil {
-			t.Fatal(err)
-		}
-		return settings.ApprovalMode
-	}
-
-	t.Run("manual routes nothing before an admin call", func(t *testing.T) {
-		ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
-		leaseIdentity, err := identity.Generate("initial-manual")
-		if err != nil {
-			t.Fatal(err)
-		}
-		exposure, err := sdk.Expose(ctx, leaseIdentity, []string{"https://localhost:" + base.Port()})
+func exposePolicyIdentities(t *testing.T, ctx context.Context, relayPort string, identities []types.Identity) {
+	t.Helper()
+	for _, tenant := range identities {
+		exposure, err := sdk.Expose(ctx, tenant, []string{"https://localhost:" + relayPort})
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = exposure.Close() })
-		go func() {
-			_ = sdk.RunHTTP(ctx, exposure, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = io.WriteString(w, "approved tenant")
-			}), "")
-		}()
-
-		pending := waitPolicyLease(t, ctx, client, base)
-		if pending.IsApproved {
-			t.Fatalf("manual relay approved a lease on its own: %+v", pending)
-		}
-		waitCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		defer cancel()
-		if ready, err := exposure.WaitReady(waitCtx); err == nil {
-			t.Fatalf("unapproved lease became ready: %+v", ready)
-		}
-		tenantClient := relayTenantClient(t, client, base)
-		publicURL := "https://" + pending.CanonicalHostname + ":" + base.Port()
-		if response, err := tenantClient.Get(publicURL); err == nil {
-			body, _ := io.ReadAll(response.Body)
-			response.Body.Close()
-			if string(body) == "approved tenant" {
-				t.Fatal("an unapproved lease received a visitor request")
-			}
-		}
-
-		setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: leaseIdentity.Key(), IsApproved: ptr(true)})
 		readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		if _, err := exposure.WaitReady(readyCtx); err != nil {
-			t.Fatalf("approved lease never became ready: %v", err)
-		}
-		response, err := tenantClient.Get(publicURL)
+		_, err = exposure.WaitReady(readyCtx)
+		cancel()
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer response.Body.Close()
-		if body, _ := io.ReadAll(response.Body); string(body) != "approved tenant" {
-			t.Fatalf("approved lease answered %d %q", response.StatusCode, body)
-		}
-	})
-
-	for _, tc := range []struct {
-		name, saved, flag, want string
-	}{
-		{"saved auto wins over a manual flag", `{"approval_mode":"auto"}`, "manual", "auto"},
-		{"saved manual wins over an auto flag", `{"approval_mode":"manual"}`, "auto", "manual"},
-		{"a saved policy without a mode keeps the flag", `{}`, "manual", "manual"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			stateDir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(stateDir, types.RelayPolicyFilename), []byte(tc.saved), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			ctx, base, client := startPolicyRelay(t, stateDir, "--approval-mode", tc.flag)
-			if got := effectiveMode(t, ctx, base, client); got != tc.want {
-				t.Fatalf("effective mode = %q, want %q", got, tc.want)
-			}
-		})
-	}
-
-	t.Run("invalid value stops startup", func(t *testing.T) {
-		bin := buildRelayBinary(t)
-		for _, value := range []string{"off", "Manual", ""} {
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			command := exec.CommandContext(ctx, bin, "--identity-path", t.TempDir(), "--approval-mode="+value)
-			command.Dir = t.TempDir()
-			output, err := command.CombinedOutput()
-			if err == nil {
-				t.Fatalf("relay started with --approval-mode=%q:\n%s", value, output)
-			}
-			if !bytes.Contains(output, []byte("invalid approval mode")) {
-				t.Fatalf("--approval-mode=%q did not name the setting:\n%s", value, output)
-			}
-		}
-	})
-}
-
-func TestManualModeRevokesOfflineCache(t *testing.T) {
-	stateDir, siteDir := t.TempDir(), t.TempDir()
-	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte("cached policy site"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ctx, base, client := startPolicyRelay(t, stateDir,
-		"--cache-enabled=true",
-		"--cache-max-bytes=1024",
-		"--cache-max-ttl=30s",
-	)
-	leaseIdentity, err := identity.Generate("cached-policy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	relayURL := "https://localhost:" + base.Port()
-	exposure, err := sdk.Expose(ctx, leaseIdentity, []string{relayURL}, sdk.WithStaticRelayCache(siteDir, 30*time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	static := staticsite.NewHandler("/", siteDir, "index.html")
-	go func() { _ = sdk.RunHTTP(ctx, exposure, static, "") }()
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	ready, err := exposure.WaitReady(readyCtx)
-	if err != nil || len(ready) != 1 {
-		t.Fatalf("ready: %v, %v", ready, err)
-	}
-	tenantClient := relayTenantClient(t, client, base)
-	publicURL := ready[0].PublicURL
-	for {
-		response, err := tenantClient.Get(publicURL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		body, _ := io.ReadAll(response.Body)
-		response.Body.Close()
-		if response.Header.Get("ETag") != "" {
-			if response.StatusCode != http.StatusOK || string(body) != "cached policy site" {
-				t.Fatalf("cache response: %d, %q", response.StatusCode, body)
-			}
-			break
-		}
-		select {
-		case <-readyCtx.Done():
-			t.Fatal("cache did not populate")
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-	if err := exposure.Close(); err != nil {
-		t.Fatal(err)
-	}
-	response, err := tenantClient.Get(publicURL)
-	if err != nil {
-		t.Fatalf("offline cache unavailable before policy change: %v", err)
-	}
-	body, _ := io.ReadAll(response.Body)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK || string(body) != "cached policy site" {
-		t.Fatalf("offline cache before policy change: %d, %q", response.StatusCode, body)
-	}
-	headers := http.Header{"Authorization": {"Bearer admin-test"}}
-	var settings types.PolicySettings
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, types.PolicySettings{ApprovalMode: "manual"}, headers, &settings); err != nil {
-		t.Fatal(err)
-	}
-	response, err = tenantClient.Get(publicURL)
-	if err != nil {
-		return
-	}
-	defer response.Body.Close()
-	body, _ = io.ReadAll(response.Body)
-	if response.StatusCode == http.StatusOK && string(body) == "cached policy site" {
-		t.Fatal("manual mode left an unapproved offline cache routable")
 	}
 }
 
-func TestUDPRuntimeToggle(t *testing.T) {
+func startBandwidthPhase(t *testing.T, stateDir string, identities []types.Identity, defaultBPS int) (context.Context, *url.URL, *http.Client) {
+	t.Helper()
+	ctx, base, client := startPolicyRelay(t, stateDir, "--default-identity-bps", strconv.Itoa(defaultBPS))
+	exposePolicyIdentities(t, ctx, base.Port(), identities)
+	return ctx, base, client
+}
+
+func checkPolicyLimits(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, identities []types.Identity, want []int64) {
+	t.Helper()
 	headers := http.Header{"Authorization": {"Bearer admin-test"}}
+	var state types.PolicyStateResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]int64)
+	for _, lease := range state.Leases {
+		got[lease.IdentityKey] = lease.BPS
+	}
+	for i, tenant := range identities {
+		if limit, found := got[tenant.Key()]; !found || limit != want[i] {
+			t.Fatalf("identity %s limit = %d (found %v), want %d", tenant.Name, limit, found, want[i])
+		}
+	}
+}
 
-	t.Run("disable while listener is live", func(t *testing.T) {
-		lo, hi := ephemeralPortRange()
-		ctx, base, client := startPolicyRelay(t, t.TempDir(),
-			"--udp-enabled=true",
-			"--min-port="+strconv.Itoa(lo),
-			"--max-port="+strconv.Itoa(hi),
-		)
-		var settings types.PolicySettings
-		if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy,
-			types.PolicySettings{ApprovalMode: "auto"}, headers, &settings); err != nil {
-			t.Fatalf("runtime udp disable: %v", err)
-		}
-		if settings.UDP.Enabled {
-			t.Fatal("udp policy still enabled after runtime disable")
-		}
+func postLeasePolicyUpdate(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, update types.LeasePolicyUpdate) {
+	t.Helper()
+	headers := http.Header{"Authorization": {"Bearer admin-test"}}
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, update, headers, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkBandwidthOverrides(t *testing.T, stateDir string, identities []types.Identity) {
+	t.Helper()
+	ctx, base, client := startBandwidthPhase(t, stateDir, identities, types.DefaultIdentityBPS)
+	checkPolicyLimits(t, ctx, client, base, identities, []int64{types.DefaultIdentityBPS, types.DefaultIdentityBPS, types.DefaultIdentityBPS})
+	for i, bps := range []int64{4 * types.DefaultIdentityBPS, 0} {
+		postLeasePolicyUpdate(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: identities[i].Key(), BPS: &bps})
+	}
+	checkPolicyLimits(t, ctx, client, base, identities, []int64{4 * types.DefaultIdentityBPS, 0, types.DefaultIdentityBPS})
+}
+
+func checkBandwidthReset(t *testing.T, stateDir string, identities []types.Identity) {
+	t.Helper()
+	defaultBPS := 2 * types.DefaultIdentityBPS
+	ctx, base, client := startBandwidthPhase(t, stateDir, identities, defaultBPS)
+	checkPolicyLimits(t, ctx, client, base, identities, []int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
+
+	zero := int64(0)
+	conflict := types.LeasePolicyUpdate{IdentityKey: identities[0].Key(), BPS: &zero, ResetBPS: true}
+	err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, conflict, http.Header{"Authorization": {"Bearer admin-test"}}, nil)
+	if apiErr, ok := errors.AsType[*types.APIRequestError](err); !ok || apiErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("conflicting bandwidth update: %v", err)
+	}
+	checkPolicyLimits(t, ctx, client, base, identities, []int64{4 * types.DefaultIdentityBPS, 0, int64(defaultBPS)})
+
+	for _, tenant := range identities[:2] {
+		postLeasePolicyUpdate(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: tenant.Key(), ResetBPS: true})
+	}
+	checkPolicyLimits(t, ctx, client, base, identities, []int64{int64(defaultBPS), int64(defaultBPS), int64(defaultBPS)})
+}
+
+func checkBandwidthInheritance(t *testing.T, stateDir string, identities []types.Identity) {
+	t.Helper()
+	defaultBPS := 3 * types.DefaultIdentityBPS
+	ctx, base, client := startBandwidthPhase(t, stateDir, identities, defaultBPS)
+	checkPolicyLimits(t, ctx, client, base, identities, []int64{int64(defaultBPS), int64(defaultBPS), int64(defaultBPS)})
+}
+
+func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
+	stateDir := t.TempDir()
+	identities := generatePolicyIdentities(t, "upgraded", "unlimited", "inherited")
+	t.Run("initial defaults and overrides", func(t *testing.T) {
+		checkBandwidthOverrides(t, stateDir, identities)
 	})
-
-	t.Run("enable without listener requires restart", func(t *testing.T) {
-		ctx, base, client := startPolicyRelay(t, t.TempDir())
-		err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy,
-			types.PolicySettings{ApprovalMode: "auto", UDP: types.PolicyPortSettings{Enabled: true}}, headers, new(types.PolicySettings))
-		if err == nil {
-			t.Fatal("enabling udp without a backhaul listener must be refused")
-		}
+	t.Run("survive restart and reset", func(t *testing.T) {
+		checkBandwidthReset(t, stateDir, identities)
+	})
+	t.Run("restore inheritance after restart", func(t *testing.T) {
+		checkBandwidthInheritance(t, stateDir, identities)
 	})
 }
 
@@ -596,257 +302,4 @@ func setLeasePolicy(t *testing.T, ctx context.Context, client *http.Client, base
 	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicyLeases, update, headers, new(struct{})); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestManualRelayApprovalLifecycle(t *testing.T) {
-	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
-	leaseIdentity, err := identity.Generate("approval-lifecycle")
-	if err != nil {
-		t.Fatal(err)
-	}
-	exposure, err := sdk.Expose(ctx, leaseIdentity, []string{"https://localhost:" + base.Port()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = exposure.Close() })
-	go func() {
-		_ = sdk.RunHTTP(ctx, exposure, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = io.WriteString(w, "approved tenant")
-		}), "")
-	}()
-
-	waitStatus := func(name string, match func(sdk.RelayStatus) bool) sdk.RelayStatus {
-		t.Helper()
-		deadline := time.After(20 * time.Second)
-		for {
-			if relays := exposure.Relays(); len(relays) == 1 && match(relays[0]) {
-				return relays[0]
-			}
-			select {
-			case <-deadline:
-				t.Fatalf("status never reached %s: %+v", name, exposure.Relays())
-			case <-time.After(20 * time.Millisecond):
-			}
-		}
-	}
-	waitApproval := func(want sdk.RelayApproval) {
-		t.Helper()
-		status := waitStatus(string(want), func(status sdk.RelayStatus) bool { return status.Approval == want })
-		if status.State != sdk.RelayConnecting || status.PublicURL != "" || status.Active() {
-			t.Fatalf("%s status = %+v, want no usable endpoint", want, status)
-		}
-	}
-	waitReady := func() string {
-		t.Helper()
-		status := waitStatus("ready", func(status sdk.RelayStatus) bool { return status.State == sdk.RelayReady })
-		if status.Approval != "" {
-			t.Fatalf("ready status = %+v", status)
-		}
-		return status.PublicURL
-	}
-	key := leaseIdentity.Key()
-
-	waitApproval(sdk.RelayApprovalPending)
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(true)})
-	publicURL := waitReady()
-	tenantClient := relayTenantClient(t, client, base)
-	response, err := tenantClient.Get(publicURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(response.Body)
-	response.Body.Close()
-	if string(body) != "approved tenant" {
-		t.Fatalf("approved lease answered %d %q", response.StatusCode, body)
-	}
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(false)})
-	waitApproval(sdk.RelayApprovalPending)
-	if lease := waitPolicyLease(t, ctx, client, base); lease.Ready != 0 {
-		t.Fatalf("a revoked lease kept %d idle streams", lease.Ready)
-	}
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(true)})
-	waitReady()
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsDenied: ptr(true)})
-	waitApproval(sdk.RelayApprovalRefused)
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsDenied: ptr(false), IsApproved: ptr(true)})
-	waitReady()
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsBanned: ptr(true)})
-	waitApproval(sdk.RelayApprovalRefused)
-}
-
-func TestReverseCapabilitySurvivesApproval(t *testing.T) {
-	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
-	leaseIdentity, err := identity.Generate("approval-capability")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-		t.Fatal(err)
-	}
-	signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(challenge.SIWEMessage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var registered types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}, nil, &registered); err != nil {
-		t.Fatal(err)
-	}
-	connect := func() error {
-		t.Helper()
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+types.PathSDKConnect, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		request.Header.Set(types.HeaderReverseCapability, registered.ReverseEndpoint.Capability)
-		request.Header.Set("Connection", "Upgrade")
-		request.Header.Set("Upgrade", "raw")
-		response, err := client.Do(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		if response.StatusCode == http.StatusSwitchingProtocols {
-			return nil
-		}
-		return utils.DecodeAPIRequestError(response)
-	}
-	key := leaseIdentity.Key()
-
-	if err := connect(); !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}) {
-		t.Fatalf("waiting connect = %v", err)
-	}
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(true)})
-	if err := connect(); err != nil {
-		t.Fatalf("approved connect = %v", err)
-	}
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsDenied: ptr(true)})
-	if err := connect(); !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}) {
-		t.Fatalf("denied connect = %v", err)
-	}
-}
-
-func TestPortalExposeWaitsForRelayApproval(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds and runs the portal binary")
-	}
-	portalBin := filepath.Join(t.TempDir(), "portal")
-	if runtime.GOOS == "windows" {
-		portalBin += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", portalBin, "./cmd/portal-tunnel")
-	build.Dir = repoRoot(t)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build portal binary: %v\n%s", err, out)
-	}
-	lo, hi := ephemeralPortRange()
-	ctx, base, client := startPolicyRelay(t, t.TempDir(),
-		"--approval-mode", "manual",
-		"--tcp-enabled=true",
-		"--min-port="+strconv.Itoa(lo),
-		"--max-port="+strconv.Itoa(hi),
-	)
-	target, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer target.Close()
-	go func() {
-		for {
-			conn, err := target.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer conn.Close()
-				_, _ = io.Copy(conn, conn)
-			}()
-		}
-	}()
-
-	cmd := exec.Command(portalBin, "expose", "--log-format", "json", "--tcp",
-		"--relays", "https://localhost:"+base.Port(), "--discovery=false",
-		"--identity-path", filepath.Join(t.TempDir(), "identity.json"), target.Addr().String())
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	records := make(chan map[string]any, 4096)
-	go readLifecycleRecords(t, stdout, records)
-	go drainLifecycleStderr(stderr)
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		for range records {
-		}
-		_ = cmd.Wait()
-	})
-	isStatus := func(record map[string]any) bool { return record["event"] == "relay_status" }
-
-	waiting := waitLifecycleRecord(t, records, func(record map[string]any) bool {
-		if record["message"] == "raw transport endpoints allocated" || (isStatus(record) && record["state"] == "ready") {
-			t.Fatalf("usable output while waiting: %v", record)
-		}
-		return isStatus(record) && record["approval"] == "pending"
-	}, 30*time.Second)
-	if fmt.Sprint(waiting["message"]) != "waiting for relay approval" || waiting["public_url"] != "" {
-		t.Fatalf("waiting record = %v", waiting)
-	}
-
-	key := waitPolicyLease(t, ctx, client, base).IdentityKey
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(true)})
-	const rawLine = "raw transport endpoints allocated"
-	var ready bool
-	var raw map[string]any
-	waitLifecycleRecord(t, records, func(record map[string]any) bool {
-		ready = ready || (isStatus(record) && record["state"] == "ready")
-		if record["message"] == rawLine {
-			raw = record
-		}
-		return ready && raw != nil
-	}, 30*time.Second)
-
-	_, port, err := net.SplitHostPort(fmt.Sprint(raw["tcp_addr"]))
-	if err != nil {
-		t.Fatalf("raw line = %v: %v", raw, err)
-	}
-	for range 10 {
-		var burst sync.WaitGroup
-		for range 4 {
-			burst.Go(func() {
-				conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", port), 2*time.Second)
-				if err != nil {
-					return
-				}
-				defer conn.Close()
-				_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-				_, _ = conn.Write([]byte("x"))
-				_, _ = io.ReadFull(conn, make([]byte, 1))
-			})
-		}
-		burst.Wait()
-	}
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(false)})
-	waitLifecycleRecord(t, records, func(record map[string]any) bool {
-		if record["message"] == rawLine {
-			t.Fatalf("the address printed again: %v", record)
-		}
-		return isStatus(record) && record["state"] == "connecting"
-	}, 30*time.Second)
-	waitLifecycleRecord(t, records, func(record map[string]any) bool {
-		return isStatus(record) && record["approval"] == "pending"
-	}, 30*time.Second)
 }

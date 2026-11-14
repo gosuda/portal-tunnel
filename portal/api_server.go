@@ -22,6 +22,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -179,33 +180,42 @@ func writeDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryRespo
 		return
 	}
 	if int64(len(encoded)) > types.MaxDiscoveryResponseBytes {
-		response.IncompatibleRelays = nil
-		response.RelayReleaseVersions = nil
-		encoded = nil
-		for low, high := 1, len(response.Relays); low <= high; {
-			count := low + (high-low)/2
-			candidate := response
-			candidate.Relays = response.Relays[:count]
-			body, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: candidate})
-			if err != nil {
-				utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-				return
-			}
-			if int64(len(body)) > types.MaxDiscoveryResponseBytes {
-				high = count - 1
-			} else {
-				encoded = body
-				low = count + 1
-			}
-		}
-		if encoded == nil {
-			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "self descriptor exceeds discovery response limit")
+		var ok bool
+		encoded, ok = fitWriteDiscoveryResponse(w, response)
+		if !ok {
 			return
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(encoded)
+}
+
+func fitWriteDiscoveryResponse(w http.ResponseWriter, response types.DiscoveryResponse) ([]byte, bool) {
+	response.IncompatibleRelays = nil
+	response.RelayReleaseVersions = nil
+	var encoded []byte
+	for low, high := 1, len(response.Relays); low <= high; {
+		count := low + (high-low)/2
+		candidate := response
+		candidate.Relays = response.Relays[:count]
+		body, err := json.Marshal(types.APIEnvelope[types.DiscoveryResponse]{OK: true, Data: candidate})
+		if err != nil {
+			utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+			return nil, false
+		}
+		if int64(len(body)) > types.MaxDiscoveryResponseBytes {
+			high = count - 1
+		} else {
+			encoded = body
+			low = count + 1
+		}
+	}
+	if encoded == nil {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "self descriptor exceeds discovery response limit")
+		return nil, false
+	}
+	return encoded, true
 }
 
 func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) {
@@ -235,15 +245,7 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		return
 	}
 	host := utils.NormalizeHostname(announceURL.Hostname())
-	cfg := s.config()
-	if selfURL, err := utils.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
-			fmt.Sprintf("self-announce rejected: %q matches receiving relay url", desc.APIHTTPSAddr))
-		return
-	}
-	if host != "" && host == utils.NormalizeHostname(s.identity.Name) {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
-			fmt.Sprintf("self-announce rejected: host %q matches receiving relay host", host))
+	if s.rejectAnnounceSelf(w, desc, host) {
 		return
 	}
 
@@ -268,18 +270,36 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 	})
 }
 
+func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescriptor, host string) bool {
+	cfg := s.config()
+	if selfURL, err := utils.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
+			fmt.Sprintf("self-announce rejected: %q matches receiving relay url", desc.APIHTTPSAddr))
+		return true
+	}
+	if host != "" && host == utils.NormalizeHostname(s.identity.Name) {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
+			fmt.Sprintf("self-announce rejected: host %q matches receiving relay host", host))
+		return true
+	}
+	return false
+}
+
 // DomainReport returns the relay-owned /sdk/domain payload. An
 // application that sets ServerConfig.ApplicationOwnsDomainReport composes its
 // own metadata onto this value and serves the result itself. x402
 // facilitator metadata is owned by the application that mounts the
 // facilitator (cmd/relay-server); this report stays x402-blind.
 func (s *Server) DomainReport() types.DomainResponse {
+	issuance := s.config().TenantCertificates && s.acmeManager.TenantIssuanceConfigured()
 	return types.DomainResponse{
-		Replicas:        true,
-		Cache:           s.registry.cache.Limits(),
-		ProtocolVersion: types.SDKVersion,
-		ReleaseVersion:  types.ReleaseVersion,
-		ENS:             s.acmeManager.ENSStatus(),
+		Replicas:                  true,
+		TenantCertificateIssuance: &issuance,
+		Namespaces:                []string{types.LocalTLSNamespaceV1},
+		Cache:                     s.registry.cache.Limits(),
+		ProtocolVersion:           types.SDKVersion,
+		ReleaseVersion:            types.ReleaseVersion,
+		ENS:                       s.acmeManager.ENSStatus(),
 	}
 }
 
@@ -309,6 +329,7 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 // success response. The relay first applies the returned identity's access
 // decision, then writes the response so the lease cannot become observable
 // before its routability is known.
+
 func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.ServiceIdentityKey, types.RegisterResponse, bool) {
 	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
@@ -333,23 +354,42 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 		s.registry.suspendIdentity(identityKey)
 	}
 
-	var self types.RelayDescriptor
-	var descriptors []types.RelayDescriptor
-	if challenge.Request.Overlay {
-		self, descriptors, err = s.overlayIssueDescriptors(time.Now().UTC())
-		if err != nil {
-			log.Warn().Err(err).Str("lease", challenge.Request.Identity.Key()).Msg("relay overlay descriptors unavailable; using direct reverse transport")
-			self = types.RelayDescriptor{}
-			descriptors = nil
-		}
+	self, descriptors := s.issueHandleRegisterDescriptors(challenge)
+	record, replaced, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial())
+	if replaced != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
+		s.deleteLeaseDNS(cleanupCtx, replaced)
+		cleanupCancel()
 	}
-	record, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial())
 	if err != nil {
 		writeAPIErrorResponse(w, err)
 		return identityKey, types.RegisterResponse{}, false
 	}
+	if !s.syncHandleRegisterLeaseDNS(w, r, record, resp) {
+		return identityKey, types.RegisterResponse{}, false
+	}
+	if record.tcpPort > 0 {
+		go s.serveTCP(record)
+	}
+
+	return record.ServiceKey(), resp, true
+}
+
+func (s *Server) issueHandleRegisterDescriptors(challenge *identity.RegisterChallenge) (types.RelayDescriptor, []types.RelayDescriptor) {
+	if !challenge.Request.Overlay {
+		return types.RelayDescriptor{}, nil
+	}
+	self, descriptors, err := s.overlayIssueDescriptors(time.Now().UTC())
+	if err != nil {
+		log.Warn().Err(err).Str("lease", challenge.Request.Identity.Key()).Msg("relay overlay descriptors unavailable; using direct reverse transport")
+		return types.RelayDescriptor{}, nil
+	}
+	return self, descriptors
+}
+
+func (s *Server) syncHandleRegisterLeaseDNS(w http.ResponseWriter, r *http.Request, record *leaseRecord, resp types.RegisterResponse) bool {
 	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-	err = s.syncLeaseDNS(dnsCtx, record)
+	err := s.syncLeaseDNS(dnsCtx, record)
 	cancel()
 	if err != nil {
 		removed, _ := s.registry.Unregister(types.UnregisterRequest{AccessToken: resp.AccessToken})
@@ -361,13 +401,9 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 		s.deleteLeaseDNS(cleanupCtx, removed)
 		cleanupCancel()
 		writeAPIErrorResponse(w, err)
-		return identityKey, types.RegisterResponse{}, false
+		return false
 	}
-	if record.tcpPort > 0 {
-		go s.serveTCP(record)
-	}
-
-	return record.ServiceKey(), resp, true
+	return true
 }
 
 // HandleRegisterChallenge issues a registration challenge without publishing
@@ -413,7 +449,6 @@ func (s *Server) HandleRegisterChallenge(w http.ResponseWriter, r *http.Request,
 		writeAPIErrorResponse(w, err)
 		return identityKey, types.RegisterChallengeResponse{}, false
 	}
-
 	return identityKey, resp, true
 }
 
@@ -523,6 +558,51 @@ func (s *Server) serveReverseMux(lease *leaseRecord, session *transport.ReverseM
 	}
 }
 
+func (s *Server) hijackReverseConn(w http.ResponseWriter) (net.Conn, bool) {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackUnsupported, "hijacking is not supported")
+		return nil, false
+	}
+	conn, rw, err := hijacker.Hijack()
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackFailed, err.Error())
+		return nil, false
+	}
+	if _, err := rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: raw\r\nConnection: Upgrade\r\n\r\n"); err != nil {
+		_ = conn.Close()
+		return nil, false
+	}
+	if err := rw.Flush(); err != nil {
+		_ = conn.Close()
+		return nil, false
+	}
+	return conn, true
+}
+
+func (s *Server) offerReverseLease(lease *leaseRecord, conn net.Conn, sourceAddr netip.Addr) {
+	remoteAddr := ""
+	if conn.RemoteAddr() != nil {
+		remoteAddr = conn.RemoteAddr().String()
+	}
+	if err := lease.reverse.Offer(conn); err != nil {
+		log.Warn().
+			Err(err).
+			Str("address", lease.Address).
+			Str("lease_name", lease.Name).
+			Str("remote_addr", remoteAddr).
+			Msg("sdk reverse rejected")
+		return
+	}
+	s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
+	log.Info().
+		Str("address", lease.Address).
+		Str("lease_name", lease.Name).
+		Str("remote_addr", remoteAddr).
+		Int("ready", lease.reverse.ReadyCount()).
+		Msg("sdk reverse connected")
+}
+
 func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAddr netip.Addr) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
@@ -561,48 +641,11 @@ func (s *Server) HandleConnect(w http.ResponseWriter, r *http.Request, sourceAdd
 		return
 	}
 
-	hijacker, ok := w.(http.Hijacker)
+	conn, ok := s.hijackReverseConn(w)
 	if !ok {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackUnsupported, "hijacking is not supported")
 		return
 	}
-
-	conn, rw, err := hijacker.Hijack()
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackFailed, err.Error())
-		return
-	}
-
-	if _, err := rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: raw\r\nConnection: Upgrade\r\n\r\n"); err != nil {
-		_ = conn.Close()
-		return
-	}
-	if err := rw.Flush(); err != nil {
-		_ = conn.Close()
-		return
-	}
-
-	remoteAddr := ""
-	if conn.RemoteAddr() != nil {
-		remoteAddr = conn.RemoteAddr().String()
-	}
-	if err := lease.reverse.Offer(conn); err != nil {
-		log.Warn().
-			Err(err).
-			Str("address", lease.Address).
-			Str("lease_name", lease.Name).
-			Str("remote_addr", remoteAddr).
-			Msg("sdk reverse rejected")
-		return
-	}
-
-	s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
-	log.Info().
-		Str("address", lease.Address).
-		Str("lease_name", lease.Name).
-		Str("remote_addr", remoteAddr).
-		Int("ready", lease.reverse.ReadyCount()).
-		Msg("sdk reverse connected")
+	s.offerReverseLease(lease, conn, sourceAddr)
 }
 
 func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
@@ -633,8 +676,11 @@ func (s *Server) HandleSign(w http.ResponseWriter, r *http.Request) {
 	}
 	s.signer.ServeHTTP(w, r, leaseID)
 }
-
 func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host string) {
+	if namespace.IsLocalTLSHostname(host, s.registry.rootHostname) {
+		http.Error(w, "local TLS hostnames require tunnel termination", http.StatusMisdirectedRequest)
+		return
+	}
 	if req.TLS == nil || utils.NormalizeHostname(req.TLS.ServerName) != host {
 		http.Error(w, "TLS name and request host must match", http.StatusMisdirectedRequest)
 		return
@@ -652,7 +698,15 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Second)
 	defer cancel()
-	httpTransport := &http.Transport{
+	httpTransport := s.serveCachedSiteFallbackTransport(host, record)
+	defer httpTransport.CloseIdleConnections()
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "https", Host: host})
+	proxy.Transport = httpTransport
+	proxy.ServeHTTP(w, req.WithContext(ctx))
+}
+
+func (s *Server) serveCachedSiteFallbackTransport(host string, record *leaseRecord) *http.Transport {
+	return &http.Transport{
 		DisableKeepAlives: true,
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			binding := s.registry.bindings.Issue(record.id, nil)
@@ -678,8 +732,4 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 			return conn, nil
 		},
 	}
-	defer httpTransport.CloseIdleConnections()
-	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "https", Host: host})
-	proxy.Transport = httpTransport
-	proxy.ServeHTTP(w, req.WithContext(ctx))
 }

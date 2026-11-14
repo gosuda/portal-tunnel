@@ -8,7 +8,7 @@ export function readAdminAuthToken(): string {
   }
 }
 
-export function writeAdminAuthToken(token: string) {
+export function writeAdminAuthToken(token: string): void {
   const value = token.trim();
   try {
     if (value) {

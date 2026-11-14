@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import type { ReactNode } from "react";
 import { BookOpen, Github, Globe, Home, ShieldCheck, Star, Terminal, ThumbsUp, type LucideIcon } from "lucide-react";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
@@ -104,7 +105,7 @@ export function SidebarNav({
   favorites,
   onBrowseViewChange,
   onSortByChange,
-}: SidebarNavProps) {
+}: SidebarNavProps): JSX.Element {
   const mini = variant === "mini";
   const browse: NavEntry[] = [
     {

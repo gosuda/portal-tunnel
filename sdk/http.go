@@ -3,6 +3,7 @@ package sdk
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/http2"
 
 	"github.com/rs/zerolog/log"
 
@@ -36,41 +39,22 @@ const (
 // RunHTTP serves handler on the relay listener and, when localAddr is set, on
 // that local address too. Requests from the relay listener reach handler with
 // X-Forwarded-Proto set to https. Do not use it on an exposure that enables
-// WithTCP.
+// WithTCP. For an Exposure, this enables HTTP/2 on its canonical Local TLS
+// endpoint. Raw Expose/Proxy users remain HTTP/1.1-only. The handler rejects
+// HTTP authorities that differ from the TLS server name.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	if relayListener == nil && localAddr == "" {
 		return errRelayListenerOrLocalAddressRequired
 	}
-
 	if handler == nil {
 		handler = http.NotFoundHandler()
 	}
-
-	var relaySrv *http.Server
-	if relayListener != nil {
-		relaySrv = &http.Server{
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-				utils.DelHeaderSpellings(r.Header, "X-Forwarded-Proto")
-				r.Header.Set("X-Forwarded-Proto", "https")
-				utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
-				handler.ServeHTTP(w, r)
-			}),
-			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
-			IdleTimeout:       defaultHTTPIdleTimeout,
-		}
+	if exposure, ok := relayListener.(*Exposure); ok {
+		exposure.enableHTTP2()
 	}
 
-	var localSrv *http.Server
-	if localAddr != "" {
-		localSrv = &http.Server{
-			Addr:              localAddr,
-			Handler:           handler,
-			ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
-			IdleTimeout:       defaultHTTPIdleTimeout,
-		}
-	}
-
+	relaySrv := relayHTTPServer(relayListener, handler)
+	localSrv := localHTTPServer(localAddr, handler)
 	serverCount := 0
 	if relaySrv != nil {
 		serverCount++
@@ -80,52 +64,24 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	}
 
 	results := make(chan error, serverCount)
-	normalizeServeErr := func(err error, prefix string) error {
-		if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-			return nil
-		}
-		return fmt.Errorf("%s: %w", prefix, err)
-	}
-
-	var (
-		shutdownOnce sync.Once
-		shutdownErr  error
-	)
-	shutdown := func() error {
-		shutdownOnce.Do(func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultHTTPShutdownTimeout)
-			defer cancel()
-
-			var localErr error
-			if localSrv != nil {
-				localErr = localSrv.Shutdown(shutdownCtx)
-				if errors.Is(localErr, http.ErrServerClosed) {
-					localErr = nil
-				}
-			}
-
-			var relayErr error
-			if relaySrv != nil {
-				relayErr = relaySrv.Shutdown(shutdownCtx)
-				if errors.Is(relayErr, http.ErrServerClosed) {
-					relayErr = nil
-				}
-			}
-
-			shutdownErr = errors.Join(localErr, relayErr)
-		})
-		return shutdownErr
-	}
-
 	if localSrv != nil {
 		go func() {
-			results <- normalizeServeErr(localSrv.ListenAndServe(), "serve local http")
+			results <- normalizeHTTPServeError(localSrv.ListenAndServe(), "serve local http")
 		}()
 	}
 	if relaySrv != nil {
 		go func() {
-			results <- normalizeServeErr(relaySrv.Serve(relayListener), "serve relay http")
+			results <- normalizeHTTPServeError(relaySrv.Serve(httpTLSListener{relayListener}), "serve relay http")
 		}()
+	}
+
+	var shutdownErr error
+	var shutdownOnce sync.Once
+	shutdown := func() error {
+		shutdownOnce.Do(func() {
+			shutdownErr = shutdownHTTPServers(localSrv, relaySrv)
+		})
+		return shutdownErr
 	}
 
 	var serveErr error
@@ -144,8 +100,120 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 			ctxDone = nil
 		}
 	}
-
 	return errors.Join(serveErr, shutdownErr)
+}
+
+func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Server {
+	if relayListener == nil {
+		return nil
+	}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			strictAuthority := r.TLS != nil
+			if state, ok := r.Context().Value(httpTLSStateKey{}).(httpTLSState); ok {
+				strictAuthority = state.local
+				if r.TLS == nil && state.connection.HandshakeComplete {
+					r.TLS = &state.connection
+				}
+			}
+			if strictAuthority && r.TLS.ServerName != "" && utils.NormalizeHostWithoutPort(r.Host) != utils.NormalizeHostname(r.TLS.ServerName) {
+				http.Error(w, "authority does not match TLS server name", http.StatusMisdirectedRequest)
+				return
+			}
+			utils.DelHeaderSpellings(r.Header, "X-Forwarded-Proto")
+			r.Header.Set("X-Forwarded-Proto", "https")
+			utils.DelHeaderSpellings(r.Header, types.PortalIdentityHeaders...)
+			handler.ServeHTTP(w, r)
+		}),
+		ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
+		IdleTimeout:       defaultHTTPIdleTimeout,
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			for {
+				switch wrapped := conn.(type) {
+				case *exposureConn:
+					conn = wrapped.Conn
+				case *bufferedConn:
+					conn = wrapped.Conn
+				default:
+					if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+						_, local := conn.(*tls.Conn)
+						return context.WithValue(ctx, httpTLSStateKey{}, httpTLSState{connection: stateful.ConnectionState(), local: local})
+					}
+					return ctx
+				}
+			}
+		},
+	}
+	// Configure the actual HTTP/2 server, not just ALPN. Native TLS connections
+	// are returned directly by httpTLSListener for net/http's protocol dispatch.
+	_ = http2.ConfigureServer(server, &http2.Server{})
+	return server
+}
+
+type httpTLSStateKey struct{}
+
+// Local TLS uses native crypto/tls connections. Keyless connections retain the
+// legacy authority policy: a canonical SNI may carry its friendly alias Host,
+// with application handlers still responsible for their allowed-host checks.
+type httpTLSState struct {
+	connection tls.ConnectionState
+	local      bool
+}
+type httpTLSListener struct{ net.Listener }
+
+func (l httpTLSListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	if tracked, ok := conn.(*exposureConn); ok {
+		if native, ok := tracked.Conn.(*tls.Conn); ok {
+			return native, nil
+		}
+	}
+	return conn, nil
+}
+
+func localHTTPServer(localAddr string, handler http.Handler) *http.Server {
+	if localAddr == "" {
+		return nil
+	}
+	return &http.Server{
+		Addr:              localAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
+		IdleTimeout:       defaultHTTPIdleTimeout,
+	}
+}
+
+func normalizeHTTPServeError(err error, prefix string) error {
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return fmt.Errorf("serve http %s: %w", prefix, err)
+}
+
+func shutdownHTTPServers(localSrv, relaySrv *http.Server) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultHTTPShutdownTimeout)
+	defer cancel()
+
+	var localErr error
+	if localSrv != nil {
+		localErr = localSrv.Shutdown(shutdownCtx)
+		if errors.Is(localErr, http.ErrServerClosed) {
+			localErr = nil
+		}
+	}
+
+	var relayErr error
+	if relaySrv != nil {
+		relayErr = relaySrv.Shutdown(shutdownCtx)
+		if errors.Is(relayErr, http.ErrServerClosed) {
+			relayErr = nil
+		}
+	}
+
+	return errors.Join(localErr, relayErr)
 }
 
 // HTTPRouteConfig maps one public path prefix to one local HTTP upstream.
@@ -361,72 +429,84 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 	header := resp.Header
 	publicHost := resp.Request.Header.Get("X-Forwarded-Host")
 	publicScheme := resp.Request.Header.Get("X-Forwarded-Proto")
-	publicPath := func(raw string) string {
-		raw = utils.NormalizeURLPath(raw)
-		if r.prefix != "/" && (raw == r.prefix || strings.HasPrefix(raw, r.prefix+"/")) {
-			return raw
-		}
+	r.rewriteProxyLocation(header, publicHost, publicScheme)
+	r.rewriteProxyCookies(header, publicHost)
+	return nil
+}
 
-		rest := raw
-		if r.upstreamPath != "/" {
-			switch {
-			case raw == r.upstreamPath:
-				rest = "/"
-			case strings.HasPrefix(raw, r.upstreamPath+"/"):
-				rest = strings.TrimPrefix(raw, r.upstreamPath)
-			}
-		}
-
-		if r.prefix == "/" {
-			return rest
-		}
-		if rest == "/" {
-			return r.prefix
-		}
-		return r.prefix + rest
+func (r *httpRoute) mapPublicPath(raw string) string {
+	raw = utils.NormalizeURLPath(raw)
+	if r.prefix != "/" && (raw == r.prefix || strings.HasPrefix(raw, r.prefix+"/")) {
+		return raw
 	}
 
+	rest := raw
+	if r.upstreamPath != "/" {
+		switch {
+		case raw == r.upstreamPath:
+			rest = "/"
+		case strings.HasPrefix(raw, r.upstreamPath+"/"):
+			rest = strings.TrimPrefix(raw, r.upstreamPath)
+		}
+	}
+
+	if r.prefix == "/" {
+		return rest
+	}
+	if rest == "/" {
+		return r.prefix
+	}
+	return r.prefix + rest
+}
+
+func (r *httpRoute) rewriteProxyLocation(header http.Header, publicHost, publicScheme string) {
 	location := header.Get("Location")
-	if location != "" {
-		parsed, err := url.Parse(location)
-		if err == nil {
-			switch {
-			case parsed.IsAbs():
-
-				if (strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host)) ||
-					strings.EqualFold(parsed.Host, publicHost) {
-					parsed.Scheme = publicScheme
-					parsed.Host = publicHost
-				} else {
-					parsed = nil
-				}
-			case parsed.Host == "" && isSafeAbsoluteURLPath(location):
-			default:
-				parsed = nil
-			}
-
-			if parsed != nil {
-				mapped := publicPath(parsed.Path)
-				if isSafeAbsoluteURLPath(mapped) {
-					parsed.Path = mapped
-					parsed.RawPath = ""
-					header.Set("Location", parsed.String())
-				}
-			}
-		}
+	if location == "" {
+		return
 	}
+	parsed, err := url.Parse(location)
+	if err != nil {
+		return
+	}
+	target := r.rewriteProxyLocationTarget(parsed, location, publicHost, publicScheme)
+	if target == nil {
+		return
+	}
+	mapped := r.mapPublicPath(target.Path)
+	if isSafeAbsoluteURLPath(mapped) {
+		target.Path = mapped
+		target.RawPath = ""
+		header.Set("Location", target.String())
+	}
+}
 
-	values := header.Values("Set-Cookie")
-	if len(values) == 0 {
+func (r *httpRoute) rewriteProxyLocationTarget(parsed *url.URL, location, publicHost, publicScheme string) *url.URL {
+	switch {
+	case parsed.IsAbs():
+		if (strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host)) ||
+			strings.EqualFold(parsed.Host, publicHost) {
+			parsed.Scheme = publicScheme
+			parsed.Host = publicHost
+		} else {
+			return nil
+		}
+	case parsed.Host == "" && isSafeAbsoluteURLPath(location):
+	default:
 		return nil
 	}
+	return parsed
+}
 
+func (r *httpRoute) rewriteProxyCookies(header http.Header, publicHost string) {
+	values := header.Values("Set-Cookie")
+	if len(values) == 0 {
+		return
+	}
 	publicDomain := publicHost
 	if host, port, err := net.SplitHostPort(publicDomain); err == nil && port != "" {
 		publicDomain = host
 	}
 	publicDomain = utils.NormalizeHostname(strings.Trim(publicDomain, "[]"))
-
 	header.Del("Set-Cookie")
 	for _, value := range values {
 		cookie, err := http.ParseSetCookie(value)
@@ -434,29 +514,23 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 			header.Add("Set-Cookie", value)
 			continue
 		}
-
 		changed := false
 		if cookie.Path != "" {
-			if rewritten := publicPath(cookie.Path); rewritten != cookie.Path {
+			if rewritten := r.mapPublicPath(cookie.Path); rewritten != cookie.Path {
 				cookie.Path = rewritten
 				changed = true
 			}
 		}
-
 		domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
-		rewriteDomain := domain != "" && domain != publicDomain &&
-			(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain))
-		if rewriteDomain {
+		matchesDomain := domain == r.upstreamDomain || utils.IsLocalRelayHost(domain)
+		if domain != "" && domain != publicDomain && matchesDomain {
 			cookie.Domain = ""
 			changed = true
 		}
-
 		if changed {
 			header.Add("Set-Cookie", cookie.String())
-			continue
+		} else {
+			header.Add("Set-Cookie", value)
 		}
-		header.Add("Set-Cookie", value)
 	}
-
-	return nil
 }

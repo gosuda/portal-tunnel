@@ -32,25 +32,27 @@ func newTestReputationAPI(t *testing.T) *RelayAPI {
 	return api
 }
 
-func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
-	api := newTestReputationAPI(t)
-	post := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, pathReputationVote, strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.RemoteAddr = "203.0.113.11:2000"
-		rec := httptest.NewRecorder()
-		api.Handler().ServeHTTP(rec, req)
-		return rec
-	}
-	if got := post(`{"hostname":"demo.example.com","vote":"invalid"}`).Code; got != http.StatusBadRequest {
+func postReputationVote(t *testing.T, api *RelayAPI, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, pathReputationVote, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.11:2000"
+	rec := httptest.NewRecorder()
+	api.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func checkReputationVotes(t *testing.T, api *RelayAPI) {
+	t.Helper()
+	if got := postReputationVote(t, api, `{"hostname":"demo.example.com","vote":"invalid"}`).Code; got != http.StatusBadRequest {
 		t.Fatalf("invalid vote status = %d", got)
 	}
-	if got := post(`{"hostname":"fake.example.com","vote":"up"}`).Code; got != http.StatusNotFound {
+	if got := postReputationVote(t, api, `{"hostname":"fake.example.com","vote":"up"}`).Code; got != http.StatusNotFound {
 		t.Fatalf("unknown hostname status = %d", got)
 	}
 	var limited bool
 	for range 22 {
-		rec := post(`{"hostname":"fake.example.com","vote":"up"}`)
+		rec := postReputationVote(t, api, `{"hostname":"fake.example.com","vote":"up"}`)
 		if rec.Code == http.StatusTooManyRequests {
 			limited = rec.Header().Get("Retry-After") != ""
 			break
@@ -59,6 +61,10 @@ func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
 	if !limited {
 		t.Fatal("vote source limit was not enforced")
 	}
+}
+
+func checkReputationCommentID(t *testing.T, api *RelayAPI) {
+	t.Helper()
 	for _, id := range []string{"", "  "} {
 		req := httptest.NewRequest(http.MethodPost, types.PathCommentsVote, strings.NewReader(`{"hostname":"demo.example.com","id":"`+id+`","vote":"up"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -69,12 +75,23 @@ func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
 			t.Fatalf("missing comment ID: status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	}
+}
+
+func checkReputationDirectory(t *testing.T, api *RelayAPI) {
+	t.Helper()
 	read := httptest.NewRecorder()
 	api.Handler().ServeHTTP(read, httptest.NewRequest(http.MethodGet, types.PathState, nil))
 	var response types.APIEnvelope[publicStateResponse]
 	if read.Code != http.StatusOK || json.Unmarshal(read.Body.Bytes(), &response) != nil || len(response.Data.Reputation) != 0 {
 		t.Fatalf("directory response: status=%d body=%s", read.Code, read.Body.String())
 	}
+}
+
+func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
+	api := newTestReputationAPI(t)
+	checkReputationVotes(t, api)
+	checkReputationCommentID(t, api)
+	checkReputationDirectory(t, api)
 }
 
 func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, error) {
@@ -98,7 +115,8 @@ func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, e
 	return api, server, err
 }
 
-func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
+func seedLegacyIPBanPolicy(t *testing.T) (*portal.Server, string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: dir})
 	if err != nil {
@@ -112,13 +130,18 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	api, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	return server, path, frontend
+}
+
+func checkMigratedIdentitySnapshot(t *testing.T, api *RelayAPI) {
+	t.Helper()
 	if !api.policies.Snapshot().IsBanned(types.NewServiceIdentityKey("blocked", "addr")) || api.policies.Snapshot().Access(types.NewServiceIdentityKey("allowed", "addr")) != types.LeaseRoutable {
 		t.Fatal("identity policy lost during migration")
 	}
+}
+
+func checkMigratedPolicyFile(t *testing.T, path string) {
+	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -130,9 +153,10 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if _, ok := fields["banned_ips"]; ok {
 		t.Fatal("legacy bans remain persisted")
 	}
-	if _, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{}); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
+}
+
+func checkRemovedIPEndpoints(t *testing.T, api *RelayAPI) {
+	t.Helper()
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
 		req := httptest.NewRequest(method, "/api/policy/ips", nil)
 		req.Header.Set("Authorization", "Bearer admin-test")
@@ -142,6 +166,20 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 			t.Fatalf("removed IP policy endpoint: %d", response.Code)
 		}
 	}
+}
+
+func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
+	server, path, frontend := seedLegacyIPBanPolicy(t)
+	api, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkMigratedIdentitySnapshot(t, api)
+	checkMigratedPolicyFile(t, path)
+	if _, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{}); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	checkRemovedIPEndpoints(t, api)
 }
 
 func TestPolicyLoadNormalizesUnnormalizedIdentityKeys(t *testing.T) {

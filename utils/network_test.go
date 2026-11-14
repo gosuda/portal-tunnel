@@ -47,8 +47,7 @@ func TestSanitizeReportedIP(t *testing.T) {
 }
 
 func TestResolvePublicIPs(t *testing.T) {
-	unavailable4 := errors.New("ipv4 unavailable")
-	unavailable6 := errors.New("ipv6 unavailable")
+	unavailable := [2]error{errors.New("ipv4 unavailable"), errors.New("ipv6 unavailable")}
 	for _, tc := range []struct {
 		name string
 		ipv4 string
@@ -62,30 +61,41 @@ func TestResolvePublicIPs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			original := DefaultHTTPClient
-			DefaultHTTPClient = &http.Client{Transport: publicIPTransport(func(req *http.Request) (*http.Response, error) {
-				body, unavailable := tc.ipv4, unavailable4
-				if slices.Contains(publicIPv6Endpoints, req.URL.String()) {
-					body, unavailable = tc.ipv6, unavailable6
-				}
-				if body == "" {
-					return nil, unavailable
-				}
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
-			})}
+			DefaultHTTPClient = &http.Client{Transport: fakePublicIPTransport(tc.ipv4, tc.ipv6, unavailable)}
 			t.Cleanup(func() { DefaultHTTPClient = original })
 
 			got, err := ResolvePublicIPs(context.Background())
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("ResolvePublicIPs() = %v, want %v", got, tc.want)
-			}
-			if len(tc.want) == 0 {
-				if !errors.Is(err, unavailable4) || !errors.Is(err, unavailable6) {
-					t.Fatalf("ResolvePublicIPs() error = %v, want both family failures", err)
-				}
-			} else if err != nil {
-				t.Fatalf("ResolvePublicIPs() error = %v", err)
-			}
+			checkPublicIPsResult(t, got, tc.want, err, unavailable)
 		})
+	}
+}
+
+func fakePublicIPTransport(ipv4, ipv6 string, unavailable [2]error) publicIPTransport {
+	return publicIPTransport(func(req *http.Request) (*http.Response, error) {
+		body, failed := ipv4, unavailable[0]
+		if slices.Contains(publicIPv6Endpoints, req.URL.String()) {
+			body, failed = ipv6, unavailable[1]
+		}
+		if body == "" {
+			return nil, failed
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+}
+
+func checkPublicIPsResult(t *testing.T, got, want []string, err error, unavailable [2]error) {
+	t.Helper()
+	if !slices.Equal(got, want) {
+		t.Fatalf("ResolvePublicIPs() = %v, want %v", got, want)
+	}
+	if len(want) == 0 {
+		if !errors.Is(err, unavailable[0]) || !errors.Is(err, unavailable[1]) {
+			t.Fatalf("ResolvePublicIPs() error = %v, want both family failures", err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("ResolvePublicIPs() error = %v", err)
 	}
 }
 
@@ -181,32 +191,42 @@ func TestResolvePublicIPFallbackDoesNotWaitForUnavailableFamily(t *testing.T) {
 				var pending atomic.Int32
 				original := DefaultHTTPClient
 				DefaultHTTPClient = &http.Client{Transport: publicIPTransport(func(req *http.Request) (*http.Response, error) {
-					if slices.Contains(publicIPEndpoints, req.URL.String()) {
-						return nil, errServiceUnavailable
-					}
-					if slices.Contains(tc.endpoints, req.URL.String()) {
-						synctest.Sleep(100 * time.Millisecond)
-						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.want))}, nil
-					}
-					pending.Add(1)
-					defer pending.Add(-1)
-					<-req.Context().Done()
-					return nil, req.Context().Err()
+					return serveFallbackReadyIP(req, tc.endpoints, tc.want, &pending)
 				})}
 				t.Cleanup(func() { DefaultHTTPClient = original })
 
 				started := time.Now()
-				if got := ResolvePublicIP(context.Background()); got != tc.want {
-					t.Fatalf("ResolvePublicIP() = %q, want %q", got, tc.want)
-				}
-				if elapsed := time.Since(started); elapsed >= time.Second {
-					t.Fatalf("ready fallback was delayed by unavailable family: %v", elapsed)
-				}
-				if pending.Load() != 0 {
-					t.Fatal("public IP discovery returned with pending requests")
-				}
+				got := ResolvePublicIP(context.Background())
+				checkFallbackIPResult(t, got, tc.want, started, &pending)
 			})
 		})
+	}
+}
+
+func serveFallbackReadyIP(req *http.Request, endpoints []string, want string, pending *atomic.Int32) (*http.Response, error) {
+	if slices.Contains(publicIPEndpoints, req.URL.String()) {
+		return nil, errServiceUnavailable
+	}
+	if slices.Contains(endpoints, req.URL.String()) {
+		synctest.Sleep(100 * time.Millisecond)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(want))}, nil
+	}
+	pending.Add(1)
+	defer pending.Add(-1)
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func checkFallbackIPResult(t *testing.T, got, want string, started time.Time, pending *atomic.Int32) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("ResolvePublicIP() = %q, want %q", got, want)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("ready fallback was delayed by unavailable family: %v", elapsed)
+	}
+	if pending.Load() != 0 {
+		t.Fatal("public IP discovery returned with pending requests")
 	}
 }
 
@@ -224,29 +244,38 @@ func TestResolvePublicIPsDoesNotWaitForUnavailableFamily(t *testing.T) {
 				var pending atomic.Int32
 				original := DefaultHTTPClient
 				DefaultHTTPClient = &http.Client{Transport: publicIPTransport(func(req *http.Request) (*http.Response, error) {
-					if slices.Contains(tc.endpoints, req.URL.String()) {
-						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.want))}, nil
-					}
-					pending.Add(1)
-					defer pending.Add(-1)
-					<-req.Context().Done()
-					return nil, req.Context().Err()
+					return serveFamiliesReadyIP(req, tc.endpoints, tc.want, &pending)
 				})}
 				t.Cleanup(func() { DefaultHTTPClient = original })
 
 				started := time.Now()
 				got, err := ResolvePublicIPs(context.Background())
-				if err != nil || !slices.Equal(got, []string{tc.want}) {
-					t.Fatalf("ResolvePublicIPs() = %v, %v, want [%s]", got, err, tc.want)
-				}
+				checkFamiliesIPResult(t, got, tc.want, err, &pending)
 				if elapsed := time.Since(started); elapsed >= 5*time.Second {
 					t.Fatalf("available family waited for unavailable family to exhaust its endpoints: %v", elapsed)
 				}
-				if pending.Load() != 0 {
-					t.Fatal("public IP discovery returned with pending requests")
-				}
 			})
 		})
+	}
+}
+
+func serveFamiliesReadyIP(req *http.Request, endpoints []string, want string, pending *atomic.Int32) (*http.Response, error) {
+	if slices.Contains(endpoints, req.URL.String()) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(want))}, nil
+	}
+	pending.Add(1)
+	defer pending.Add(-1)
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func checkFamiliesIPResult(t *testing.T, got []string, want string, err error, pending *atomic.Int32) {
+	t.Helper()
+	if err != nil || !slices.Equal(got, []string{want}) {
+		t.Fatalf("ResolvePublicIPs() = %v, %v, want [%s]", got, err, want)
+	}
+	if pending.Load() != 0 {
+		t.Fatal("public IP discovery returned with pending requests")
 	}
 }
 
@@ -262,23 +291,32 @@ func TestResolvePublicIPsKeepsDelayedWorkingFamily(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				original := DefaultHTTPClient
 				DefaultHTTPClient = &http.Client{Transport: publicIPTransport(func(req *http.Request) (*http.Response, error) {
-					if slices.Contains(tc.endpoints, req.URL.String()) {
-						synctest.Sleep(2 * time.Second)
-					}
-					body := "203.0.113.10"
-					if slices.Contains(publicIPv6Endpoints, req.URL.String()) {
-						body = "2001:db8::10"
-					}
-					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+					return serveDelayedWorkingIP(req, tc.endpoints)
 				})}
 				t.Cleanup(func() { DefaultHTTPClient = original })
 
 				got, err := ResolvePublicIPs(context.Background())
-				if err != nil || !slices.Equal(got, []string{"203.0.113.10", "2001:db8::10"}) {
-					t.Fatalf("ResolvePublicIPs() = %v, %v, want both families", got, err)
-				}
+				checkKeptDelayedFamily(t, got, err)
 			})
 		})
+	}
+}
+
+func serveDelayedWorkingIP(req *http.Request, endpoints []string) (*http.Response, error) {
+	if slices.Contains(endpoints, req.URL.String()) {
+		synctest.Sleep(2 * time.Second)
+	}
+	body := "203.0.113.10"
+	if slices.Contains(publicIPv6Endpoints, req.URL.String()) {
+		body = "2001:db8::10"
+	}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+}
+
+func checkKeptDelayedFamily(t *testing.T, got []string, err error) {
+	t.Helper()
+	if err != nil || !slices.Equal(got, []string{"203.0.113.10", "2001:db8::10"}) {
+		t.Fatalf("ResolvePublicIPs() = %v, %v, want both families", got, err)
 	}
 }
 

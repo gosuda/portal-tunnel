@@ -89,16 +89,24 @@ func runTCPCommand(args []string) error {
 		printTCPUsage(os.Stderr)
 		return err
 	}
-	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	cfg, err := normalizeDemoName(cfg)
 	if err != nil {
-		return fmt.Errorf("invalid --name value: %w", err)
+		return err
 	}
-	cfg.name = normalizedName
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	return runTCPDemo(ctx, cfg)
+}
+
+func normalizeDemoName(cfg demoConfig) (demoConfig, error) {
+	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	if err != nil {
+		return cfg, fmt.Errorf("invalid --name value: %w", err)
+	}
+	cfg.name = normalizedName
+	return cfg, nil
 }
 
 func runUDPCommand(args []string) error {
@@ -122,11 +130,10 @@ func runUDPCommand(args []string) error {
 		printUDPUsage(os.Stderr)
 		return err
 	}
-	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	cfg, err := normalizeDemoName(cfg)
 	if err != nil {
-		return fmt.Errorf("invalid --name value: %w", err)
+		return err
 	}
-	cfg.name = normalizedName
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
@@ -173,22 +180,9 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 }
 
 func runUDPDemo(ctx context.Context, cfg demoConfig) error {
-	listenerIdentity, err := resolveDemoIdentity(cfg)
+	exposure, err := exposeRunUDPDemo(ctx, cfg)
 	if err != nil {
 		return err
-	}
-	exposure, err := exposeDemo(ctx, cfg, listenerIdentity,
-		sdk.WithUDP(),
-		sdk.WithMetadata(types.LeaseMetadata{
-			Description: cfg.desc,
-			Tags:        utils.SplitCSV(cfg.tags),
-			Owner:       cfg.owner,
-			Thumbnail:   cfg.thumbnail,
-			Hide:        cfg.hide,
-		}),
-	)
-	if err != nil {
-		return fmt.Errorf("exposure listen error: %w", err)
 	}
 	defer exposure.Close()
 
@@ -214,6 +208,27 @@ func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	}
 	log.Info().Msg("demo udp shutdown complete")
 	return nil
+}
+
+func exposeRunUDPDemo(ctx context.Context, cfg demoConfig) (*sdk.Exposure, error) {
+	listenerIdentity, err := resolveDemoIdentity(cfg)
+	if err != nil {
+		return nil, err
+	}
+	exposure, err := exposeDemo(ctx, cfg, listenerIdentity,
+		sdk.WithUDP(),
+		sdk.WithMetadata(types.LeaseMetadata{
+			Description: cfg.desc,
+			Tags:        utils.SplitCSV(cfg.tags),
+			Owner:       cfg.owner,
+			Thumbnail:   cfg.thumbnail,
+			Hide:        cfg.hide,
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("exposure listen error: %w", err)
+	}
+	return exposure, nil
 }
 
 func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, opts ...sdk.Option) (*sdk.Exposure, error) {
@@ -242,7 +257,11 @@ func resolveDemoIdentity(cfg demoConfig) (types.Identity, error) {
 			return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 		}
 	}
-	generated, err := identity.Generate(strings.TrimSpace(cfg.name))
+	return generateResolveDemoIdentity(path, strings.TrimSpace(cfg.name))
+}
+
+func generateResolveDemoIdentity(path, name string) (types.Identity, error) {
+	generated, err := identity.Generate(name)
 	if err != nil {
 		return types.Identity{}, err
 	}

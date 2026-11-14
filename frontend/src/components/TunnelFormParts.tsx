@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 import { TriangleAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -34,7 +34,7 @@ export function Notice({
 }: {
   tone: "error" | "warn";
   children: ReactNode;
-}) {
+}): JSX.Element {
   return (
     <p
       className={cn(
@@ -62,7 +62,7 @@ export function Chip({
   removeLabel: string;
   removeDisabled?: boolean;
   onRemove: () => void;
-}) {
+}): JSX.Element {
   return (
     <span className={cn(s.chip, invalid && "ring-1 ring-destructive")}>
       {kind && (
@@ -112,7 +112,7 @@ export function ChipField({
   onDraftChange: (draft: string) => void;
   onCommit: () => void;
   onRemoveLast: () => void;
-}) {
+}): JSX.Element {
   return (
     <div className={s.chipField}>
       {chips}

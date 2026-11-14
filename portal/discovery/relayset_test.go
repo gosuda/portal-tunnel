@@ -175,22 +175,25 @@ func TestApplyRelayDiscoveryResponseCollectsHintsWhenTargetDescriptorIsMissing(t
 	}
 }
 
-func TestDiscoveryFailureLifecycle(t *testing.T) {
-	const (
-		relayA = "https://relay-a.example"
-		relayB = "https://relay-b.example"
-		budget = 3
-	)
+func seedDiscoveryFailureSet(t *testing.T, relayA string, relayB string) (*RelaySet, types.RelayDescriptor) {
+	t.Helper()
 	set := NewRelaySet(nil)
 	descA := mustRelayDescriptor(t, relayA)
 	mustApplyAuthoritative(t, set, descA)
 	mustApplyAuthoritative(t, set, mustRelayDescriptor(t, relayB))
+	return set, descA
+}
 
+func checkTransientDiscoveryFailure(t *testing.T, set *RelaySet, relayA string, budget int) {
+	t.Helper()
 	set.RecordDiscoveryFailure(relayA, budget)
 	if !servesDescriptor(set, relayA) || !routesTo(t, set, relayA) {
 		t.Fatal("a transient discovery failure removed an otherwise usable relay")
 	}
+}
 
+func checkExhaustedDiscoveryFailure(t *testing.T, set *RelaySet, relayA string, relayB string, budget int) {
+	t.Helper()
 	for range budget - 1 {
 		set.RecordDiscoveryFailure(relayA, budget)
 	}
@@ -200,7 +203,10 @@ func TestDiscoveryFailureLifecycle(t *testing.T) {
 	if !servesDescriptor(set, relayB) || !routesTo(t, set, relayB) {
 		t.Fatal("healthy relay was affected by another relay's discovery failures")
 	}
+}
 
+func checkHintRevivesNothing(t *testing.T, set *RelaySet, descA types.RelayDescriptor, relayA string) {
+	t.Helper()
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{descA},
@@ -210,19 +216,31 @@ func TestDiscoveryFailureLifecycle(t *testing.T) {
 	if servesDescriptor(set, relayA) || routesTo(t, set, relayA) {
 		t.Fatal("a gossip hint revived a dead relay; only authoritative contact may")
 	}
+}
 
+func checkAuthoritativeRevivesRelay(t *testing.T, set *RelaySet, descA types.RelayDescriptor, relayA string) {
+	t.Helper()
 	mustApplyAuthoritative(t, set, descA)
 	if !servesDescriptor(set, relayA) || !routesTo(t, set, relayA) {
 		t.Fatal("authoritative discovery success did not revive the relay")
 	}
 }
 
-func TestActiveFailureLifecycle(t *testing.T) {
-	const relayA = "https://relay-a.example"
-	set := NewRelaySet(nil)
-	desc := mustRelayDescriptor(t, relayA)
-	mustApplyAuthoritative(t, set, desc)
+func TestDiscoveryFailureLifecycle(t *testing.T) {
+	const (
+		relayA = "https://relay-a.example"
+		relayB = "https://relay-b.example"
+		budget = 3
+	)
+	set, descA := seedDiscoveryFailureSet(t, relayA, relayB)
+	checkTransientDiscoveryFailure(t, set, relayA, budget)
+	checkExhaustedDiscoveryFailure(t, set, relayA, relayB, budget)
+	checkHintRevivesNothing(t, set, descA, relayA)
+	checkAuthoritativeRevivesRelay(t, set, descA, relayA)
+}
 
+func checkActiveFailureBackoff(t *testing.T, set *RelaySet, relayA string) {
+	t.Helper()
 	backedOff, _, _ := set.RecordActiveFailure(relayA, 1)
 	if !backedOff {
 		t.Fatal("active failure at budget should back off")
@@ -236,16 +254,32 @@ func TestActiveFailureLifecycle(t *testing.T) {
 	if states := set.currentRelayStates(time.Now().UTC()); len(states) != 1 || states[0].Banned {
 		t.Fatalf("relay states = %+v, want relay retained without a ban", states)
 	}
+}
 
+func checkActiveFailureUnforgiven(t *testing.T, set *RelaySet, desc types.RelayDescriptor, relayA string) {
+	t.Helper()
 	mustApplyAuthoritative(t, set, desc)
 	if routesTo(t, set, relayA) {
 		t.Fatal("discovery success forgave active listener failures")
 	}
+}
 
+func checkOperatorRestoresRelay(t *testing.T, set *RelaySet, relayA string) {
+	t.Helper()
 	set.AllowRelayURL(relayA)
 	if !routesTo(t, set, relayA) {
 		t.Fatal("operator re-add did not restore the relay to route planning")
 	}
+}
+
+func TestActiveFailureLifecycle(t *testing.T) {
+	const relayA = "https://relay-a.example"
+	set := NewRelaySet(nil)
+	desc := mustRelayDescriptor(t, relayA)
+	mustApplyAuthoritative(t, set, desc)
+	checkActiveFailureBackoff(t, set, relayA)
+	checkActiveFailureUnforgiven(t, set, desc, relayA)
+	checkOperatorRestoresRelay(t, set, relayA)
 }
 
 func TestRelaySetEnsureRelayURLPreservesExistingState(t *testing.T) {
@@ -365,11 +399,8 @@ func TestCompatibleAuthoritativeDiscoveryClearsIncompatibleRelay(t *testing.T) {
 	}
 }
 
-func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-release.example"
-	desc := mustRelayDescriptor(t, relayURL)
+func applyTargetReleaseResponse(t *testing.T, set *RelaySet, relayURL string, desc types.RelayDescriptor) {
+	t.Helper()
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
 		Relays:          []types.RelayDescriptor{desc},
@@ -377,7 +408,10 @@ func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
 	}, time.Now().UTC()); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
+}
 
+func checkTargetReleaseRecorded(t *testing.T, set *RelaySet, relayURL string) {
+	t.Helper()
 	var state *relayState
 	for _, candidate := range relayStates(set) {
 		if candidate.Descriptor.APIHTTPSAddr == relayURL {
@@ -391,11 +425,17 @@ func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
 	if state.Trust != relayVerified {
 		t.Fatalf("relayState.Trust = %d, want relayVerified after the authoritative poll", state.Trust)
 	}
-
-	versions := set.KnownRelayReleaseVersions()
-	if len(versions) != 1 || versions[relayURL] != "v2.6.0" {
+	if versions := set.KnownRelayReleaseVersions(); len(versions) != 1 || versions[relayURL] != "v2.6.0" {
 		t.Fatalf("KnownRelayReleaseVersions() = %+v, want {%q: %q}", versions, relayURL, "v2.6.0")
 	}
+}
+
+func TestApplyRelayDiscoveryResponseRecordsTargetReleaseVersion(t *testing.T) {
+	set := NewRelaySet(nil)
+	relayURL := "https://relay-release.example"
+	desc := mustRelayDescriptor(t, relayURL)
+	applyTargetReleaseResponse(t, set, relayURL, desc)
+	checkTargetReleaseRecorded(t, set, relayURL)
 }
 
 func TestApplyRelayDiscoveryResponseIgnoresReleaseVersionFromGossip(t *testing.T) {
@@ -416,12 +456,8 @@ func TestApplyRelayDiscoveryResponseIgnoresReleaseVersionFromGossip(t *testing.T
 	}
 }
 
-func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
-	set := NewRelaySet(nil)
-
-	relayURL := "https://relay-expire.example"
-	signing := mustSigningIdentity(t)
-	t0 := time.Now().UTC().Truncate(time.Microsecond)
+func seedDirectReleasePoll(t *testing.T, set *RelaySet, signing types.Identity, relayURL string, t0 time.Time) {
+	t.Helper()
 	desc := mustSignedDescriptor(t, signing, relayURL, t0)
 	if _, err := set.ApplyRelayDiscoveryResponse(relayURL, types.DiscoveryResponse{
 		ProtocolVersion: types.DiscoveryVersion,
@@ -430,7 +466,10 @@ func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
 	}, t0); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
+}
 
+func applyGossipReleaseRefresh(t *testing.T, set *RelaySet, signing types.Identity, relayURL string, t0 time.Time) {
+	t.Helper()
 	gossipAt := t0.Add(2 * time.Hour)
 	gossipDesc := mustSignedDescriptor(t, signing, relayURL, gossipAt)
 	if _, err := set.ApplyRelayDiscoveryResponse("", types.DiscoveryResponse{
@@ -439,13 +478,26 @@ func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
 	}, gossipAt); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() gossip error = %v", err)
 	}
+}
 
+func checkReleaseVersionExpiry(t *testing.T, set *RelaySet, relayURL string, t0 time.Time) {
+	t.Helper()
 	if versions := set.knownRelayReleaseVersionsAt(t0.Add(AnnounceMaxValidity)); versions[relayURL] != "v2.6.0" {
 		t.Fatalf("knownRelayReleaseVersionsAt(validity boundary) = %+v, want %q still fresh on its direct-observation clock", versions, "v2.6.0")
 	}
 	if versions := set.knownRelayReleaseVersionsAt(t0.Add(AnnounceMaxValidity).Add(time.Second)); len(versions) != 0 {
 		t.Fatalf("knownRelayReleaseVersionsAt(validity+1s) = %+v, want empty: gossip must not extend the direct clock", versions)
 	}
+}
+
+func TestKnownRelayReleaseVersionsExpireWithoutFreshDirectPoll(t *testing.T) {
+	set := NewRelaySet(nil)
+	relayURL := "https://relay-expire.example"
+	signing := mustSigningIdentity(t)
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	seedDirectReleasePoll(t, set, signing, relayURL, t0)
+	applyGossipReleaseRefresh(t, set, signing, relayURL, t0)
+	checkReleaseVersionExpiry(t, set, relayURL, t0)
 }
 
 func TestApplyRelayDiscoveryResponseCollectionLimit(t *testing.T) {

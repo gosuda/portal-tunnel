@@ -22,6 +22,124 @@ func newTestReputationStore(t *testing.T) *ReputationStore {
 	}
 	return store
 }
+func durabilitySource() netip.Addr {
+	return netip.MustParseAddr("203.0.113.10")
+}
+
+func prepareDurabilityTarget(t *testing.T, store *ReputationStore, target, identity string) string {
+	t.Helper()
+	if target != "comment" {
+		return ""
+	}
+	comments, err := store.AddComment(identity, "A comment", "", "author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commentID := comments[0].ID
+	if _, _, err := store.Vote("another-app", commentID, VoteUp, "", durabilitySource()); !errors.Is(err, ErrCommentNotFound) {
+		t.Fatalf("another app inherited comment voting rights: %v", err)
+	}
+	return commentID
+}
+
+func castDurabilityVoteSequence(t *testing.T, store *ReputationStore, identity, commentID string) string {
+	t.Helper()
+	source := durabilitySource()
+	first, cookie, err := store.Vote(identity, commentID, VoteUp, "", source)
+	if err != nil || first.Up != 1 || first.Total != 1 || cookie == "" {
+		t.Fatalf("first vote: %+v, cookie=%q, err=%v", first, cookie, err)
+	}
+	for _, choice := range []string{VoteUp, VoteDown, VoteClear, VoteClear} {
+		summary, _, err := store.Vote(identity, commentID, choice, cookie, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkDurabilityVoteChoice(t, summary, choice)
+	}
+	return cookie
+}
+
+func checkDurabilityVoteChoice(t *testing.T, summary VoteSummary, choice string) {
+	t.Helper()
+	if choice == VoteClear {
+		if summary.Total != 0 || summary.ViewerVote != "" {
+			t.Fatalf("clear vote: %+v", summary)
+		}
+		return
+	}
+	if summary.Total != 1 || summary.ViewerVote != choice {
+		t.Fatalf("switch or repeat vote: %+v", summary)
+	}
+	if choice == VoteDown && summary.Down != 1 {
+		t.Fatalf("switch or repeat vote: %+v", summary)
+	}
+}
+
+func reopenDurabilityStore(t *testing.T, store *ReputationStore) *ReputationStore {
+	t.Helper()
+	reopened, err := NewReputationStore(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reopened
+}
+
+func checkDurabilityRestartVotes(t *testing.T, store *ReputationStore, identity, commentID, cookie string) {
+	t.Helper()
+	source := durabilitySource()
+	cleared, _, err := store.Vote(identity, commentID, VoteClear, cookie, source)
+	if err != nil || cleared.Total != 0 {
+		t.Fatalf("cleared vote did not survive restart: %+v, err=%v", cleared, err)
+	}
+	if _, _, err := store.Vote(identity, commentID, VoteUp, cookie, source); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func attemptFailedDurabilityVote(t *testing.T, store *ReputationStore, identity, commentID, cookie string) {
+	t.Helper()
+	if err := os.Remove(store.path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store.path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, minted, err := store.Vote(identity, commentID, VoteDown, cookie, durabilitySource()); err == nil || minted != "" {
+		t.Fatalf("failed persistence returned success or issued a cookie: %q, %v", minted, err)
+	}
+}
+
+func checkFailedCommentWrite(t *testing.T, store *ReputationStore, identity, commentID, cookie string) {
+	t.Helper()
+	comments := store.ListComments(identity, store.ViewerHashFor(cookie), "author")
+	if len(comments) != 1 || comments[0].Up != 1 || comments[0].Down != 0 || comments[0].ViewerVote != VoteUp {
+		t.Fatalf("failed write changed comment vote: %+v", comments)
+	}
+}
+
+func checkFailedAppWrite(t *testing.T, store *ReputationStore, cookie string) {
+	t.Helper()
+	row := store.Summaries(store.ViewerHashFor(cookie), testLeases("demo.example.com"))[0]
+	if row.Up != 1 || row.Down != 0 || row.ViewerVote != VoteUp {
+		t.Fatalf("failed write changed app vote: %+v", row)
+	}
+}
+
+func checkVoteDurability(t *testing.T, target string) {
+	t.Helper()
+	const identity = "id:demo.example.com"
+	store := newTestReputationStore(t)
+	commentID := prepareDurabilityTarget(t, store, target, identity)
+	cookie := castDurabilityVoteSequence(t, store, identity, commentID)
+	store = reopenDurabilityStore(t, store)
+	checkDurabilityRestartVotes(t, store, identity, commentID, cookie)
+	attemptFailedDurabilityVote(t, store, identity, commentID, cookie)
+	if target == "comment" {
+		checkFailedCommentWrite(t, store, identity, commentID, cookie)
+	} else {
+		checkFailedAppWrite(t, store, cookie)
+	}
+}
 
 func TestReputationRejectsInvalidStoredVotes(t *testing.T) {
 	type storedVoteCase struct {
@@ -38,37 +156,50 @@ func TestReputationRejectsInvalidStoredVotes(t *testing.T) {
 		{"invalid vote", map[string]map[string]string{"app": {"voter": "invalid"}}, errReputationStoredInvalid},
 		{"stored clear", map[string]map[string]string{"app": {"voter": VoteClear}}, errReputationStoredInvalid},
 	}
-	tooManyVoters := make(map[string]string)
-	for i := range reputationMaxVoters + 1 {
-		tooManyVoters[strconv.Itoa(i)] = VoteUp
-	}
-	tooManyIdentities := make(map[string]map[string]string)
-	for i := range reputationMaxIdentities + 1 {
-		tooManyIdentities[strconv.Itoa(i)] = map[string]string{"voter": VoteDown}
-	}
 	tests = append(tests,
-		storedVoteCase{"voter capacity", map[string]map[string]string{"app": tooManyVoters}, ErrReputationCapacity},
-		storedVoteCase{"identity capacity", tooManyIdentities, ErrReputationCapacity},
+		storedVoteCase{"voter capacity", map[string]map[string]string{"app": tooManyReputationStoredVoters()}, ErrReputationCapacity},
+		storedVoteCase{"identity capacity", tooManyReputationStoredIdentities(), ErrReputationCapacity},
 	)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "reputation.json")
-			state := persistedReputation{VoterSecret: make([]byte, reputationVoterIDBytes), Identities: test.identities}
-			if err := utils.WriteJSONFile(path, state, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			before, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := NewReputationStore(path); !errors.Is(err, test.want) {
-				t.Fatalf("invalid stored votes: got %v, want %v", err, test.want)
-			}
-			after, err := os.ReadFile(path)
-			if err != nil || string(before) != string(after) {
-				t.Fatalf("rejected state was rewritten: %v", err)
-			}
+			checkReputationStoredVoteCase(t, test.identities, test.want)
 		})
+	}
+}
+
+func tooManyReputationStoredVoters() map[string]string {
+	voters := make(map[string]string)
+	for i := range reputationMaxVoters + 1 {
+		voters[strconv.Itoa(i)] = VoteUp
+	}
+	return voters
+}
+
+func tooManyReputationStoredIdentities() map[string]map[string]string {
+	identities := make(map[string]map[string]string)
+	for i := range reputationMaxIdentities + 1 {
+		identities[strconv.Itoa(i)] = map[string]string{"voter": VoteDown}
+	}
+	return identities
+}
+
+func checkReputationStoredVoteCase(t *testing.T, identities map[string]map[string]string, want error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "reputation.json")
+	state := persistedReputation{VoterSecret: make([]byte, reputationVoterIDBytes), Identities: identities}
+	if err := utils.WriteJSONFile(path, state, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewReputationStore(path); !errors.Is(err, want) {
+		t.Fatalf("invalid stored votes: got %v, want %v", err, want)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(before) != string(after) {
+		t.Fatalf("rejected state was rewritten: %v", err)
 	}
 }
 
@@ -77,7 +208,13 @@ func TestReputationRotatingSourcesSpendNewVoterBudget(t *testing.T) {
 	now := time.Now()
 	store.limiter.clock = func() time.Time { return now }
 	const identity = "id:demo.example.com"
-	firstSource := netip.MustParseAddr("2001:db8::1")
+	firstCookie := castReputationRotatingNewVoters(t, store, identity)
+	checkRotatingMintCapacity(t, store, identity)
+	checkRotatingExistingVoter(t, store, identity, firstCookie)
+}
+
+func castReputationRotatingNewVoters(t *testing.T, store *ReputationStore, identity string) string {
+	t.Helper()
 	var firstCookie string
 	for i := 1; i <= 3; i++ {
 		source := netip.MustParseAddr("2001:db8::" + strconv.Itoa(i))
@@ -92,6 +229,11 @@ func TestReputationRotatingSourcesSpendNewVoterBudget(t *testing.T) {
 			firstCookie = cookie
 		}
 	}
+	return firstCookie
+}
+
+func checkRotatingMintCapacity(t *testing.T, store *ReputationStore, identity string) {
+	t.Helper()
 	fourthSource := netip.MustParseAddr("2001:db8::4")
 	if retry := store.AllowVote(fourthSource, false); retry != 0 {
 		t.Fatalf("ordinary vote request unexpectedly exhausted: %v", retry)
@@ -100,6 +242,11 @@ func TestReputationRotatingSourcesSpendNewVoterBudget(t *testing.T) {
 	if !errors.Is(err, ErrReputationCapacity) || cookie != "" || len(store.state.Identities[identity]) != 3 {
 		t.Fatalf("rotating source bypassed mint budget: cookie=%q, err=%v", cookie, err)
 	}
+}
+
+func checkRotatingExistingVoter(t *testing.T, store *ReputationStore, identity, firstCookie string) {
+	t.Helper()
+	firstSource := netip.MustParseAddr("2001:db8::1")
 	if retry := store.AllowVote(firstSource, false); retry != 0 {
 		t.Fatalf("existing source cannot afford an update: %v", retry)
 	}
@@ -107,6 +254,7 @@ func TestReputationRotatingSourcesSpendNewVoterBudget(t *testing.T) {
 	if err != nil || updated.Total != 3 || updated.Down != 1 || cookie != firstCookie {
 		t.Fatalf("existing cookieless voter = %+v, cookie=%q, err=%v", updated, cookie, err)
 	}
+	fourthSource := netip.MustParseAddr("2001:db8::4")
 	if retry := store.AllowVote(fourthSource, false); retry != 0 {
 		t.Fatalf("existing cookie cannot afford an update: %v", retry)
 	}
@@ -132,7 +280,6 @@ func TestReputationLegacyCookieRemainsDistinctFromNATSource(t *testing.T) {
 	store := newTestReputationStore(t)
 	const identity = "id:demo.example.com"
 	source := netip.MustParseAddr("203.0.113.10")
-	// Pre-existing cookies contain a random ID signed with the same secret.
 	id := make([]byte, reputationVoterIDBytes)
 	id[0] = 42
 	legacyCookie := base64.RawURLEncoding.EncodeToString(append(id, store.voterMAC(id)...))
@@ -276,74 +423,7 @@ func TestReputationAtCapacityExistingVoterCanChangeVote(t *testing.T) {
 func TestVoteChangesAreDurableForAppsAndComments(t *testing.T) {
 	for _, target := range []string{"app", "comment"} {
 		t.Run(target, func(t *testing.T) {
-			store := newTestReputationStore(t)
-			const identity = "id:demo.example.com"
-			source := netip.MustParseAddr("203.0.113.10")
-			commentID := ""
-			if target == "comment" {
-				comments, err := store.AddComment(identity, "A comment", "", "author")
-				if err != nil {
-					t.Fatal(err)
-				}
-				commentID = comments[0].ID
-				if _, _, err := store.Vote("another-app", commentID, VoteUp, "", source); !errors.Is(err, ErrCommentNotFound) {
-					t.Fatalf("another app inherited comment voting rights: %v", err)
-				}
-			}
-			first, cookie, err := store.Vote(identity, commentID, VoteUp, "", source)
-			if err != nil || first.Up != 1 || first.Total != 1 || cookie == "" {
-				t.Fatalf("first vote: %+v, cookie=%q, err=%v", first, cookie, err)
-			}
-			for _, choice := range []string{VoteUp, VoteDown, VoteClear, VoteClear} {
-				summary, _, err := store.Vote(identity, commentID, choice, cookie, source)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if choice == VoteClear {
-					if summary.Total != 0 || summary.ViewerVote != "" {
-						t.Fatalf("clear vote: %+v", summary)
-					}
-					continue
-				}
-				if summary.Total != 1 || summary.ViewerVote != choice {
-					t.Fatalf("switch or repeat vote: %+v", summary)
-				}
-				if choice == VoteDown && summary.Down != 1 {
-					t.Fatalf("switch or repeat vote: %+v", summary)
-				}
-			}
-			store, err = NewReputationStore(store.path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cleared, _, err := store.Vote(identity, commentID, VoteClear, cookie, source)
-			if err != nil || cleared.Total != 0 {
-				t.Fatalf("cleared vote did not survive restart: %+v, err=%v", cleared, err)
-			}
-			if _, _, err := store.Vote(identity, commentID, VoteUp, cookie, source); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Remove(store.path); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Mkdir(store.path, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if _, minted, err := store.Vote(identity, commentID, VoteDown, cookie, source); err == nil || minted != "" {
-				t.Fatalf("failed persistence returned success or issued a cookie: %q, %v", minted, err)
-			}
-			viewerHash := store.ViewerHashFor(cookie)
-			if target == "comment" {
-				comments := store.ListComments(identity, viewerHash, "author")
-				if len(comments) != 1 || comments[0].Up != 1 || comments[0].Down != 0 || comments[0].ViewerVote != VoteUp {
-					t.Fatalf("failed write changed comment vote: %+v", comments)
-				}
-			} else {
-				row := store.Summaries(viewerHash, testLeases("demo.example.com"))[0]
-				if row.Up != 1 || row.Down != 0 || row.ViewerVote != VoteUp {
-					t.Fatalf("failed write changed app vote: %+v", row)
-				}
-			}
+			checkVoteDurability(t, target)
 		})
 	}
 }

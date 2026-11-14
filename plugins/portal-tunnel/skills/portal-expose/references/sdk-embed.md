@@ -27,7 +27,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// name applies only when the identity file does not exist yet.
+	// Select this service without rewriting an existing signing identity.
 	id, err := identity.LoadOrCreate("my-app", os.Getenv("PORTAL_IDENTITY_PATH"), os.Getenv("IDENTITY_JSON"))
 	if err != nil {
 		log.Fatal(err)
@@ -70,7 +70,7 @@ The sign-in gate below needs `v2.7.3` or later.
 
 ## Identity
 
-- `identity.LoadOrCreate(name, path, rawJSON)`: an in-memory JSON payload wins, then an existing file at `path` is parsed as-is, and only when neither exists is a new identity generated with `name` (which may be empty for an unnamed service) and written to `path` with mode `0600`. An existing file supplies the public name; `name` never renames it. One identity file per public name.
+- `identity.LoadOrCreate(name, path, rawJSON)`: an in-memory JSON payload wins, then an existing file at `path` is loaded, and only when neither exists is a new signing identity generated and persisted privately without a service name. A nonempty `name` selects the service without rewriting the file. An omitted name retains an old file's saved default or selects an unnamed service. Different explicit service names may share a key while retaining independent leases and targets.
 - The file holds private key material (`private_key` or `mnemonic` plus `derivation_path`). Keep it outside the repository and out of images and logs. Empty `path` keeps the identity in memory only, which means a new hostname on every start.
 - `sdk.Expose` requires a fully resolved identity with name, address, and keys. Always go through `identity.LoadOrCreate`, `identity.Parse`, or `identity.Generate`; a hand-built struct is rejected.
 - Names are normalized to a DNS label whose ASCII form is limited to 63 characters, or empty for an unnamed service. Relays that predate long-name support accept at most 22. Relays return the address-only canonical hostname (`<address>.<relay-host>`) when name is empty, or both the friendly hostname and the full-address canonical hostname when named; SDK readiness URLs use the returned canonical hostname as the stable browser origin.
@@ -82,16 +82,18 @@ The sign-in gate below needs `v2.7.3` or later.
 - Read the public URL from `exposure.WaitReady(ctx)`, from `exposure.Relays()` (sorted snapshot), or from `exposure.Updates()` (buffered channel of size one; slow readers miss intermediate states and should re-read `Relays()`). The SDK also logs `service ready at <url>` with field `public_url`, exactly like the CLI.
 - `RelayStatus.Approval` is `pending` or `refused` while the relay refuses the lease, and `Message()` gives the wording to show. Empty never means approved. See the SDK API reference for old and new SDK and relay pairs.
 - `RelayStatus` carries `RelayURL`, `PublicURL`, `AliasURL`, `AliasSince` (when the exposure came to hold `AliasURL`), `TCPAddr`, `UDPAddr`, `Version`, `State` (`connecting`, `ready`, `failed`), and `Failure` (`runtime`, `terminal`, `mitm`). One failed relay does not stop an exposure that has healthy ones.
-- `PublicURL` is the identity-bound canonical URL; it always routes to this exposure. `AliasURL` is `<name>.<root host>` when the relay granted that alias to the lease, and empty when another identity owns the name or the exposure is unnamed. Both URLs stay set while the lease is held, including `connecting` while reverse sessions reconnect; a failed relay clears `AliasURL`. While `State` is `ready`, prefer `AliasURL` for user-facing links and sharing, falling back to `PublicURL` when empty. Never derive an alias by stripping the address suffix. The friendly alias always reaches the live origin; the opt-in relay cache serves only the canonical hostname.
+- `PublicURL` is the identity-bound canonical URL. In negotiated Local TLS mode it is empty until usable local material exists and is withdrawn on expiry; `LegacyURL` is the separate one-label compatibility origin. `AliasURL` is `<name>.<root host>` when granted, and empty for an alias collision or unnamed service. Connecting status retracts readiness even if endpoint fields remain; advertise only nonempty URLs from a ready, non-deselected status. Prefer `AliasURL` for friendly sharing, then an available `PublicURL` or `LegacyURL` as an explicit origin choice. Never infer an alias by stripping labels. Only eligible legacy canonical origins support opt-in relay cache.
 - Lease renewal, re-registration after a relay restart, and reverse-session pooling are handled inside the SDK. The app does nothing for them.
 
 ## What the handler sees
 
-- Tenant TLS is terminated inside the SDK using the relay's certificate through the keyless signer; session keys never leave the process, and the handler receives plain HTTP. This is the same end-to-end property the CLI gives.
-- `r.TLS` is always nil, because the terminated connection is not a `crypto/tls` conn. Do not gate Secure cookies or scheme detection on it; the public scheme is always `https` for the tunnel hostname.
+- Tenant TLS terminates in the SDK. Friendly and legacy connections use the Keyless signer; negotiated Local TLS canonical connections use a tunnel-owned exact-host certificate and native `crypto/tls`. The handler receives HTTP requests and the public tunnel scheme is `https`.
+- `sdk.RunHTTP` preserves available connection TLS state in `r.TLS` and sets `X-Forwarded-Proto: https`. Do not assume TLS state is always absent. Canonical Local TLS rejects HTTP authorities that differ from SNI.
 - `r.Host` is the real public hostname. `r.RemoteAddr` is the relay end of the SDK's own outbound connection, never the browser. `sdk.RunHTTP` sets `X-Forwarded-Proto: https` on tunneled requests, and Portal adds no `X-Forwarded-For` or `X-Real-IP`, so the real client IP is not available in-process.
 - WebSockets and other upgrades work; the tunnel is a byte-transparent `net.Conn`.
 - To proxy to local services instead of handling in-process: `sdk.NewHTTPRoutes([]sdk.HTTPRouteConfig{{Prefix: "/", Upstream: "127.0.0.1:3000"}})` returns an `http.Handler`; `StaticRoot` serves a directory as an SPA. `sdk.Proxy(ctx, exposure, "127.0.0.1:3000")` forwards raw streams and closes the exposure when it returns, so do not also `defer exposure.Close()` on that path.
+
+Native callers opt into automatic certificates with `sdk.WithAutomaticTLS(stateDir, requireLocal)` or manual material with `sdk.WithTLSCertificate(certFile, keyFile)`. The modes are mutually exclusive. `RunHTTP` enables actual HTTP/2 handling on the new canonical and can proxy to HTTP/1.1 backends; raw `Expose`/`Proxy` streams remain HTTP/1.1. Ordinary browser/WASM runtimes do not support Local TLS provisioning. See `docs/src/routes/api-reference/+page.md` and the detailed SDK API page for capability negotiation, exact SAN validation, readiness, issuance approval, and cache boundaries.
 
 ## Sign-in for visitors
 

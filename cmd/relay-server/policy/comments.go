@@ -44,38 +44,53 @@ type persistedComments struct {
 	Authors map[string]string            `json:"authors,omitempty"`
 }
 
-func (s *ReputationStore) validateComments() error {
+func validateCommentThreads(threads map[string][]storedComment) (map[string]bool, error) {
 	total := 0
 	ids := make(map[string]bool)
-	for identity, comments := range s.state.Comments.Threads {
+	for identity, comments := range threads {
 		if identity == "" || len(comments) == 0 || len(comments) > commentsMaxPerApp {
-			return ErrCommentThreadInvalid
+			return nil, ErrCommentThreadInvalid
 		}
 		for _, comment := range comments {
 			if comment.ID == "" || ids[comment.ID] || comment.CreatedAt.IsZero() || strings.TrimSpace(comment.Text) == "" || utf8.RuneCountInString(comment.Text) > types.CommentMaxLength {
-				return ErrCommentStoredInvalid
+				return nil, ErrCommentStoredInvalid
 			}
 			ids[comment.ID] = true
 		}
 		total += len(comments)
 	}
 	if total > commentsMaxTotal {
-		return ErrCommentCapacity
+		return nil, ErrCommentCapacity
 	}
+	return ids, nil
+}
+
+func validateCommentVotes(votes map[string]map[string]string, ids map[string]bool) error {
 	voteTotal := 0
-	for id, votes := range s.state.Comments.Votes {
-		if !ids[id] || len(votes) > reputationMaxVoters {
+	for id, threadVotes := range votes {
+		if !ids[id] || len(threadVotes) > reputationMaxVoters {
 			return ErrCommentVotesInvalid
 		}
-		for voter, vote := range votes {
+		for voter, vote := range threadVotes {
 			if voter == "" || (vote != VoteUp && vote != VoteDown) {
 				return ErrCommentVoteInvalid
 			}
 		}
-		voteTotal += len(votes)
+		voteTotal += len(threadVotes)
 	}
 	if voteTotal > commentsMaxVotes {
 		return ErrCommentCapacity
+	}
+	return nil
+}
+
+func (s *ReputationStore) validateComments() error {
+	ids, err := validateCommentThreads(s.state.Comments.Threads)
+	if err != nil {
+		return err
+	}
+	if err := validateCommentVotes(s.state.Comments.Votes, ids); err != nil {
+		return err
 	}
 	for id, hash := range s.state.Comments.Authors {
 		if !ids[id] || hash == "" {

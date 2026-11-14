@@ -21,6 +21,11 @@ func TestRegisterChallengeSIWE(t *testing.T) {
 	if !strings.Contains(challenge.SIWEMessage, "\nRegister a portal lease\n\n") || !strings.HasSuffix(challenge.SIWEMessage, "Request ID: "+challenge.ChallengeID) {
 		t.Fatalf("registration message omitted challenge fields: %q", challenge.SIWEMessage)
 	}
+	checkRegisterChallengeVectors(t, challenge, owner, other, now)
+}
+
+func checkRegisterChallengeVectors(t *testing.T, challenge *RegisterChallenge, owner, other LocalAuthority, now time.Time) {
+	t.Helper()
 	for _, test := range []struct {
 		name    string
 		signer  LocalAuthority
@@ -60,38 +65,62 @@ func siweTestAuthority(t *testing.T, keyDigit string) LocalAuthority {
 	}
 	return NewLocalAuthority(resolved)
 }
-
 func TestValidateRegisterSIWEChallenge(t *testing.T) {
 	t.Parallel()
-
-	now := time.Date(2026, 10, 13, 12, 0, 0, 500000000, time.UTC)
-	relayURL, err := url.Parse("https://relay.example:8443")
+	fixture, err := newRegisterSIWEChallengeFixture()
 	if err != nil {
 		t.Fatal(err)
 	}
-	const address = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
-	const challengeID = "rch_example"
-	base := SIWEMessage{
-		Domain: relayURL.Host, Address: address,
+	for _, tc := range fixture.cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkRegisterSIWEChallenge(t, fixture, tc)
+		})
+	}
+}
+
+type registerSIWEChallengeCase struct {
+	name    string
+	change  func(*SIWEMessage, *types.RegisterChallengeResponse)
+	edit    func(string) string
+	wantErr bool
+}
+
+type registerSIWEChallengeFixture struct {
+	base        SIWEMessage
+	cases       []registerSIWEChallengeCase
+	relayURL    *url.URL
+	address     string
+	challengeID string
+	now         time.Time
+}
+
+func newRegisterSIWEChallengeFixture() (registerSIWEChallengeFixture, error) {
+	var fixture registerSIWEChallengeFixture
+	now := time.Date(2026, 10, 13, 12, 0, 0, 500000000, time.UTC)
+	relayURL, err := url.Parse("https://relay.example:8443")
+	if err != nil {
+		return fixture, err
+	}
+	fixture.now = now
+	fixture.relayURL = relayURL
+	fixture.address = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+	fixture.challengeID = "rch_example"
+	fixture.base = SIWEMessage{
+		Domain: relayURL.Host, Address: fixture.address,
 		URI:       "https://relay.example:8443" + types.PathSDKRegister,
 		Statement: types.RegisterLeaseSIWEStatement,
-		Nonce:     "abcdefgh12345678", RequestID: challengeID,
+		Nonce:     "abcdefgh12345678", RequestID: fixture.challengeID,
 		IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute),
 	}
-
-	tests := []struct {
-		name    string
-		change  func(*SIWEMessage, *types.RegisterChallengeResponse)
-		edit    func(string) string
-		wantErr bool
-	}{
+	fixture.cases = []registerSIWEChallengeCase{
 		{name: "honest relay"},
 		{name: "missing challenge ID", change: func(_ *SIWEMessage, c *types.RegisterChallengeResponse) {
 			c.ChallengeID = ""
 		}, wantErr: true},
 		{name: "expiration reached", change: func(m *SIWEMessage, c *types.RegisterChallengeResponse) {
-			m.IssuedAt = now.Add(-time.Minute)
-			m.ExpiresAt = now
+			m.ExpiresAt = m.IssuedAt
+			m.IssuedAt = m.IssuedAt.Add(-time.Minute)
 			c.ExpiresAt = m.ExpiresAt
 		}, wantErr: true},
 		{name: "subsecond challenge", change: func(m *SIWEMessage, c *types.RegisterChallengeResponse) {
@@ -128,13 +157,13 @@ func TestValidateRegisterSIWEChallenge(t *testing.T) {
 			c.ExpiresAt = m.ExpiresAt
 		}, wantErr: true},
 		{name: "future issue time", change: func(m *SIWEMessage, c *types.RegisterChallengeResponse) {
-			m.IssuedAt = now.Add(3 * time.Minute)
-			m.ExpiresAt = m.IssuedAt.Add(time.Minute)
+			m.ExpiresAt = m.IssuedAt.Add(4 * time.Minute)
+			m.IssuedAt = m.IssuedAt.Add(3 * time.Minute)
 			c.ExpiresAt = m.ExpiresAt
 		}, wantErr: true},
 		{name: "expired", change: func(m *SIWEMessage, c *types.RegisterChallengeResponse) {
-			m.IssuedAt = now.Add(-3 * time.Minute)
-			m.ExpiresAt = now.Add(-time.Minute)
+			m.ExpiresAt = m.IssuedAt.Add(-time.Minute)
+			m.IssuedAt = m.IssuedAt.Add(-3 * time.Minute)
 			c.ExpiresAt = m.ExpiresAt
 		}, wantErr: true},
 		{name: "invalid nonce", edit: func(msg string) string {
@@ -156,31 +185,30 @@ func TestValidateRegisterSIWEChallenge(t *testing.T) {
 			return msg + strings.Repeat("A", maxRegisterSIWEMessageBytes)
 		}, wantErr: true},
 	}
+	return fixture, nil
+}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			message := base
-			challenge := types.RegisterChallengeResponse{ChallengeID: challengeID, ExpiresAt: base.ExpiresAt}
-			if tc.change != nil {
-				tc.change(&message, &challenge)
-			}
-			formatted, err := FormatSIWEMessage(message)
-			if err != nil {
-				t.Fatalf("format test fixture: %v", err)
-			}
-			if tc.edit != nil {
-				formatted = tc.edit(formatted)
-			}
-			challenge.SIWEMessage = formatted
-			got := ValidateRegisterSIWEChallenge(challenge, relayURL, address, now)
-			if (got != nil) != tc.wantErr {
-				t.Fatalf("ValidateRegisterSIWEChallenge() error = %v, wantErr %t", got, tc.wantErr)
-			}
-			if tc.wantErr && !errors.Is(got, ErrInvalidRegisterSIWEChallenge) {
-				t.Fatalf("ValidateRegisterSIWEChallenge() error = %v, want invalid challenge sentinel", got)
-			}
-		})
+func checkRegisterSIWEChallenge(t *testing.T, fixture registerSIWEChallengeFixture, tc registerSIWEChallengeCase) {
+	t.Helper()
+	message := fixture.base
+	challenge := types.RegisterChallengeResponse{ChallengeID: fixture.challengeID, ExpiresAt: fixture.base.ExpiresAt}
+	if tc.change != nil {
+		tc.change(&message, &challenge)
+	}
+	formatted, err := FormatSIWEMessage(message)
+	if err != nil {
+		t.Fatalf("format test fixture: %v", err)
+	}
+	if tc.edit != nil {
+		formatted = tc.edit(formatted)
+	}
+	challenge.SIWEMessage = formatted
+	got := ValidateRegisterSIWEChallenge(challenge, fixture.relayURL, fixture.address, fixture.now)
+	if (got != nil) != tc.wantErr {
+		t.Fatalf("ValidateRegisterSIWEChallenge() error = %v, wantErr %t", got, tc.wantErr)
+	}
+	if tc.wantErr && !errors.Is(got, ErrInvalidRegisterSIWEChallenge) {
+		t.Fatalf("ValidateRegisterSIWEChallenge() error = %v, want invalid challenge sentinel", got)
 	}
 }
 

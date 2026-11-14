@@ -166,7 +166,6 @@ func authenticateReverseStream(ctx context.Context, conn net.Conn, capability st
 	if capability == "" || len(capability) > reverseCapabilityLimit {
 		return errReverseCapabilityIsInvalid
 	}
-
 	deadline := time.Now().Add(reverseStreamAuthTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
@@ -177,7 +176,10 @@ func authenticateReverseStream(ctx context.Context, conn net.Conn, capability st
 	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopClose()
 	defer conn.SetDeadline(time.Time{})
+	return exchangeReverseCapability(conn, capability)
+}
 
+func exchangeReverseCapability(conn net.Conn, capability string) error {
 	var size [2]byte
 	binary.BigEndian.PutUint16(size[:], uint16(len(capability)))
 	if err := writeReverseStreamFrame(conn, size[:], []byte(capability)); err != nil {

@@ -1,10 +1,11 @@
+import type { JSX } from "react";
 import { SsgoiTransition } from "@ssgoi/react";
 import { AdminHeader } from "@/components/AdminHeader";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useAuth } from "@/hooks/useAuth";
 import { AdminServerList } from "@/components/AdminServerList";
 
-export function Admin() {
+export function Admin(): JSX.Element {
   const auth = useAuth();
   const { isAuthenticated, isLoading: authLoading } = auth;
 

@@ -56,7 +56,7 @@ async function fetchAuthState(): Promise<AuthState> {
 
 export type AdminAuth = ReturnType<typeof useAuth>;
 
-export function useAuth() {
+export function useAuth(): { isAuthenticated: boolean; isLoading: boolean; login: (token: string) => Promise<LoginResult>; logout: () => Promise<void> } {
   const [authState, setAuthState] = useState<AuthState>({
     isAuthenticated: false,
     isLoading: true,

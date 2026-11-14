@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	jose "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
@@ -45,14 +45,7 @@ type stubOIDCProvider struct {
 	challenge string
 }
 
-func startStubOIDCProvider(t *testing.T) *stubOIDCProvider {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := &stubOIDCProvider{key: key}
-	mux := http.NewServeMux()
+func registerStubOIDCRoutes(p *stubOIDCProvider, mux *http.ServeMux, key *rsa.PrivateKey) {
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"issuer":                 p.URL,
@@ -77,6 +70,17 @@ func startStubOIDCProvider(t *testing.T) *stubOIDCProvider {
 		back.RawQuery = url.Values{"code": {"stub-code"}, "state": {query.Get("state")}}.Encode()
 		http.Redirect(w, r, back.String(), http.StatusFound)
 	})
+}
+
+func startStubOIDCProvider(t *testing.T) *stubOIDCProvider {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &stubOIDCProvider{key: key}
+	mux := http.NewServeMux()
+	registerStubOIDCRoutes(p, mux, key)
 	mux.HandleFunc("/token", p.serveToken(t))
 	p.Server = httptest.NewServer(mux)
 	t.Cleanup(p.Close)
@@ -127,6 +131,326 @@ func (h *swappableHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	(*h.current.Load().(*http.Handler)).ServeHTTP(w, r)
 }
 
+func bootLocalhostRelay(t *testing.T, ctx context.Context) (string, int) {
+	t.Helper()
+	port := harnessPort(t, "localhost")
+	sniAddr := net.JoinHostPort("localhost", strconv.Itoa(port))
+	relay, err := portal.NewServer(portal.ServerConfig{
+		PortalURL:     "https://" + sniAddr,
+		StateDir:      t.TempDir(),
+		SNIListenAddr: sniAddr,
+		SNIPort:       port,
+	})
+	if err != nil {
+		t.Fatalf("create relay: %v", err)
+	}
+	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
+		t.Fatalf("start relay: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = relay.Shutdown(shutdownCtx)
+		_ = relay.Wait()
+	})
+	return sniAddr, port
+}
+
+func guardAppWithOIDC(t *testing.T, ctx context.Context, app http.Handler, providerURL string) (types.Identity, *swappableHandler, appauth.Config) {
+	t.Helper()
+	id, err := identity.Generate("embed")
+	if err != nil {
+		t.Fatalf("generate identity: %v", err)
+	}
+	cfg := appauth.Config{
+		Provider:   appauth.ProviderOIDC,
+		EmailList:  []string{"sub:user-123"},
+		OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: providerURL, OIDCClientID: "embedder"},
+	}
+	if err := appauth.Check(ctx, cfg); err != nil {
+		t.Fatalf("check provider: %v", err)
+	}
+	gate, err := appauth.New(app, id, cfg)
+	if err != nil {
+		t.Fatalf("build gate: %v", err)
+	}
+	front := &swappableHandler{}
+	front.set(gate)
+	return id, front, cfg
+}
+
+func awaitAppLease(t *testing.T, ctx context.Context, exposure *sdk.Exposure) (string, *url.URL) {
+	t.Helper()
+	waitCtx, waitCancel := context.WithTimeout(ctx, 60*time.Second)
+	defer waitCancel()
+	ready, err := exposure.WaitReady(waitCtx)
+	if err != nil {
+		t.Fatalf("wait for lease: %v", err)
+	}
+	if len(ready) != 1 || ready[0].PublicURL == "" {
+		t.Fatalf("relay status = %+v, want one public URL", ready)
+	}
+	publicURL := strings.TrimSuffix(ready[0].PublicURL, "/")
+	public, err := url.Parse(publicURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publicURL, public
+}
+
+func serveAppThroughRelay(t *testing.T, ctx context.Context, cancel context.CancelFunc, id types.Identity, sniAddr string, front http.Handler) (string, *url.URL) {
+	t.Helper()
+	exposure, err := sdk.Expose(ctx, id, []string{"https://" + sniAddr})
+	if err != nil {
+		t.Fatalf("expose: %v", err)
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- sdk.RunHTTP(ctx, exposure, front, "") }()
+	t.Cleanup(func() {
+		_ = exposure.Close()
+		cancel()
+		select {
+		case err := <-runDone:
+			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
+				t.Errorf("run: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("RunHTTP did not stop")
+		}
+	})
+	return awaitAppLease(t, ctx, exposure)
+}
+
+func newAppSessionClients(t *testing.T, providerURL, sniAddr string, public *url.URL) (*http.Client, *http.Client) {
+	t.Helper()
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr == strings.TrimPrefix(providerURL, "http://") {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, sniAddr)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 20 * time.Second, Jar: jar, Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext:       dial,
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true, ServerName: public.Hostname(), MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
+	}}
+	noRedirect := *client
+	noRedirect.Jar = nil
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return client, &noRedirect
+}
+
+func getAppSession(t *testing.T, ctx context.Context, client *http.Client, publicURL, path string, header http.Header) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, publicURL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, values := range header {
+		req.Header[name] = values
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(body)
+}
+
+func dialAppSocket(t *testing.T, ctx context.Context, noRedirect *http.Client, public *url.URL, cookie string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	header := http.Header{"Origin": {"https://" + public.Host}}
+	if cookie != "" {
+		header.Set("Cookie", cookie)
+	}
+	return websocket.Dial(ctx, "wss://"+public.Host+"/ws", &websocket.DialOptions{HTTPClient: noRedirect, HTTPHeader: header})
+}
+
+func refuteSpoofedSession(t *testing.T, ctx context.Context, noRedirect *http.Client, publicURL string, public *url.URL) {
+	t.Helper()
+	spoofed := http.Header{
+		types.HeaderPortalUser: {"mallory"},
+		types.HeaderPortalAuth: {"oidc"},
+		"X_Portal_User":        {"mallory"},
+		"X_portal_auth":        {"oidc"},
+	}
+	if code, _ := getAppSession(t, ctx, noRedirect, publicURL, "/whoami", spoofed); code != http.StatusSeeOther {
+		t.Fatalf("no session: status = %d, want %d", code, http.StatusSeeOther)
+	}
+	if conn, resp, err := dialAppSocket(t, ctx, noRedirect, public, ""); err == nil {
+		_ = conn.CloseNow()
+		t.Fatal("a WebSocket without a session was accepted")
+	} else if resp == nil || resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("no session: WebSocket answer %+v, error %v", resp, err)
+	}
+}
+
+func assertAuthenticatedSession(t *testing.T, ctx context.Context, client *http.Client, publicURL string, public *url.URL) string {
+	t.Helper()
+	spoofed := http.Header{
+		types.HeaderPortalUser: {"mallory"},
+		types.HeaderPortalAuth: {"oidc"},
+		"X_Portal_User":        {"mallory"},
+		"X_portal_auth":        {"oidc"},
+	}
+	code, body := getAppSession(t, ctx, client, publicURL, "/whoami", spoofed)
+	if code != http.StatusOK {
+		t.Fatalf("after sign-in: status = %d, body %s", code, body)
+	}
+	var seen map[string]string
+	if err := json.Unmarshal([]byte(body), &seen); err != nil {
+		t.Fatalf("whoami body %q: %v", body, err)
+	}
+	if seen["provider"] != appauth.ProviderOIDC || seen["subject"] != "sub:user-123" || seen["email"] != "alice@example.com" {
+		t.Fatalf("principal = %v", seen)
+	}
+	if seen["header"] != "" {
+		t.Fatalf("a spoofed %s reached the program: %v", types.HeaderPortalUser, seen)
+	}
+	sessionURL := &url.URL{Scheme: "https", Host: public.Host, Path: "/"}
+	var cookie string
+	for _, c := range client.Jar.Cookies(sessionURL) {
+		if strings.HasPrefix(c.Name, "__Host-portal_access") {
+			cookie = c.Name + "=" + c.Value
+		}
+	}
+	if cookie == "" {
+		t.Fatal("the browser holds no session")
+	}
+	return cookie
+}
+
+func assertSessionSocket(t *testing.T, ctx context.Context, noRedirect *http.Client, public *url.URL, cookie string) {
+	t.Helper()
+	conn, _, err := dialAppSocket(t, ctx, noRedirect, public, cookie)
+	if err != nil {
+		t.Fatalf("WebSocket with a session: %v", err)
+	}
+	if _, message, err := conn.Read(ctx); err != nil || string(message) != "alice@example.com" {
+		t.Fatalf("WebSocket message = %q, error %v", message, err)
+	}
+	_ = conn.CloseNow()
+}
+
+func rebuildAppGate(t *testing.T, app http.Handler, id types.Identity, front *swappableHandler, cfg appauth.Config) {
+	t.Helper()
+	rebuilt, err := appauth.New(app, id, cfg)
+	if err != nil {
+		t.Fatalf("rebuild gate: %v", err)
+	}
+	front.set(rebuilt)
+}
+
+func awaitHeldLease(t *testing.T, ctx context.Context, runtime *tunnel.Runtime) []sdk.RelayStatus {
+	t.Helper()
+	waitCtx, waitCancel := context.WithTimeout(ctx, 60*time.Second)
+	defer waitCancel()
+	ready, err := runtime.Exposure.WaitReady(waitCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 1 || ready[0].PublicURL == "" || ready[0].AliasURL == "" {
+		t.Fatalf("relay status = %+v, want a public URL and an alias", ready)
+	}
+	return ready
+}
+
+func startHeldTunnel(t *testing.T, ctx context.Context, sniAddr, upstreamURL, identityPath string) (sdk.RelayStatus, func(), types.Identity) {
+	t.Helper()
+	runtime, err := tunnel.Start(ctx, tunnel.Spec{
+		Identity:  tunnel.IdentitySpec{Name: "held", Path: identityPath},
+		Relays:    tunnel.RelaySpec{URLs: []string{"https://" + sniAddr}},
+		Transport: tunnel.TransportSpec{Target: strings.TrimPrefix(upstreamURL, "http://")},
+		HTTP:      &tunnel.HTTPConfig{Auth: &appauth.Config{Provider: appauth.ProviderCredential}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- runtime.Run(ctx) }()
+	ready := awaitHeldLease(t, ctx, runtime)
+	return ready[0], func() {
+		t.Helper()
+		_ = runtime.Close()
+		select {
+		case err := <-runDone:
+			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
+				t.Errorf("run: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("the tunnel did not stop")
+		}
+	}, runtime.Identity
+}
+
+func newHeldSessionClient(sniAddr string) *http.Client {
+	return &http.Client{
+		Timeout:       20 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, network, sniAddr)
+			},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
+		},
+	}
+}
+
+func sendSessionRequest(t *testing.T, client *http.Client, req *http.Request) *http.Response {
+	t.Helper()
+	response, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	return response
+}
+
+func signInSession(t *testing.T, ctx context.Context, client *http.Client, id types.Identity, publicURL string) *http.Cookie {
+	t.Helper()
+	parsed, err := url.Parse(publicURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := appauth.IssueCredential(id, parsed.Host, "alice", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]string{"credential": credential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+types.PathApplicationAuthRedeem, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "https://"+parsed.Host)
+	response := sendSessionRequest(t, client, req)
+	if response.StatusCode != http.StatusOK || len(response.Cookies()) != 1 {
+		t.Fatalf("sign-in at %s = %d, cookies %v", publicURL, response.StatusCode, response.Cookies())
+	}
+	return response.Cookies()[0]
+}
+
+func openSessionPage(t *testing.T, ctx context.Context, client *http.Client, publicURL string, session *http.Cookie, host string) int {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, publicURL+"/private", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = host
+	req.AddCookie(session)
+	return sendSessionRequest(t, client, req).StatusCode
+}
 func TestEmbeddedApplicationAuth(t *testing.T) {
 	provider := startStubOIDCProvider(t)
 	reachedWithoutSession := make(chan string, 8)
@@ -162,183 +486,16 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	port := harnessPort(t, "localhost")
-	sniAddr := net.JoinHostPort("localhost", strconv.Itoa(port))
-	relay, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     "https://" + sniAddr,
-		StateDir:      t.TempDir(),
-		SNIListenAddr: sniAddr,
-		SNIPort:       port,
-	})
-	if err != nil {
-		t.Fatalf("create relay: %v", err)
-	}
-	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
-		t.Fatalf("start relay: %v", err)
-	}
-	t.Cleanup(func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		_ = relay.Shutdown(shutdownCtx)
-		_ = relay.Wait()
-	})
+	sniAddr, _ := bootLocalhostRelay(t, ctx)
+	id, front, cfg := guardAppWithOIDC(t, ctx, app, provider.URL)
+	publicURL, public := serveAppThroughRelay(t, ctx, cancel, id, sniAddr, front)
+	client, noRedirect := newAppSessionClients(t, provider.URL, sniAddr, public)
 
-	id, err := identity.Generate("embed")
-	if err != nil {
-		t.Fatalf("generate identity: %v", err)
-	}
-	cfg := appauth.Config{
-		Provider:   appauth.ProviderOIDC,
-		EmailList:  []string{"sub:user-123"},
-		OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: provider.URL, OIDCClientID: "embedder"},
-	}
-	if err := appauth.Check(ctx, cfg); err != nil {
-		t.Fatalf("check provider: %v", err)
-	}
-	gate, err := appauth.New(app, id, cfg)
-	if err != nil {
-		t.Fatalf("build gate: %v", err)
-	}
-	front := &swappableHandler{}
-	front.set(gate)
-
-	exposure, err := sdk.Expose(ctx, id, []string{"https://" + sniAddr})
-	if err != nil {
-		t.Fatalf("expose: %v", err)
-	}
-	runDone := make(chan error, 1)
-	go func() { runDone <- sdk.RunHTTP(ctx, exposure, front, "") }()
-	t.Cleanup(func() {
-		_ = exposure.Close()
-		cancel()
-		select {
-		case err := <-runDone:
-			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
-				t.Errorf("run: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Error("RunHTTP did not stop")
-		}
-	})
-	waitCtx, waitCancel := context.WithTimeout(ctx, 60*time.Second)
-	defer waitCancel()
-	ready, err := exposure.WaitReady(waitCtx)
-	if err != nil {
-		t.Fatalf("wait for lease: %v", err)
-	}
-	if len(ready) != 1 || ready[0].PublicURL == "" {
-		t.Fatalf("relay status = %+v, want one public URL", ready)
-	}
-	publicURL := strings.TrimSuffix(ready[0].PublicURL, "/")
-	public, err := url.Parse(publicURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if addr == strings.TrimPrefix(provider.URL, "http://") {
-			return (&net.Dialer{}).DialContext(ctx, network, addr)
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, sniAddr)
-	}
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{Timeout: 20 * time.Second, Jar: jar, Transport: &http.Transport{
-		DisableKeepAlives: true,
-		DialContext:       dial,
-		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true, ServerName: public.Hostname(), MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
-	}}
-	noRedirect := *client
-	noRedirect.Jar = nil
-	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-
-	get := func(c *http.Client, path string, header http.Header) (int, string) {
-		t.Helper()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, publicURL+path, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for name, values := range header {
-			req.Header[name] = values
-		}
-		resp, err := c.Do(req)
-		if err != nil {
-			t.Fatalf("GET %s: %v", path, err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return resp.StatusCode, string(body)
-	}
-	dialSocket := func(cookie string) (*websocket.Conn, *http.Response, error) {
-		t.Helper()
-		header := http.Header{"Origin": {"https://" + public.Host}}
-		if cookie != "" {
-			header.Set("Cookie", cookie)
-		}
-		return websocket.Dial(ctx, "wss://"+public.Host+"/ws", &websocket.DialOptions{HTTPClient: &noRedirect, HTTPHeader: header})
-	}
-
-	spoofed := http.Header{
-		types.HeaderPortalUser: {"mallory"},
-		types.HeaderPortalAuth: {"oidc"},
-		"X_Portal_User":        {"mallory"},
-		"X_portal_auth":        {"oidc"},
-	}
-	if code, _ := get(&noRedirect, "/whoami", spoofed); code != http.StatusSeeOther {
-		t.Fatalf("no session: status = %d, want %d", code, http.StatusSeeOther)
-	}
-	if conn, resp, err := dialSocket(""); err == nil {
-		_ = conn.CloseNow()
-		t.Fatal("a WebSocket without a session was accepted")
-	} else if resp == nil || resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("no session: WebSocket answer %+v, error %v", resp, err)
-	}
-
-	code, body := get(client, "/whoami", spoofed)
-	if code != http.StatusOK {
-		t.Fatalf("after sign-in: status = %d, body %s", code, body)
-	}
-	var seen map[string]string
-	if err := json.Unmarshal([]byte(body), &seen); err != nil {
-		t.Fatalf("whoami body %q: %v", body, err)
-	}
-	if seen["provider"] != appauth.ProviderOIDC || seen["subject"] != "sub:user-123" || seen["email"] != "alice@example.com" {
-		t.Fatalf("principal = %v", seen)
-	}
-	if seen["header"] != "" {
-		t.Fatalf("a spoofed %s reached the program: %v", types.HeaderPortalUser, seen)
-	}
-
-	sessionURL := &url.URL{Scheme: "https", Host: public.Host, Path: "/"}
-	var cookie string
-	for _, c := range jar.Cookies(sessionURL) {
-		if strings.HasPrefix(c.Name, "__Host-portal_access") {
-			cookie = c.Name + "=" + c.Value
-		}
-	}
-	if cookie == "" {
-		t.Fatal("the browser holds no session")
-	}
-	conn, _, err := dialSocket(cookie)
-	if err != nil {
-		t.Fatalf("WebSocket with a session: %v", err)
-	}
-	if _, message, err := conn.Read(ctx); err != nil || string(message) != "alice@example.com" {
-		t.Fatalf("WebSocket message = %q, error %v", message, err)
-	}
-	_ = conn.CloseNow()
-
-	rebuilt, err := appauth.New(app, id, cfg)
-	if err != nil {
-		t.Fatalf("rebuild gate: %v", err)
-	}
-	front.set(rebuilt)
-	if code, _ := get(&noRedirect, "/whoami", http.Header{"Cookie": {cookie}}); code != http.StatusOK {
+	refuteSpoofedSession(t, ctx, noRedirect, publicURL, public)
+	cookie := assertAuthenticatedSession(t, ctx, client, publicURL, public)
+	assertSessionSocket(t, ctx, noRedirect, public, cookie)
+	rebuildAppGate(t, app, id, front, cfg)
+	if code, _ := getAppSession(t, ctx, noRedirect, publicURL, "/whoami", http.Header{"Cookie": {cookie}}); code != http.StatusOK {
 		t.Fatalf("after a rebuild: status = %d, want %d", code, http.StatusOK)
 	}
 
@@ -351,141 +508,36 @@ func TestEmbeddedApplicationAuth(t *testing.T) {
 func TestSessionsFollowTheHostsATunnelHolds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	port := harnessPort(t, "localhost")
-	sniAddr := net.JoinHostPort("localhost", strconv.Itoa(port))
-	relay, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://" + sniAddr, StateDir: t.TempDir(), SNIListenAddr: sniAddr, SNIPort: port})
-	if err != nil {
-		t.Fatalf("create relay: %v", err)
-	}
-	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
-		t.Fatalf("start relay: %v", err)
-	}
-	t.Cleanup(func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		_ = relay.Shutdown(shutdownCtx)
-		_ = relay.Wait()
-	})
+	sniAddr, port := bootLocalhostRelay(t, ctx)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	t.Cleanup(upstream.Close)
 	identityPath := filepath.Join(t.TempDir(), "identity.json")
-	var id types.Identity
-	start := func() (status sdk.RelayStatus, stop func()) {
-		t.Helper()
-		runtime, err := tunnel.Start(ctx, tunnel.Spec{
-			Identity:  tunnel.IdentitySpec{Name: "held", Path: identityPath},
-			Relays:    tunnel.RelaySpec{URLs: []string{"https://" + sniAddr}},
-			Transport: tunnel.TransportSpec{Target: strings.TrimPrefix(upstream.URL, "http://")},
-			HTTP:      &tunnel.HTTPConfig{Auth: &appauth.Config{Provider: appauth.ProviderCredential}},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		id = runtime.Identity
-		runDone := make(chan error, 1)
-		go func() { runDone <- runtime.Run(ctx) }()
-		waitCtx, waitCancel := context.WithTimeout(ctx, 60*time.Second)
-		defer waitCancel()
-		ready, err := runtime.Exposure.WaitReady(waitCtx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(ready) != 1 || ready[0].PublicURL == "" || ready[0].AliasURL == "" {
-			t.Fatalf("relay status = %+v, want a public URL and an alias", ready)
-		}
-		return ready[0], func() {
-			t.Helper()
-			_ = runtime.Close()
-			select {
-			case err := <-runDone:
-				if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
-					t.Errorf("run: %v", err)
-				}
-			case <-time.After(10 * time.Second):
-				t.Error("the tunnel did not stop")
-			}
-		}
-	}
+	client := newHeldSessionClient(sniAddr)
 
-	client := &http.Client{
-		Timeout:       20 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			DisableKeepAlives: true,
-			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, network, sniAddr)
-			},
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
-		},
-	}
-	send := func(req *http.Request) *http.Response {
-		t.Helper()
-		response, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = response.Body.Close()
-		return response
-	}
-	signIn := func(publicURL string) *http.Cookie {
-		t.Helper()
-		parsed, err := url.Parse(publicURL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		credential, err := appauth.IssueCredential(id, parsed.Host, "alice", time.Now().Add(time.Hour))
-		if err != nil {
-			t.Fatal(err)
-		}
-		body, err := json.Marshal(map[string]string{"credential": credential})
-		if err != nil {
-			t.Fatal(err)
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+types.PathApplicationAuthRedeem, bytes.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Origin", "https://"+parsed.Host)
-		response := send(req)
-		if response.StatusCode != http.StatusOK || len(response.Cookies()) != 1 {
-			t.Fatalf("sign-in at %s = %d, cookies %v", publicURL, response.StatusCode, response.Cookies())
-		}
-		return response.Cookies()[0]
-	}
-	open := func(publicURL string, session *http.Cookie, host string) int {
-		t.Helper()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, publicURL+"/private", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Host = host
-		req.AddCookie(session)
-		return send(req).StatusCode
-	}
-
-	status, stop := start()
-	canonicalSession, aliasSession := signIn(status.PublicURL), signIn(status.AliasURL)
-	if code := open(status.PublicURL, canonicalSession, ""); code != http.StatusNoContent {
+	status, stop, id := startHeldTunnel(t, ctx, sniAddr, upstream.URL, identityPath)
+	canonicalSession := signInSession(t, ctx, client, id, status.PublicURL)
+	aliasSession := signInSession(t, ctx, client, id, status.AliasURL)
+	if code := openSessionPage(t, ctx, client, status.PublicURL, canonicalSession, ""); code != http.StatusNoContent {
 		t.Fatalf("canonical session = %d; want 204", code)
 	}
-	if code := open(status.AliasURL, aliasSession, ""); code != http.StatusNoContent {
+	if code := openSessionPage(t, ctx, client, status.AliasURL, aliasSession, ""); code != http.StatusNoContent {
 		t.Fatalf("alias session = %d; want 204", code)
 	}
-	if code := open(status.PublicURL, canonicalSession, "elsewhere.localhost:"+strconv.Itoa(port)); code != http.StatusMisdirectedRequest {
+	if code := openSessionPage(t, ctx, client, status.PublicURL, canonicalSession, "elsewhere.localhost:"+strconv.Itoa(port)); code != http.StatusMisdirectedRequest {
 		t.Fatalf("a host the tunnel does not hold = %d; want 421", code)
 	}
 
 	stop()
-	restarted, stop := start()
+	restarted, stop, _ := startHeldTunnel(t, ctx, sniAddr, upstream.URL, identityPath)
 	t.Cleanup(stop)
-	if code := open(restarted.PublicURL, canonicalSession, ""); code != http.StatusNoContent {
+	if code := openSessionPage(t, ctx, client, restarted.PublicURL, canonicalSession, ""); code != http.StatusNoContent {
 		t.Fatalf("canonical session after a restart = %d; want 204", code)
 	}
-	if code := open(restarted.AliasURL, aliasSession, ""); code != http.StatusSeeOther {
+	if code := openSessionPage(t, ctx, client, restarted.AliasURL, aliasSession, ""); code != http.StatusSeeOther {
 		t.Fatalf("alias session after a restart = %d; want the login redirect", code)
 	}
-	if code := open(restarted.AliasURL, signIn(restarted.AliasURL), ""); code != http.StatusNoContent {
+	if code := openSessionPage(t, ctx, client, restarted.AliasURL, signInSession(t, ctx, client, id, restarted.AliasURL), ""); code != http.StatusNoContent {
 		t.Fatalf("new alias session = %d; want 204", code)
 	}
 }

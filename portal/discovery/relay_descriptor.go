@@ -80,7 +80,6 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 	if rawSignature == "" {
 		return types.RelayDescriptor{}, errRelayDescriptorIsNotSigned
 	}
-
 	normalized, err := NormalizeRelayDescriptor(desc)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: normalize: %w", err)
@@ -93,12 +92,10 @@ func VerifyRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, e
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("canonicalize relay descriptor: %w", err)
 	}
-
 	publicKey, err := identity.RecoverSHA256Secp256k1Compact(canonical, signature)
 	if err != nil {
 		return types.RelayDescriptor{}, fmt.Errorf("relay descriptor signature is invalid: %w", err)
 	}
-
 	publicKeyHex := hex.EncodeToString(publicKey.SerializeCompressed())
 	derivedAddress, err := identity.AddressFromCompressedPublicKeyHex(publicKeyHex)
 	if err != nil {
@@ -136,7 +133,6 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	if !desc.ExpiresAt.IsZero() {
 		desc.ExpiresAt = desc.ExpiresAt.UTC()
 	}
-
 	if desc.APIHTTPSAddr != "" {
 		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
 		if err != nil {
@@ -160,7 +156,6 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	if desc.TCPBPS < 0 || math.IsNaN(desc.TCPBPS) || math.IsInf(desc.TCPBPS, 0) {
 		return types.RelayDescriptor{}, errTCPBPSIsInvalid
 	}
-
 	switch {
 	case desc.Address == "":
 		return types.RelayDescriptor{}, errAddressIsRequired
@@ -173,7 +168,6 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 	case desc.IssuedAt.After(desc.ExpiresAt):
 		return types.RelayDescriptor{}, errIssuedAtMustBeBeforeExpiresAt
 	}
-
 	return desc, nil
 }
 

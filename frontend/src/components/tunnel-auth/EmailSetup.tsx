@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { SecretPrompt, TextField } from "./authShared";
 import { TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import type {
@@ -16,7 +17,7 @@ export function EmailSetup({
   patch: (next: Partial<TunnelAuthOptions>) => void;
   issues: TunnelAuthIssue[];
   os: TunnelCommandOS;
-}) {
+}): JSX.Element {
 
   return (
     <div className="space-y-4">

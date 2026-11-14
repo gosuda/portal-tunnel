@@ -109,9 +109,6 @@ func TestConfigSpecModes(t *testing.T) {
 			c.TargetAddr, c.Provider, c.Allow = "localhost:3000", "oidc", []string{"alice@example.com"}
 			c.OIDCIssuerURL, c.OIDCClientID, c.SAMLEntityID = "https://accounts.google.com", "client-123", "urn:portal"
 		}},
-		{name: "casper payment without asset", edit: func(c *Config) {
-			c.HTTPRoutes, c.PayTo, c.Network = routes, "account-hash-1", "casper:casper-test"
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg Config
@@ -253,80 +250,76 @@ func TestConfigSpecHTTPMode(t *testing.T) {
 	}
 }
 
-func TestConfigSpecResolvesComponents(t *testing.T) {
+func TestConfigSpecResolvesOIDC(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", "")
-	for _, tc := range []struct {
-		name  string
-		input func() Config
-		check func(t *testing.T, spec Spec)
-	}{
-		{
-			name: "oidc",
-			input: func() Config {
-				cfg := Config{TargetAddr: " localhost:3000 "}
-				cfg.Provider, cfg.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
-				cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
-				return cfg
-			},
-			check: func(t *testing.T, spec Spec) {
-				want := appauth.Config{
-					Provider:   appauth.ProviderOIDC,
-					Allow:      []string{"bob@example.com"},
-					OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
-				}
-				if spec.Transport.Target != "localhost:3000" || !reflect.DeepEqual(*spec.HTTP.Auth, want) {
-					t.Fatalf("target = %q, auth = %+v", spec.Transport.Target, *spec.HTTP.Auth)
-				}
-			},
-		},
-		{
-			name: "saml",
-			input: func() Config {
-				cfg := Config{TargetAddr: "localhost:3000"}
-				cfg.Provider, cfg.Allow, cfg.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
-				cfg.SAMLMetadataURL, cfg.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
-				return cfg
-			},
-			check: func(t *testing.T, spec Spec) {
-				want := appauth.Config{
-					Provider:        appauth.ProviderSAML,
-					Allow:           []string{"@example.com", "sub:G-7f3a"},
-					IdentityHeaders: true,
-					SAMLConfig:      appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLSubjectAttribute: "email"},
-				}
-				if !reflect.DeepEqual(*spec.HTTP.Auth, want) {
-					t.Fatalf("auth = %+v", *spec.HTTP.Auth)
-				}
-			},
-		},
-		{
-			name: "x402",
-			input: func() Config {
-				cfg := Config{HTTPRoutes: []HTTPRoute{{Prefix: " /paid ", Upstream: "127.0.0.1:3001", Methods: []string{"get", "GET", " post "}, Amount: " 0.01 "}}}
-				cfg.PayTo, cfg.Network, cfg.Endpoints = " 0x1234 ", " SUI:TESTNET ", []string{" https://rpc.example ", ""}
-				cfg.FacilitatorToken = " token "
-				return cfg
-			},
-			check: func(t *testing.T, spec Spec) {
-				wantRoutes := []HTTPRoute{{Prefix: "/paid", Upstream: "127.0.0.1:3001", Methods: []string{"GET", "POST"}, Amount: "0.01"}}
-				wantPayment := gateway.X402Config{PayTo: "0x1234", Network: "sui:testnet", Endpoints: []string{"https://rpc.example"}, FacilitatorToken: "token"}
-				if !reflect.DeepEqual(spec.HTTP.Routes, wantRoutes) || !reflect.DeepEqual(spec.HTTP.Payment, wantPayment) || spec.HTTP.Auth != nil {
-					t.Fatalf("routes = %+v, payment = %+v, auth = %+v", spec.HTTP.Routes, spec.HTTP.Payment, spec.HTTP.Auth)
-				}
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := tc.input()
-			spec, err := cfg.Spec()
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.check(t, spec)
-			if !reflect.DeepEqual(cfg, tc.input()) {
-				t.Fatalf("Spec changed the config it resolved: %+v", cfg)
-			}
-		})
+	cfg := Config{TargetAddr: " localhost:3000 "}
+	cfg.Provider, cfg.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
+	cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := appauth.Config{
+		Provider:   appauth.ProviderOIDC,
+		Allow:      []string{"bob@example.com"},
+		OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
+	}
+	if spec.Transport.Target != "localhost:3000" || !reflect.DeepEqual(*spec.HTTP.Auth, want) {
+		t.Fatalf("target = %q, auth = %+v", spec.Transport.Target, *spec.HTTP.Auth)
+	}
+	fresh := Config{TargetAddr: " localhost:3000 "}
+	fresh.Provider, fresh.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
+	fresh.OIDCIssuerURL, fresh.OIDCClientID, fresh.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
+	if !reflect.DeepEqual(cfg, fresh) {
+		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
+	}
+}
+
+func TestConfigSpecResolvesSAML(t *testing.T) {
+	t.Setenv("CSPR_CLOUD_API_KEY", "")
+	cfg := Config{TargetAddr: "localhost:3000"}
+	cfg.Provider, cfg.Allow, cfg.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
+	cfg.SAMLMetadataURL, cfg.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := appauth.Config{
+		Provider:        appauth.ProviderSAML,
+		Allow:           []string{"@example.com", "sub:G-7f3a"},
+		IdentityHeaders: true,
+		SAMLConfig:      appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLSubjectAttribute: "email"},
+	}
+	if !reflect.DeepEqual(*spec.HTTP.Auth, want) {
+		t.Fatalf("auth = %+v", *spec.HTTP.Auth)
+	}
+	fresh := Config{TargetAddr: "localhost:3000"}
+	fresh.Provider, fresh.Allow, fresh.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
+	fresh.SAMLMetadataURL, fresh.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
+	if !reflect.DeepEqual(cfg, fresh) {
+		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
+	}
+}
+
+func TestConfigSpecResolvesX402(t *testing.T) {
+	t.Setenv("CSPR_CLOUD_API_KEY", "")
+	cfg := Config{HTTPRoutes: []HTTPRoute{{Prefix: " /paid ", Upstream: "127.0.0.1:3001", Methods: []string{"get", "GET", " post "}, Amount: " 0.01 "}}}
+	cfg.PayTo, cfg.Network, cfg.Endpoints = " 0x1234 ", " SUI:TESTNET ", []string{" https://rpc.example ", ""}
+	cfg.FacilitatorToken = " token "
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoutes := []HTTPRoute{{Prefix: "/paid", Upstream: "127.0.0.1:3001", Methods: []string{"GET", "POST"}, Amount: "0.01"}}
+	wantPayment := gateway.X402Config{PayTo: "0x1234", Network: "sui:testnet", Endpoints: []string{"https://rpc.example"}, FacilitatorToken: "token"}
+	if !reflect.DeepEqual(spec.HTTP.Routes, wantRoutes) || !reflect.DeepEqual(spec.HTTP.Payment, wantPayment) || spec.HTTP.Auth != nil {
+		t.Fatalf("routes = %+v, payment = %+v, auth = %+v", spec.HTTP.Routes, spec.HTTP.Payment, spec.HTTP.Auth)
+	}
+	fresh := Config{HTTPRoutes: []HTTPRoute{{Prefix: " /paid ", Upstream: "127.0.0.1:3001", Methods: []string{"get", "GET", " post "}, Amount: " 0.01 "}}}
+	fresh.PayTo, fresh.Network, fresh.Endpoints = " 0x1234 ", " SUI:TESTNET ", []string{" https://rpc.example ", ""}
+	fresh.FacilitatorToken = " token "
+	if !reflect.DeepEqual(cfg, fresh) {
+		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
 	}
 }
 
@@ -354,5 +347,130 @@ func TestConfigNormalizeKeepsProofAndPaths(t *testing.T) {
 	}
 	if cfg.IdentityPath != "relative/identity.json" || cfg.IdentityProof != " proof-with-spaces-kept " {
 		t.Fatalf("normalized = %+v", cfg)
+	}
+}
+
+func TestLocalTLSCertificateConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantError bool
+	}{
+		{"paired", Config{TargetAddr: "3000", TLSCert: " cert.pem ", TLSKey: " key.pem "}, false},
+		{"certificate only", Config{TargetAddr: "3000", TLSCert: "cert.pem"}, true},
+		{"key only", Config{TargetAddr: "3000", TLSKey: "key.pem"}, true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TCPEnabled: true}, true},
+		{"relay cache", Config{Serve: "site", TLSCert: "cert.pem", TLSKey: "key.pem", Cache: &CacheConfig{}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() error = %v, want error %v", err, tc.wantError)
+			}
+			if !tc.wantError && (spec.TLSCert != tc.config.TLSCert || spec.TLSKey != tc.config.TLSKey) {
+				t.Fatalf("certificate paths = %q, %q", spec.TLSCert, spec.TLSKey)
+			}
+		})
+	}
+}
+
+func TestLocalTLSPathsAreNotNormalizedAway(t *testing.T) {
+	cfg := Config{TargetAddr: "3000", TLSCert: " ", TLSKey: " "}
+	spec, err := cfg.Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TLSCert != " " || spec.TLSKey != " " {
+		t.Fatal("configured local TLS file paths were silently removed")
+	}
+}
+
+func TestAutomaticTLSConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantDir   string
+		wantError bool
+	}{
+		{"identity default", Config{TargetAddr: "3000", IdentityPath: "identity.json", TLSAuto: true}, "identity.json.tls", false},
+		{"explicit", Config{TargetAddr: "3000", IdentityJSON: "{}", TLSAuto: true, TLSStateDir: " certs ", TLSRequireLocal: true}, " certs ", false},
+		{"memory identity requires directory", Config{TargetAddr: "3000", IdentityJSON: "{}", IdentityPath: "unused.json", TLSAuto: true}, "", true},
+		{"missing identity and directory", Config{TargetAddr: "3000", TLSAuto: true}, "", true},
+		{"directory does not enable automatic", Config{TargetAddr: "3000", TLSStateDir: "certs"}, "", true},
+		{"policy needs a mode", Config{TargetAddr: "3000", TLSRequireLocal: true}, "", true},
+		{"manual policy", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TLSRequireLocal: true}, "", false},
+		{"manual automatic conflict", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TLSCert: "cert.pem", TLSKey: "key.pem"}, "", true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TCPEnabled: true}, "", true},
+		{"cache", Config{Serve: "site", TLSAuto: true, TLSStateDir: "certs", Cache: &CacheConfig{}}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() = %v, want error %v", err, tc.wantError)
+			}
+			if !tc.wantError && spec.TLSStateDir != tc.wantDir {
+				t.Fatalf("state directory = %q, want %q", spec.TLSStateDir, tc.wantDir)
+			}
+			if spec.TLSRequireLocal != tc.config.TLSRequireLocal {
+				t.Fatal("require-local policy was lost")
+			}
+		})
+	}
+}
+
+func TestCertificateMonitoringConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    Config
+		wantError bool
+	}{
+		{"disabled by default", Config{TargetAddr: "3000"}, false},
+		{"keyless", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence"}, false},
+		{"manual", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TLSMonitorStateDir: "evidence"}, false},
+		{"automatic", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TLSMonitorStateDir: "evidence"}, false},
+		{"explicit baseline and resolver", Config{TargetAddr: "3000", TLSMonitorStateDir: " evidence ", TLSMonitorBaseline: " baseline.json ", TLSMonitorDNSResolver: "[2606:4700:4700::1111]:53"}, false},
+		{"baseline alone", Config{TargetAddr: "3000", TLSMonitorBaseline: "baseline.json"}, true},
+		{"resolver alone", Config{TargetAddr: "3000", TLSMonitorDNSResolver: "9.9.9.9:53"}, true},
+		{"invalid resolver", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence", TLSMonitorDNSResolver: "resolver.example:53"}, true},
+		{"raw TCP", Config{TargetAddr: "3000", TLSMonitorStateDir: "evidence", TCPEnabled: true}, true},
+		{"relay cache", Config{Serve: "site", TLSMonitorStateDir: "evidence", Cache: &CacheConfig{}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := tc.config.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() error = %v, want error %v", err, tc.wantError)
+			}
+			if tc.wantError {
+				return
+			}
+			monitor := spec.CertificateMonitor
+			if tc.config.TLSMonitorStateDir == "" {
+				if monitor != nil {
+					t.Fatal("monitoring enabled without an explicit request")
+				}
+				return
+			}
+			if monitor == nil || monitor.StateDir != tc.config.TLSMonitorStateDir || monitor.BaselineFile != tc.config.TLSMonitorBaseline || monitor.DNSResolver != tc.config.TLSMonitorDNSResolver {
+				t.Fatalf("monitoring configuration was changed: %+v", monitor)
+			}
+			if spec.TLSAuto != tc.config.TLSAuto || spec.TLSRequireLocal != tc.config.TLSRequireLocal {
+				t.Fatal("monitoring changed certificate provisioning policy")
+			}
+		})
+	}
+}
+
+func TestLocalTLSSelectsHTTPHandler(t *testing.T) {
+	for _, config := range []Config{
+		{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs"},
+		{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem"},
+	} {
+		spec, err := config.Spec()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if spec.HTTP == nil {
+			t.Fatal("Local TLS targets need HTTP handling for h2 translation")
+		}
 	}
 }

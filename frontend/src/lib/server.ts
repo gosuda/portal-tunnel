@@ -30,7 +30,11 @@ export function leaseToServer(row: Lease): BaseServer {
   const payment = resolveLeasePayment(metadata);
   const hostname = row.hostname || "";
   const routeHostname = row.canonical_hostname || hostname;
-  const publicHostname = hostname || routeHostname;
+  const canonicalAvailable =
+    row.namespace !== "local-tls-v1" || row.canonical_ready === true;
+  const publicHostname =
+    hostname ||
+    (canonicalAvailable ? routeHostname : row.legacy_canonical_hostname || "");
   const tcpAddr = row.tcp_addr?.trim() || "";
   const udpAddr = row.udp_addr?.trim() || "";
 
@@ -41,7 +45,9 @@ export function leaseToServer(row: Lease): BaseServer {
     tags: metadata.tags,
     thumbnail: resolveLeaseThumbnail(metadata),
     owner: metadata.owner,
-    online: (row.ready || 0) > 0,
+    online:
+      (row.ready || 0) > 0 &&
+      Boolean(publicHostname || tcpAddr || udpAddr),
     dns: publicHostname,
     link: !tcpAddr && !udpAddr && publicHostname ? `https://${publicHostname}/` : "",
     address: row.address,

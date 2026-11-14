@@ -112,24 +112,12 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 		email,
 		testTunnel("plain"),
 	)
-	data, err := json.Marshal(m.Snapshot())
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := marshalTunnelStatus(t, m)
 	if strings.Contains(string(data), secret) || strings.Contains(string(data), smtpPassword) {
 		t.Fatalf("status exposes a secret: %s", data)
 	}
 
-	var wire struct {
-		Tunnels []map[string]any `json:"tunnels"`
-	}
-	if err := json.Unmarshal(data, &wire); err != nil {
-		t.Fatal(err)
-	}
-	byID := make(map[string]map[string]any, len(wire.Tunnels))
-	for _, tunnel := range wire.Tunnels {
-		byID[tunnel["id"].(string)] = tunnel
-	}
+	byID := tunnelStatusByID(t, data)
 	if got := byID["oidc"]["auth_allowed_wallets"]; !slices.Equal(toStrings(got), []string{"alice@example.com"}) {
 		t.Fatalf("oidc auth_allowed_wallets = %v", got)
 	}
@@ -149,6 +137,30 @@ func TestTunnelStatusAuthSettings(t *testing.T) {
 	if _, ok := byID["oidc"]["auth_provider_checked"]; ok {
 		t.Fatal("stopped oidc tunnel reports a provider check")
 	}
+}
+
+func marshalTunnelStatus(t *testing.T, m *manager) []byte {
+	t.Helper()
+	data, err := json.Marshal(m.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func tunnelStatusByID(t *testing.T, data []byte) map[string]map[string]any {
+	t.Helper()
+	var wire struct {
+		Tunnels []map[string]any `json:"tunnels"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]map[string]any, len(wire.Tunnels))
+	for _, tunnel := range wire.Tunnels {
+		byID[tunnel["id"].(string)] = tunnel
+	}
+	return byID
 }
 
 func toStrings(value any) []string {
@@ -203,79 +215,261 @@ func savedTunnel(t *testing.T, path, id string) TunnelConfig {
 	return TunnelConfig{}
 }
 
+func TestAddTunnelWithAuth(t *testing.T) {
+	const secret = "created-client-secret"
+	wallet := "0x0000000000000000000000000000000000000001"
+	common := `"discovery":false,"relays":["` + unreachableRelay + `"]`
+
+	t.Run("accepted", func(t *testing.T) {
+		checkAddTunnelWithAuthAccepted(t, secret, wallet, common)
+	})
+
+	t.Run("rejected", func(t *testing.T) {
+		checkAddTunnelWithAuthRejected(t, secret, common)
+	})
+}
+
+func checkAddTunnelWithAuthAccepted(t *testing.T, secret, wallet, common string) {
+	t.Helper()
+	m, path := testManager(t)
+	startManager(t, m)
+	for _, body := range []string{
+		`{"id":"siwe","target_addr":"127.0.0.1:3000","auth":" SIWE ","auth_allowed_wallets":["` + wallet + `"],"auth_identity_headers":true,` + common + `}`,
+		`{"id":"oidc","target_addr":"127.0.0.1:3000","auth":"oidc","auth_allowed_wallets":["alice@example.com"],"auth_oidc_issuer":"` + unreachableIssuer + `","auth_oidc_client_id":"client-123","auth_oidc_client_secret":"` + secret + `",` + common + `}`,
+	} {
+		code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body)
+		if code != http.StatusAccepted || strings.Contains(resp, secret) {
+			t.Fatalf("status = %d, body = %s", code, resp)
+		}
+	}
+
+	siwe := savedTunnel(t, path, "siwe")
+	if siwe.Provider != "siwe" || !slices.Equal(siwe.Allow, []string{wallet}) || !siwe.IdentityHeaders {
+		t.Fatalf("saved siwe tunnel = %+v", siwe)
+	}
+	if oidc := savedTunnel(t, path, "oidc"); oidc.Provider != "oidc" || oidc.OIDCClientID != "client-123" || oidc.OIDCClientSecret != secret {
+		t.Fatalf("saved oidc tunnel = %+v", oidc)
+	}
+	if got := tunnelStatus(t, m, "oidc"); !got.AuthOIDCClientSecretSet || got.OIDCClientID != "client-123" {
+		t.Fatalf("oidc tunnel status = %+v", got)
+	}
+}
+
+func checkAddTunnelWithAuthRejected(t *testing.T, secret, common string) {
+	t.Helper()
+	m, path := testManager(t, testTunnel("existing"))
+	for _, tc := range []addTunnelRejection{
+		{name: "oidc without allowlist", want: "oidc requires at least one",
+			body: `{"id":"app","auth":"oidc","auth_oidc_issuer":"` + unreachableIssuer + `","auth_oidc_client_id":"client-123","auth_oidc_client_secret":"` + secret + `",` + common + `}`},
+		{name: "invalid wallet", want: "address must start with 0x",
+			body: `{"id":"app","auth":"siwe","auth_allowed_wallets":["alice"],` + common + `}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkAddTunnelRejection(t, m, path, secret, tc)
+		})
+	}
+}
+
+type addTunnelRejection struct {
+	name string
+	body string
+	want string
+}
+
+func checkAddTunnelRejection(t *testing.T, m *manager, path, secret string, tc addTunnelRejection) {
+	t.Helper()
+	fileBefore, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, tc.body)
+	if code != http.StatusBadRequest || !strings.Contains(resp, tc.want) || strings.Contains(resp, secret) {
+		t.Fatalf("status = %d, body = %s; want 400 mentioning %q", code, resp, tc.want)
+	}
+	if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
+		t.Fatalf("rejected tunnel changed the config file (err %v):\n%s", err, fileAfter)
+	}
+	if got := len(m.Snapshot().Tunnels); got != 1 {
+		t.Fatalf("tunnels = %d, want only the existing one", got)
+	}
+}
+
+func TestAddTunnelStaticSite(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	siteJSON, err := json.Marshal(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	common := `"discovery":false,"relays":["` + unreachableRelay + `"]`
+
+	t.Run("accepted", func(t *testing.T) {
+		checkStaticSiteAccepted(t, site, siteJSON, common)
+	})
+
+	t.Run("with target", func(t *testing.T) {
+		checkStaticSiteWithTargetRejected(t, siteJSON, common)
+	})
+}
+
+func checkStaticSiteAccepted(t *testing.T, site string, siteJSON []byte, common string) {
+	t.Helper()
+	m, path := testManager(t)
+	startManager(t, m)
+	if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, `{"id":"site","serve":`+string(siteJSON)+`,`+common+`}`); code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", code, resp)
+	}
+	if saved := savedTunnel(t, path, "site"); saved.Serve != site || saved.TargetAddr != "" {
+		t.Fatalf("saved static tunnel = %+v", saved)
+	}
+}
+
+func checkStaticSiteWithTargetRejected(t *testing.T, siteJSON []byte, common string) {
+	t.Helper()
+	m, path := testManager(t, testTunnel("existing"))
+	fileBefore, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"id":"site","serve":` + string(siteJSON) + `,"target_addr":"127.0.0.1:3000",` + common + `}`
+	if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body); code != http.StatusBadRequest || !strings.Contains(resp, "static serving cannot be combined") {
+		t.Fatalf("status = %d, body = %s; want 400 refusing the combination", code, resp)
+	}
+	if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
+		t.Fatalf("refused tunnel changed the config file (err %v):\n%s", err, fileAfter)
+	}
+}
+
+func TestAddTunnelSavesOnlyWhatWasSent(t *testing.T) {
+	m, path := testManager(t)
+	startManager(t, m)
+	body := `{"id":"web","discovery":false,"relays":["` + unreachableRelay + `"]}`
+	if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body); code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", code, resp)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "max_active_relays") || !strings.Contains(string(saved), "discovery = false") {
+		t.Fatalf("saved config:\n%s", saved)
+	}
+	if status := tunnelStatus(t, m, "web"); status.Discovery || status.MaxActiveRelays != discovery.DefaultMaxActiveRelays {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
 func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
 	const oldSecret, newSecret = "old-client-secret", "new-client-secret"
 	m, path := testManager(t, oidcTunnel("app", unreachableIssuer, oldSecret))
 	startManager(t, m)
 
-	for _, step := range []struct {
-		name  string
-		body  string
-		check func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus)
-	}{
+	for _, step := range tunnelAuthUpdateSteps(oldSecret, newSecret) {
+		t.Run(step.name, func(t *testing.T) {
+			checkTunnelAuthUpdateStep(t, m, path, newSecret, step)
+		})
+	}
+}
+
+type tunnelAuthUpdateStep struct {
+	name  string
+	body  string
+	check func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus)
+}
+
+func tunnelAuthUpdateSteps(oldSecret, newSecret string) []tunnelAuthUpdateStep {
+	return []tunnelAuthUpdateStep{
 		{
 			name: "metadata leaves sign-in alone",
 			body: `{"metadata":{"description":"hello"}}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if saved.Description != "hello" || saved.Provider != "oidc" || saved.OIDCClientSecret != oldSecret ||
-					!slices.Equal(saved.Allow, []string{"alice@example.com"}) {
-					t.Fatalf("saved = %+v", saved)
-				}
+				checkAuthUpdateLeavesSignInAlone(t, saved, oldSecret)
 			},
 		},
 		{
 			name: "allowlist replaces only the allowlist",
 			body: `{"auth_allowed_wallets":["Bob@Example.com","sub:42"]}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if !slices.Equal(saved.Allow, []string{"bob@example.com", "sub:42"}) ||
-					!slices.Equal(status.Allow, saved.Allow) ||
-					saved.OIDCIssuerURL != unreachableIssuer || saved.OIDCClientID != "client-123" || saved.OIDCClientSecret != oldSecret {
-					t.Fatalf("saved = %+v, status allowlist = %v", saved, status.Allow)
-				}
+				checkAuthUpdateReplacesAllowlist(t, saved, status, oldSecret)
 			},
 		},
 		{
 			name: "null leaves a field as it is",
 			body: `{"metadata":{"description":"again"},"auth_allowed_wallets":null,"auth_oidc_issuer":null}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if !slices.Equal(saved.Allow, []string{"bob@example.com", "sub:42"}) || saved.OIDCIssuerURL != unreachableIssuer {
-					t.Fatalf("saved = %+v", saved)
-				}
+				checkAuthUpdateNullKeepsField(t, saved)
 			},
 		},
 		{
 			name: "secret is replaced and never echoed",
 			body: `{"auth_oidc_client_secret":"` + newSecret + `"}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if saved.OIDCClientSecret != newSecret || !status.AuthOIDCClientSecretSet {
-					t.Fatalf("saved secret = %q, secret set = %v", saved.OIDCClientSecret, status.AuthOIDCClientSecretSet)
-				}
-				if data, _ := json.Marshal(status); strings.Contains(string(data), newSecret) {
-					t.Fatalf("status exposes the client secret: %s", data)
-				}
+				checkAuthUpdateReplacesSecret(t, saved, status, newSecret)
 			},
 		},
 		{
 			name: "empty secret clears it",
 			body: `{"auth_oidc_client_secret":""}`,
 			check: func(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
-				if saved.OIDCClientSecret != "" || status.AuthOIDCClientSecretSet || saved.Provider != "oidc" {
-					t.Fatalf("saved = %+v, secret set = %v", saved, status.AuthOIDCClientSecretSet)
-				}
+				checkAuthUpdateClearsSecret(t, saved, status)
 			},
 		},
-	} {
-		t.Run(step.name, func(t *testing.T) {
-			code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", step.body)
-			if code != http.StatusAccepted {
-				t.Fatalf("status = %d, body = %s", code, body)
-			}
-			if strings.Contains(body, newSecret) {
-				t.Fatalf("response echoes the client secret: %s", body)
-			}
-			step.check(t, savedTunnel(t, path, "app"), tunnelStatus(t, m, "app"))
-		})
 	}
+}
+
+func checkAuthUpdateLeavesSignInAlone(t *testing.T, saved TunnelConfig, oldSecret string) {
+	t.Helper()
+	if saved.Description != "hello" || saved.Provider != "oidc" || saved.OIDCClientSecret != oldSecret ||
+		!slices.Equal(saved.Allow, []string{"alice@example.com"}) {
+		t.Fatalf("saved = %+v", saved)
+	}
+}
+
+func checkAuthUpdateReplacesAllowlist(t *testing.T, saved TunnelConfig, status AgentTunnelStatus, oldSecret string) {
+	t.Helper()
+	if !slices.Equal(saved.Allow, []string{"bob@example.com", "sub:42"}) ||
+		!slices.Equal(status.Allow, saved.Allow) ||
+		saved.OIDCIssuerURL != unreachableIssuer || saved.OIDCClientID != "client-123" || saved.OIDCClientSecret != oldSecret {
+		t.Fatalf("saved = %+v, status allowlist = %v", saved, status.Allow)
+	}
+}
+
+func checkAuthUpdateNullKeepsField(t *testing.T, saved TunnelConfig) {
+	t.Helper()
+	if !slices.Equal(saved.Allow, []string{"bob@example.com", "sub:42"}) || saved.OIDCIssuerURL != unreachableIssuer {
+		t.Fatalf("saved = %+v", saved)
+	}
+}
+
+func checkAuthUpdateReplacesSecret(t *testing.T, saved TunnelConfig, status AgentTunnelStatus, newSecret string) {
+	t.Helper()
+	if saved.OIDCClientSecret != newSecret || !status.AuthOIDCClientSecretSet {
+		t.Fatalf("saved secret = %q, secret set = %v", saved.OIDCClientSecret, status.AuthOIDCClientSecretSet)
+	}
+	if data, _ := json.Marshal(status); strings.Contains(string(data), newSecret) {
+		t.Fatalf("status exposes the client secret: %s", data)
+	}
+}
+
+func checkAuthUpdateClearsSecret(t *testing.T, saved TunnelConfig, status AgentTunnelStatus) {
+	t.Helper()
+	if saved.OIDCClientSecret != "" || status.AuthOIDCClientSecretSet || saved.Provider != "oidc" {
+		t.Fatalf("saved = %+v, secret set = %v", saved, status.AuthOIDCClientSecretSet)
+	}
+}
+
+func checkTunnelAuthUpdateStep(t *testing.T, m *manager, path, newSecret string, step tunnelAuthUpdateStep) {
+	t.Helper()
+	code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", step.body)
+	if code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", code, body)
+	}
+	if strings.Contains(body, newSecret) {
+		t.Fatalf("response echoes the client secret: %s", body)
+	}
+	step.check(t, savedTunnel(t, path, "app"), tunnelStatus(t, m, "app"))
 }
 
 func TestUpdateTunnelEmptyAuthTurnsSignInOff(t *testing.T) {
@@ -309,9 +503,7 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 	udp.UDPEnabled = true
 	m, path := testManager(t, testTunnel("plain"), signedIn, tcp, udp)
 
-	for _, tc := range []struct {
-		name, id, body, want string
-	}{
+	for _, tc := range []updateRejectionCase{
 		{name: "oidc without allowlist", id: "plain", want: "oidc requires at least one",
 			body: `{"auth":"oidc","auth_oidc_issuer":"https://accounts.example.com","auth_oidc_client_id":"client-123","auth_oidc_client_secret":"` + secret + `"}`},
 		{name: "oidc without issuer", id: "plain", want: "issuer",
@@ -328,30 +520,39 @@ func TestUpdateTunnelAuthRejectionChangesNothing(t *testing.T) {
 		{name: "udp", id: "udp", want: "cannot be combined with TCP or UDP", body: `{"auth":"credential"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fileBefore, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			statusBefore := tunnelStatus(t, m, tc.id)
-
-			code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+tc.id, tc.body)
-			if code != http.StatusBadRequest || !strings.Contains(body, tc.want) {
-				t.Fatalf("status = %d, body = %s; want 400 mentioning %q", code, body, tc.want)
-			}
-			if strings.Contains(body, secret) {
-				t.Fatalf("error echoes the client secret: %s", body)
-			}
-			fileAfter, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(fileBefore, fileAfter) {
-				t.Fatalf("rejected update changed the config file:\n%s", fileAfter)
-			}
-			if statusAfter := tunnelStatus(t, m, tc.id); !reflect.DeepEqual(statusBefore, statusAfter) {
-				t.Fatalf("rejected update changed the tunnel: %+v -> %+v", statusBefore, statusAfter)
-			}
+			checkUpdateRejectionUnchanged(t, m, path, secret, tc)
 		})
+	}
+}
+
+type updateRejectionCase struct {
+	name, id, body, want string
+}
+
+func checkUpdateRejectionUnchanged(t *testing.T, m *manager, path, secret string, tc updateRejectionCase) {
+	t.Helper()
+	fileBefore, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusBefore := tunnelStatus(t, m, tc.id)
+
+	code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+tc.id, tc.body)
+	if code != http.StatusBadRequest || !strings.Contains(body, tc.want) {
+		t.Fatalf("status = %d, body = %s; want 400 mentioning %q", code, body, tc.want)
+	}
+	if strings.Contains(body, secret) {
+		t.Fatalf("error echoes the client secret: %s", body)
+	}
+	fileAfter, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(fileBefore, fileAfter) {
+		t.Fatalf("rejected update changed the config file:\n%s", fileAfter)
+	}
+	if statusAfter := tunnelStatus(t, m, tc.id); !reflect.DeepEqual(statusBefore, statusAfter) {
+		t.Fatalf("rejected update changed the tunnel: %+v -> %+v", statusBefore, statusAfter)
 	}
 }
 
@@ -367,13 +568,8 @@ func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 	eventually(t, "both tunnels to run", func() bool {
 		return tunnelStatus(t, m, "a").State == "running" && tunnelStatus(t, m, "b").State == "running"
 	})
-	if code, body := callControl(t, m, http.MethodPost, types.PathAgentTunnelsPrefix+"b/relays", `{"relay_url":"`+addedRelay+`"}`); code != http.StatusAccepted {
-		t.Fatalf("connect relay: status = %d, body = %s", code, body)
-	}
-	hasAddedRelay := func(status AgentTunnelStatus) bool {
-		return slices.ContainsFunc(status.Relays, func(relay AgentRelayStatus) bool { return relay.RelayURL == addedRelay })
-	}
-	if b := tunnelStatus(t, m, "b"); !hasAddedRelay(b) {
+	connectTunnelRelay(t, m, "b", addedRelay)
+	if b := tunnelStatus(t, m, "b"); !statusHasRelay(b, addedRelay) {
 		t.Fatalf("relay was not connected to b: %+v", b.Relays)
 	}
 
@@ -381,136 +577,30 @@ func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 	if code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"a", body); code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", code, resp)
 	}
-	if b := tunnelStatus(t, m, "b"); b.State != "running" || !hasAddedRelay(b) {
+	if b := tunnelStatus(t, m, "b"); b.State != "running" || !statusHasRelay(b, addedRelay) {
 		t.Fatalf("sign-in change on a restarted b: %+v", b)
 	}
 	eventually(t, "a to run with the oidc gate", func() bool {
 		return tunnelStatus(t, m, "a").AuthProviderError != ""
 	})
 
-	if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnelsPrefix+"a/relays", `{"relay_url":"`+addedRelay+`"}`); code != http.StatusAccepted {
-		t.Fatalf("connect relay: status = %d, body = %s", code, resp)
-	}
+	connectTunnelRelay(t, m, "a", addedRelay)
 	body = `{"metadata":{"description":"in place"},"auth":"oidc","auth_oidc_issuer":"` + unreachableIssuer + `"}`
 	if code, resp := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"a", body); code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", code, resp)
 	}
-	if status := tunnelStatus(t, m, "a"); status.State != "running" || !hasAddedRelay(status) || status.Metadata.Description != "in place" {
+	if status := tunnelStatus(t, m, "a"); status.State != "running" || !statusHasRelay(status, addedRelay) || status.Metadata.Description != "in place" {
 		t.Fatalf("tunnel was rebuilt for a metadata change: %+v", status)
 	}
 }
 
-func TestAddTunnelWithAuth(t *testing.T) {
-	const secret = "created-client-secret"
-	wallet := "0x0000000000000000000000000000000000000001"
-	common := `"discovery":false,"relays":["` + unreachableRelay + `"]`
-
-	t.Run("accepted", func(t *testing.T) {
-		m, path := testManager(t)
-		startManager(t, m)
-		for _, body := range []string{
-			`{"id":"siwe","target_addr":"127.0.0.1:3000","auth":" SIWE ","auth_allowed_wallets":["` + wallet + `"],"auth_identity_headers":true,` + common + `}`,
-			`{"id":"oidc","target_addr":"127.0.0.1:3000","auth":"oidc","auth_allowed_wallets":["alice@example.com"],"auth_oidc_issuer":"` + unreachableIssuer + `","auth_oidc_client_id":"client-123","auth_oidc_client_secret":"` + secret + `",` + common + `}`,
-		} {
-			code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body)
-			if code != http.StatusAccepted || strings.Contains(resp, secret) {
-				t.Fatalf("status = %d, body = %s", code, resp)
-			}
-		}
-
-		siwe := savedTunnel(t, path, "siwe")
-		if siwe.Provider != "siwe" || !slices.Equal(siwe.Allow, []string{wallet}) || !siwe.IdentityHeaders {
-			t.Fatalf("saved siwe tunnel = %+v", siwe)
-		}
-		if oidc := savedTunnel(t, path, "oidc"); oidc.Provider != "oidc" || oidc.OIDCClientID != "client-123" || oidc.OIDCClientSecret != secret {
-			t.Fatalf("saved oidc tunnel = %+v", oidc)
-		}
-		if got := tunnelStatus(t, m, "oidc"); !got.AuthOIDCClientSecretSet || got.OIDCClientID != "client-123" {
-			t.Fatalf("oidc tunnel status = %+v", got)
-		}
-	})
-
-	t.Run("rejected", func(t *testing.T) {
-		m, path := testManager(t, testTunnel("existing"))
-		for _, tc := range []struct{ name, body, want string }{
-			{name: "oidc without allowlist", want: "oidc requires at least one",
-				body: `{"id":"app","auth":"oidc","auth_oidc_issuer":"` + unreachableIssuer + `","auth_oidc_client_id":"client-123","auth_oidc_client_secret":"` + secret + `",` + common + `}`},
-			{name: "invalid wallet", want: "address must start with 0x",
-				body: `{"id":"app","auth":"siwe","auth_allowed_wallets":["alice"],` + common + `}`},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				fileBefore, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, tc.body)
-				if code != http.StatusBadRequest || !strings.Contains(resp, tc.want) || strings.Contains(resp, secret) {
-					t.Fatalf("status = %d, body = %s; want 400 mentioning %q", code, resp, tc.want)
-				}
-				if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
-					t.Fatalf("rejected tunnel changed the config file (err %v):\n%s", err, fileAfter)
-				}
-				if got := len(m.Snapshot().Tunnels); got != 1 {
-					t.Fatalf("tunnels = %d, want only the existing one", got)
-				}
-			})
-		}
-	})
+func connectTunnelRelay(t *testing.T, m *manager, tunnelID, relayURL string) {
+	t.Helper()
+	if code, body := callControl(t, m, http.MethodPost, types.PathAgentTunnelsPrefix+tunnelID+"/relays", `{"relay_url":"`+relayURL+`"}`); code != http.StatusAccepted {
+		t.Fatalf("connect relay: status = %d, body = %s", code, body)
+	}
 }
 
-func TestAddTunnelStaticSite(t *testing.T) {
-	site := t.TempDir()
-	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	siteJSON, err := json.Marshal(site)
-	if err != nil {
-		t.Fatal(err)
-	}
-	common := `"discovery":false,"relays":["` + unreachableRelay + `"]`
-
-	t.Run("accepted", func(t *testing.T) {
-		m, path := testManager(t)
-		startManager(t, m)
-		if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, `{"id":"site","serve":`+string(siteJSON)+`,`+common+`}`); code != http.StatusAccepted {
-			t.Fatalf("status = %d, body = %s", code, resp)
-		}
-		if saved := savedTunnel(t, path, "site"); saved.Serve != site || saved.TargetAddr != "" {
-			t.Fatalf("saved static tunnel = %+v", saved)
-		}
-	})
-
-	t.Run("with target", func(t *testing.T) {
-		m, path := testManager(t, testTunnel("existing"))
-		fileBefore, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		body := `{"id":"site","serve":` + string(siteJSON) + `,"target_addr":"127.0.0.1:3000",` + common + `}`
-		if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body); code != http.StatusBadRequest || !strings.Contains(resp, "static serving cannot be combined") {
-			t.Fatalf("status = %d, body = %s; want 400 refusing the combination", code, resp)
-		}
-		if fileAfter, err := os.ReadFile(path); err != nil || !bytes.Equal(fileBefore, fileAfter) {
-			t.Fatalf("refused tunnel changed the config file (err %v):\n%s", err, fileAfter)
-		}
-	})
-}
-
-func TestAddTunnelSavesOnlyWhatWasSent(t *testing.T) {
-	m, path := testManager(t)
-	startManager(t, m)
-	body := `{"id":"web","discovery":false,"relays":["` + unreachableRelay + `"]}`
-	if code, resp := callControl(t, m, http.MethodPost, types.PathAgentTunnels, body); code != http.StatusAccepted {
-		t.Fatalf("status = %d, body = %s", code, resp)
-	}
-	saved, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(saved), "max_active_relays") || !strings.Contains(string(saved), "discovery = false") {
-		t.Fatalf("saved config:\n%s", saved)
-	}
-	if status := tunnelStatus(t, m, "web"); status.Discovery || status.MaxActiveRelays != discovery.DefaultMaxActiveRelays {
-		t.Fatalf("status = %+v", status)
-	}
+func statusHasRelay(status AgentTunnelStatus, relayURL string) bool {
+	return slices.ContainsFunc(status.Relays, func(relay AgentRelayStatus) bool { return relay.RelayURL == relayURL })
 }

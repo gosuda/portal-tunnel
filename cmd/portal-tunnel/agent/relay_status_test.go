@@ -57,3 +57,11 @@ func TestAgentRelayStatusCarriesFailure(t *testing.T) {
 		t.Fatalf("status = %+v", statuses[0])
 	}
 }
+
+func TestAgentRelayStatusKeepsLegacyURLSeparate(t *testing.T) {
+	const legacy = "https://blog-0123456789012345678901234567890123456789.relay.example/"
+	statuses := agentRelayStatuses([]sdk.RelayStatus{{LegacyURL: legacy, State: sdk.RelayReady}})
+	if statuses[0].LegacyURL != legacy || statuses[0].PublicURL != "" {
+		t.Fatal("legacy URL must not advertise an unready Local TLS canonical endpoint")
+	}
+}

@@ -1,8 +1,10 @@
 package sdk
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -17,12 +19,19 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
+	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
+	errAutomaticTLSStateRequired           = errors.New("automatic TLS requires a certificate state directory")
+	errAutomaticTLSFilesConflict           = errors.New("automatic TLS cannot be combined with manual certificate files")
+	errLocalTLSCertificatePairRequired     = errors.New("tenant TLS requires both certificate and key files")
+	errLocalTLSModeUnsupported             = errors.New("local tenant TLS cannot be combined with raw TCP or the browser runtime")
+	errCertificateMonitorModeUnsupported   = errors.New("TLS certificate monitoring cannot be combined with raw TCP or the browser runtime")
 	errPortalSDKOptionIsNil                = errors.New("portal sdk: option is nil")
 	errReplicaRequiresDirectHTTP           = errors.New("replicas require direct HTTP tunnels without dedicated TCP/UDP ports, relay cache, or overlay")
 	errPortalSDKContextIsNil               = errors.New("portal sdk: context is nil")
@@ -84,9 +93,13 @@ const (
 // RelayStatus is an immutable snapshot of one relay's externally visible state.
 type RelayStatus struct {
 	RelayURL string
-	// PublicURL is the identity-bound canonical URL. It always routes to
-	// this exposure, and the opt-in relay cache serves only this hostname.
+	// PublicURL is the identity-bound canonical URL. With negotiated Local TLS,
+	// it stays empty until a valid local certificate exists and is never cached
+	// by the relay. Old relays and non-Local-TLS exposures retain their legacy URL.
 	PublicURL string
+	// LegacyURL preserves the old one-label canonical origin and its optional
+	// relay cache. It is not a redirect to PublicURL.
+	LegacyURL string
 	// AliasURL is the <name>.<root host> URL when the relay granted that
 	// alias to this lease, else empty: another identity may own the name
 	// (canonical fallback). A set alias is held by the lease: it stays set
@@ -108,6 +121,9 @@ type RelayStatus struct {
 	State      RelayState
 	Failure    RelayFailure
 	Err        error
+	// CertificateError describes an automatic issuance policy refusal. A live
+	// legacy endpoint or an already valid local certificate can still work.
+	CertificateError error
 	// Approval is set while the relay refuses this lease's reverse connection.
 	// State stays RelayConnecting and no endpoint field is set, because nothing
 	// routes. Empty means no refusal was reported, and it never means approved:
@@ -162,20 +178,27 @@ type Exposure struct {
 
 	discovery *discovery.Controller
 
-	closeOnce sync.Once
-	connSeq   atomic.Uint64
+	closeOnce    sync.Once
+	connSeq      atomic.Uint64
+	http2Enabled bool
 }
 
 var _ net.Listener = (*Exposure)(nil)
 
 type options struct {
-	Replica    bool
-	Cache      *cache.SourceConfig
-	UDPEnabled bool
-	TCPEnabled bool
-	BanMITM    bool
-	Overlay    bool
-	Metadata   types.LeaseMetadata
+	Replica            bool
+	CertificateMonitor *certmonitor.MonitorConfig
+	AutomaticTLS       bool
+	TLSStateDir        string
+	TLSRequireLocal    bool
+	TLSCertFile        string
+	TLSKeyFile         string
+	Cache              *cache.SourceConfig
+	UDPEnabled         bool
+	TCPEnabled         bool
+	BanMITM            bool
+	Overlay            bool
+	Metadata           types.LeaseMetadata
 
 	discoveryEnabled bool
 	maxActiveRelays  int
@@ -199,6 +222,49 @@ func WithReplicas() Option {
 // Cache errors never stop the exposure; the caller still serves the same path.
 func WithStaticRelayCache(path string, ttl time.Duration) Option {
 	return func(opts *options) { opts.Cache = &cache.SourceConfig{Path: path, TTL: ttl} }
+}
+
+// WithTLSCertificate requires a locally held tenant certificate and private key.
+// Expose validates the pair before registering. Its only DNS SAN must be the
+// exact new canonical hostname. Friendly and legacy URLs remain Keyless.
+// Files are reloaded during certificate refresh; errors never enable relay signing.
+// This option requires a namespace-capable relay and cannot be used with raw TCP.
+func WithTLSCertificate(certFile, keyFile string) Option {
+	return func(opts *options) {
+		opts.TLSCertFile = certFile
+		opts.TLSKeyFile = keyFile
+	}
+}
+
+// WithAutomaticTLS obtains and renews tenant certificates through the relay.
+// The tunnel generates and persists private keys in directory. New canonical
+// hostnames never fall back to Keyless. requireLocal additionally rejects old
+// relays without namespace support and waits for canonical readiness; false
+// allows a live legacy endpoint to satisfy WaitReady while issuance is pending.
+// This is local-key ownership, not independent authentication of the relay.
+func WithAutomaticTLS(directory string, requireLocal bool) Option {
+	return func(opts *options) {
+		opts.AutomaticTLS = true
+		opts.TLSStateDir = directory
+		opts.TLSRequireLocal = requireLocal
+	}
+}
+
+// WithCertificateMonitoring opts into best-effort, evaluation-only CAA and certificate
+// transparency checks for each canonical tenant hostname. stateDir is required
+// for durable evidence. baselineFile is operator-managed; an empty path leaves
+// CAA policy unconfigured. dnsResolver is an optional IP:port (default 1.1.1.1:53).
+// Enabling this sends hostname queries to that resolver and CertSpotter over
+// HTTPS. Runtime findings and query failures only warn; they do not change
+// certificates, relay selection, or traffic readiness. Invalid initial monitor
+// configuration may reject startup. Detection before an attack is not guaranteed.
+// Raw TCP and the browser runtime are unsupported.
+func WithCertificateMonitoring(stateDir, baselineFile, dnsResolver string) Option {
+	return func(opts *options) {
+		opts.CertificateMonitor = &certmonitor.MonitorConfig{
+			StateDir: stateDir, BaselineFile: baselineFile, DNSResolver: dnsResolver,
+		}
+	}
 }
 
 // WithUDP enables the datagram transport capability.
@@ -244,7 +310,8 @@ func WithDiscovery(maxActiveRelays int) Option {
 }
 
 // Expose constructs a relay-backed network endpoint from an already-resolved
-// identity and concrete relay URLs. It never creates or persists keys.
+// identity and concrete relay URLs. It never creates or persists identity keys.
+// WithAutomaticTLS persists tenant TLS keys separately in its configured directory.
 //
 // When WithDiscovery is applied, Exposure delegates relay selection to an
 // internal discovery.Controller. The explicit relays are always retained;
@@ -256,12 +323,9 @@ func WithDiscovery(maxActiveRelays int) Option {
 // non-empty, and without WithDiscovery at least one explicit relay is
 // required.
 func Expose(ctx context.Context, identity types.Identity, relays []string, opts ...Option) (*Exposure, error) {
-	var cfg options
-	for _, option := range opts {
-		if option == nil {
-			return nil, errPortalSDKOptionIsNil
-		}
-		option(&cfg)
+	cfg, err := applyExposeOptions(opts)
+	if err != nil {
+		return nil, err
 	}
 	if ctx == nil {
 		return nil, errPortalSDKContextIsNil
@@ -269,29 +333,12 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := cfg.Metadata.Validate(); err != nil {
+	if err := validateExposeConfig(cfg); err != nil {
 		return nil, err
 	}
-	if cfg.Replica {
-		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.Overlay || cfg.Cache != nil {
-			return nil, errReplicaRequiresDirectHTTP
-		}
-	}
-	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
-	if runtime.GOOS == "js" && requiresSocketTransport {
-		return nil, errPortalSDKThisRuntimeSupportsHTTPS
-	}
-	var source *cache.Source
-	if cfg.Cache != nil {
-		if cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM {
-			return nil, errRelayStaticCacheCannotCombinedUDP
-		}
-		var err error
-		source, err = cache.NewSource(*cfg.Cache)
-		if err != nil {
-			return nil, err
-		}
-		log.Warn().Msg("relay cache enabled: selected relays are trusted to store static content and terminate browser TLS; cached responses are not end-to-end encrypted to this client")
+	source, err := newRelayCache(cfg)
+	if err != nil {
+		return nil, err
 	}
 	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
@@ -302,31 +349,10 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		strings.TrimSpace(identity.PrivateKey) == "" {
 		return nil, errPortalSDKIdentityMustIncludeAddress
 	}
-
-	var controller *discovery.Controller
-	initialRelays := relayURLs
-	if cfg.discoveryEnabled {
-		resolved, err := discovery.ResolveRelayURLs(relayURLs, true)
-		if err != nil {
-			return nil, err
-		}
-		if len(resolved) == 0 {
-			return nil, errPortalSDKLeastOneInitialRelay
-		}
-		bootstraps, err := discovery.BootstrapRelayURLs()
-		if err != nil {
-			return nil, err
-		}
-		controller = discovery.NewController(bootstraps)
-		controller.SetExplicitRelays(relayURLs)
-		controller.SetMaxActiveRelays(cfg.maxActiveRelays)
-		controller.SetTransportRequirements(cfg.UDPEnabled, cfg.TCPEnabled)
-		controller.SetLocalAddress(identity.Address)
-		controller.SetSelectionKey(deriveSelectionKey(identity))
-	} else if len(relayURLs) == 0 {
-		return nil, errPortalSDKLeastOneInitialRelay
+	initialRelays, controller, err := resolveExposeMembership(relayURLs, cfg, identity)
+	if err != nil {
+		return nil, err
 	}
-
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
 		cancel:         cancel,
@@ -345,47 +371,109 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		updates:        make(chan RelayStatus, 1),
 		discovery:      controller,
 	}
-
 	if exposure.cache != nil {
 		go exposure.cache.Run(exposureCtx)
 	}
-
 	if err := exposure.setRelays(initialRelays, true); err != nil {
 		_ = exposure.Close()
 		return nil, err
 	}
-
-	if controller != nil {
-		go func() {
-			for {
-				desired, err := controller.Next(exposureCtx)
-				if err != nil {
-					if !errors.Is(err, context.Canceled) && !exposure.closed() {
-						log.Warn().Err(err).Msg("relay discovery loop exited")
-					}
-					return
-				}
-				if err := exposure.applyRelays(desired); err != nil {
-					if !errors.Is(err, net.ErrClosed) && !exposure.closed() {
-						log.Warn().Err(err).Msg("apply discovered relay selection")
-					}
-					return
-				}
-			}
-		}()
+	if exposure.discovery != nil {
+		go exposure.runDiscoveryLoop(exposureCtx)
 	}
-
 	go func() {
 		<-exposure.done
 		_ = exposure.Close()
 	}()
-
 	return exposure, nil
 }
 
-func deriveSelectionKey(identity types.Identity) []byte {
-	sum := sha256.Sum256(append([]byte("portal-tunnel/mols-selection-key\x00"), identity.PrivateKey...))
-	return sum[:]
+func validateExposeConfig(cfg options) error {
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return errLocalTLSCertificatePairRequired
+	}
+	if cfg.AutomaticTLS {
+		if strings.TrimSpace(cfg.TLSStateDir) == "" {
+			return errAutomaticTLSStateRequired
+		}
+		if cfg.TLSCertFile != "" {
+			return errAutomaticTLSFilesConflict
+		}
+	}
+	localTLSConfigured := cfg.TLSCertFile != "" || cfg.AutomaticTLS
+	localTLSUnsupported := cfg.TCPEnabled || runtime.GOOS == "js"
+	if localTLSConfigured && localTLSUnsupported {
+		return errLocalTLSModeUnsupported
+	}
+	if cfg.TLSCertFile != "" {
+		if err := localtls.ValidateCertificateFiles(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+			return fmt.Errorf("tenant TLS: %w", err)
+		}
+	}
+	if cfg.CertificateMonitor != nil {
+		if localTLSUnsupported {
+			return errCertificateMonitorModeUnsupported
+		}
+		if err := cfg.CertificateMonitor.Validate(); err != nil {
+			return err
+		}
+	}
+	if err := cfg.Metadata.Validate(); err != nil {
+		return err
+	}
+	if cfg.Replica && (cfg.UDPEnabled || cfg.TCPEnabled || cfg.Overlay || cfg.Cache != nil) {
+		return errReplicaRequiresDirectHTTP
+	}
+	requiresSocketTransport := cfg.Overlay || cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM
+	if runtime.GOOS == "js" && requiresSocketTransport {
+		return errPortalSDKThisRuntimeSupportsHTTPS
+	}
+	return nil
+}
+
+func applyExposeOptions(opts []Option) (options, error) {
+	var cfg options
+	for _, option := range opts {
+		if option == nil {
+			return options{}, errPortalSDKOptionIsNil
+		}
+		option(&cfg)
+	}
+	return cfg, nil
+}
+
+func newRelayCache(cfg options) (*cache.Source, error) {
+	if cfg.Cache == nil {
+		return nil, nil
+	}
+	if cfg.UDPEnabled || cfg.TCPEnabled || cfg.BanMITM {
+		return nil, errRelayStaticCacheCannotCombinedUDP
+	}
+	source, err := cache.NewSource(*cfg.Cache)
+	if err != nil {
+		return nil, err
+	}
+	log.Warn().Msg("relay cache enabled: selected relays are trusted to store static content and terminate browser TLS; cached responses are not end-to-end encrypted to this client")
+	return source, nil
+}
+
+func (e *Exposure) runDiscoveryLoop(exposureCtx context.Context) {
+	controller := e.discovery
+	for {
+		desired, err := controller.Next(exposureCtx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !e.closed() {
+				log.Warn().Err(err).Msg("relay discovery loop exited")
+			}
+			return
+		}
+		if err := e.applyRelays(desired); err != nil {
+			if !errors.Is(err, net.ErrClosed) && !e.closed() {
+				log.Warn().Err(err).Msg("apply discovered relay selection")
+			}
+			return
+		}
+	}
 }
 
 func (e *Exposure) applyRelays(relays []string) error {
@@ -550,431 +638,36 @@ type exposureAddr string
 func (a exposureAddr) Network() string { return "portal" }
 func (a exposureAddr) String() string  { return string(a) }
 
-// Relays returns a sorted point-in-time snapshot of the relay pool.
-func (e *Exposure) Relays() []RelayStatus {
-	if e == nil {
-		return nil
-	}
-	e.mu.RLock()
-	relays := make([]RelayStatus, 0, len(e.statuses))
-	for _, status := range e.statuses {
-		relays = append(relays, status)
-	}
-	e.mu.RUnlock()
-	slices.SortFunc(relays, func(a, b RelayStatus) int {
-		aReady := a.State == RelayReady
-		bReady := b.State == RelayReady
-		if aReady != bReady {
-			if aReady {
-				return -1
-			}
-			return 1
+func resolveExposeMembership(relayURLs []string, cfg options, identity types.Identity) ([]string, *discovery.Controller, error) {
+	if !cfg.discoveryEnabled {
+		if len(relayURLs) == 0 {
+			return nil, nil, errPortalSDKLeastOneInitialRelay
 		}
-		aConnecting := a.State == RelayConnecting
-		bConnecting := b.State == RelayConnecting
-		if aConnecting != bConnecting {
-			if aConnecting {
-				return -1
-			}
-			return 1
-		}
-		return strings.Compare(a.RelayURL, b.RelayURL)
-	})
-	return relays
+		return relayURLs, nil, nil
+	}
+	resolved, err := discovery.ResolveRelayURLs(relayURLs, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(resolved) == 0 {
+		return nil, nil, errPortalSDKLeastOneInitialRelay
+	}
+	bootstraps, err := discovery.BootstrapRelayURLs()
+	if err != nil {
+		return nil, nil, err
+	}
+	controller := discovery.NewController(bootstraps)
+	controller.SetExplicitRelays(relayURLs)
+	controller.SetMaxActiveRelays(cfg.maxActiveRelays)
+	controller.SetTransportRequirements(cfg.UDPEnabled, cfg.TCPEnabled)
+	controller.SetLocalAddress(identity.Address)
+	controller.SetSelectionKey(deriveSelectionKey(identity))
+	return relayURLs, controller, nil
 }
 
-// ActiveRelays returns the relay URLs whose RelayStatus.Active() is true,
-// derived from the same snapshot as Relays.  Relay-selection callers use it
-// for stickiness (keeping a slot for a relay that still holds a lease address).
-func (e *Exposure) ActiveRelays() []string {
-	if e == nil {
-		return nil
-	}
-	e.mu.RLock()
-	relayURLs := make([]string, 0, len(e.statuses))
-	for relayURL, status := range e.statuses {
-		if status.Active() {
-			relayURLs = append(relayURLs, relayURL)
-		}
-	}
-	e.mu.RUnlock()
-	slices.Sort(relayURLs)
-	return relayURLs
-}
-
-func (e *Exposure) setRelayStatus(relayURL string, update listenerStatus) {
-	e.applyRelayStatus(relayURL, update, nil)
-}
-
-func (e *Exposure) setListenerRelayStatus(relayURL string, owner *listener, update listenerStatus) {
-	e.applyRelayStatus(relayURL, update, owner)
-}
-
-func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owner *listener) {
-	if e == nil || relayURL == "" || e.closed() {
-		return
-	}
-
-	e.mu.Lock()
-	if owner != nil {
-		if current, ok := e.relayListeners[relayURL]; !ok || current != owner {
-			e.mu.Unlock()
-			return
-		}
-	}
-	if e.statuses == nil {
-		e.statuses = make(map[string]RelayStatus)
-	}
-	status, exists := e.statuses[relayURL]
-	if !exists {
-		status = RelayStatus{RelayURL: relayURL, State: RelayConnecting}
-	}
-	previous := status
-	status.RelayURL = relayURL
-	if update.state != "" {
-		status.State = update.state
-	}
-	if update.failure != "" {
-		status.Failure = update.failure
-	} else if update.state != RelayFailed {
-		status.Failure = RelayFailureNone
-	}
-	status.Approval = update.approval
-	if update.version != "" {
-		status.Version = update.version
-	}
-	if update.err != nil {
-		status.Err = update.err
-		if errors.Is(update.err, errMITMDetected) {
-			if e.blockedRelays == nil {
-				e.blockedRelays = make(map[string]error)
-			}
-			e.blockedRelays[relayURL] = update.err
-		}
-	} else if update.state != RelayFailed {
-		status.Err = nil
-	}
-	if update.state == RelayFailed {
-
-		status.AliasURL = ""
-	}
-	if update.state == RelayConnecting {
-		status.PublicURL = ""
-		status.AliasURL = ""
-		status.UDPAddr = ""
-		status.TCPAddr = ""
-	}
-	if update.publicURL != "" || update.state == RelayReady {
-		status.PublicURL = update.publicURL
-		status.AliasURL = update.aliasURL
-	}
-	if update.udpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
-		status.UDPAddr = update.udpAddr
-	}
-	if update.tcpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
-		status.TCPAddr = update.tcpAddr
-	}
-	switch {
-	case status.AliasURL == "" || update.aliasEpoch != "":
-		status.AliasSince = time.Time{}
-	case status.AliasURL != previous.AliasURL || previous.AliasEpoch != "":
-		status.AliasSince = time.Now()
-	}
-	status.AliasEpoch = ""
-	if status.AliasURL != "" {
-		status.AliasEpoch = update.aliasEpoch
-	}
-	advertised := previous.State != RelayReady && status.State == RelayReady && status.PublicURL != ""
-	if !relayStatusEqual(previous, status) {
-		e.statuses[relayURL] = status
-		e.notifyStateChangedLocked()
-	} else {
-		e.mu.Unlock()
-		return
-	}
-	e.mu.Unlock()
-
-	if advertised {
-		message := "service ready at " + status.PublicURL
-		if status.AliasURL != "" {
-			message += " (short URL: " + status.AliasURL + ")"
-		}
-		relayStatusLogEvent(log.Info(), status).
-			Str("address", e.identity.Address).
-			Msg(message)
-	} else if previous.State == RelayReady && status.State == RelayConnecting {
-		relayStatusLogEvent(log.Info(), status).
-			Str("address", e.identity.Address).
-			Msg("relay reconnecting")
-	} else if status.State == RelayFailed {
-		relayStatusLogEvent(log.Warn(), status).
-			Str("address", e.identity.Address).
-			Msg("relay failed")
-	}
-	if status.Approval != "" && status.Approval != previous.Approval {
-		relayStatusLogEvent(log.Warn(), status).
-			Str("address", e.identity.Address).
-			Msg(status.Approval.Message())
-	}
-
-	e.publishRelayStatus(status)
-	if e.discovery != nil {
-		e.discovery.SetActiveRelays(e.ActiveRelays())
-	}
-
-	if status.State == RelayFailed && e.discovery != nil {
-		e.discovery.Report(status.RelayURL, discoveryFailureKind(status.Failure))
-	}
-}
-
-func discoveryFailureKind(failure RelayFailure) discovery.FailureKind {
-	switch failure {
-	case RelayFailureMITM:
-		return discovery.FailureMITM
-	case RelayFailureTerminal:
-		return discovery.FailureTerminal
-	default:
-
-		return discovery.FailureRuntime
-	}
-}
-
-func (e *Exposure) publishRelayStatus(status RelayStatus) {
-	e.updatesMu.Lock()
-	defer e.updatesMu.Unlock()
-	select {
-	case <-e.done:
-		return
-	default:
-	}
-	select {
-	case e.updates <- status:
-		return
-	default:
-	}
-	select {
-	case <-e.updates:
-	default:
-	}
-	select {
-	case <-e.done:
-	case e.updates <- status:
-	default:
-	}
-}
-
-func relayStatusEqual(a, b RelayStatus) bool {
-	errorsEqual := a.Err == nil && b.Err == nil
-	if a.Err != nil && b.Err != nil {
-		errorsEqual = a.Err.Error() == b.Err.Error()
-	}
-	return a.RelayURL == b.RelayURL &&
-		a.PublicURL == b.PublicURL &&
-		a.AliasURL == b.AliasURL &&
-		a.AliasEpoch == b.AliasEpoch &&
-		a.UDPAddr == b.UDPAddr &&
-		a.TCPAddr == b.TCPAddr &&
-		a.Version == b.Version &&
-		a.State == b.State &&
-		a.Failure == b.Failure &&
-		a.Approval == b.Approval &&
-		a.Deselected == b.Deselected &&
-		errorsEqual
-}
-
-func (e *Exposure) notifyStateChangedLocked() {
-	if e.stateChanged != nil {
-		close(e.stateChanged)
-	}
-	e.stateChanged = make(chan struct{})
-}
-
-func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
-	desired := make(map[string]RelayStatus, len(relayURLs))
-	for _, relayURL := range relayURLs {
-		desired[relayURL] = RelayStatus{
-			RelayURL: relayURL,
-			State:    RelayConnecting,
-		}
-	}
-
-	e.mu.Lock()
-	if e.statuses == nil {
-		e.statuses = make(map[string]RelayStatus)
-	}
-	changed := false
-	for relayURL, status := range desired {
-		if _, ok := e.statuses[relayURL]; ok {
-			continue
-		}
-		e.statuses[relayURL] = status
-		changed = true
-	}
-	var deselected []RelayStatus
-	for relayURL, previous := range e.statuses {
-		if _, ok := desired[relayURL]; ok {
-			continue
-		}
-		delete(e.statuses, relayURL)
-		changed = true
-		previous.Deselected = true
-		deselected = append(deselected, previous)
-	}
-	if changed {
-		e.notifyStateChangedLocked()
-	}
-	e.mu.Unlock()
-	if changed && e.discovery != nil {
-		e.discovery.SetActiveRelays(e.ActiveRelays())
-	}
-	return deselected
-}
-
-func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
-	for _, status := range deselected {
-		if status.PublicURL != "" {
-			relayStatusLogEvent(log.Info(), status).
-				Msg("relay no longer active for " + status.PublicURL)
-		}
-		e.publishRelayStatus(status)
-	}
-}
-
-func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Event {
-	event = event.
-		Str("event", "relay_status").
-		Str("relay_url", status.RelayURL).
-		Str("state", string(status.State)).
-		Str("public_url", status.PublicURL).
-		Bool("deselected", status.Deselected)
-	if status.State == RelayReady && !status.Deselected && status.AliasURL != "" {
-		event = event.Str("alias_url", status.AliasURL)
-	}
-	if status.State == RelayFailed {
-		event = event.Str("failure", string(status.Failure))
-	}
-	if status.Approval != "" {
-		event = event.Str("approval", string(status.Approval))
-	}
-	return event
-}
-
-func (e *Exposure) readyRelays(matches func(RelayStatus) bool) ([]RelayStatus, <-chan struct{}) {
-	e.mu.RLock()
-	ready := make([]RelayStatus, 0, len(e.statuses))
-	for _, status := range e.statuses {
-		if !matches(status) {
-			continue
-		}
-		ready = append(ready, status)
-	}
-	changed := e.stateChanged
-	e.mu.RUnlock()
-	slices.SortFunc(ready, func(a, b RelayStatus) int {
-		return strings.Compare(a.RelayURL, b.RelayURL)
-	})
-	return ready, changed
-}
-
-// Updates reports relay lifecycle changes. Relays is the authoritative
-// snapshot; slow consumers may miss intermediate updates. When relay
-// membership shrinks — discovery deselection or a relay-list change — a
-// removal notification with Deselected set and the relay's last known
-// endpoint is delivered best-effort; use it as a trigger to re-read
-// Relays(), not as durable history.
-func (e *Exposure) Updates() <-chan RelayStatus {
-	if e == nil {
-		return nil
-	}
-	return e.updates
-}
-
-// WaitReady waits until at least one relay can accept tenant connections.
-func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
-	if e == nil {
-		return nil, net.ErrClosed
-	}
-	return e.waitReady(ctx, func(status RelayStatus) bool {
-		return status.State == RelayReady
-	})
-}
-
-func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool) ([]RelayStatus, error) {
-	if ctx == nil {
-		return nil, errPortalSDKContextIsNil
-	}
-	for {
-		ready, changed := e.readyRelays(matches)
-		if len(ready) > 0 {
-			return ready, nil
-		}
-		if e.closed() {
-			return nil, net.ErrClosed
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-e.done:
-			return nil, net.ErrClosed
-		case <-changed:
-		}
-	}
-}
-
-func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
-	if !e.options.UDPEnabled {
-		return types.DatagramFrame{}, net.ErrClosed
-	}
-	for {
-		select {
-		case <-e.done:
-			return types.DatagramFrame{}, net.ErrClosed
-		case frame := <-e.datagrams:
-			select {
-			case <-frame.LeaseDone:
-				continue
-			default:
-			}
-			return frame, nil
-		}
-	}
-}
-
-// SendDatagram replies on the lease that delivered frame. Preserve the accepted
-// frame's LeaseDone metadata when constructing a reply.
-func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
-	if !e.options.UDPEnabled {
-		return net.ErrClosed
-	}
-	e.mu.RLock()
-	listener := e.relayListeners[frame.RelayURL]
-	e.mu.RUnlock()
-	if listener == nil {
-		return net.ErrClosed
-	}
-	return listener.sendDatagram(frame)
-}
-
-// WaitDatagramReady waits until at least one relay has an authenticated UDP
-// backhaul and returns the ready relay snapshots.
-func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error) {
-	if !e.options.UDPEnabled {
-		return nil, errExposureDoesNotHaveUDPEnabled
-	}
-	return e.waitReady(ctx, func(status RelayStatus) bool {
-		return status.State != RelayFailed && status.UDPAddr != ""
-	})
-}
-
-// WaitTCPReady waits until at least one relay has allocated a public TCP
-// address and returns the ready relay snapshots.
-func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
-	if !e.options.TCPEnabled {
-		return nil, errExposureDoesNotHaveTCPEnabled
-	}
-	return e.waitReady(ctx, func(status RelayStatus) bool {
-		return status.State != RelayFailed && status.TCPAddr != ""
-	})
+func deriveSelectionKey(identity types.Identity) []byte {
+	sum := sha256.Sum256(append([]byte("portal-tunnel/mols-selection-key\x00"), identity.PrivateKey...))
+	return sum[:]
 }
 
 type exposureConn struct {
@@ -983,6 +676,13 @@ type exposureConn struct {
 	localAddr  string
 	remoteAddr string
 	closeOnce  sync.Once
+}
+
+func (c *exposureConn) ConnectionState() tls.ConnectionState {
+	if conn, ok := c.Conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+		return conn.ConnectionState()
+	}
+	return tls.ConnectionState{}
 }
 
 func (c *exposureConn) CloseWrite() error {
@@ -1127,18 +827,30 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	e.mu.RLock()
 	relayURLs := append([]string(nil), e.relayURLs...)
 	e.mu.RUnlock()
-	desired := make(map[string]struct{}, len(relayURLs))
-	for _, relayURL := range relayURLs {
-		e.mu.RLock()
-		_, blocked := e.blockedRelays[relayURL]
-		e.mu.RUnlock()
-		if blocked {
-			continue
-		}
-		desired[relayURL] = struct{}{}
-	}
+	desired := e.unblockedRelaySet(relayURLs)
 
 	e.mu.Lock()
+	staleListeners, missingRelayURLs := e.detachStaleRelayListenersLocked(relayURLs, desired)
+	e.mu.Unlock()
+	deselected := e.syncRelayStatuses(relayURLs)
+
+	for relayURL, listener := range staleListeners {
+		if listener != nil {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
+			}
+		}
+	}
+	e.reportDeselectedRelays(deselected)
+	addedRelayURLs, err := e.publishMissingRelayListeners(missingRelayURLs, failOnError)
+	if err != nil {
+		return err
+	}
+	logReconciledRelays(relayURLs, staleListeners, addedRelayURLs)
+	return nil
+}
+
+func (e *Exposure) detachStaleRelayListenersLocked(relayURLs []string, desired map[string]struct{}) (map[string]*listener, []string) {
 	staleListeners := make(map[string]*listener)
 	stateChanged := false
 	for relayURL, listener := range e.relayListeners {
@@ -1163,63 +875,85 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	if stateChanged {
 		e.notifyStateChangedLocked()
 	}
-	e.mu.Unlock()
-	deselected := e.syncRelayStatuses(relayURLs)
+	return staleListeners, missingRelayURLs
+}
 
+func (e *Exposure) publishMissingRelayListeners(missingRelayURLs []string, failOnError bool) ([]string, error) {
 	addedRelayURLs := make([]string, 0, len(missingRelayURLs))
-	for relayURL, listener := range staleListeners {
-		if listener == nil {
-			continue
-		}
-		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Warn().Err(err).Str("relay_url", relayURL).Msg("close stale relay listener")
-		}
-	}
-
-	e.reportDeselectedRelays(deselected)
 	for _, relayURL := range missingRelayURLs {
-		e.setRelayStatus(relayURL, listenerStatus{state: RelayConnecting})
-		listener, err := newListener(context.Background(), relayURL, listenerConfig{
-			Replica:    e.options.Replica,
-			Cache:      e.cache,
-			Identity:   e.identity,
-			Overlay:    e.options.Overlay,
-			UDPEnabled: e.options.UDPEnabled,
-			TCPEnabled: e.options.TCPEnabled,
-			BanMITM:    e.options.BanMITM,
-			Metadata:   e.metadata.Copy(),
-			StartedAt:  e.startedAt,
-		})
+		e.applyRelayStatus(relayURL, listenerStatus{state: RelayConnecting}, nil)
+		published, err := e.publishRelayListenerLocked(relayURL)
 		if err != nil {
-			e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err})
+			e.applyRelayStatus(relayURL, listenerStatus{state: RelayFailed, err: err}, nil)
 			if failOnError {
-				return fmt.Errorf("listen %q: %w", relayURL, err)
+				return nil, fmt.Errorf("add relay listener %q: %w", relayURL, err)
 			}
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("add relay listener")
 			continue
 		}
+		if published {
+			addedRelayURLs = append(addedRelayURLs, relayURL)
+		}
+	}
+	return addedRelayURLs, nil
+}
 
-		if !e.publishCreatedListener(relayURL, listener) {
+func (e *Exposure) unblockedRelaySet(relayURLs []string) map[string]struct{} {
+	desired := make(map[string]struct{}, len(relayURLs))
+	for _, relayURL := range relayURLs {
+		e.mu.RLock()
+		_, blocked := e.blockedRelays[relayURL]
+		e.mu.RUnlock()
+		if blocked {
 			continue
 		}
-		addedRelayURLs = append(addedRelayURLs, relayURL)
+		desired[relayURL] = struct{}{}
 	}
+	return desired
+}
 
-	if len(staleListeners) > 0 || len(addedRelayURLs) > 0 {
-		removedRelayURLs := make([]string, 0, len(staleListeners))
-		for relayURL := range staleListeners {
-			removedRelayURLs = append(removedRelayURLs, relayURL)
-		}
-		if len(removedRelayURLs) > 1 {
-			slices.Sort(removedRelayURLs)
-		}
-		log.Info().
-			Strs("added_relays", addedRelayURLs).
-			Strs("removed_relays", removedRelayURLs).
-			Strs("listener_relays", relayURLs).
-			Msg("reconciled relay listeners")
+func (e *Exposure) publishRelayListenerLocked(relayURL string) (bool, error) {
+	listener, err := newListener(context.Background(), relayURL, listenerConfig{
+		Replica:            e.options.Replica,
+		TLSCertFile:        e.options.TLSCertFile,
+		TLSKeyFile:         e.options.TLSKeyFile,
+		TLSStateDir:        e.options.TLSStateDir,
+		TLSRequireLocal:    e.options.TLSRequireLocal,
+		CertificateMonitor: e.options.CertificateMonitor,
+		Cache:              e.cache,
+		Identity:           e.identity,
+		Overlay:            e.options.Overlay,
+		UDPEnabled:         e.options.UDPEnabled,
+		TCPEnabled:         e.options.TCPEnabled,
+		BanMITM:            e.options.BanMITM,
+		Metadata:           e.metadata.Copy(),
+		StartedAt:          e.startedAt,
+	})
+	if err != nil {
+		return false, err
 	}
-	return nil
+	if e.http2Enabled {
+		listener.enableHTTP2()
+	}
+	return e.publishCreatedListener(relayURL, listener), nil
+}
+
+func logReconciledRelays(relayURLs []string, staleListeners map[string]*listener, addedRelayURLs []string) {
+	if len(staleListeners) == 0 && len(addedRelayURLs) == 0 {
+		return
+	}
+	removedRelayURLs := make([]string, 0, len(staleListeners))
+	for relayURL := range staleListeners {
+		removedRelayURLs = append(removedRelayURLs, relayURL)
+	}
+	if len(removedRelayURLs) > 1 {
+		slices.Sort(removedRelayURLs)
+	}
+	log.Info().
+		Strs("added_relays", addedRelayURLs).
+		Strs("removed_relays", removedRelayURLs).
+		Strs("listener_relays", relayURLs).
+		Msg("reconciled relay listeners")
 }
 
 func (e *Exposure) publishCreatedListener(relayURL string, listener *listener) bool {
@@ -1227,7 +961,7 @@ func (e *Exposure) publishCreatedListener(relayURL string, listener *listener) b
 	if blockErr, blocked := e.blockedRelays[relayURL]; blocked {
 		e.mu.Unlock()
 		_ = listener.Close()
-		e.setRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: blockErr})
+		e.applyRelayStatus(relayURL, listenerStatus{state: RelayFailed, failure: RelayFailureMITM, err: blockErr}, nil)
 		return false
 	}
 	if _, exists := e.relayListeners[relayURL]; exists {
@@ -1260,56 +994,21 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 
 	relayURL := listener.api.relayURL.String()
 	var workers sync.WaitGroup
-	statusUpdates := listener.statusUpdates
-	if statusUpdates != nil {
+	if statusUpdates := listener.statusUpdates; statusUpdates != nil {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for {
-				select {
-				case status := <-statusUpdates:
-					e.setListenerRelayStatus(relayURL, listener, status)
-				case <-listener.doneCh:
-					return
-				}
-			}
+			e.forwardListenerStatuses(listener, relayURL, statusUpdates)
 		}()
 	}
 	if listener.udpEnabled {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for {
-				frame, err := listener.acceptDatagram()
-				if err != nil {
-					select {
-					case <-e.done:
-						return
-					default:
-					}
-					if errors.Is(err, net.ErrClosed) {
-						return
-					}
-					log.Warn().
-						Err(err).
-						Str("relay_url", relayURL).
-						Str("address", listener.identity.Address).
-						Msg("datagram accept failed")
-					return
-				}
-
-				select {
-				case <-e.done:
-					return
-				case <-listener.doneCh:
-					return
-				case e.datagrams <- frame:
-				}
-			}
+			e.pumpListenerDatagrams(listener, relayURL)
 		}()
 	}
 	defer func() {
-
 		workers.Wait()
 		e.mu.Lock()
 		if current, ok := e.relayListeners[relayURL]; ok && current == listener {
@@ -1326,10 +1025,9 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 				return
 			default:
 			}
-			if errors.Is(err, net.ErrClosed) {
-				return
+			if !errors.Is(err, net.ErrClosed) {
+				log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
 			}
-			log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
 			return
 		}
 
@@ -1340,4 +1038,524 @@ func (e *Exposure) runListenerAcceptLoop(listener *listener) {
 		case e.accepted <- conn:
 		}
 	}
+}
+
+func (e *Exposure) forwardListenerStatuses(listener *listener, relayURL string, statusUpdates <-chan listenerStatus) {
+	for {
+		select {
+		case status := <-statusUpdates:
+			e.applyRelayStatus(relayURL, status, listener)
+		case <-listener.doneCh:
+			return
+		}
+	}
+}
+
+func (e *Exposure) pumpListenerDatagrams(listener *listener, relayURL string) {
+	for {
+		frame, err := listener.acceptDatagram()
+		if err != nil {
+			select {
+			case <-e.done:
+				return
+			default:
+			}
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Warn().
+				Err(err).
+				Str("relay_url", relayURL).
+				Str("address", listener.identity.Address).
+				Msg("datagram accept failed")
+			return
+		}
+
+		select {
+		case <-e.done:
+			return
+		case <-listener.doneCh:
+			return
+		case e.datagrams <- frame:
+		}
+	}
+}
+
+// Relays returns a sorted point-in-time snapshot of the relay pool.
+func (e *Exposure) Relays() []RelayStatus {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	relays := make([]RelayStatus, 0, len(e.statuses))
+	for _, status := range e.statuses {
+		relays = append(relays, status)
+	}
+	e.mu.RUnlock()
+	slices.SortFunc(relays, compareRelayStatusRelays)
+	return relays
+}
+
+func compareRelayStatusRelays(a, b RelayStatus) int {
+	aReady := a.State == RelayReady
+	bReady := b.State == RelayReady
+	if aReady != bReady {
+		if aReady {
+			return -1
+		}
+		return 1
+	}
+	aConnecting := a.State == RelayConnecting
+	bConnecting := b.State == RelayConnecting
+	if aConnecting != bConnecting {
+		if aConnecting {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a.RelayURL, b.RelayURL)
+}
+
+// ActiveRelays returns the relay URLs whose RelayStatus.Active() is true,
+// derived from the same snapshot as Relays.  Relay-selection callers use it
+// for stickiness (keeping a slot for a relay that still holds a lease address).
+func (e *Exposure) ActiveRelays() []string {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	relayURLs := make([]string, 0, len(e.statuses))
+	for relayURL, status := range e.statuses {
+		if status.Active() {
+			relayURLs = append(relayURLs, relayURL)
+		}
+	}
+	e.mu.RUnlock()
+	slices.Sort(relayURLs)
+	return relayURLs
+}
+
+func (e *Exposure) applyRelayStatus(relayURL string, update listenerStatus, owner *listener) {
+	if e == nil || relayURL == "" || e.closed() {
+		return
+	}
+
+	e.mu.Lock()
+	if owner != nil {
+		if current, ok := e.relayListeners[relayURL]; !ok || current != owner {
+			e.mu.Unlock()
+			return
+		}
+		// Listener reports can wait behind other producers. Resolve canonical
+		// availability here, where updates are serialized, rather than trusting
+		// material that was usable when a report was constructed.
+		lease, registered := owner.leaseSnapshot()
+		endpoint, local := lease.tenantTLS.(*namespaceTLS)
+		if registered && local {
+			update.publicURL = ""
+			if update.state == RelayReady && endpoint.local.Ready() {
+				update.publicURL = owner.leaseURL(lease.hostname)
+			}
+			update.certificateErr = endpoint.local.IssuanceError()
+		}
+	}
+	if e.statuses == nil {
+		e.statuses = make(map[string]RelayStatus)
+	}
+	status, exists := e.statuses[relayURL]
+	if !exists {
+		status = RelayStatus{RelayURL: relayURL, State: RelayConnecting}
+	}
+	previous := status
+	e.trackBlockedRelayLocked(relayURL, update.err)
+	status = mergeRelayStatusFieldsLocked(previous, update, relayURL)
+	if !relayStatusEqual(previous, status) {
+		e.statuses[relayURL] = status
+		e.notifyStateChangedLocked()
+	} else {
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Unlock()
+
+	e.announceRelayStatusChange(previous, status)
+}
+
+func (e *Exposure) trackBlockedRelayLocked(relayURL string, err error) {
+	if err == nil || !errors.Is(err, errMITMDetected) {
+		return
+	}
+	if e.blockedRelays == nil {
+		e.blockedRelays = make(map[string]error)
+	}
+	e.blockedRelays[relayURL] = err
+}
+
+func mergeRelayStatusFieldsLocked(previous RelayStatus, update listenerStatus, relayURL string) RelayStatus {
+	status := previous
+	status.RelayURL = relayURL
+	if update.state != "" {
+		status.State = update.state
+	}
+	if update.failure != "" {
+		status.Failure = update.failure
+	} else if update.state != RelayFailed {
+		status.Failure = RelayFailureNone
+	}
+	status.Approval = update.approval
+	status.CertificateError = update.certificateErr
+	if update.version != "" {
+		status.Version = update.version
+	}
+	if update.err != nil {
+		status.Err = update.err
+	} else if update.state != RelayFailed {
+		status.Err = nil
+	}
+
+	if update.state == RelayFailed {
+		status.AliasURL = ""
+		status.LegacyURL = ""
+	}
+	if update.state == RelayConnecting {
+		status.PublicURL = ""
+		status.LegacyURL = ""
+		status.AliasURL = ""
+		status.UDPAddr = ""
+		status.TCPAddr = ""
+	}
+	hasEndpoint := update.publicURL != "" || update.legacyURL != "" || update.aliasURL != ""
+	if hasEndpoint || update.state == RelayReady {
+		status.PublicURL = update.publicURL
+		status.LegacyURL = update.legacyURL
+		status.AliasURL = update.aliasURL
+	}
+	if update.udpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
+		status.UDPAddr = update.udpAddr
+	}
+	if update.tcpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
+		status.TCPAddr = update.tcpAddr
+	}
+
+	switch {
+	case status.AliasURL == "" || update.aliasEpoch != "":
+		status.AliasSince = time.Time{}
+	case status.AliasURL != previous.AliasURL || previous.AliasEpoch != "":
+		status.AliasSince = time.Now()
+	}
+	status.AliasEpoch = ""
+	if status.AliasURL != "" {
+		status.AliasEpoch = update.aliasEpoch
+	}
+	return status
+}
+
+func (e *Exposure) announceRelayStatusChange(previous, status RelayStatus) {
+	publicURL := cmp.Or(status.PublicURL, status.LegacyURL)
+	advertised := (previous.State != RelayReady || previous.PublicURL != status.PublicURL) && status.State == RelayReady && publicURL != ""
+	if advertised {
+		message := "service ready at " + publicURL
+		if status.AliasURL != "" {
+			message += " (short URL: " + status.AliasURL + ")"
+		}
+		relayStatusLogEvent(log.Info(), status).
+			Str("address", e.identity.Address).
+			Msg(message)
+	} else if previous.State == RelayReady && status.State == RelayConnecting {
+		relayStatusLogEvent(log.Info(), status).
+			Str("address", e.identity.Address).
+			Msg("relay reconnecting")
+	} else if status.State == RelayFailed {
+		relayStatusLogEvent(log.Warn(), status).
+			Str("address", e.identity.Address).
+			Msg("relay failed")
+	}
+	if status.Approval != "" && status.Approval != previous.Approval {
+		relayStatusLogEvent(log.Warn(), status).
+			Str("address", e.identity.Address).
+			Msg(status.Approval.Message())
+	}
+
+	e.publishRelayStatus(status)
+	if e.discovery != nil {
+		e.discovery.SetActiveRelays(e.ActiveRelays())
+	}
+
+	if status.State == RelayFailed && e.discovery != nil {
+		e.discovery.Report(status.RelayURL, discoveryFailureKind(status.Failure))
+	}
+}
+
+func discoveryFailureKind(failure RelayFailure) discovery.FailureKind {
+	switch failure {
+	case RelayFailureMITM:
+		return discovery.FailureMITM
+	case RelayFailureTerminal:
+		return discovery.FailureTerminal
+	default:
+
+		return discovery.FailureRuntime
+	}
+}
+
+func (e *Exposure) publishRelayStatus(status RelayStatus) {
+	e.updatesMu.Lock()
+	defer e.updatesMu.Unlock()
+	select {
+	case <-e.done:
+		return
+	default:
+	}
+	select {
+	case e.updates <- status:
+		return
+	default:
+	}
+	select {
+	case <-e.updates:
+	default:
+	}
+	select {
+	case <-e.done:
+	case e.updates <- status:
+	default:
+	}
+}
+
+func relayStatusEqual(a, b RelayStatus) bool {
+	errorsEqual := a.Err == nil && b.Err == nil
+	if a.Err != nil && b.Err != nil {
+		errorsEqual = a.Err.Error() == b.Err.Error()
+	}
+	certErrorsEqual := a.CertificateError == nil && b.CertificateError == nil
+	if a.CertificateError != nil && b.CertificateError != nil {
+		certErrorsEqual = a.CertificateError.Error() == b.CertificateError.Error()
+	}
+	return certErrorsEqual && a.RelayURL == b.RelayURL &&
+		a.PublicURL == b.PublicURL &&
+		a.LegacyURL == b.LegacyURL &&
+		a.AliasURL == b.AliasURL &&
+		a.AliasEpoch == b.AliasEpoch &&
+		a.UDPAddr == b.UDPAddr &&
+		a.TCPAddr == b.TCPAddr &&
+		a.Version == b.Version &&
+		a.State == b.State &&
+		a.Failure == b.Failure &&
+		a.Approval == b.Approval &&
+		a.Deselected == b.Deselected &&
+		errorsEqual
+}
+
+func (e *Exposure) notifyStateChangedLocked() {
+	if e.stateChanged != nil {
+		close(e.stateChanged)
+	}
+	e.stateChanged = make(chan struct{})
+}
+
+func (e *Exposure) syncRelayStatuses(relayURLs []string) []RelayStatus {
+	desired := make(map[string]RelayStatus, len(relayURLs))
+	for _, relayURL := range relayURLs {
+		desired[relayURL] = RelayStatus{
+			RelayURL: relayURL,
+			State:    RelayConnecting,
+		}
+	}
+
+	e.mu.Lock()
+	if e.statuses == nil {
+		e.statuses = make(map[string]RelayStatus)
+	}
+	changed := false
+	for relayURL, status := range desired {
+		if _, ok := e.statuses[relayURL]; ok {
+			continue
+		}
+		e.statuses[relayURL] = status
+		changed = true
+	}
+	var deselected []RelayStatus
+	for relayURL, previous := range e.statuses {
+		if _, ok := desired[relayURL]; ok {
+			continue
+		}
+		delete(e.statuses, relayURL)
+		changed = true
+		previous.Deselected = true
+		deselected = append(deselected, previous)
+	}
+	if changed {
+		e.notifyStateChangedLocked()
+	}
+	e.mu.Unlock()
+	if changed && e.discovery != nil {
+		e.discovery.SetActiveRelays(e.ActiveRelays())
+	}
+	return deselected
+}
+
+func (e *Exposure) reportDeselectedRelays(deselected []RelayStatus) {
+	for _, status := range deselected {
+		if status.PublicURL != "" {
+			relayStatusLogEvent(log.Info(), status).
+				Msg("relay no longer active for " + status.PublicURL)
+		}
+		e.publishRelayStatus(status)
+	}
+}
+
+func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Event {
+	event = event.
+		Str("event", "relay_status").
+		Str("relay_url", status.RelayURL).
+		Str("state", string(status.State)).
+		Str("public_url", status.PublicURL).
+		Str("legacy_url", status.LegacyURL).
+		Bool("deselected", status.Deselected)
+	if status.State == RelayReady && !status.Deselected && status.AliasURL != "" {
+		event = event.Str("alias_url", status.AliasURL)
+	}
+	if status.State == RelayFailed {
+		event = event.Str("failure", string(status.Failure))
+	}
+	if status.Approval != "" {
+		event = event.Str("approval", string(status.Approval))
+	}
+	return event
+}
+
+func (e *Exposure) readyRelays(matches func(RelayStatus) bool, requireLocal bool) ([]RelayStatus, <-chan struct{}, error) {
+	e.mu.RLock()
+	ready := make([]RelayStatus, 0, len(e.statuses))
+	allTerminal := len(e.statuses) > 0
+	var terminalErr error
+	for _, status := range e.statuses {
+		if matches(status) {
+			ready = append(ready, status)
+		}
+		if status.State == RelayFailed && status.Failure == RelayFailureTerminal && status.Err != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("relay %s: %w", status.RelayURL, status.Err))
+		} else if requireLocal && status.PublicURL == "" && status.CertificateError != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("relay %s: %w", status.RelayURL, status.CertificateError))
+		} else {
+			allTerminal = false
+		}
+	}
+	changed := e.stateChanged
+	e.mu.RUnlock()
+	slices.SortFunc(ready, func(a, b RelayStatus) int {
+		return strings.Compare(a.RelayURL, b.RelayURL)
+	})
+	if !allTerminal {
+		terminalErr = nil
+	}
+	return ready, changed, terminalErr
+}
+
+// Updates reports relay lifecycle changes. Relays is the authoritative
+// snapshot; slow consumers may miss intermediate updates. When relay
+// membership shrinks — discovery deselection or a relay-list change — a
+// removal notification with Deselected set and the relay's last known
+// endpoint is delivered best-effort; use it as a trigger to re-read
+// Relays(), not as durable history.
+func (e *Exposure) Updates() <-chan RelayStatus {
+	if e == nil {
+		return nil
+	}
+	return e.updates
+}
+
+// WaitReady waits until at least one relay can accept tenant connections.
+// With require-local, it waits for a usable canonical Local TLS URL and
+// returns errors if all current relays failed or refuse automatic issuance. The
+// exposure stays open, and callers may add relays or continue discovery.
+func (e *Exposure) WaitReady(ctx context.Context) ([]RelayStatus, error) {
+	if e == nil {
+		return nil, net.ErrClosed
+	}
+	requireLocal := e.options.TLSRequireLocal
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State == RelayReady && (!requireLocal || status.PublicURL != "")
+	}, requireLocal)
+}
+
+func (e *Exposure) waitReady(ctx context.Context, matches func(RelayStatus) bool, requireLocal bool) ([]RelayStatus, error) {
+	if ctx == nil {
+		return nil, errPortalSDKContextIsNil
+	}
+	for {
+		ready, changed, terminalErr := e.readyRelays(matches, requireLocal)
+		if len(ready) > 0 {
+			return ready, nil
+		}
+		if e.closed() {
+			return nil, net.ErrClosed
+		}
+		if terminalErr != nil {
+			return nil, terminalErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-e.done:
+			return nil, net.ErrClosed
+		case <-changed:
+		}
+	}
+}
+
+func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
+	if !e.options.UDPEnabled {
+		return types.DatagramFrame{}, net.ErrClosed
+	}
+	for {
+		select {
+		case <-e.done:
+			return types.DatagramFrame{}, net.ErrClosed
+		case frame := <-e.datagrams:
+			select {
+			case <-frame.LeaseDone:
+				continue
+			default:
+			}
+			return frame, nil
+		}
+	}
+}
+
+// SendDatagram replies on the lease that delivered frame. Preserve the accepted
+// frame's LeaseDone metadata when constructing a reply.
+func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
+	if !e.options.UDPEnabled {
+		return net.ErrClosed
+	}
+	e.mu.RLock()
+	listener := e.relayListeners[frame.RelayURL]
+	e.mu.RUnlock()
+	if listener == nil {
+		return net.ErrClosed
+	}
+	return listener.sendDatagram(frame)
+}
+
+// WaitDatagramReady waits until at least one relay has an authenticated UDP
+// backhaul and returns the ready relay snapshots.
+func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]RelayStatus, error) {
+	if !e.options.UDPEnabled {
+		return nil, errExposureDoesNotHaveUDPEnabled
+	}
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State != RelayFailed && status.UDPAddr != ""
+	}, false)
+}
+
+// WaitTCPReady waits until at least one relay has allocated a public TCP
+// address and returns the ready relay snapshots.
+func (e *Exposure) WaitTCPReady(ctx context.Context) ([]RelayStatus, error) {
+	if !e.options.TCPEnabled {
+		return nil, errExposureDoesNotHaveTCPEnabled
+	}
+	return e.waitReady(ctx, func(status RelayStatus) bool {
+		return status.State != RelayFailed && status.TCPAddr != ""
+	}, false)
 }

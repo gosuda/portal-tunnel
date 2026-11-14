@@ -211,9 +211,10 @@
 					>
 						<p class="text-sm leading-6 text-slate-300">
 							Portal discovers public relays and prints the available URLs in your terminal.
-							When <code>--name</code> is omitted, an address-based canonical URL is used.
-							The name above applies when creating a new identity; an existing
-							<code>identity.json</code> keeps its saved name.
+							The name above selects a service using your existing identity key. Repeat
+							<code>--name</code> on later runs to select the same service; new identity files
+							do not save it. Omitting it uses a legacy file's saved name, or the unnamed
+							default service.
 						</p>
 					</div>
 				</div>

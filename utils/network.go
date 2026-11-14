@@ -33,6 +33,8 @@ var (
 	}
 )
 
+var errInvalidPublicIPResponse = errors.New("invalid public ip response")
+
 // ResolvePublicIP determines the caller's public IP address using well-known
 // external services. It returns an empty string on failure.
 func ResolvePublicIP(ctx context.Context) string {
@@ -58,14 +60,15 @@ func ResolvePublicIPs(ctx context.Context) ([]string, error) {
 	return resolvePublicIPFamilies(ctx, 3*time.Second, 3*time.Second)
 }
 
+type publicIPFamilyResult struct {
+	index   int
+	address string
+	err     error
+}
+
 func resolvePublicIPFamilies(ctx context.Context, attemptTimeout, familyWait time.Duration) ([]string, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	type result struct {
-		index   int
-		address string
-		err     error
-	}
-	results := make(chan result, 2)
+	results := make(chan publicIPFamilyResult, 2)
 	var workers sync.WaitGroup
 	for i, endpoints := range [][]string{publicIPv4Endpoints, publicIPv6Endpoints} {
 		workers.Go(func() {
@@ -74,7 +77,7 @@ func resolvePublicIPFamilies(ctx context.Context, attemptTimeout, familyWait tim
 			if err != nil {
 				err = fmt.Errorf("resolve public ipv%d: %w", family, err)
 			}
-			results <- result{index: i, address: address, err: err}
+			results <- publicIPFamilyResult{index: i, address: address, err: err}
 		})
 	}
 	defer func() {
@@ -82,6 +85,14 @@ func resolvePublicIPFamilies(ctx context.Context, attemptTimeout, familyWait tim
 		workers.Wait()
 	}()
 
+	addresses, errs, err := collectFamilyResults(ctx, results, familyWait)
+	if err != nil {
+		return nil, err
+	}
+	return finalizeFamilyResults(ctx, addresses, errs)
+}
+
+func collectFamilyResults(ctx context.Context, results chan publicIPFamilyResult, familyWait time.Duration) ([2]string, [2]error, error) {
 	var addresses [2]string
 	var errs [2]error
 	var remainingFamily <-chan time.Time
@@ -90,26 +101,28 @@ collect:
 		select {
 		case result := <-results:
 			addresses[result.index], errs[result.index] = result.address, result.err
-			if result.address != "" {
-				if familyWait == 0 {
-					break collect
-				}
-				if remainingFamily == nil {
-					timer := time.NewTimer(familyWait)
-					defer timer.Stop()
-					remainingFamily = timer.C
-				}
+			done := result.address != "" && familyWait == 0
+			if result.address != "" && remainingFamily == nil && familyWait != 0 {
+				timer := time.NewTimer(familyWait)
+				defer timer.Stop()
+				remainingFamily = timer.C
+			}
+			if done {
+				break collect
 			}
 		case <-remainingFamily:
 			break collect
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return addresses, errs, ctx.Err()
 		}
 	}
+	return addresses, errs, nil
+}
+
+func finalizeFamilyResults(ctx context.Context, addresses [2]string, errs [2]error) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
 	var ips []string
 	for _, address := range addresses {
 		if address != "" {
@@ -123,47 +136,15 @@ collect:
 }
 
 func resolvePublicIP(ctx context.Context, attemptTimeout time.Duration, family int, endpoints ...string) (string, error) {
-	client := DefaultHTTPClient
-	headers := http.Header{"User-Agent": []string{"portal-tunnel"}}
 	var lastErr error
-
 	for _, endpoint := range endpoints {
 		if err := ctx.Err(); err != nil {
 			lastErr = err
 			break
 		}
-
-		requestCtx, cancelRequest := context.WithTimeout(ctx, attemptTimeout)
-		resp, err := httpDo(requestCtx, client, http.MethodGet, endpoint, nil, headers)
+		candidate, err := fetchResolvePublicIPEndpoint(ctx, endpoint, family, attemptTimeout)
 		if err != nil {
-			cancelRequest()
 			lastErr = err
-			continue
-		}
-
-		limitedBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
-		_ = resp.Body.Close()
-		cancelRequest()
-		if resp.StatusCode != http.StatusOK {
-			lastErr = errors.New(resp.Status)
-			continue
-		}
-		if readErr != nil {
-			lastErr = readErr
-			continue
-		}
-
-		candidate := SanitizeReportedIP(string(limitedBody))
-		if candidate == "" {
-			lastErr = errors.New("invalid public ip response")
-			continue
-		}
-		addressFamily := 4
-		if strings.Contains(candidate, ":") {
-			addressFamily = 6
-		}
-		if family != 0 && family != addressFamily {
-			lastErr = fmt.Errorf("public ip is not ipv%d", family)
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -171,11 +152,57 @@ func resolvePublicIP(ctx context.Context, attemptTimeout time.Duration, family i
 		}
 		return candidate, nil
 	}
-
 	if lastErr == nil {
 		lastErr = errors.New("resolve public ip failed")
 	}
 	return "", lastErr
+}
+
+func fetchResolvePublicIPEndpoint(ctx context.Context, endpoint string, family int, attemptTimeout time.Duration) (string, error) {
+	client := DefaultHTTPClient
+	headers := http.Header{"User-Agent": []string{"portal-tunnel"}}
+	requestCtx, cancelRequest := context.WithTimeout(ctx, attemptTimeout)
+	resp, err := httpDo(requestCtx, client, http.MethodGet, endpoint, nil, headers)
+	if err != nil {
+		cancelRequest()
+		return "", err
+	}
+	limitedBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
+	_ = resp.Body.Close()
+	cancelRequest()
+	if err := checkEndpointTransport(resp, readErr); err != nil {
+		return "", err
+	}
+	candidate := SanitizeReportedIP(string(limitedBody))
+	if err := matchPublicIPFamily(candidate, family); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
+func matchPublicIPFamily(candidate string, family int) error {
+	if candidate == "" {
+		return errInvalidPublicIPResponse
+	}
+	addressFamily := 4
+	if strings.Contains(candidate, ":") {
+		addressFamily = 6
+	}
+	if family != 0 && family != addressFamily {
+		return fmt.Errorf("public ip is not ipv%d", family)
+	}
+	return nil
+
+}
+
+func checkEndpointTransport(resp *http.Response, readErr error) error {
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch public ip: unexpected status %s", resp.Status)
+	}
+	if readErr != nil {
+		return readErr
+	}
+	return nil
 }
 
 func SanitizeReportedIP(raw string) string {
@@ -219,22 +246,30 @@ func IsPublicIP(ip netip.Addr) bool {
 		return false
 	}
 	if ip.Is4() {
-		for _, prefix := range nonPublicIPv4 {
-			if prefix.Contains(ip) {
-				return false
-			}
-		}
-		return true
+		return !blockedIsPublicIPV4Address(ip)
 	}
 	if !globalIPv6.Contains(ip) {
 		return false
 	}
-	for _, prefix := range nonPublicIPv6 {
+	return !blockedIsPublicIPV6Address(ip)
+}
+
+func blockedIsPublicIPV4Address(ip netip.Addr) bool {
+	for _, prefix := range nonPublicIPv4 {
 		if prefix.Contains(ip) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
+}
+
+func blockedIsPublicIPV6Address(ip netip.Addr) bool {
+	for _, prefix := range nonPublicIPv6 {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func NormalizeLoopbackTarget(raw string) (string, error) {

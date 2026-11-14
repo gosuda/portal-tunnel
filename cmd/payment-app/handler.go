@@ -80,19 +80,19 @@ type paymentPageData struct {
 	ConfigJSON       template.JS
 }
 
-func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
+func resolvePaymentRequirements(cfg paymentHandlerConfig) (facilitatortypes.PaymentRequirements, *paymentHandler, error) {
 	network := suiNetwork(cfg.Testnet)
 	asset, ok := suischeme.GetGaslessStablecoinType(network, usdcAssetSymbol)
 	if !ok {
-		return nil, fmt.Errorf("x402 %s is not registered on %s", usdcAssetSymbol, network)
+		return facilitatortypes.PaymentRequirements{}, nil, fmt.Errorf("x402 %s is not registered on %s", usdcAssetSymbol, network)
 	}
 	payTo := suischeme.NormalizeAddress(cfg.PayTo)
 	if payTo == "" {
-		return nil, errX402UsdcPaymentRequiresValidSui
+		return facilitatortypes.PaymentRequirements{}, nil, errX402UsdcPaymentRequiresValidSui
 	}
 	amount, err := suischeme.StablecoinAmountToAtomic(network, usdcAssetSymbol, cfg.Amount)
 	if err != nil {
-		return nil, fmt.Errorf("x402 USDC amount: %w", err)
+		return facilitatortypes.PaymentRequirements{}, nil, fmt.Errorf("x402 USDC amount: %w", err)
 	}
 	maxTimeoutSeconds := cfg.MaxTimeoutSeconds
 	if maxTimeoutSeconds <= 0 {
@@ -119,11 +119,16 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 			"assetTransferMethod": "sui-gasless-stablecoin-address-balance",
 		},
 	}
+	return requirements, handler, nil
+}
+
+func newPaidPhotoGate(requirements facilitatortypes.PaymentRequirements, cfg paymentHandlerConfig) (*x402http.Gate, http.Handler, error) {
+	network := requirements.Network
 	facilitator, err := suifacilitator.NewSuiFacilitatorWithOptions(network, firstNonEmpty(cfg.Endpoints), "", suifacilitator.SuiFacilitatorOptions{
-		GaslessStablecoinTypes: []string{asset},
+		GaslessStablecoinTypes: []string{requirements.Asset},
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	gate, err := x402http.New(x402http.Config{
 		Requirements: requirements,
@@ -136,7 +141,7 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 		RequestTimeout: cfg.RequestTimeout,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	prepareHandler, err := suihttp.NewPrepareHandler(suihttp.Config{
 		Requirements:        requirements,
@@ -146,6 +151,18 @@ func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
 		Endpoints:           cfg.Endpoints,
 		RequestTimeout:      cfg.RequestTimeout,
 	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return gate, prepareHandler, nil
+}
+
+func newHandler(cfg paymentHandlerConfig) (http.Handler, error) {
+	requirements, handler, err := resolvePaymentRequirements(cfg)
+	if err != nil {
+		return nil, err
+	}
+	gate, prepareHandler, err := newPaidPhotoGate(requirements, cfg)
 	if err != nil {
 		return nil, err
 	}

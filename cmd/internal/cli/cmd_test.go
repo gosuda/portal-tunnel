@@ -1,9 +1,27 @@
 package cli
 
 import (
+	"flag"
 	"slices"
 	"testing"
 )
+
+func checkEndOfOptionsArgs(t *testing.T, fs *flag.FlagSet, wantArgs []string) {
+	t.Helper()
+	if !slices.Equal(fs.Args(), wantArgs) {
+		t.Errorf("args = %q, want %q", fs.Args(), wantArgs)
+	}
+}
+
+func checkEndOfOptionsNames(t *testing.T, name, serve, wantName string) {
+	t.Helper()
+	if name != wantName {
+		t.Errorf("name = %q, want %q", name, wantName)
+	}
+	if serve != "" {
+		t.Errorf("serve = %q, want empty: positional option was parsed", serve)
+	}
+}
 
 func TestParseFlagSetPreservesEndOfOptions(t *testing.T) {
 	t.Parallel()
@@ -55,15 +73,8 @@ func TestParseFlagSetPreservesEndOfOptions(t *testing.T) {
 			if err := ParseFlagSet(fs, tt.args, nil); err != nil {
 				t.Fatalf("ParseFlagSet() error = %v", err)
 			}
-			if !slices.Equal(fs.Args(), tt.wantArgs) {
-				t.Errorf("args = %q, want %q", fs.Args(), tt.wantArgs)
-			}
-			if name != tt.wantName {
-				t.Errorf("name = %q, want %q", name, tt.wantName)
-			}
-			if serve != "" {
-				t.Errorf("serve = %q, want empty: positional option was parsed", serve)
-			}
+			checkEndOfOptionsArgs(t, fs, tt.wantArgs)
+			checkEndOfOptionsNames(t, name, serve, tt.wantName)
 		})
 	}
 }

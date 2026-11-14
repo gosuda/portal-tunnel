@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { SsgoiTransition } from "@ssgoi/react";
 import { useServerList } from "@/hooks/useServerList";
 import { ServerListView } from "@/components/ServerListView";
@@ -6,7 +7,7 @@ import { useServerComments } from "@/hooks/useServerComments";
 import type { BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 
-export function ServerList() {
+export function ServerList(): JSX.Element {
   const {
     commentServer,
     toggleComments,

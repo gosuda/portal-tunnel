@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { TUNNEL_FORM_STYLES as s } from "@/components/TunnelFormParts";
 import { cn } from "@/lib/utils";
 import {
@@ -36,7 +37,7 @@ export function TunnelAuthSection({
   discovery,
   name,
   os,
-}: TunnelAuthSectionProps) {
+}: TunnelAuthSectionProps): JSX.Element {
   const patch = (next: Partial<TunnelAuthOptions>) =>
     onChange({ ...auth, ...next });
   const methods = useRadioGroup(

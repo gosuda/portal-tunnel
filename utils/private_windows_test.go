@@ -9,30 +9,34 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func setTestDACL(t *testing.T, path, sddl string) {
+	t.Helper()
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil, nil, acl, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWindowsPrivateACLRepairsBroadDirectoryAndFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(dir, "agent-endpoint.json")
-	if err := os.WriteFile(file, []byte("secret"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	broad, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;WD)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	acl, _, err := broad.DACL()
-	if err != nil {
+	if err := os.WriteFile(file, []byte("secret"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{dir, file} {
-		if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-			windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-			nil, nil, acl, nil); err != nil {
-			t.Fatal(err)
-		}
+		setTestDACL(t, path, "D:P(A;OICI;FA;;;WD)")
 	}
 	if err := EnsurePrivateDir(dir); err != nil {
 		t.Fatal(err)
@@ -40,19 +44,13 @@ func TestWindowsPrivateACLRepairsBroadDirectoryAndFile(t *testing.T) {
 	if err := EnsurePrivateFile(file); err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		path string
-		dir  bool
-	}{
-		{path: dir, dir: true},
-		{path: file, dir: false},
-	} {
-		_, owner, err := privateWindowsDescriptor(tc.dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := verifyWindowsPath(tc.path, owner, tc.dir); err != nil {
-			t.Fatalf("insecure ACL for %q: %v", tc.path, err)
+	_, owner, err := privateWindowsDescriptor(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{dir, file} {
+		if _, err := verifyWindowsPath(path, owner, path == dir); err != nil {
+			t.Fatalf("insecure ACL for %q: %v", path, err)
 		}
 	}
 }
@@ -89,20 +87,7 @@ func TestWindowsPrivateDirectoryRepairsMissingInheritance(t *testing.T) {
 	for _, flags := range []string{"", "OI", "CI"} {
 		t.Run("flags="+flags, func(t *testing.T) {
 			dir := t.TempDir()
-			sd, err := windows.SecurityDescriptorFromString(fmt.Sprintf(
-				"D:P(A;%s;FA;;;%s)(A;%s;FA;;;SY)(A;%s;FA;;;BA)", flags, user.String(), flags, flags))
-			if err != nil {
-				t.Fatal(err)
-			}
-			acl, _, err := sd.DACL()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
-				windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-				nil, nil, acl, nil); err != nil {
-				t.Fatal(err)
-			}
+			setTestDACL(t, dir, fmt.Sprintf("D:P(A;%s;FA;;;%s)(A;%s;FA;;;SY)(A;%s;FA;;;BA)", flags, user.String(), flags, flags))
 			if err := EnsurePrivateDir(dir); err != nil {
 				t.Fatal(err)
 			}
@@ -110,7 +95,7 @@ func TestWindowsPrivateDirectoryRepairsMissingInheritance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			acl, _, err = actual.DACL()
+			acl, _, err := actual.DACL()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -139,29 +124,15 @@ func TestWindowsPrivateFilePreservesSafePermissionsAndOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sd, err := windows.SecurityDescriptorFromString(fmt.Sprintf("D:P(A;;FR;;;%s)(A;;FA;;;SY)(A;;FA;;;BA)", user.String()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	acl, _, err := sd.DACL()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil, nil, acl, nil); err != nil {
-		t.Fatal(err)
-	}
-	before, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
+	setTestDACL(t, path, fmt.Sprintf("D:P(A;;FR;;;%s)(A;;FA;;;SY)(A;;FA;;;BA)", user.String()))
+	before, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := EnsurePrivateFile(path); err != nil {
 		t.Fatal(err)
 	}
-	after, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
+	after, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}

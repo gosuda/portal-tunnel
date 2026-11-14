@@ -19,13 +19,8 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
-	h := newHarness(t)
-	publicURL := h.waitForPublicURL()
-	if got := h.get(publicURL); got != marker {
-		t.Fatalf("tenant response before restart = %q, want %q", got, marker)
-	}
-
+func shutdownRelayForRestart(t *testing.T, h *harness) {
+	t.Helper()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := h.server.Shutdown(shutdownCtx); err != nil {
@@ -34,7 +29,10 @@ func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 	if err := h.server.Wait(); err != nil {
 		t.Fatalf("wait for relay shutdown: %v", err)
 	}
+}
 
+func startRestartedRelay(t *testing.T, h *harness) {
+	t.Helper()
 	restarted, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:     "https://127.0.0.1:" + strconv.Itoa(h.sniPort),
 		StateDir:      h.stateDir,
@@ -50,41 +48,10 @@ func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
 		t.Fatalf("start restarted relay: %v", err)
 	}
 	h.server = restarted
-
-	deadline := time.Now().Add(45 * time.Second)
-	for {
-		if got, ok := h.tryGet(publicURL); ok && got == marker {
-			return
-		}
-		if !time.Now().Before(deadline) {
-			break
-		}
-		<-time.After(250 * time.Millisecond)
-	}
-	t.Fatal("exposure did not route again after relay restart")
 }
 
-func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
-	h := newHarness(t)
-	publicURL := h.waitForPublicURL()
-	if got := h.get(publicURL); got != marker {
-		t.Fatalf("tenant response before rotation = %q, want %q", got, marker)
-	}
-
-	preRestartToken, err := registerShortLivedToken(h.sniPort)
-	if err != nil {
-		t.Fatalf("register pre-restart token: %v", err)
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := h.server.Shutdown(shutdownCtx); err != nil {
-		t.Fatalf("shutdown relay: %v", err)
-	}
-	if err := h.server.Wait(); err != nil {
-		t.Fatalf("wait for relay shutdown: %v", err)
-	}
-
+func rotateRelayAuthority(t *testing.T, h *harness) {
+	t.Helper()
 	identityPath := filepath.Join(h.stateDir, types.RelayIdentityFilename)
 	rotatedIdentity, err := identity.LoadOrCreateRelayIdentity(
 		filepath.Join(t.TempDir(), types.RelayIdentityFilename),
@@ -100,51 +67,61 @@ func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
 	if err := os.WriteFile(identityPath, rotatedBytes, 0o600); err != nil {
 		t.Fatalf("replace relay identity file: %v", err)
 	}
+}
 
-	restarted, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     "https://127.0.0.1:" + strconv.Itoa(h.sniPort),
-		StateDir:      h.stateDir,
-		SNIListenAddr: "127.0.0.1:" + strconv.Itoa(h.sniPort),
-		SNIPort:       h.sniPort,
-	})
-	if err != nil {
-		t.Fatalf("create restarted relay: %v", err)
-	}
-	serverCtx, serverCancel := context.WithCancel(context.Background())
-	t.Cleanup(serverCancel)
-	if err := restarted.Start(serverCtx, relayHandler(restarted, nil)); err != nil {
-		t.Fatalf("start restarted relay: %v", err)
-	}
-	h.server = restarted
-
-	assertUnauthorizedForOldToken(t, h.sniPort, preRestartToken)
-
+func awaitExposureRouted(t *testing.T, h *harness, publicURL string) bool {
+	t.Helper()
 	deadline := time.Now().Add(45 * time.Second)
 	for {
 		if got, ok := h.tryGet(publicURL); ok && got == marker {
-			return
+			return true
 		}
 		if !time.Now().Before(deadline) {
-			break
+			return false
 		}
 		<-time.After(250 * time.Millisecond)
 	}
-	t.Fatal("exposure did not route again after authority rotation")
 }
 
-func registerShortLivedToken(sniPort int) (string, error) {
-	baseURL, err := url.Parse("https://127.0.0.1:" + strconv.Itoa(sniPort))
-	if err != nil {
-		return "", err
-	}
-	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
-
-	tmpIdentity, err := identity.Generate("e2e-rotation-token")
-	if err != nil {
-		return "", err
+func TestExposureReRegistersAfterRelayRestart(t *testing.T) {
+	h := newHarness(t)
+	publicURL := h.waitForPublicURL()
+	if got := h.get(publicURL); got != marker {
+		t.Fatalf("tenant response before restart = %q, want %q", got, marker)
 	}
 
+	shutdownRelayForRestart(t, h)
+	startRestartedRelay(t, h)
+
+	if !awaitExposureRouted(t, h, publicURL) {
+		t.Fatal("exposure did not route again after relay restart")
+	}
+}
+
+func TestExposureReRegistersAfterAuthorityRotation(t *testing.T) {
+	h := newHarness(t)
+	publicURL := h.waitForPublicURL()
+	if got := h.get(publicURL); got != marker {
+		t.Fatalf("tenant response before rotation = %q, want %q", got, marker)
+	}
+
+	preRestartToken, err := registerShortLivedToken(h.sniPort)
+	if err != nil {
+		t.Fatalf("register pre-restart token: %v", err)
+	}
+
+	shutdownRelayForRestart(t, h)
+	rotateRelayAuthority(t, h)
+	startRestartedRelay(t, h)
+
+	assertUnauthorizedForOldToken(t, h.sniPort, preRestartToken)
+
+	if !awaitExposureRouted(t, h, publicURL) {
+		t.Fatal("exposure did not route again after authority rotation")
+	}
+}
+
+func redeemRotationToken(client *http.Client, baseURL *url.URL, tmpIdentity types.Identity) (string, error) {
 	var challenge types.RegisterChallengeResponse
 	if err := utils.HTTPDoAPIPath(context.Background(), client, baseURL, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{
 		Identity: tmpIdentity,
@@ -167,6 +144,22 @@ func registerShortLivedToken(sniPort int) (string, error) {
 		return "", err
 	}
 	return resp.AccessToken, nil
+}
+
+func registerShortLivedToken(sniPort int) (string, error) {
+	baseURL, err := url.Parse("https://127.0.0.1:" + strconv.Itoa(sniPort))
+	if err != nil {
+		return "", err
+	}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+
+	tmpIdentity, err := identity.Generate("e2e-rotation-token")
+	if err != nil {
+		return "", err
+	}
+
+	return redeemRotationToken(client, baseURL, tmpIdentity)
 }
 
 func assertUnauthorizedForOldToken(t *testing.T, sniPort int, accessToken string) {

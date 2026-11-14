@@ -83,24 +83,32 @@ func parseDerivationPath(raw string) (derivationPath, error) {
 	}
 
 	for _, component := range components {
-		component = strings.TrimSpace(component)
-		hardened := strings.HasSuffix(component, "'")
-		if hardened {
-			component = strings.TrimSpace(strings.TrimSuffix(component, "'"))
-		}
-		value, err := strconv.ParseUint(component, 0, 32)
+		value, err := parseDerivationComponent(component)
 		if err != nil {
-			return nil, fmt.Errorf("invalid component: %s", component)
+			return nil, err
 		}
-		if hardened {
-			if value >= uint64(bip32HardenedOffset) {
-				return nil, fmt.Errorf("component %d out of allowed hardened range [0, %d]", value, bip32HardenedOffset-1)
-			}
-			value += uint64(bip32HardenedOffset)
-		}
-		path = append(path, uint32(value))
+		path = append(path, value)
 	}
 	return path, nil
+}
+
+func parseDerivationComponent(raw string) (uint32, error) {
+	component := strings.TrimSpace(raw)
+	hardened := strings.HasSuffix(component, "'")
+	if hardened {
+		component = strings.TrimSpace(strings.TrimSuffix(component, "'"))
+	}
+	value, err := strconv.ParseUint(component, 0, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid component: %s", component)
+	}
+	if hardened {
+		if value >= uint64(bip32HardenedOffset) {
+			return 0, fmt.Errorf("component %d out of allowed hardened range [0, %d]", value, bip32HardenedOffset-1)
+		}
+		value += uint64(bip32HardenedOffset)
+	}
+	return uint32(value), nil
 }
 
 func (path derivationPath) String() string {
@@ -147,15 +155,7 @@ func deriveBIP32Secp256k1PrivateKey(seed []byte, path derivationPath) ([]byte, e
 	return privateKey, nil
 }
 
-func deriveBIP32Secp256k1ChildPrivateKey(parentPrivateKey, parentChainCode []byte, child uint32) ([]byte, []byte, error) {
-	if len(parentChainCode) != 32 {
-		return nil, nil, errParentChainCodeMust32Bytes
-	}
-	parentKey, err := normalizeBIP32PrivateKey(parentPrivateKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parent private key: %w", err)
-	}
-
+func encodeBIP32ChildData(parentKey []byte, child uint32) []byte {
 	data := make([]byte, 0, 37)
 	if child >= bip32HardenedOffset {
 		data = append(data, 0)
@@ -165,7 +165,19 @@ func deriveBIP32Secp256k1ChildPrivateKey(parentPrivateKey, parentChainCode []byt
 	}
 	var childBytes [4]byte
 	binary.BigEndian.PutUint32(childBytes[:], child)
-	data = append(data, childBytes[:]...)
+	return append(data, childBytes[:]...)
+}
+
+func deriveBIP32Secp256k1ChildPrivateKey(parentPrivateKey, parentChainCode []byte, child uint32) ([]byte, []byte, error) {
+	if len(parentChainCode) != 32 {
+		return nil, nil, errParentChainCodeMust32Bytes
+	}
+	parentKey, err := normalizeBIP32PrivateKey(parentPrivateKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parent private key: %w", err)
+	}
+
+	data := encodeBIP32ChildData(parentKey, child)
 
 	mac := hmac.New(sha512.New, parentChainCode)
 	_, _ = mac.Write(data)

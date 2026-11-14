@@ -28,88 +28,12 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/portal/overlay"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
-
-var (
-	errDefaultIdentityBPSMustNonNegative         = errors.New("default identity bps must be non-negative")
-	errHTTPRedirectRequiresPortalURLAbsolute     = errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
-	errHTTPRedirectPortalURLPortMust             = errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
-	errHTTPRedirectHTTPRedirectAddrHas           = errors.New("http redirect HTTP_REDIRECT_ADDR has an invalid host")
-	errHTTPRedirectHTTPRedirectAddrPort          = errors.New("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535")
-	errRelayOverlayRequiresDiscovery             = errors.New("relay overlay requires discovery")
-	errStateDirectoryIsRequired                  = errors.New("state directory is required")
-	errRootHostIsRequired                        = errors.New("root host is required")
-	errTransportMaxLeasesMustNonNegative         = errors.New("transport max leases must be non-negative")
-	errUnapprovedLeaseLimitNegative              = errors.New("unapproved leases per source must be non-negative")
-	errTransportEnablementRequiresLeasePortRange = errors.New("transport enablement requires a lease port range")
-	errEnablingUDPRequiresRelayRestart           = errors.New("enabling udp requires a relay restart")
-	errServerAlreadyStarted                      = errors.New("server already started")
-	errJanitorIntervalMustBePositive             = errors.New("janitor interval must be positive")
-)
-
-const (
-	defaultClaimTimeout          = 10 * time.Second
-	replicaWaitSlice             = 250 * time.Millisecond
-	defaultClientHelloWait       = 2 * time.Second
-	defaultControlBodyLimit      = 4 << 20
-	reverseOfferAdmissionWorkers = 16
-	quicBackhaulPendingLimit     = 64
-	quicBackhaulAuthTimeout      = 3 * time.Second
-	quicBackhaulPerSourceLimit   = 4
-	publicIngressLimit           = 1024
-	publicInspectionLimit        = 128
-)
-
-type backhaulPendingSources struct {
-	mu     sync.Mutex
-	counts map[netip.Prefix]int
-}
-
-func newBackhaulPendingSources() *backhaulPendingSources {
-	return &backhaulPendingSources{counts: make(map[netip.Prefix]int)}
-}
-
-func (p *backhaulPendingSources) acquire(remote net.Addr) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	prefix, ok := backhaulSourcePrefix(remote)
-	if !ok {
-		return true
-	}
-	if p.counts[prefix] >= quicBackhaulPerSourceLimit {
-		return false
-	}
-	p.counts[prefix]++
-	return true
-}
-
-func (p *backhaulPendingSources) release(remote net.Addr) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	prefix, ok := backhaulSourcePrefix(remote)
-	if !ok {
-		return
-	}
-	if p.counts[prefix]--; p.counts[prefix] <= 0 {
-		delete(p.counts, prefix)
-	}
-}
-
-func backhaulSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
-	addrPort, err := netip.ParseAddrPort(remote.String())
-	if err != nil {
-		return netip.Prefix{}, false
-	}
-	addr := addrPort.Addr().Unmap()
-	if addr.Is4() {
-		return netip.PrefixFrom(addr, addr.BitLen()), true
-	}
-	return netip.PrefixFrom(addr, 64).Masked(), true
-}
 
 const DefaultHTTPRedirectAddr = ":80"
 
@@ -122,18 +46,20 @@ type HTTPRedirectConfig struct {
 }
 
 type ServerConfig struct {
-	Cache            cache.Config
-	IVNPConfigPath   string
-	PortalURL        string
-	StateDir         string
-	Bootstraps       []string
-	DiscoveryEnabled bool
-	SNIPort          int
-	HTTPRedirect     HTTPRedirectConfig
-	SNIListenAddr    string
-	MinPort          int
-	MaxPort          int
-	ACME             acme.Config
+	// TenantCertificates opts into ACME quota use for explicitly approved tenants.
+	TenantCertificates bool
+	Cache              cache.Config
+	IVNPConfigPath     string
+	PortalURL          string
+	StateDir           string
+	Bootstraps         []string
+	DiscoveryEnabled   bool
+	SNIPort            int
+	HTTPRedirect       HTTPRedirectConfig
+	SNIListenAddr      string
+	MinPort            int
+	MaxPort            int
+	ACME               acme.Config
 	// UnapprovedLeasesPerSource bounds the leases one source can hold without
 	// being routable. Zero disables the bound.
 	UnapprovedLeasesPerSource int
@@ -148,27 +74,35 @@ type ServerConfig struct {
 
 // NormalizeHTTPRedirectConfig validates redirect settings without resolving names
 // or binding sockets. Listener availability is checked only when the server starts.
-func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTPRedirectConfig, error) {
-	if !cfg.Enabled {
-		return cfg, nil
+func parsePortInRange(portStr string, min, max int, outErr error) (int, error) {
+	n, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", outErr, err)
 	}
+	if n < min || n > max {
+		return 0, outErr
+	}
+	return n, nil
+}
+
+func parseRedirectTarget(portalURL string) (*url.URL, error) {
 	target, err := url.Parse(strings.TrimSpace(portalURL))
 	if err != nil {
-		return HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
+		return nil, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
 	}
 	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
-		return HTTPRedirectConfig{}, errHTTPRedirectRequiresPortalURLAbsolute
+		return nil, errHTTPRedirectRequiresPortalURLAbsolute
 	}
 	if port := target.Port(); port != "" {
-		n, err := strconv.Atoi(port)
-		if err != nil {
-			return HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectPortalURLPortMust, err)
-		}
-		if n < 1 || n > 65535 {
-			return HTTPRedirectConfig{}, errHTTPRedirectPortalURLPortMust
+		if _, err := parsePortInRange(port, 1, 65535, errHTTPRedirectPortalURLPortMust); err != nil {
+			return nil, err
 		}
 	}
+	return target, nil
+}
+
+func normalizeRedirectAddr(cfg HTTPRedirectConfig) (HTTPRedirectConfig, error) {
 	cfg.Addr = cmp.Or(strings.TrimSpace(cfg.Addr), DefaultHTTPRedirectAddr)
 	host, port, err := net.SplitHostPort(cfg.Addr)
 	if err != nil {
@@ -182,18 +116,54 @@ func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTP
 			return HTTPRedirectConfig{}, fmt.Errorf("http redirect HTTP_REDIRECT_ADDR has an invalid IP address: %w", err)
 		}
 	}
-	n, err := strconv.Atoi(port)
-	if err != nil {
-		return HTTPRedirectConfig{}, fmt.Errorf("%w: %w", errHTTPRedirectHTTPRedirectAddrPort, err)
-	}
-	if n < 0 || n > 65535 {
-		return HTTPRedirectConfig{}, errHTTPRedirectHTTPRedirectAddrPort
+	if _, err := parsePortInRange(port, 0, 65535, errHTTPRedirectHTTPRedirectAddrPort); err != nil {
+		return HTTPRedirectConfig{}, err
 	}
 	return cfg, nil
 }
 
+func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTPRedirectConfig, error) {
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+	if _, err := parseRedirectTarget(portalURL); err != nil {
+		return HTTPRedirectConfig{}, err
+	}
+	return normalizeRedirectAddr(cfg)
+}
+
 // ValidateServerConfig normalizes server configuration and checks the
-// side-effect-free invariants required before runtime resources are created.
+// invariants required before runtime resources are created.
+func applyValidateServerConfigACME(cfg ServerConfig) (ServerConfig, error) {
+	caDirURL, err := acme.NormalizeCADirURL(cfg.ACME.CADirURL)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	cfg.ACME.CADirURL = caDirURL
+	if err := cfg.Cache.Validate(); err != nil {
+		return ServerConfig{}, err
+	}
+	return cfg, nil
+}
+
+func applyValidateServerConfigRelayURLs(cfg ServerConfig) (ServerConfig, error) {
+	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
+	if err != nil {
+		return ServerConfig{}, fmt.Errorf("normalize portal url: %w", err)
+	}
+	if utils.PortalRootHost(selfRelayURL) == "" {
+		return ServerConfig{}, errRootHostIsRequired
+	}
+	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
+	if err != nil {
+		return ServerConfig{}, fmt.Errorf("normalize bootstraps: %w", err)
+	}
+	cfg.PortalURL = selfRelayURL
+	cfg.Bootstraps = bootstraps
+	cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, selfRelayURL)
+	return cfg, nil
+}
+
 func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.DefaultIdentityBPS < 0 {
 		return ServerConfig{}, errDefaultIdentityBPSMustNonNegative
@@ -213,37 +183,26 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if strings.TrimSpace(cfg.ACME.KeyDir) == "" {
 		cfg.ACME.KeyDir = cfg.StateDir
 	}
-	caDirURL, err := acme.NormalizeCADirURL(cfg.ACME.CADirURL)
+	next, err := applyValidateServerConfigACME(cfg)
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	cfg.ACME.CADirURL = caDirURL
-	if err := cfg.Cache.Validate(); err != nil {
+	cfg = next
+	if cfg.HTTPRedirect, err = NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL); err != nil {
 		return ServerConfig{}, err
 	}
-
-	redirect, err := NormalizeHTTPRedirectConfig(cfg.HTTPRedirect, cfg.PortalURL)
+	next, err = applyValidateServerConfigRelayURLs(cfg)
 	if err != nil {
 		return ServerConfig{}, err
 	}
-	cfg.HTTPRedirect = redirect
-
-	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
-	if err != nil {
-		return ServerConfig{}, fmt.Errorf("normalize portal url: %w", err)
+	cfg = next
+	if cfg.TenantCertificates {
+		issuanceConfig := cfg.ACME
+		issuanceConfig.BaseDomain = utils.PortalRootHost(cfg.PortalURL)
+		if err := issuanceConfig.ValidateTenantIssuanceState(); err != nil {
+			return ServerConfig{}, fmt.Errorf("TENANT_CERTIFICATES requires usable TENANT_ISSUANCE_STATE_DIR: %w", err)
+		}
 	}
-	if utils.PortalRootHost(selfRelayURL) == "" {
-		return ServerConfig{}, errRootHostIsRequired
-	}
-
-	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
-	if err != nil {
-		return ServerConfig{}, fmt.Errorf("normalize bootstraps: %w", err)
-	}
-	cfg.PortalURL = selfRelayURL
-	cfg.Bootstraps = bootstraps
-	cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, selfRelayURL)
-
 	if cfg.SNIPort == 0 {
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
 	}
@@ -292,6 +251,23 @@ func (cfg ServerConfig) ValidateTransportPolicy(udpEnabled bool, udpMaxLeases in
 	return nil
 }
 
+var (
+	errDefaultIdentityBPSMustNonNegative         = errors.New("default identity bps must be non-negative")
+	errHTTPRedirectRequiresPortalURLAbsolute     = errors.New("http redirect requires PORTAL_URL to be an absolute HTTPS URL without credentials")
+	errHTTPRedirectPortalURLPortMust             = errors.New("http redirect PORTAL_URL port must be between 1 and 65535")
+	errHTTPRedirectHTTPRedirectAddrHas           = errors.New("http redirect HTTP_REDIRECT_ADDR has an invalid host")
+	errHTTPRedirectHTTPRedirectAddrPort          = errors.New("http redirect HTTP_REDIRECT_ADDR port must be between 0 and 65535")
+	errRelayOverlayRequiresDiscovery             = errors.New("relay overlay requires discovery")
+	errStateDirectoryIsRequired                  = errors.New("state directory is required")
+	errRootHostIsRequired                        = errors.New("root host is required")
+	errTransportMaxLeasesMustNonNegative         = errors.New("transport max leases must be non-negative")
+	errUnapprovedLeaseLimitNegative              = errors.New("unapproved leases per source must be non-negative")
+	errTransportEnablementRequiresLeasePortRange = errors.New("transport enablement requires a lease port range")
+	errEnablingUDPRequiresRelayRestart           = errors.New("enabling udp requires a relay restart")
+	errServerAlreadyStarted                      = errors.New("server already started")
+	errJanitorIntervalMustBePositive             = errors.New("janitor interval must be positive")
+)
+
 type Server struct {
 	cancel       context.CancelFunc
 	group        *errgroup.Group
@@ -326,86 +302,8 @@ type Server struct {
 	overlay  *overlay.Runtime
 }
 
-func NewServer(cfg ServerConfig) (*Server, error) {
-	cfg, err := ValidateServerConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-	identityPath := filepath.Join(cfg.StateDir, types.RelayIdentityFilename)
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(cfg.PortalURL))
-	if err != nil {
-		return nil, fmt.Errorf("load relay identity: %w", err)
-	}
-	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
-	registry, err := newLeaseRegistry(cfg.MinPort, cfg.MaxPort, relayIdentity.Name, relayAuthority, cfg.PortalURL, int64(cfg.DefaultIdentityBPS))
-	if err != nil {
-		return nil, err
-	}
-	registry.unapprovedPerSource = cfg.UnapprovedLeasesPerSource
-	var relaySet *discovery.RelaySet
-	if cfg.DiscoveryEnabled {
-		cfg.Bootstraps, err = discovery.ResolveRelayURLs(cfg.Bootstraps, true)
-		if err != nil {
-			return nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
-		}
-		cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, cfg.PortalURL)
-		relaySet = discovery.NewRelaySet(cfg.Bootstraps)
-	}
-
-	server := &Server{
-		cfg:       utils.NewSnapshot(cfg, ServerConfig.snapshot),
-		identity:  relayIdentity,
-		authority: relayAuthority,
-		registry:  registry,
-		relaySet:  relaySet,
-	}
-	if cfg.IVNPConfigPath != "" {
-		server.overlay, err = overlay.New(overlay.Config{
-			ConfigPath: cfg.IVNPConfigPath,
-			Authority:  relayAuthority,
-		})
-		if err != nil {
-			return nil, err
-		}
-		registry.overlay = server.overlay
-	}
-	return server, nil
-}
-
 func (s *Server) config() ServerConfig {
 	return s.cfg.Load()
-}
-
-func (s *Server) overlayIssueDescriptors(now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
-	if s.overlay == nil || s.relaySet == nil {
-		return types.RelayDescriptor{}, nil, nil
-	}
-	self, err := s.newSelfDescriptor(now)
-	if err != nil {
-		return types.RelayDescriptor{}, nil, fmt.Errorf("build self overlay descriptor: %w", err)
-	}
-	return self, s.relaySet.Descriptors(types.RelayDescriptor{}), nil
-}
-
-func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.ReverseEndpoint, error) {
-	var self types.RelayDescriptor
-	var descriptors []types.RelayDescriptor
-	if input.useOverlay {
-		var err error
-		self, descriptors, err = s.overlayIssueDescriptors(time.Now().UTC())
-		if err != nil {
-			log.Warn().Err(err).Str("lease", input.leaseIdentity.Key()).Msg("relay overlay descriptors unavailable; using direct reverse transport")
-			input.useOverlay = false
-		}
-	}
-	endpoint, err := s.registry.issueReverseEndpoint(input, self, descriptors)
-	if err != nil {
-		if errors.Is(err, errUnauthorized) || errors.Is(err, errLeaseNotFound) {
-			return types.ReverseEndpoint{}, err
-		}
-		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
-	}
-	return endpoint, nil
 }
 
 // SetTransportPolicy applies relay-owned transport enablement and capacity
@@ -448,6 +346,205 @@ func (s *Server) supportsTCP() bool {
 	return enabled
 }
 
+func (s *Server) Wait() error {
+	if s.group == nil {
+		return nil
+	}
+	err := s.group.Wait()
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) closeSNIServer() error {
+	if s.sniListener == nil {
+		return nil
+	}
+	if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) shutdownRedirectServer(ctx context.Context) error {
+	if s.redirectServer == nil {
+		return nil
+	}
+	err := s.redirectServer.Shutdown(ctx)
+	if err != nil {
+		_ = s.redirectServer.Close()
+	}
+	_ = s.redirectListener.Close()
+	return err
+}
+
+func (s *Server) stopShutdownACME(ctx context.Context) error {
+	if s.acmeManager == nil {
+		return nil
+	}
+	if err := s.acmeManager.Stop(ctx); err != nil {
+		return fmt.Errorf("stop acme manager: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	var shutdownErr error
+	s.shutdownOnce.Do(func() {
+		records := s.haltRelayTransports(ctx)
+		s.deleteHaltedLeaseDNS(ctx, records)
+		if err := s.closeRelayServers(ctx); err != nil {
+			shutdownErr = err
+		}
+		if err := s.stopShutdownACME(ctx); err != nil && shutdownErr == nil {
+			shutdownErr = err
+		}
+	})
+	return shutdownErr
+}
+
+func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
+	cfg := s.config()
+	acmeCfg := cfg.ACME
+	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
+		return nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
+	}
+	acmeCfg.BaseDomain = s.identity.Name
+	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
+		acmeCfg.ENSGaslessAddress = s.identity.Address
+	}
+
+	manager, err := acme.NewManager(acmeCfg)
+	if err != nil {
+		return nil, fmt.Errorf("create acme manager: %w", err)
+	}
+
+	if err := manager.EnsureTLSMaterial(ctx); err != nil {
+		_ = manager.Stop(ctx)
+		return nil, fmt.Errorf("ensure relay certificate: %w", err)
+	}
+	s.acmeManager = manager
+
+	apiTLS := &tls.Config{
+		GetCertificate: manager.GetCertificate,
+		MinVersion:     tls.VersionTLS12,
+		NextProtos:     []string{"http/1.1"},
+	}
+	return apiTLS, nil
+}
+
+func resolveRelaySet(cfg ServerConfig) (ServerConfig, *discovery.RelaySet, error) {
+	if !cfg.DiscoveryEnabled {
+		return cfg, nil, nil
+	}
+	bootstraps, err := discovery.ResolveRelayURLs(cfg.Bootstraps, true)
+	if err != nil {
+		return ServerConfig{}, nil, fmt.Errorf("resolve discovery bootstraps: %w", err)
+	}
+	cfg.Bootstraps = bootstraps
+	cfg.Bootstraps = removeRelayURL(cfg.Bootstraps, cfg.PortalURL)
+	return cfg, discovery.NewRelaySet(cfg.Bootstraps), nil
+}
+
+func attachOverlay(server *Server, cfg ServerConfig, relayAuthority identity.Authority) error {
+	if cfg.IVNPConfigPath == "" {
+		return nil
+	}
+	overlayRuntime, err := overlay.New(overlay.Config{
+		ConfigPath: cfg.IVNPConfigPath,
+		Authority:  relayAuthority,
+	})
+	if err != nil {
+		return err
+	}
+	server.overlay = overlayRuntime
+	server.registry.overlay = overlayRuntime
+	return nil
+}
+
+func completeNewServer(cfg ServerConfig, registry *leaseRegistry, relayIdentity identity.RelayIdentity, relayAuthority identity.Authority) (*Server, error) {
+	resolved, relaySet, err := resolveRelaySet(cfg)
+	if err != nil {
+		return nil, err
+	}
+	server := &Server{
+		cfg:       utils.NewSnapshot(resolved, ServerConfig.snapshot),
+		identity:  relayIdentity,
+		authority: relayAuthority,
+		registry:  registry,
+		relaySet:  relaySet,
+	}
+	if err := attachOverlay(server, resolved, relayAuthority); err != nil {
+		return nil, err
+	}
+	return server, nil
+}
+
+func NewServer(cfg ServerConfig) (*Server, error) {
+	validated, err := ValidateServerConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	identityPath := filepath.Join(validated.StateDir, types.RelayIdentityFilename)
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(validated.PortalURL))
+	if err != nil {
+		return nil, fmt.Errorf("load relay identity: %w", err)
+	}
+	relayAuthority := identity.NewLocalAuthority(relayIdentity.Identity)
+	registry, err := newLeaseRegistry(validated.MinPort, validated.MaxPort, relayIdentity.Name, relayAuthority, validated.PortalURL, int64(validated.DefaultIdentityBPS))
+	if err != nil {
+		return nil, err
+	}
+	registry.unapprovedPerSource = validated.UnapprovedLeasesPerSource
+	return completeNewServer(validated, registry, relayIdentity, relayAuthority)
+}
+
+func (s *Server) overlayIssueDescriptors(now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
+	if s.overlay == nil || s.relaySet == nil {
+		return types.RelayDescriptor{}, nil, nil
+	}
+	self, err := s.newSelfDescriptor(now)
+	if err != nil {
+		return types.RelayDescriptor{}, nil, fmt.Errorf("build self overlay descriptor: %w", err)
+	}
+	return self, s.relaySet.Descriptors(types.RelayDescriptor{}), nil
+}
+
+func (s *Server) issueReverseEndpoint(input reverseEndpointInput) (types.ReverseEndpoint, error) {
+	var self types.RelayDescriptor
+	var descriptors []types.RelayDescriptor
+	if input.useOverlay {
+		var err error
+		self, descriptors, err = s.overlayIssueDescriptors(time.Now().UTC())
+		if err != nil {
+			log.Warn().Err(err).Str("lease", input.leaseIdentity.Key()).Msg("relay overlay descriptors unavailable; using direct reverse transport")
+			input.useOverlay = false
+		}
+	}
+	endpoint, err := s.registry.issueReverseEndpoint(input, self, descriptors)
+	if err != nil {
+		if errors.Is(err, errUnauthorized) || errors.Is(err, errLeaseNotFound) {
+			return types.ReverseEndpoint{}, err
+		}
+		return types.ReverseEndpoint{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
+	}
+	return endpoint, nil
+}
+
+const (
+	defaultClaimTimeout          = 10 * time.Second
+	replicaWaitSlice             = 250 * time.Millisecond
+	defaultClientHelloWait       = 2 * time.Second
+	defaultControlBodyLimit      = 4 << 20
+	reverseOfferAdmissionWorkers = 16
+	quicBackhaulPendingLimit     = 64
+	quicBackhaulAuthTimeout      = 3 * time.Second
+	quicBackhaulPerSourceLimit   = 4
+	publicIngressLimit           = 1024
+	publicInspectionLimit        = 128
+)
+
 // Serve runs the complete relay lifecycle around the composed handler: the
 // relay's route table (see the relay package), admin API, and application
 // routes all arrive as one handler.
@@ -465,6 +562,19 @@ func (s *Server) Start(ctx context.Context, handler http.Handler) error {
 	return s.start(ctx, handler)
 }
 
+func (s *Server) installStartBundle(serverCtx context.Context, bundle serverStartBundle, cancel context.CancelFunc) {
+	s.apiHandoff = &handoffListener{addr: bundle.sniListener.Addr(), conns: make(chan net.Conn), done: make(chan struct{})}
+	s.sniListener = bundle.sniListener
+	s.apiServer = bundle.apiServer
+	s.apiTLSClose = bundle.apiCloser
+	s.redirectListener = bundle.redirectListener
+	s.redirectServer = bundle.redirectServer
+	s.ingressCtx = serverCtx
+	s.cancel = cancel
+	s.group = bundle.group
+	s.quicBackhaul = bundle.quicBackhaul
+}
+
 func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if s.group != nil {
 		return errServerAlreadyStarted
@@ -479,100 +589,264 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 	if err != nil {
 		return err
 	}
-
 	serverCtx, cancel := context.WithCancel(ctx)
 	started := false
-	var sniListener net.Listener
-	var apiServer *http.Server
-	var apiCloser io.Closer
-	var redirectListener net.Listener
-	var redirectServer *http.Server
-	var quicBackhaul *quic.Listener
+	var bundle serverStartBundle
 	defer func() {
 		if started {
 			return
 		}
 		cancel()
-		if s.overlay != nil {
-			s.overlay.Close()
-		}
-		_ = s.acmeManager.Stop(ctx)
-		if apiServer != nil {
-			_ = apiServer.Close()
-		}
-		if redirectServer != nil {
-			_ = redirectServer.Close()
-		}
-		if redirectListener != nil {
-			_ = redirectListener.Close()
-		}
-		if quicBackhaul != nil {
-			_ = quicBackhaul.Close()
-		}
-		if apiCloser != nil {
-			_ = apiCloser.Close()
-		}
-		if sniListener != nil {
-			_ = sniListener.Close()
-		}
+		s.abortStartBundle(ctx, bundle)
 	}()
-	var listenConfig net.ListenConfig
-
-	sniListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.SNIListenAddr)
-	if err != nil {
-		return fmt.Errorf("listen sni: %w", err)
-	}
-
-	group, groupCtx := errgroup.WithContext(serverCtx)
-	apiServer, apiCloser, err = s.newAPIServer(apiHandler, apiTLS)
+	collected, err := s.collectStartBundle(serverCtx, cfg, apiHandler, apiTLS)
+	bundle = collected
 	if err != nil {
 		return err
 	}
-	if cfg.HTTPRedirect.Enabled {
-		redirectListener, err = listenConfig.Listen(serverCtx, "tcp", cfg.HTTPRedirect.Addr)
-		if err != nil {
-			return fmt.Errorf("listen http redirect: %w", err)
-		}
-		redirectServer = &http.Server{
-			DisableGeneralOptionsHandler: true,
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if cfg.HTTPRedirect.HSTS {
-					w.Header().Set("Strict-Transport-Security", "max-age=31536000")
-				}
-				http.Redirect(w, r, cfg.PortalURL, http.StatusMovedPermanently)
-			}),
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       10 * time.Second,
-			WriteTimeout:      10 * time.Second,
-			IdleTimeout:       30 * time.Second,
-		}
-	}
-
-	if udpEnabled, _ := s.registry.udpPolicy(); udpEnabled {
-		quicBackhaul, err = s.newQUICBackhaulListener(apiTLS)
-		if err != nil {
-			return fmt.Errorf("listen quic backhaul: %w", err)
-		}
-	}
-	if s.overlay != nil {
-		if err := s.overlay.Start(serverCtx); err != nil {
-			return fmt.Errorf("start relay overlay: %w", err)
-		}
-	}
-
-	s.apiHandoff = &handoffListener{addr: sniListener.Addr(), conns: make(chan net.Conn), done: make(chan struct{})}
-	s.sniListener = sniListener
-	s.apiServer = apiServer
-	s.apiTLSClose = apiCloser
-	s.redirectListener = redirectListener
-	s.redirectServer = redirectServer
-	s.ingressCtx = serverCtx
-	s.cancel = cancel
-	s.group = group
-	s.quicBackhaul = quicBackhaul
+	s.installStartBundle(serverCtx, bundle, cancel)
 	started = true
+	s.serveStartListeners(bundle)
+	s.serveStartBackground(serverCtx, bundle, cfg)
+	s.emitStartLog(cfg)
+	return nil
+}
 
-	group.Go(func() error {
+func (s *Server) runPublicIngress(ctx context.Context) error {
+	for {
+		conn, err := s.sniListener.Accept()
+		switch {
+		case err == nil:
+			if !s.admitIngress(conn, true) {
+				_ = conn.Close()
+				continue
+			}
+			go s.servePublicIngressConn(ctx, conn)
+		case errors.Is(err, net.ErrClosed):
+			return nil
+		default:
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return fmt.Errorf("accept sni connection: %w", err)
+		}
+	}
+}
+
+func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.CloseWithError(1, "backhaul authentication canceled")
+		close(closed)
+	})
+	authenticated := false
+	defer func() {
+		if !authenticated && !stop() {
+			<-closed
+		}
+	}()
+	lease, ok := s.admitBackhaulLease(ctx, conn)
+	if !ok {
+		return
+	}
+	if !stop() {
+		<-closed
+		return
+	}
+	authenticated = true
+	sourceAddr := netip.Addr{}
+	if remote := conn.RemoteAddr(); remote != nil {
+		if addrPort, err := netip.ParseAddrPort(remote.String()); err == nil {
+			sourceAddr = addrPort.Addr().Unmap()
+		}
+	}
+	s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
+	log.Info().
+		Str("component", "quic-backhaul-listener").
+		Str("address", lease.Address).
+		Str("lease_name", lease.Name).
+		Str("remote_addr", conn.RemoteAddr().String()).
+		Msg("quic backhaul connected")
+}
+
+func (s *Server) haltRelayTransports(ctx context.Context) []*leaseRecord {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.closeIngress()
+	if s.overlay != nil {
+		s.overlay.Close()
+	}
+	if s.quicBackhaul != nil {
+		_ = s.quicBackhaul.Close()
+	}
+	if s.quicBackhaulDone != nil {
+		<-s.quicBackhaulDone
+	}
+	records := s.registry.CloseAll()
+	s.ingressWorkers.Wait()
+	return records
+}
+
+func (s *Server) deleteHaltedLeaseDNS(ctx context.Context, records []*leaseRecord) {
+	for _, record := range records {
+		s.deleteLeaseDNS(ctx, record)
+	}
+}
+
+func (s *Server) closeRelayServers(ctx context.Context) error {
+	var firstErr error
+	if s.apiHandoff != nil {
+		_ = s.apiHandoff.Close()
+	}
+	if err := s.closeSNIServer(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if s.apiServer != nil {
+		if err := s.apiServer.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if err := s.shutdownRedirectServer(ctx); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if s.apiTLSClose != nil {
+		_ = s.apiTLSClose.Close()
+	}
+	return firstErr
+}
+
+type serverStartBundle struct {
+	sniListener      net.Listener
+	apiServer        *http.Server
+	apiCloser        io.Closer
+	redirectListener net.Listener
+	redirectServer   *http.Server
+	quicBackhaul     *quic.Listener
+	group            *errgroup.Group
+	groupCtx         context.Context
+}
+
+func (s *Server) buildRedirectServerStart(serverCtx context.Context, cfg ServerConfig) (net.Listener, *http.Server, error) {
+	if !cfg.HTTPRedirect.Enabled {
+		return nil, nil, nil
+	}
+	var listenConfig net.ListenConfig
+	redirectListener, err := listenConfig.Listen(serverCtx, "tcp", cfg.HTTPRedirect.Addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen http redirect: %w", err)
+	}
+	redirectServer := &http.Server{
+		DisableGeneralOptionsHandler: true,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if cfg.HTTPRedirect.HSTS {
+				w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+			}
+			http.Redirect(w, r, cfg.PortalURL, http.StatusMovedPermanently)
+		}),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+	return redirectListener, redirectServer, nil
+}
+
+func (s *Server) buildQUICBackhaulStart(apiTLS *tls.Config) (*quic.Listener, error) {
+	udpEnabled, _ := s.registry.udpPolicy()
+	if !udpEnabled {
+		return nil, nil
+	}
+	quicBackhaul, err := s.newQUICBackhaulListener(apiTLS)
+	if err != nil {
+		return nil, fmt.Errorf("listen quic backhaul: %w", err)
+	}
+	return quicBackhaul, nil
+}
+
+func (s *Server) enterOverlayStart(serverCtx context.Context) error {
+	if s.overlay == nil {
+		return nil
+	}
+	if err := s.overlay.Start(serverCtx); err != nil {
+		return fmt.Errorf("start relay overlay: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) fillBundleFrontListeners(serverCtx context.Context, cfg ServerConfig, apiHandler http.Handler, apiTLS *tls.Config, bundle *serverStartBundle) error {
+	var listenConfig net.ListenConfig
+	sniListener, err := listenConfig.Listen(serverCtx, "tcp", cfg.SNIListenAddr)
+	if err != nil {
+		return fmt.Errorf("listen sni: %w", err)
+	}
+	bundle.sniListener = sniListener
+	bundle.group, bundle.groupCtx = errgroup.WithContext(serverCtx)
+	apiServer, apiCloser, err := s.newAPIServer(apiHandler, apiTLS)
+	if err != nil {
+		return err
+	}
+	bundle.apiServer = apiServer
+	bundle.apiCloser = apiCloser
+	return nil
+}
+
+func (s *Server) fillBundleBackListeners(serverCtx context.Context, cfg ServerConfig, apiTLS *tls.Config, bundle *serverStartBundle) error {
+	redirectListener, redirectServer, err := s.buildRedirectServerStart(serverCtx, cfg)
+	if err != nil {
+		return err
+	}
+	bundle.redirectListener = redirectListener
+	bundle.redirectServer = redirectServer
+	quicBackhaul, err := s.buildQUICBackhaulStart(apiTLS)
+	if err != nil {
+		return err
+	}
+	bundle.quicBackhaul = quicBackhaul
+	if err := s.enterOverlayStart(serverCtx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) collectStartBundle(serverCtx context.Context, cfg ServerConfig, apiHandler http.Handler, apiTLS *tls.Config) (serverStartBundle, error) {
+	var bundle serverStartBundle
+	if err := s.fillBundleFrontListeners(serverCtx, cfg, apiHandler, apiTLS, &bundle); err != nil {
+		return bundle, err
+	}
+	if err := s.fillBundleBackListeners(serverCtx, cfg, apiTLS, &bundle); err != nil {
+		return bundle, err
+	}
+	return bundle, nil
+}
+
+func (s *Server) abortStartBundle(ctx context.Context, bundle serverStartBundle) {
+	if s.overlay != nil {
+		s.overlay.Close()
+	}
+	_ = s.acmeManager.Stop(ctx)
+	if bundle.apiServer != nil {
+		_ = bundle.apiServer.Close()
+	}
+	if bundle.redirectServer != nil {
+		_ = bundle.redirectServer.Close()
+	}
+	if bundle.redirectListener != nil {
+		_ = bundle.redirectListener.Close()
+	}
+	if bundle.quicBackhaul != nil {
+		_ = bundle.quicBackhaul.Close()
+	}
+	if bundle.apiCloser != nil {
+		_ = bundle.apiCloser.Close()
+	}
+	if bundle.sniListener != nil {
+		_ = bundle.sniListener.Close()
+	}
+}
+
+func (s *Server) serveStartListeners(bundle serverStartBundle) {
+	bundle.group.Go(func() error {
 		err := s.apiServer.Serve(tls.NewListener(s.apiHandoff, s.apiServer.TLSConfig))
 		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 			return nil
@@ -580,7 +854,7 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		return err
 	})
 	if s.redirectServer != nil {
-		group.Go(func() error {
+		bundle.group.Go(func() error {
 			err := s.redirectServer.Serve(s.redirectListener)
 			if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -588,50 +862,59 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 			return err
 		})
 	}
-	group.Go(func() error { return s.runPublicIngress(groupCtx) })
+	bundle.group.Go(func() error { return s.runPublicIngress(bundle.groupCtx) })
 	if s.quicBackhaul != nil {
 		s.quicBackhaulDone = make(chan struct{})
-		group.Go(func() error {
+		bundle.group.Go(func() error {
 			defer close(s.quicBackhaulDone)
-			return s.runQUICBackhaulListener(groupCtx)
+			return s.runQUICBackhaulListener(bundle.groupCtx)
 		})
 	}
-	group.Go(func() error { return s.runRegistryJanitor(groupCtx, 5*time.Second) })
-	if cacheManager != nil {
-		group.Go(func() error { return cacheManager.Run(groupCtx) })
+}
+
+func (s *Server) serveStartBackground(serverCtx context.Context, bundle serverStartBundle, cfg ServerConfig) {
+	bundle.group.Go(func() error { return s.runRegistryJanitor(bundle.groupCtx, 5*time.Second) })
+	if s.registry.cache != nil {
+		bundle.group.Go(func() error { return s.registry.cache.Run(bundle.groupCtx) })
 	}
 	if cfg.DiscoveryEnabled {
-		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
+		bundle.group.Go(func() error { return s.runRelayDiscoveryLoop(bundle.groupCtx) })
 	}
 	if s.overlay != nil {
-		group.Go(func() error {
-			if err := s.overlay.Run(groupCtx); err != nil && groupCtx.Err() == nil {
-				log.Error().Err(err).Msg("relay overlay stopped; direct reverse transport remains available")
-				s.overlay.Close()
-			}
-			return nil
-		})
-		for range reverseOfferAdmissionWorkers {
-			group.Go(func() error {
-				for {
-					select {
-					case <-groupCtx.Done():
-						return nil
-					case offer := <-s.overlay.ReverseOffers():
-						s.admitReverseOffer(offer)
-					}
-				}
-			})
-		}
+		s.serveStartOverlay(bundle)
 	}
 	s.acmeManager.Start(serverCtx)
-	group.Go(func() error {
-		<-groupCtx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	bundle.group.Go(func() error {
+		<-bundle.groupCtx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
 		return s.Shutdown(shutdownCtx)
 	})
+}
 
+func (s *Server) serveStartOverlay(bundle serverStartBundle) {
+	bundle.group.Go(func() error {
+		if err := s.overlay.Run(bundle.groupCtx); err != nil && bundle.groupCtx.Err() == nil {
+			log.Error().Err(err).Msg("relay overlay stopped; direct reverse transport remains available")
+			s.overlay.Close()
+		}
+		return nil
+	})
+	for range reverseOfferAdmissionWorkers {
+		bundle.group.Go(func() error {
+			for {
+				select {
+				case <-bundle.groupCtx.Done():
+					return nil
+				case offer := <-s.overlay.ReverseOffers():
+					s.admitReverseOffer(offer)
+				}
+			}
+		})
+	}
+}
+
+func (s *Server) emitStartLog(cfg ServerConfig) {
 	logEvent := log.Info().
 		Str("sni_addr", s.sniListener.Addr().String()).
 		Str("root_host", s.identity.Name).
@@ -648,108 +931,8 @@ func (s *Server) start(ctx context.Context, apiHandler http.Handler) error {
 		logEvent = logEvent.Str("internal_quic_backhaul_addr", s.quicBackhaul.Addr().String())
 	}
 	logEvent.Msg("relay server started")
-
-	return nil
 }
 
-func (s *Server) Wait() error {
-	if s.group == nil {
-		return nil
-	}
-	err := s.group.Wait()
-	if errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return err
-}
-
-func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
-	lease, err := s.registry.admitLeaseIdentity(offer.ServiceIdentity, offer.LeaseID, time.Now().UTC(), false)
-	if err != nil {
-		switch {
-		case errors.Is(err, errLeaseRejected):
-			offer.RejectPending()
-		case errors.Is(err, errLeaseDenied):
-			offer.RejectDenied()
-		default:
-			offer.RejectUnavailable()
-		}
-		offer.Close()
-		return
-	}
-
-	reservation, err := lease.reverse.ReserveOffer(offer.Connection())
-	if err != nil {
-		offer.RejectCapacity()
-		offer.Close()
-		return
-	}
-	defer reservation.Cancel()
-	if err := offer.Accept(); err != nil {
-		offer.Close()
-		return
-	}
-	_ = offer.Connection().SetDeadline(time.Time{})
-	if err := reservation.Commit(); err != nil {
-		offer.Close()
-		return
-	}
-}
-
-func (s *Server) serveTCP(record *leaseRecord) {
-	for {
-		inbound, err := record.tcpListener.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
-		if !s.admitIngress(inbound, false) {
-			_ = inbound.Close()
-			continue
-		}
-		bridge, err := s.registry.admitBridge(s.ingressCtx, record, inbound)
-		if err != nil {
-			_ = inbound.Close()
-			s.releaseIngress(inbound, false)
-			continue
-		}
-		go func() {
-			defer s.releaseIngress(inbound, false)
-			defer record.releaseBridge(bridge)
-			s.bridgeTCPConn(record, bridge, inbound)
-		}()
-	}
-}
-
-func (s *Server) bridgeTCPConn(record *leaseRecord, bridge *leaseBridge, inbound net.Conn) {
-	ctx, cancel := context.WithTimeout(bridge.ctx, defaultClaimTimeout)
-	defer cancel()
-	for {
-		reverse, err := record.reverse.Acquire(ctx)
-		if err != nil {
-			return
-		}
-		if err := s.registry.activateBridge(record, bridge, reverse, inbound); err != nil {
-			_ = reverse.Close()
-			return
-		}
-		if err := transport.WriteRawStart(reverse); err != nil {
-			_ = reverse.Close()
-			continue
-		}
-		s.proxy.bridge(bridge.ctx, inbound, reverse, record.ServiceKey(), s.registry.bps)
-		return
-	}
-}
-
-// SetServiceIdentityAccess applies the relay's current access decision for one
-// identity to the portal data path. The relay owns the decision; this only
-// carries the result across the boundary, including revoking cached content.
-// False means a newer relay snapshot has already reached Portal: the caller
-// must reload the committed snapshot before retrying. Stale values never apply.
 func (s *Server) SetServiceIdentityAccess(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64) bool {
 	if s == nil || s.registry == nil {
 		return true
@@ -863,94 +1046,180 @@ func (s *Server) RelayIdentity() identity.RelayIdentity {
 	return s.identity
 }
 
-func (s *Server) Shutdown(ctx context.Context) error {
-	var shutdownErr error
-	s.shutdownOnce.Do(func() {
-		if s.cancel != nil {
-			s.cancel()
-		}
-		s.closeIngress()
-		if s.overlay != nil {
-			s.overlay.Close()
-		}
-
-		if s.quicBackhaul != nil {
-			_ = s.quicBackhaul.Close()
-		}
-		if s.quicBackhaulDone != nil {
-			<-s.quicBackhaulDone
-		}
-
-		records := s.registry.CloseAll()
-		s.ingressWorkers.Wait()
-		for _, record := range records {
-			s.deleteLeaseDNS(ctx, record)
-		}
-
-		if s.apiHandoff != nil {
-			_ = s.apiHandoff.Close()
-		}
-		if s.sniListener != nil {
-			if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				shutdownErr = err
-			}
-		}
-		if s.apiServer != nil {
-			if err := s.apiServer.Shutdown(ctx); err != nil && shutdownErr == nil {
-				shutdownErr = err
-			}
-		}
-		if s.redirectServer != nil {
-			if err := s.redirectServer.Shutdown(ctx); err != nil {
-				_ = s.redirectServer.Close()
-				if shutdownErr == nil {
-					shutdownErr = err
-				}
-			}
-			_ = s.redirectListener.Close()
-		}
-		if s.apiTLSClose != nil {
-			_ = s.apiTLSClose.Close()
-		}
-		if s.acmeManager != nil {
-			if err := s.acmeManager.Stop(ctx); err != nil && shutdownErr == nil {
-				shutdownErr = fmt.Errorf("stop acme manager: %w", err)
-			}
-		}
-	})
-	return shutdownErr
-}
-
-func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
-	cfg := s.config()
-	acmeCfg := cfg.ACME
-	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
-		return nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
-	}
-	acmeCfg.BaseDomain = s.identity.Name
-	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
-		acmeCfg.ENSGaslessAddress = s.identity.Address
-	}
-
-	manager, err := acme.NewManager(acmeCfg)
+func (s *Server) admitBackhaulLease(ctx context.Context, conn *quic.Conn) (*leaseRecord, bool) {
+	control, err := transport.AcceptQUICBackhaulControl(ctx, conn)
 	if err != nil {
-		return nil, fmt.Errorf("create acme manager: %w", err)
+		_ = conn.CloseWithError(1, "control read failed")
+		return nil, false
 	}
-
-	if err := manager.EnsureTLSMaterial(ctx); err != nil {
-		_ = manager.Stop(ctx)
-		return nil, fmt.Errorf("ensure relay certificate: %w", err)
+	lease, err := s.registry.admitLeaseByToken(control.AccessToken, true)
+	if err != nil {
+		code, reason := types.APIErrorCodeInvalidRequest, "invalid control message"
+		switch {
+		case errors.Is(err, errLeaseNotFound):
+			code, reason = types.APIErrorCodeLeaseNotFound, "lease not found"
+		case errors.Is(err, errLeaseRejected), errors.Is(err, errLeaseDenied):
+			code, reason = types.APIErrorCodeLeaseRejected, "lease rejected"
+		case errors.Is(err, errUnauthorized):
+			code, reason = types.APIErrorCodeUnauthorized, "unauthorized"
+		case errors.Is(err, errTransportMismatch):
+			code, reason = types.APIErrorCodeTransportMismatch, "transport mismatch"
+		}
+		_ = control.Reject(code, reason)
+		return nil, false
 	}
-	s.acmeManager = manager
-
-	apiTLS := &tls.Config{
-		GetCertificate: manager.GetCertificate,
-		MinVersion:     tls.VersionTLS12,
-		NextProtos:     []string{"http/1.1"},
+	if err := lease.datagram.BindBackhaul(conn); err != nil {
+		_ = control.Reject("broker_closed", "broker closed")
+		return nil, false
 	}
-	return apiTLS, nil
+	if err := control.Accept(); err != nil {
+		_ = conn.CloseWithError(1, "control response failed")
+		return nil, false
+	}
+	return lease, true
 }
 
+type backhaulPendingSources struct {
+	mu     sync.Mutex
+	counts map[netip.Prefix]int
+}
+
+func newBackhaulPendingSources() *backhaulPendingSources {
+	return &backhaulPendingSources{counts: make(map[netip.Prefix]int)}
+}
+
+func (p *backhaulPendingSources) acquire(remote net.Addr) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	prefix, ok := backhaulSourcePrefix(remote)
+	if !ok {
+		return true
+	}
+	if p.counts[prefix] >= quicBackhaulPerSourceLimit {
+		return false
+	}
+	p.counts[prefix]++
+	return true
+}
+
+func (p *backhaulPendingSources) release(remote net.Addr) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	prefix, ok := backhaulSourcePrefix(remote)
+	if !ok {
+		return
+	}
+	if p.counts[prefix]--; p.counts[prefix] <= 0 {
+		delete(p.counts, prefix)
+	}
+}
+
+func backhaulSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
+	addrPort, err := netip.ParseAddrPort(remote.String())
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	addr := addrPort.Addr().Unmap()
+	if addr.Is4() {
+		return netip.PrefixFrom(addr, addr.BitLen()), true
+	}
+	return netip.PrefixFrom(addr, 64).Masked(), true
+}
+
+func (s *Server) rejectAdmitReverseOffer(offer overlay.ReverseOffer, admitErr error) {
+	switch {
+	case errors.Is(admitErr, errLeaseRejected):
+		offer.RejectPending()
+	case errors.Is(admitErr, errLeaseDenied):
+		offer.RejectDenied()
+	default:
+		offer.RejectUnavailable()
+	}
+}
+
+func (s *Server) completeAdmitReverseOffer(lease *leaseRecord, offer overlay.ReverseOffer) {
+	reservation, err := lease.reverse.ReserveOffer(offer.Connection())
+	if err != nil {
+		offer.RejectCapacity()
+		offer.Close()
+		return
+	}
+	defer reservation.Cancel()
+	if err := offer.Accept(); err != nil {
+		offer.Close()
+		return
+	}
+	_ = offer.Connection().SetDeadline(time.Time{})
+	if err := reservation.Commit(); err != nil {
+		offer.Close()
+		return
+	}
+}
+
+func (s *Server) admitReverseOffer(offer overlay.ReverseOffer) {
+	lease, err := s.registry.admitLeaseIdentity(offer.ServiceIdentity, offer.LeaseID, time.Now().UTC(), false)
+	if err != nil {
+		s.rejectAdmitReverseOffer(offer, err)
+		offer.Close()
+		return
+	}
+	s.completeAdmitReverseOffer(lease, offer)
+}
+
+func (s *Server) serveTCP(record *leaseRecord) {
+	for {
+		inbound, err := record.tcpListener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if !s.admitIngress(inbound, false) {
+			_ = inbound.Close()
+			continue
+		}
+		bridge, err := s.registry.admitBridge(s.ingressCtx, record, inbound)
+		if err != nil {
+			_ = inbound.Close()
+			s.releaseIngress(inbound, false)
+			continue
+		}
+		go func() {
+			defer s.releaseIngress(inbound, false)
+			defer record.releaseBridge(bridge)
+			s.bridgeTCPConn(record, bridge, inbound)
+		}()
+	}
+}
+
+func (s *Server) bridgeTCPConn(record *leaseRecord, bridge *leaseBridge, inbound net.Conn) {
+	ctx, cancel := context.WithTimeout(bridge.ctx, defaultClaimTimeout)
+	defer cancel()
+	for {
+		reverse, err := record.reverse.Acquire(ctx)
+		if err != nil {
+			return
+		}
+		if err := s.registry.activateBridge(record, bridge, reverse, inbound); err != nil {
+			_ = reverse.Close()
+			return
+		}
+		if err := transport.WriteRawStart(reverse); err != nil {
+			_ = reverse.Close()
+			continue
+		}
+		s.proxy.bridge(bridge.ctx, inbound, reverse, record.ServiceKey(), s.registry.bps)
+		return
+	}
+}
+
+// SetServiceIdentityAccess applies the relay's current access decision for one
+// identity to the portal data path. The relay owns the decision; this only
+// carries the result across the boundary, including revoking cached content.
+// False means a newer relay snapshot has already reached Portal: the caller
+// must reload the committed snapshot before retrying. Stale values never apply.
 func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 	s.ingressMu.Lock()
 	defer s.ingressMu.Unlock()
@@ -1013,72 +1282,6 @@ func (s *Server) closeIngress() {
 	}
 	for _, conn := range conns {
 		_ = conn.Close()
-	}
-}
-
-func (s *Server) runPublicIngress(ctx context.Context) error {
-	for {
-		conn, err := s.sniListener.Accept()
-		switch {
-		case err == nil:
-			if !s.admitIngress(conn, true) {
-				_ = conn.Close()
-				continue
-			}
-			go func(conn net.Conn) {
-				inspecting := true
-				defer func() { s.releaseIngress(conn, inspecting) }()
-				clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
-				if err != nil {
-					if wrappedConn != nil {
-						_ = wrappedConn.Close()
-					} else {
-						_ = conn.Close()
-					}
-					return
-				}
-				helloSpan := clientHello.HandshakeMessage
-
-				serverName := utils.NormalizeHostname(clientHello.ServerName)
-				if serverName == "" || serverName == s.identity.Name || s.registry.cache.Has(serverName) {
-					select {
-					case s.apiHandoff.conns <- wrappedConn:
-					case <-s.apiHandoff.done:
-						_ = wrappedConn.Close()
-					case <-ctx.Done():
-						_ = wrappedConn.Close()
-					}
-					return
-				}
-
-				if !s.promoteIngress() {
-					_ = wrappedConn.Close()
-					return
-				}
-				inspecting = false
-				record, ok := s.registry.Lookup(serverName)
-				if !ok {
-					log.Warn().
-						Str("server_name", serverName).
-						Str("remote_addr", wrappedConn.RemoteAddr().String()).
-						Msg("unknown public ingress hostname")
-					_ = wrappedConn.Close()
-					return
-				}
-				if err := s.bridgeLeaseConn(ctx, wrappedConn, record, helloSpan); err != nil {
-					log.Warn().Err(err).Msg("bridge public ingress")
-					_ = wrappedConn.Close()
-					return
-				}
-			}(conn)
-		case errors.Is(err, net.ErrClosed):
-			return nil
-		default:
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			return fmt.Errorf("accept sni connection: %w", err)
-		}
 	}
 }
 
@@ -1221,6 +1424,7 @@ func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
 	}()
 	pending := make(chan struct{}, quicBackhaulPendingLimit)
 	sources := newBackhaulPendingSources()
+
 	for {
 		conn, err := s.quicBackhaul.Accept(ctx)
 		if err != nil {
@@ -1250,70 +1454,6 @@ func (s *Server) runQUICBackhaulListener(ctx context.Context) error {
 	}
 }
 
-func (s *Server) handleQUICBackhaulConn(ctx context.Context, conn *quic.Conn) {
-	closed := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		_ = conn.CloseWithError(1, "backhaul authentication canceled")
-		close(closed)
-	})
-	authenticated := false
-	defer func() {
-		if !authenticated && !stop() {
-			<-closed
-		}
-	}()
-	control, err := transport.AcceptQUICBackhaulControl(ctx, conn)
-	if err != nil {
-		_ = conn.CloseWithError(1, "control read failed")
-		return
-	}
-
-	lease, err := s.registry.admitLeaseByToken(control.AccessToken, true)
-	if err != nil {
-		code, reason := types.APIErrorCodeInvalidRequest, "invalid control message"
-		switch {
-		case errors.Is(err, errLeaseNotFound):
-			code, reason = types.APIErrorCodeLeaseNotFound, "lease not found"
-		case errors.Is(err, errLeaseRejected), errors.Is(err, errLeaseDenied):
-			code, reason = types.APIErrorCodeLeaseRejected, "lease rejected"
-		case errors.Is(err, errUnauthorized):
-			code, reason = types.APIErrorCodeUnauthorized, "unauthorized"
-		case errors.Is(err, errTransportMismatch):
-			code, reason = types.APIErrorCodeTransportMismatch, "transport mismatch"
-		}
-		_ = control.Reject(code, reason)
-		return
-	}
-
-	if err := lease.datagram.BindBackhaul(conn); err != nil {
-		_ = control.Reject("broker_closed", "broker closed")
-		return
-	}
-
-	if err := control.Accept(); err != nil {
-		_ = conn.CloseWithError(1, "control response failed")
-		return
-	}
-	if !stop() {
-		<-closed
-		return
-	}
-	authenticated = true
-	sourceAddr := netip.Addr{}
-	if remote := conn.RemoteAddr(); remote != nil {
-		if addrPort, err := netip.ParseAddrPort(remote.String()); err == nil {
-			sourceAddr = addrPort.Addr().Unmap()
-		}
-	}
-	s.registry.Touch(lease.ServiceKey(), lease.id, sourceAddr, time.Now())
-	log.Info().
-		Str("component", "quic-backhaul-listener").
-		Str("address", lease.Address).
-		Str("lease_name", lease.Name).
-		Str("remote_addr", conn.RemoteAddr().String()).
-		Msg("quic backhaul connected")
-}
-
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	if s.relaySet == nil {
 		<-ctx.Done()
@@ -1324,16 +1464,12 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		now := time.Now().UTC()
-		self, err := s.newSelfDescriptor(now)
+		self, err := s.newSelfDescriptor(time.Now().UTC())
 		if err != nil {
 			return fmt.Errorf("build relay discovery descriptor: %w", err)
 		}
-		if err := refresher.Refresh(ctx, &self); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
+		if refreshErr := refresher.Refresh(ctx, &self); refreshErr != nil && ctx.Err() == nil {
+			return refreshErr
 		}
 		if ctx.Err() != nil {
 			return nil
@@ -1381,4 +1517,51 @@ func removeRelayURL(inputs []string, target string) []string {
 		}
 	}
 	return filtered
+}
+
+func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
+	inspecting := true
+	defer func() { s.releaseIngress(conn, inspecting) }()
+	clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
+	if err != nil {
+		if wrappedConn != nil {
+			_ = wrappedConn.Close()
+		} else {
+			_ = conn.Close()
+		}
+		return
+	}
+	helloSpan := clientHello.HandshakeMessage
+	serverName := utils.NormalizeHostname(clientHello.ServerName)
+	localTLS := namespace.IsLocalTLSHostname(serverName, s.registry.rootHostname)
+	relayAPI := serverName == "" || serverName == s.identity.Name
+	if !localTLS && (relayAPI || s.registry.cache.Has(serverName)) {
+		select {
+		case s.apiHandoff.conns <- wrappedConn:
+		case <-s.apiHandoff.done:
+			_ = wrappedConn.Close()
+		case <-ctx.Done():
+			_ = wrappedConn.Close()
+		}
+		return
+	}
+	if !s.promoteIngress() {
+		_ = wrappedConn.Close()
+		return
+	}
+	inspecting = false
+	record, ok := s.registry.Lookup(serverName)
+	if !ok {
+		log.Warn().
+			Str("server_name", serverName).
+			Str("remote_addr", wrappedConn.RemoteAddr().String()).
+			Msg("unknown public ingress hostname")
+		_ = wrappedConn.Close()
+		return
+	}
+	if err := s.bridgeLeaseConn(ctx, wrappedConn, record, helloSpan); err != nil {
+		log.Warn().Err(err).Msg("bridge public ingress")
+		_ = wrappedConn.Close()
+		return
+	}
 }

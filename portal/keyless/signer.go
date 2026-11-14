@@ -111,34 +111,42 @@ func (s *Signer) ServeHTTP(w http.ResponseWriter, r *http.Request, leaseID strin
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxSignRequestBody)
 
-	var req signrpc.TranscriptSignRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-
-	leaf, err := presentedLeaf(req.Certificate)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	ctx := context.WithValue(r.Context(), presentedLeafContextKey{}, leaf)
-
-	resp, err := s.service.SignTranscript(ctx, &req)
-	if err != nil {
-		status := http.StatusInternalServerError
-		switch {
-		case errors.Is(err, ksigner.ErrInvalidArgument):
-			status = http.StatusBadRequest
-		case errors.Is(err, ksigner.ErrPermissionDenied):
-			status = http.StatusForbidden
-		}
-		writeJSONError(w, status, err.Error())
+	resp, status, message := s.transcriptResponse(r)
+	if status != 0 {
+		writeJSONError(w, status, message)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Signer) transcriptResponse(r *http.Request) (*signrpc.TranscriptSignResponse, int, string) {
+	var req signrpc.TranscriptSignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, http.StatusBadRequest, "invalid json body"
+	}
+	leaf, err := presentedLeaf(req.Certificate)
+	if err != nil {
+		return nil, http.StatusBadRequest, err.Error()
+	}
+	ctx := context.WithValue(r.Context(), presentedLeafContextKey{}, leaf)
+	resp, err := s.service.SignTranscript(ctx, &req)
+	if err != nil {
+		return nil, transcriptErrorStatus(err), err.Error()
+	}
+	return resp, 0, ""
+}
+
+func transcriptErrorStatus(err error) int {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, ksigner.ErrInvalidArgument):
+		status = http.StatusBadRequest
+	case errors.Is(err, ksigner.ErrPermissionDenied):
+		status = http.StatusForbidden
+	}
+	return status
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
