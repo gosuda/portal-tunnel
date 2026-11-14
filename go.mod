@@ -19,7 +19,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/go-acme/lego/v4 v4.34.0
 	github.com/go-jose/go-jose/v4 v4.1.4
-	github.com/gosuda/keyless_tls v0.0.5
+	github.com/gosuda/keyless_tls v0.0.6
 	github.com/gosuda/x402-facilitator v0.0.6-0.20261114131219-7c523e6478da
 	github.com/hashicorp/yamux v0.1.2
 	github.com/hetznercloud/hcloud-go/v2 v2.40.0
