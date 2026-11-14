@@ -1,6 +1,9 @@
 package localtls
 
 import (
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
@@ -59,5 +62,29 @@ func TestValidateCertificateFiles(t *testing.T) {
 	}
 	if err := ValidateCertificateFiles(certFile, keyFile); err != nil {
 		t.Fatalf("valid pair rejected before hostname assignment: %v", err)
+	}
+}
+
+func TestCanonicalCertificateRejectsSharedSANs(t *testing.T) {
+	const hostname = "blog.0123456789abcdef0123456789abcdef01234567.example"
+	for _, names := range [][]string{{hostname, "api.0123456789abcdef0123456789abcdef01234567.example"}, {"*.0123456789abcdef0123456789abcdef01234567.example"}} {
+		key, der, _ := mustSelfSignedCert(t, hostname, nil)
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert.DNSNames = names
+		der, err = x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = newLocalPin(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), hostname)
+		if !errors.Is(err, ErrLocalCertificate) {
+			t.Fatalf("shared/wildcard SAN accepted: %v", err)
+		}
 	}
 }

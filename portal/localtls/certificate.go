@@ -53,6 +53,14 @@ type certificateRetryError struct {
 	delay time.Duration
 }
 
+func lockCertificate(path string) (*os.File, error) {
+	file, err := utils.TryLockFile(path)
+	if errors.Is(err, utils.ErrFileLocked) {
+		return nil, errAutomaticCertificateBusy
+	}
+	return file, err
+}
+
 func (e *certificateRetryError) Unwrap() error { return e.error }
 
 // The private key is persisted before contacting the CA, and the completed pair

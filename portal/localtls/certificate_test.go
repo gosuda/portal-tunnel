@@ -3,12 +3,17 @@ package localtls
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,7 +230,7 @@ func TestAutomaticWorkerOwnsIssuanceAfterFailure(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		template := *issuer.issue(t, 3).leaf
+		template := *issuer.issueFor(t, 3, tenantHostname).leaf
 		template.IPAddresses = nil
 		der, err := x509.CreateCertificate(rand.Reader, &template, issuer.cert, csr.PublicKey, issuer.key)
 		if err != nil {
@@ -313,4 +318,67 @@ func TestAutomaticRetryAfterIsBounded(t *testing.T) {
 			}
 		})
 	}
+}
+
+type relayCertificate struct {
+	leaf *x509.Certificate
+	tls  tls.Certificate
+}
+
+type testIssuer struct {
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+}
+
+func newTestIssuer(t *testing.T) *testIssuer {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "relay test ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testIssuer{cert: cert, key: key}
+}
+
+func (i *testIssuer) issueFor(t *testing.T, serial int64, dnsName string) relayCertificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: dnsName},
+		DNSNames:     []string{dnsName},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, i.cert, &key.PublicKey, i.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return relayCertificate{leaf: leaf, tls: tls.Certificate{Certificate: [][]byte{der, i.cert.Raw}, PrivateKey: key}}
 }

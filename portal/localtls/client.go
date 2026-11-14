@@ -55,7 +55,8 @@ type Client struct {
 	closed      bool
 	closeOnce   sync.Once
 
-	files      *fileSource
+	certFile   string
+	keyFile    string
 	automatic  *automaticSource
 	hostname   string
 	nextProtos []string
@@ -102,9 +103,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if (config.CertFile == "") != (config.KeyFile == "") {
 		return nil, errTenantCertificatePairRequired
 	}
-	if config.CertFile != "" {
-		client.files = &fileSource{config.CertFile, config.KeyFile, hostname}
-	}
+	client.certFile, client.keyFile = config.CertFile, config.KeyFile
 	if config.CertificateDir == "" && config.CertFile == "" {
 		return nil, errAutomaticCertificateDirectoryRequired
 	}
@@ -330,8 +329,8 @@ func (c *Client) loadPin(ctx context.Context) (*pinnedChain, error) {
 		}
 		return newLocalPin([]byte(bundle.CertificatePEM), []byte(bundle.KeyPEM), c.hostname)
 	}
-	if c.files != nil {
-		return c.files.acquire()
+	if c.certFile != "" {
+		return loadLocalPin(c.certFile, c.keyFile, c.hostname)
 	}
 	return nil, errAutomaticCertificateMissing
 }

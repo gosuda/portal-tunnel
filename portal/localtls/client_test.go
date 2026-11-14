@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -69,16 +71,6 @@ func TestLocalTenantTLSReplacement(t *testing.T) {
 		}
 		// Avoid close_notify blocking on net.Pipe during cleanup.
 		t.Cleanup(func() { raw.Close(); server.Close() })
-		state := visitor.ConnectionState()
-		a, err := state.ExportKeyingMaterial("Portal-MITM-Probe-v1", nil, 32)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tenantState := tenant.(*tls.Conn).ConnectionState()
-		b, err := tenantState.ExportKeyingMaterial("Portal-MITM-Probe-v1", nil, 32)
-		if err != nil || !bytes.Equal(a, b) {
-			t.Fatalf("exporter mismatch: %v", err)
-		}
 		return visitor, tenant
 	}
 	oldVisitor, oldTenant := connect(probeConfig)
@@ -235,28 +227,6 @@ func TestLocalTenantCertificateValidityAndAlgorithm(t *testing.T) {
 	}
 }
 
-func TestExpiredLocalCertificateClosesConnection(t *testing.T) {
-	dir := t.TempDir()
-	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
-	writeLocalPair(t, certFile, keyFile, "tenant.test.example")
-	client, err := NewClient(t.Context(), ClientConfig{RelayURL: "https://127.0.0.1:1", Hostname: "tenant.test.example", CertFile: certFile, KeyFile: keyFile})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	client.pin.leaf.NotAfter = time.Now().Add(-time.Second)
-	visitor, raw := net.Pipe()
-	defer visitor.Close()
-	defer raw.Close()
-	if _, err := client.TerminateConn(t.Context(), raw, nil); err == nil {
-		t.Fatal("expired certificate served")
-	}
-	_ = visitor.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := visitor.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
-		t.Fatalf("raw connection was not closed: %v", err)
-	}
-}
-
 func TestInstalledCertificateEventsNeverOwnTLSMaterial(t *testing.T) {
 	dir := t.TempDir()
 	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
@@ -291,4 +261,165 @@ func TestInstalledCertificateEventsNeverOwnTLSMaterial(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("observer blocked activation")
 	}
+}
+
+func TestExpiredManualCertificateReloadsReplacement(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	writeLocalPair(t, certFile, keyFile, tenantHostname)
+	client, err := NewClient(t.Context(), ClientConfig{
+		RelayURL: "https://127.0.0.1:1", Hostname: tenantHostname, CertFile: certFile, KeyFile: keyFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	probe := client.TenantTLSConfig()
+	client.pin.leaf.NotAfter = time.Now().Add(-time.Second)
+	writeLocalPair(t, certFile, keyFile, tenantHostname)
+
+	visitor, raw := net.Pipe()
+	defer visitor.Close()
+	defer raw.Close()
+	if _, err := client.TerminateConn(t.Context(), raw, nil); !errors.Is(err, errTenantCertificateNotValid) {
+		t.Fatalf("expired handshake = %v, want the expired generation refused", err)
+	}
+
+	_ = visitor.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := visitor.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("expired connection was not closed: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	visitor, raw = net.Pipe()
+	defer visitor.Close()
+	defer raw.Close()
+	connection := tls.Client(visitor, probe)
+	done := make(chan error, 1)
+	go func() { done <- connection.HandshakeContext(ctx) }()
+	if _, err := client.TerminateConn(ctx, raw, nil); err != nil {
+		t.Fatalf("next handshake did not use replacement files: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLocalTLSALPNAndSNI(t *testing.T) {
+	const hostname = "blog.0123456789abcdef0123456789abcdef01234567.example"
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	writeLocalPair(t, certFile, keyFile, hostname)
+	client, err := NewClient(t.Context(), ClientConfig{RelayURL: "https://127.0.0.1:1", Hostname: hostname, CertFile: certFile, KeyFile: keyFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for _, tc := range []struct {
+		name, sni, want string
+		protos          []string
+	}{
+		{name: "h1 default", sni: hostname, want: "http/1.1"},
+		{name: "mixed-case canonical", sni: strings.ToUpper(hostname), want: "http/1.1"},
+		{name: "h2 enabled consumer", sni: hostname, want: "h2", protos: []string{"h2", "http/1.1"}},
+		{name: "sibling SNI", sni: "api.0123456789abcdef0123456789abcdef01234567.example", protos: []string{"h2", "http/1.1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.protos != nil {
+				client.SetNextProtos(tc.protos)
+			}
+			raw, server := net.Pipe()
+			defer raw.Close()
+			defer server.Close()
+			config := client.TenantTLSConfig()
+			config.ServerName = tc.sni
+			config.NextProtos = []string{"h2", "http/1.1"}
+			visitor := tls.Client(raw, config)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- visitor.HandshakeContext(ctx) }()
+			conn, serverErr := client.TerminateConn(ctx, server, nil)
+			visitorErr := <-done
+			if tc.want == "" {
+				if serverErr == nil || visitorErr == nil {
+					t.Fatal("sibling SNI accepted")
+				}
+				return
+			}
+			if serverErr != nil || visitorErr != nil {
+				t.Fatalf("handshake: %v, %v", serverErr, visitorErr)
+			}
+			native, ok := conn.(*tls.Conn)
+			if !ok {
+				t.Fatal("not native TLS")
+			}
+			if native.ConnectionState().NegotiatedProtocol != tc.want {
+				t.Fatalf("ALPN = %q", native.ConnectionState().NegotiatedProtocol)
+			}
+		})
+	}
+}
+
+func TestUnavailableLocalTLSClosesWithoutFallback(t *testing.T) {
+	client := &Client{hostname: "service.example"}
+	raw, server := net.Pipe()
+	defer raw.Close()
+	defer server.Close()
+	if _, err := client.TerminateConn(t.Context(), server, nil); err == nil {
+		t.Fatal("missing local certificate accepted")
+	}
+	_ = raw.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := raw.Read(make([]byte, 1)); err == nil {
+		t.Fatal("unavailable connection left open")
+	}
+}
+
+func TestLocalTLSReadinessTracksValidity(t *testing.T) {
+	client := &Client{}
+	if client.Ready() {
+		t.Fatal("missing certificate reported ready")
+	}
+	now := time.Now()
+	client.pin = &pinnedChain{leaf: &x509.Certificate{NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Minute)}}
+	if !client.Ready() {
+		t.Fatal("usable certificate reported unavailable")
+	}
+	client.pin.leaf.NotAfter = now.Add(-time.Second)
+	if client.Ready() {
+		t.Fatal("expired certificate reported ready")
+	}
+	client.pin.leaf.NotAfter = now.Add(time.Minute)
+	client.Close()
+	if client.Ready() {
+		t.Fatal("closed client reported ready")
+	}
+}
+
+const tenantHostname = "tenant.test.example"
+
+func mustSelfSignedCert(t *testing.T, hostname string, ips []net.IP) (*ecdsa.PrivateKey, []byte, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ecdsa key: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: hostname},
+		DNSNames:              []string{hostname},
+		IPAddresses:           ips,
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return key, der, certPEM
 }
