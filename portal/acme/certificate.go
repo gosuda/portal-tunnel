@@ -207,7 +207,8 @@ func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, r
 	if err != nil {
 		return nil, fmt.Errorf("create acme client: %w", err)
 	}
-	if user.Registration == nil && (client.GetExternalAccountRequired() || m.cfg.EABKID != "" || m.cfg.EABHMAC != "") {
+	eabConfigured := m.cfg.EABKID != "" || m.cfg.EABHMAC != ""
+	if user.Registration == nil && (client.GetExternalAccountRequired() || eabConfigured) {
 		if m.cfg.EABKID == "" || m.cfg.EABHMAC == "" {
 			return nil, fmt.Errorf("acme directory %s: external account binding requires ACME_EAB_KID and ACME_EAB_HMAC together to register a new account", m.cfg.CADirURL)
 		}
