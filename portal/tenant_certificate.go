@@ -40,7 +40,7 @@ func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request,
 	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if s.acmeManager == nil || !s.config().TenantCertificates {
+	if !s.config().TenantCertificates || !s.acmeManager.TenantIssuanceConfigured() {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeTenantIssuanceDisabled, "automatic tenant certificate issuance is disabled on this relay")
 		return
 	}
@@ -71,6 +71,10 @@ func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request,
 	}
 	cert, err := s.acmeManager.ObtainTenantCertificate(r.Context(), csr)
 	if err != nil {
+		if errors.Is(err, acme.ErrTenantIssuanceDisabled) {
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeTenantIssuanceDisabled, err.Error())
+			return
+		}
 		if errors.Is(err, acme.ErrTenantOrderLimited) || errors.Is(err, acme.ErrTenantIssuerBusy) {
 			w.Header().Set("Retry-After", "10")
 			if errors.Is(err, acme.ErrTenantOrderLimited) {

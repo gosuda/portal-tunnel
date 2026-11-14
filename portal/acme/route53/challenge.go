@@ -2,6 +2,7 @@ package route53
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"time"
@@ -155,32 +156,43 @@ func presentChallenge(ctx context.Context, cfg *route53.Config, name, value stri
 	}
 	// A failed request may already have changed DNS. Retain exact cleanup even
 	// when the write or its acknowledgement has an uncertain outcome.
-	return cleanup, changeChallengeRecord(ctx, client, cfg, zone, route53types.ChangeActionUpsert, recordSet)
+	return cleanup, changeChallengeRecord(ctx, client, cfg, cfg.WaitForRecordSetsChanged, zone, route53types.ChangeActionUpsert, recordSet)
 }
 
 func cleanupChallenge(ctx context.Context, client *awsroute53.Client, cfg *route53.Config, zone, name, value string) error {
-	recordSet, err := getTXTRecordSet(ctx, client, zone, name)
-	if err != nil || recordSet == nil {
-		return err
-	}
-	remaining := make([]route53types.ResourceRecord, 0, len(recordSet.ResourceRecords))
-	for _, record := range recordSet.ResourceRecords {
-		if dnsrecord.TXTContent(aws.ToString(record.Value)) != value {
-			remaining = append(remaining, record)
+	// An accepted write is enough for cleanup. Waiting for INSYNC can
+	// spend the entire order's shared budget before the next TXT removal.
+	// Route53 may reject a new same-zone change while processing the prior
+	// one. Re-read before retrying so unrelated values are preserved.
+	return wait.Retry(ctx, func() error {
+		recordSet, err := getTXTRecordSet(ctx, client, zone, name)
+		if err != nil || recordSet == nil {
+			return backoff.Permanent(err)
 		}
-	}
-	if len(remaining) == len(recordSet.ResourceRecords) {
-		return nil
-	}
-	action := route53types.ChangeActionDelete
-	if len(remaining) > 0 {
-		action = route53types.ChangeActionUpsert
-		recordSet.ResourceRecords = remaining
-	}
-	return changeChallengeRecord(ctx, client, cfg, zone, action, recordSet)
+		remaining := make([]route53types.ResourceRecord, 0, len(recordSet.ResourceRecords))
+		for _, record := range recordSet.ResourceRecords {
+			if dnsrecord.TXTContent(aws.ToString(record.Value)) != value {
+				remaining = append(remaining, record)
+			}
+		}
+		if len(remaining) == len(recordSet.ResourceRecords) {
+			return nil
+		}
+		action := route53types.ChangeActionDelete
+		if len(remaining) > 0 {
+			action = route53types.ChangeActionUpsert
+			recordSet.ResourceRecords = remaining
+		}
+		err = changeChallengeRecord(ctx, client, cfg, false, zone, action, recordSet)
+		var prior *route53types.PriorRequestNotComplete
+		if errors.As(err, &prior) {
+			return err
+		}
+		return backoff.Permanent(err)
+	}, backoff.WithBackOff(backoff.NewExponentialBackOff()))
 }
 
-func changeChallengeRecord(ctx context.Context, client *awsroute53.Client, cfg *route53.Config, zone string, action route53types.ChangeAction, recordSet *route53types.ResourceRecordSet) error {
+func changeChallengeRecord(ctx context.Context, client *awsroute53.Client, cfg *route53.Config, waitForPropagation bool, zone string, action route53types.ChangeAction, recordSet *route53types.ResourceRecordSet) error {
 	out, err := client.ChangeResourceRecordSets(ctx, &awsroute53.ChangeResourceRecordSetsInput{
 		HostedZoneId: aws.String(zone),
 		ChangeBatch: &route53types.ChangeBatch{
@@ -188,7 +200,7 @@ func changeChallengeRecord(ctx context.Context, client *awsroute53.Client, cfg *
 			Changes: []route53types.Change{{Action: action, ResourceRecordSet: recordSet}},
 		},
 	})
-	if err != nil || !cfg.WaitForRecordSetsChanged {
+	if err != nil || !waitForPropagation {
 		return err
 	}
 	return wait.Retry(ctx, func() error {

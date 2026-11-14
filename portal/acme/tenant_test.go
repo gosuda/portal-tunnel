@@ -15,6 +15,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -159,9 +161,37 @@ func TestLocalTenantIssuanceKeepsCSRKey(t *testing.T) {
 	}
 }
 
+func TestManualRelayDoesNotOfferTenantIssuance(t *testing.T) {
+	const root = "portal.example.com"
+	keyDir := t.TempDir()
+	if err := writeManualRelayCertificate(t, keyDir, root); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{cfg: Config{BaseDomain: root, KeyDir: keyDir, TenantIssuanceStateDir: t.TempDir()}}
+	if manager.TenantIssuanceConfigured() {
+		t.Fatal("manual relay advertised automatic tenant issuance")
+	}
+	encoded, _ := tenantCSR(t, &x509.CertificateRequest{DNSNames: []string{"tenant." + root}})
+	csr, err := ParseTenantCSR(encoded, []string{"tenant." + root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ObtainTenantCertificate(t.Context(), csr); !errors.Is(err, ErrTenantIssuanceDisabled) {
+		t.Fatalf("issuance eligibility = %v, want disabled", err)
+	}
+	for _, filename := range []string{accountKeyFileName, registrationFileName} {
+		if _, err := os.Stat(filepath.Join(keyDir, filename)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("manual relay account file %s: %v", filename, err)
+		}
+	}
+}
+
 func TestTenantOrderBudgetSurvivesLeaseAndKeyChanges(t *testing.T) {
 	const hostname = "tenant.example.com"
-	manager := &Manager{cfg: Config{BaseDomain: "example.com", CADirURL: "https://ca.example/directory", TenantIssuanceStateDir: t.TempDir()}}
+	manager := &Manager{cfg: Config{BaseDomain: "example.com", KeyDir: t.TempDir(), CADirURL: "https://ca.example/directory", TenantIssuanceStateDir: t.TempDir()}}
+	if _, err := loadOrCreateAccountKey(filepath.Join(manager.cfg.KeyDir, accountKeyFileName)); err != nil {
+		t.Fatal(err)
+	}
 	reservation, err := manager.reserveTenantOrder(hostname, time.Now())
 	if err != nil {
 		t.Fatal(err)

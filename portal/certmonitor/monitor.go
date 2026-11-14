@@ -373,6 +373,13 @@ func (m *certificateMonitor) loadEvidence() (monitorEvidence, error) {
 	if len(evidence.Cursor) > 256 || len(evidence.Certificates) > 10000 {
 		return evidence, errMonitorEvidenceCountLimit
 	}
+	// Older checkpoints can contain unbounded Retry-After values. Anchor
+	// the cap to the original observation so a restart cannot extend it.
+	checked := time.Now().UTC()
+	if !evidence.CTChecked.IsZero() && evidence.CTChecked.Before(checked) {
+		checked = evidence.CTChecked
+	}
+	evidence.CTNextCheck = boundCTRetryAfter(evidence.CTNextCheck, checked)
 	return evidence, nil
 }
 

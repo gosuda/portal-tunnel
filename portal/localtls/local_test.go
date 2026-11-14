@@ -7,6 +7,30 @@ import (
 	"testing"
 )
 
+func TestManualCertificateFilesRecoverAfterReplacement(t *testing.T) {
+	const hostname = "tenant.test.example"
+	dir := t.TempDir()
+	cfg := ClientConfig{
+		RelayURL: "https://127.0.0.1:1",
+		Hostname: hostname,
+		CertFile: filepath.Join(dir, "cert.pem"),
+		KeyFile:  filepath.Join(dir, "key.pem"),
+	}
+	client, err := NewClient(t.Context(), cfg)
+	if client != nil || !errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrLocalCertificate) {
+		t.Fatalf("missing replacement returned %v, %v", client, err)
+	}
+	writeLocalPair(t, cfg.CertFile, cfg.KeyFile, hostname)
+	client, err = NewClient(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if !client.Ready() {
+		t.Fatal("valid replacement is not ready")
+	}
+}
+
 func TestValidateCertificateFiles(t *testing.T) {
 	dir := t.TempDir()
 	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")

@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+const maxCTRetryDelay = 24 * time.Hour
+
 type ctIssuance struct {
 	ID        string `json:"id"`
 	TBSSHA256 string `json:"tbs_sha256"`
@@ -42,12 +44,7 @@ func (m *certificateMonitor) fetchCT(ctx context.Context, cursor string) ([]ctIs
 		return nil, time.Time{}, err
 	}
 	defer resp.Body.Close()
-	var retryAfter time.Time
-	if seconds, err := strconv.ParseUint(resp.Header.Get("Retry-After"), 10, 32); err == nil {
-		retryAfter = time.Now().Add(time.Duration(seconds) * time.Second).UTC()
-	} else if when, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
-		retryAfter = when.UTC()
-	}
+	retryAfter := ctRetryAfter(resp.Header.Get("Retry-After"), time.Now().UTC())
 	if resp.StatusCode != http.StatusOK {
 		return nil, retryAfter, fmt.Errorf("cert spotter returned HTTP %d", resp.StatusCode)
 	}
@@ -66,6 +63,23 @@ func (m *certificateMonitor) fetchCT(ctx context.Context, cursor string) ([]ctIs
 		return nil, retryAfter, errMonitorCTPageInvalid
 	}
 	return issuances, retryAfter, nil
+}
+
+func ctRetryAfter(header string, now time.Time) time.Time {
+	if seconds, err := strconv.ParseUint(header, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+		return now.Add(time.Duration(min(seconds, uint64(maxCTRetryDelay/time.Second))) * time.Second)
+	}
+	if when, err := http.ParseTime(header); err == nil {
+		return boundCTRetryAfter(when.UTC(), now)
+	}
+	return time.Time{}
+}
+
+func boundCTRetryAfter(when, checked time.Time) time.Time {
+	if latest := checked.Add(maxCTRetryDelay); when.After(latest) {
+		return latest
+	}
+	return when
 }
 
 func (m *certificateMonitor) decodeCT(issuance ctIssuance, now time.Time) (ctObservation, error) {

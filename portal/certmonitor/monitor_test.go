@@ -437,6 +437,59 @@ func TestMonitorCTPaginationRestartAndErrors(t *testing.T) {
 	}
 }
 
+func TestCTRetryAfterBounds(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   time.Time
+	}{
+		{"short seconds", "7200", now.Add(2 * time.Hour)},
+		{"long seconds", "86401", now.Add(24 * time.Hour)},
+		{"overflowing seconds", "18446744073709551616", now.Add(24 * time.Hour)},
+		{"short HTTP date", now.Add(time.Hour).Format(http.TimeFormat), now.Add(time.Hour)},
+		{"long HTTP date", now.Add(48 * time.Hour).Format(http.TimeFormat), now.Add(24 * time.Hour)},
+		{"invalid", "unknown", time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ctRetryAfter(tc.header, now); !got.Equal(tc.want) {
+				t.Fatalf("retry after %q = %s, want %s", tc.header, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMonitorCTCorrectsExcessivePersistedRetry(t *testing.T) {
+	m := testMonitor(t)
+	checked := time.Now().UTC().Add(-48 * time.Hour)
+	evidence, err := m.loadEvidence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := monitorCertificate(t, nil, m.hostname, false)
+	marker, err := m.decodeCT(ctIssuance{ID: "saved-page", TBSSHA256: strings.Repeat("c", 64), CertDER: certificate.Raw}, checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.Cursor = marker.SourceID
+	evidence.Certificates[marker.SHA256] = marker
+	evidence.CTChecked = checked
+	evidence.CTNextCheck = checked.Add(365 * 24 * time.Hour)
+	if err := m.saveEvidence(evidence); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := m.loadEvidence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := checked.Add(24 * time.Hour); !restarted.CTNextCheck.Equal(want) {
+		t.Fatalf("persisted retry after = %s, want %s", restarted.CTNextCheck, want)
+	}
+	if restarted.Cursor != marker.SourceID || !slices.Equal(restarted.Certificates[marker.SHA256].Certificate, marker.Certificate) {
+		t.Fatal("lost durable evidence or cursor")
+	}
+}
+
 func TestMonitorCTMalformedPagePreservesCheckpoint(t *testing.T) {
 	for _, response := range []string{"null", "{}", "[] []", "[", `[{"id":"next","tbs_sha256":"invalid","cert_der":"AA=="}]`, strings.Repeat(" ", certificateMonitorBytes+1)} {
 		t.Run(fmt.Sprintf("bytes-%d", len(response)), func(t *testing.T) {

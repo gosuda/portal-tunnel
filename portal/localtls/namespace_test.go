@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -52,6 +53,7 @@ func TestLocalTLSALPNAndSNI(t *testing.T) {
 		protos          []string
 	}{
 		{name: "h1 default", sni: hostname, want: "http/1.1"},
+		{name: "mixed-case canonical", sni: strings.ToUpper(hostname), want: "http/1.1"},
 		{name: "h2 enabled consumer", sni: hostname, want: "h2", protos: []string{"h2", "http/1.1"}},
 		{name: "sibling SNI", sni: "api.0123456789abcdef0123456789abcdef01234567.example", protos: []string{"h2", "http/1.1"}},
 	} {

@@ -222,9 +222,11 @@ func TestLocalTenantCertificateValidityAndAlgorithm(t *testing.T) {
 			if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if client, err := NewClient(t.Context(), ClientConfig{RelayURL: "https://127.0.0.1:1", Hostname: "tenant.test.example", CertFile: certFile, KeyFile: keyFile}); err == nil {
-				client.Close()
-				t.Fatal("invalid material accepted")
+			if client, err := NewClient(t.Context(), ClientConfig{RelayURL: "https://127.0.0.1:1", Hostname: "tenant.test.example", CertFile: certFile, KeyFile: keyFile}); err == nil || errors.Is(err, ErrLocalCertificate) {
+				if client != nil {
+					client.Close()
+				}
+				t.Fatalf("runtime validity error = %v, want retryable failure", err)
 			}
 			if err := ValidateCertificateFiles(certFile, keyFile); !errors.Is(err, ErrLocalCertificate) {
 				t.Fatalf("preflight accepted invalid material: %v", err)

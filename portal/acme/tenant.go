@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -21,6 +23,7 @@ import (
 )
 
 var (
+	ErrTenantIssuanceDisabled   = errors.New("public tenant issuance requires an existing relay ACME account")
 	ErrTenantOrderLimited       = errors.New("tenant certificate order budget exhausted")
 	errTenantCSRInvalid         = errors.New("invalid tenant certificate request")
 	errTenantCSRNames           = errors.New("tenant certificate request contains an unauthorized name")
@@ -87,6 +90,19 @@ func ParseTenantCSR(encoded string, allowed []string) (*x509.CertificateRequest,
 	return csr, nil
 }
 
+// TenantIssuanceConfigured reports whether the relay can offer issuance.
+// An unexpected storage error is reported by the issuance endpoint as retryable.
+func (m *Manager) TenantIssuanceConfigured() bool {
+	if m == nil {
+		return false
+	}
+	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(m.cfg.KeyDir, accountKeyFileName))
+	return !errors.Is(err, os.ErrNotExist)
+}
+
 // ObtainTenantCertificate completes a lease-authorized CSR using the relay's
 // existing ACME account and DNS provider. The caller must first authenticate
 // lease ownership and validate this CSR with ParseTenantCSR. Only public material
@@ -143,12 +159,18 @@ func (m *Manager) ObtainTenantCertificate(ctx context.Context, csr *x509.Certifi
 		}
 		return append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), material.CertPEM...), nil
 	}
+	// Only relay provisioning may create the account key. Opening the existing
+	// key without a create fallback also keeps manual certificate rotation safe.
+	user, registrationFile, err := m.newClientLoadUser(defaultACMEEmailPrefix+m.cfg.BaseDomain, false)
+	if err != nil {
+		return nil, err
+	}
 	reservation, err := m.reserveTenantOrder(csr.DNSNames[0], time.Now())
 	if err != nil {
 		return nil, err
 	}
 	defer reservation.file.Close()
-	client, err := m.newClient(ctx)
+	client, err := m.newClientWithLoadedUser(ctx, user, registrationFile)
 	if err != nil {
 		return nil, err
 	}

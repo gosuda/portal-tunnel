@@ -47,9 +47,19 @@ func TestChallengePreservesExistingTXTAndTTL(t *testing.T) {
 	record := testTXTRecord{Name: "_acme-challenge.example.test.", Type: "TXT", TTL: 371,
 		Values: []string{`"keep"`, `"challenge-prefix"`}}
 	writes := 0
+	blocked := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
+		if strings.Contains(r.URL.Path, "/change/") {
+			if writes > 2 {
+				t.Error("cleanup waited for DNS propagation")
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			io.WriteString(w, `<GetChangeResponse><ChangeInfo><Id>/change/test</Id><Status>INSYNC</Status></ChangeInfo></GetChangeResponse>`)
+			return
+		}
 		if !strings.Contains(r.URL.Path, "/hostedzone/pinned-zone/rrset") {
 			t.Errorf("unexpected unpinned path %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -82,34 +92,51 @@ func TestChallengePreservesExistingTXTAndTTL(t *testing.T) {
 		if body.Changes[0].Action != "UPSERT" {
 			t.Errorf("action = %s, want UPSERT preserving other TXT", body.Changes[0].Action)
 		}
+		if writes == 3 && !blocked {
+			blocked = true
+			record.Values = append(record.Values, `"concurrent"`)
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `<ErrorResponse><Error><Code>PriorRequestNotComplete</Code><Message>Previous change is processing</Message></Error></ErrorResponse>`)
+			return
+		}
 		record = body.Changes[0].Record
 		writes++
-		io.WriteString(w, `<ChangeResourceRecordSetsResponse><ChangeInfo><Id>/change/test</Id><Status>INSYNC</Status></ChangeInfo></ChangeResourceRecordSetsResponse>`)
+		io.WriteString(w, `<ChangeResourceRecordSetsResponse><ChangeInfo><Id>/change/test</Id><Status>PENDING</Status></ChangeInfo></ChangeResourceRecordSetsResponse>`)
 	}))
 	defer server.Close()
 	cfg := challengeTestConfig(t, server.URL)
+	cfg.WaitForRecordSetsChanged = true
 	ctx, cancel := context.WithCancel(t.Context())
 	cleanup, err := presentChallenge(ctx, cfg, record.Name, "challenge")
 	if err != nil || cleanup == nil {
 		t.Fatalf("Present cleanup=%v, err=%v", cleanup != nil, err)
 	}
+	otherCleanup, err := presentChallenge(ctx, cfg, record.Name, "another-challenge")
+	if err != nil || otherCleanup == nil {
+		t.Fatalf("second Present cleanup=%v, err=%v", otherCleanup != nil, err)
+	}
 	mu.Lock()
-	if record.TTL != 371 || !slices.Equal(record.Values, []string{`"keep"`, `"challenge-prefix"`, `"challenge"`}) {
+	if record.TTL != 371 || !slices.Equal(record.Values, []string{`"keep"`, `"challenge-prefix"`, `"challenge"`, `"another-challenge"`}) {
 		t.Errorf("published record = %+v", record)
 	}
 	// A value added after publication must survive cleanup too.
 	record.Values = append(record.Values, `"later"`)
 	mu.Unlock()
 	cancel()
-	if err := cleanup(t.Context()); err != nil {
+	cleanupCtx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	if err := cleanup(cleanupCtx); err != nil {
 		t.Fatalf("cleanup after order cancellation: %v", err)
 	}
-	if err := cleanup(t.Context()); err != nil {
+	if err := otherCleanup(cleanupCtx); err != nil {
+		t.Fatalf("second cleanup while prior write is processing: %v", err)
+	}
+	if err := cleanup(cleanupCtx); err != nil {
 		t.Fatalf("idempotent cleanup: %v", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if record.TTL != 371 || !slices.Equal(record.Values, []string{`"keep"`, `"challenge-prefix"`, `"later"`}) || writes != 2 {
+	if record.TTL != 371 || !slices.Equal(record.Values, []string{`"keep"`, `"challenge-prefix"`, `"later"`, `"concurrent"`}) || writes != 4 {
 		t.Errorf("cleaned record = %+v, writes=%d", record, writes)
 	}
 }

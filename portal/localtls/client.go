@@ -84,7 +84,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	hostname := strings.TrimSpace(config.Hostname)
+	hostname := utils.NormalizeHostname(config.Hostname)
 	if hostname == "" {
 		return nil, errLocalHostnameIsRequired
 	}
@@ -273,7 +273,7 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, _ []byte) (net
 	}
 	config := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pin.certificate}, NextProtos: protos,
 		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-			if hello.ServerName != c.hostname {
+			if utils.NormalizeHostname(hello.ServerName) != c.hostname {
 				return nil, fmt.Errorf("local TLS SNI does not match service hostname")
 			}
 			return nil, nil

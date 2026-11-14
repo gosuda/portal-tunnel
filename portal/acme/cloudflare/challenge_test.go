@@ -181,3 +181,31 @@ func TestFindZonePrefersChildOverCachedParent(t *testing.T) {
 		t.Fatalf("zone = %q, %v", zoneID, err)
 	}
 }
+
+func TestListZonesUsesSupportedPageSizeAndFollowsPagination(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if r.Method != http.MethodGet || r.URL.Path != "/client/v4/zones" || query.Get("per_page") != "50" || query.Get("name") != "example.test" {
+			t.Errorf("unexpected List Zones request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		page := query.Get("page")
+		if page != "1" && page != "2" {
+			t.Errorf("unexpected page: %q", page)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(zonesResult{Success: true, Result: []zone{{ID: page}}, Info: resultInfo{TotalPages: 2}})
+	}))
+	defer server.Close()
+	endpoint, _ := url.Parse(server.URL)
+	client := &http.Client{Transport: localTransport{base: server.Client().Transport, url: endpoint}}
+	zones, err := listZones(t.Context(), client, "test-token", "example.test")
+	if err != nil || len(zones) != 2 {
+		t.Fatalf("zone pagination returned %v, %v", zones, err)
+	}
+	if zones[0].ID != "1" || zones[1].ID != "2" {
+		t.Fatalf("zone pages returned %v", zones)
+	}
+}

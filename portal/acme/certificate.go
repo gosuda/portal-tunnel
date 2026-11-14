@@ -143,17 +143,30 @@ func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 
 func (m *Manager) newClient(ctx context.Context) (*lego.Client, error) {
 	email := defaultACMEEmailPrefix + m.cfg.BaseDomain
-	user, registrationFile, err := m.newClientLoadUser(email)
+	user, registrationFile, err := m.newClientLoadUser(email, true)
 	if err != nil {
 		return nil, err
 	}
 	return m.newClientWithLoadedUser(ctx, user, registrationFile)
 }
 
-func (m *Manager) newClientLoadUser(email string) (*acmeUser, string, error) {
+func (m *Manager) newClientLoadUser(email string, createKey bool) (*acmeUser, string, error) {
 	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
 	registrationFile := registrationFilePath(m.cfg.KeyDir, m.cfg.CADirURL)
-	accountKey, err := loadOrCreateAccountKey(accountKeyFile)
+	var accountKey crypto.PrivateKey
+	var err error
+	if createKey {
+		accountKey, err = loadOrCreateAccountKey(accountKeyFile)
+	} else {
+		var accountKeyPEM []byte
+		accountKeyPEM, err = os.ReadFile(accountKeyFile)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, "", ErrTenantIssuanceDisabled
+		}
+		if err == nil {
+			accountKey, err = parseAccountKeyPEM(accountKeyPEM)
+		}
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("load acme account key: %w", err)
 	}

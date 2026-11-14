@@ -436,7 +436,7 @@ func listZones(ctx context.Context, client *http.Client, token, name string) ([]
 	u, _ := url.Parse(apiBase + "/zones")
 	q := u.Query()
 	q.Set("name", name)
-	q.Set("per_page", "100")
+	q.Set("per_page", "50")
 	var zones []zone
 	for page := 1; ; page++ {
 		q.Set("page", strconv.Itoa(page))
