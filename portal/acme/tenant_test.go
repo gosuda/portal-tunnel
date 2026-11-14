@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/platform/wait"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func tenantCSR(t *testing.T, template *x509.CertificateRequest) (string, *ecdsa.PrivateKey) {
@@ -183,6 +185,49 @@ func TestManualRelayDoesNotOfferTenantIssuance(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(keyDir, filename)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("manual relay account file %s: %v", filename, err)
 		}
+	}
+}
+
+func TestTenantIssuanceCapabilityRequiresUsableState(t *testing.T) {
+	manager := &Manager{cfg: Config{BaseDomain: "example.com", KeyDir: t.TempDir()}}
+	if _, err := loadOrCreateAccountKey(filepath.Join(manager.cfg.KeyDir, accountKeyFileName)); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := t.TempDir()
+	filePath := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(filePath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, directory string
+		want            bool
+	}{
+		{"missing setting", "", false},
+		{"missing directory", filepath.Join(stateDir, "missing"), false},
+		{"not a directory", filePath, false},
+		{"usable directory", stateDir, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager.cfg.TenantIssuanceStateDir = tc.directory
+			if got := manager.TenantIssuanceConfigured(); got != tc.want {
+				t.Fatalf("TenantIssuanceConfigured() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// An active order on a replica is temporary contention, not a lost capability.
+	manager.cfg.TenantIssuanceStateDir = stateDir
+	file, err := utils.TryLockFile(filepath.Join(stateDir, "tenant-orders.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if !manager.TenantIssuanceConfigured() {
+		t.Fatal("active order disabled issuance capability")
+	}
+	manager.cfg.BaseDomain = "localhost"
+	manager.cfg.TenantIssuanceStateDir = ""
+	if !manager.TenantIssuanceConfigured() {
+		t.Fatal("local issuance requires public quota state")
 	}
 }
 

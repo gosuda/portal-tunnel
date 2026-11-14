@@ -50,6 +50,23 @@ type tenantOrderReservation struct {
 	entry tenantOrderEntry
 }
 
+// ValidateTenantIssuanceState checks that public issuance can open its durable
+// journal. It may create the journal, but never reserves an order or takes the
+// issuance lock: another replica issuing a certificate is not a config error.
+func (cfg Config) ValidateTenantIssuanceState() error {
+	if utils.IsLocalRelayHost(cfg.BaseDomain) {
+		return nil
+	}
+	if cfg.TenantIssuanceStateDir == "" {
+		return errTenantStateRequired
+	}
+	file, err := os.OpenFile(filepath.Join(cfg.TenantIssuanceStateDir, "tenant-orders.jsonl"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return fmt.Errorf("open tenant issuance state: %w", err)
+	}
+	return file.Close()
+}
+
 func (m *Manager) reserveTenantOrder(host string, now time.Time) (*tenantOrderReservation, error) {
 	if m.cfg.TenantIssuanceStateDir == "" {
 		return nil, errTenantStateRequired

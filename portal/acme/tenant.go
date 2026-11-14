@@ -91,7 +91,6 @@ func ParseTenantCSR(encoded string, allowed []string) (*x509.CertificateRequest,
 }
 
 // TenantIssuanceConfigured reports whether the relay can offer issuance.
-// An unexpected storage error is reported by the issuance endpoint as retryable.
 func (m *Manager) TenantIssuanceConfigured() bool {
 	if m == nil {
 		return false
@@ -100,7 +99,7 @@ func (m *Manager) TenantIssuanceConfigured() bool {
 		return true
 	}
 	_, err := os.Stat(filepath.Join(m.cfg.KeyDir, accountKeyFileName))
-	return !errors.Is(err, os.ErrNotExist)
+	return err == nil && m.cfg.ValidateTenantIssuanceState() == nil
 }
 
 // ObtainTenantCertificate completes a lease-authorized CSR using the relay's

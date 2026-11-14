@@ -113,7 +113,7 @@ func NormalizeHTTPRedirectConfig(cfg HTTPRedirectConfig, portalURL string) (HTTP
 }
 
 // ValidateServerConfig normalizes server configuration and checks the
-// side-effect-free invariants required before runtime resources are created.
+// invariants required before runtime resources are created.
 func applyValidateServerConfigACME(cfg ServerConfig) (ServerConfig, error) {
 	caDirURL, err := acme.NormalizeCADirURL(cfg.ACME.CADirURL)
 	if err != nil {
@@ -176,6 +176,13 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 	cfg = next
+	if cfg.TenantCertificates {
+		issuanceConfig := cfg.ACME
+		issuanceConfig.BaseDomain = utils.PortalRootHost(cfg.PortalURL)
+		if err := issuanceConfig.ValidateTenantIssuanceState(); err != nil {
+			return ServerConfig{}, fmt.Errorf("TENANT_CERTIFICATES requires usable TENANT_ISSUANCE_STATE_DIR: %w", err)
+		}
+	}
 	if cfg.SNIPort == 0 {
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)
 	}
