@@ -207,8 +207,10 @@ func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, r
 	if err != nil {
 		return nil, fmt.Errorf("create acme client: %w", err)
 	}
-	if user.Registration == nil && client.GetExternalAccountRequired() {
-		return nil, fmt.Errorf("acme directory %s requires external account binding, which is not supported", m.cfg.CADirURL)
+	if user.Registration == nil && (client.GetExternalAccountRequired() || m.cfg.EABKID != "" || m.cfg.EABHMAC != "") {
+		if m.cfg.EABKID == "" || m.cfg.EABHMAC == "" {
+			return nil, fmt.Errorf("acme directory %s: external account binding requires ACME_EAB_KID and ACME_EAB_HMAC together to register a new account", m.cfg.CADirURL)
+		}
 	}
 
 	challengeProvider, err := m.dns.ChallengeProvider(ctx)
@@ -221,7 +223,19 @@ func (m *Manager) newClientWithLoadedUser(ctx context.Context, user *acmeUser, r
 	}
 
 	if user.Registration == nil {
-		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		var reg *registration.Resource
+		if m.cfg.EABKID != "" {
+			reg, err = client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
+				TermsOfServiceAgreed: true,
+				Kid:                  m.cfg.EABKID,
+				HmacEncoded:          m.cfg.EABHMAC,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("register acme account with external account binding: verify ACME_EAB_KID and ACME_EAB_HMAC for this directory: %w", err)
+			}
+		} else {
+			reg, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		}
 		if err != nil {
 			return nil, fmt.Errorf("register acme account: %w", err)
 		}
