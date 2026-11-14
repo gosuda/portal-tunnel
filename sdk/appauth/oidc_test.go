@@ -10,9 +10,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"github.com/go-jose/go-jose/v4"
-	"github.com/go-jose/go-jose/v4/jwt"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +19,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const oidcTestClientID = "portal-client"

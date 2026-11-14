@@ -1,20 +1,11 @@
 package gcloud
 
 import (
-	"cloud.google.com/go/compute/metadata"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/go-acme/lego/v4/challenge"
-	"github.com/go-acme/lego/v4/providers/dns/gcloud"
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/utils"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	"google.golang.org/api/dns/v1"
-	"google.golang.org/api/option"
 	"maps"
 	"net/http"
 	"net/url"
@@ -24,6 +15,17 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/compute/metadata"
+	"github.com/go-acme/lego/v4/challenge"
+	"github.com/go-acme/lego/v4/providers/dns/gcloud"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/dns/v1"
+	"google.golang.org/api/option"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -399,7 +401,7 @@ func defaultCredentials(ctx context.Context) (*google.Credentials, error) {
 	}
 	data, err := os.ReadFile(filename)
 	if err == nil {
-
+		//nolint:staticcheck // Operator-controlled ADC files intentionally support all existing credential types.
 		return google.CredentialsFromJSON(ctx, data, dns.NdevClouddnsReadwriteScope)
 	}
 	if explicit {

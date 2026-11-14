@@ -13,13 +13,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/go-acme/lego/v4/certcrypto"
-	"github.com/go-acme/lego/v4/certificate"
-	"github.com/go-acme/lego/v4/challenge/dns01"
-	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/registration"
-	"github.com/gosuda/portal-tunnel/v2/utils"
-	"github.com/rs/zerolog/log"
 	"math/big"
 	"net"
 	"net/http"
@@ -28,6 +21,15 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/go-acme/lego/v4/certcrypto"
+	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/lego"
+	"github.com/go-acme/lego/v4/registration"
+	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (

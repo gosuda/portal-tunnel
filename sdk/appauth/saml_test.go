@@ -11,8 +11,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/beevik/etree"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"io"
 	"math/big"
 	"net/http"
@@ -23,6 +21,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/beevik/etree"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 
 	dsig "github.com/russellhaering/goxmldsig"
 )

@@ -3,8 +3,6 @@ package appauth
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestApplicationAuthRequiresLogin(t *testing.T) {

@@ -16,14 +16,16 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/go-acme/lego/v4/platform/wait"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/go-acme/lego/v4/platform/wait"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func tenantCSR(t *testing.T, template *x509.CertificateRequest) (string, *ecdsa.PrivateKey) {

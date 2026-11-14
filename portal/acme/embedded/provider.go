@@ -8,12 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/go-acme/lego/v4/challenge"
-	"github.com/go-acme/lego/v4/challenge/dns01"
-	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/utils"
-	"github.com/miekg/dns"
-	"github.com/rs/zerolog/log"
 	"maps"
 	"net"
 	"slices"
@@ -21,6 +15,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-acme/lego/v4/challenge"
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/miekg/dns"
+	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (

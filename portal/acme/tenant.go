@@ -22,8 +22,9 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/certificate"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (

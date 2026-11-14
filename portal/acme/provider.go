@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"time"
+
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/rs/zerolog/log"
+
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/cloudflare"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/embedded"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/gcloud"
@@ -15,9 +20,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/vultr"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
-	"github.com/rs/zerolog/log"
-	"path/filepath"
-	"time"
 )
 
 const (

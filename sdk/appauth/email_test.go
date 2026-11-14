@@ -8,9 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +20,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const (

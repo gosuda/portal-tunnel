@@ -8,10 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
-	"golang.org/x/sync/singleflight"
 	"io"
 	"net/http"
 	"net/url"
@@ -20,6 +16,12 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"golang.org/x/sync/singleflight"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (

@@ -8,9 +8,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/rs/zerolog/log"
 	"net"
 	"net/http"
 	"net/mail"
@@ -23,6 +20,11 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 var (

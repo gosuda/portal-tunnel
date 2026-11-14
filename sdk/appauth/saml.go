@@ -10,8 +10,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 	"io"
 	"net/http"
 	"net/url"
@@ -21,6 +19,9 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 
 	saml2 "github.com/russellhaering/gosaml2"
 	samltypes "github.com/russellhaering/gosaml2/types"
