@@ -170,7 +170,7 @@ func TestReplicaSelectionUsesReadyRoutableLeases(t *testing.T) {
 		}
 	}
 	key := identity.ServiceKey()
-	selected := registry.selectReplica(key, nil, true)
+	selected := registry.selectReplica(key, "", nil, true)
 	if selected == nil || selected == empty {
 		t.Fatal("selected a replica without a ready reverse stream")
 	}
@@ -183,11 +183,11 @@ func TestReplicaSelectionUsesReadyRoutableLeases(t *testing.T) {
 	if err != nil || stream != nil {
 		t.Fatalf("empty pool must permit immediate failover: %v", err)
 	}
-	next := registry.selectReplica(key, map[string]bool{selected.id: true}, true)
+	next := registry.selectReplica(key, "", map[string]bool{selected.id: true}, true)
 	if next == nil || next == selected || next == empty {
 		t.Fatal("did not select the other ready replica")
 	}
-	if waitOn := registry.selectReplica(key, map[string]bool{first.id: true, second.id: true}, false); waitOn != empty {
+	if waitOn := registry.selectReplica(key, "", map[string]bool{first.id: true, second.id: true}, false); waitOn != empty {
 		t.Fatal("a burst with no ready replica must wait on a live replica")
 	}
 	if public := registry.PublicLeases(time.Now()); len(public) != 1 || public[0].Ready != 1 {
@@ -198,7 +198,7 @@ func TestReplicaSelectionUsesReadyRoutableLeases(t *testing.T) {
 		t.Fatal("admin listing lost independent lease identities")
 	}
 	registry.setIdentityAccess(key, types.LeaseDenied, 1)
-	if registry.selectReplica(key, nil, false) != nil || len(registry.PublicLeases(time.Now())) != 0 {
+	if registry.selectReplica(key, "", nil, false) != nil || len(registry.PublicLeases(time.Now())) != 0 {
 		t.Fatal("identity denial did not cover all replicas")
 	}
 }
@@ -262,6 +262,30 @@ func TestReplicaRegistrationRejectsUnsupportedTransports(t *testing.T) {
 		request.Identity = identity
 		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errReplicaMode) {
 			t.Fatalf("unsupported replica request accepted: %+v, %v", request, err)
+		}
+	}
+}
+
+func TestReplicaSelectionStaysInOneNamespace(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "replicas")
+	register := func(namespace string) *leaseRecord {
+		t.Helper()
+		record, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true, Namespace: namespace}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	local, legacy := register(types.LocalTLSNamespaceV1), register("")
+	if local.CanonicalHostname == legacy.CanonicalHostname {
+		t.Fatal("namespaces must issue different canonical hostnames")
+	}
+	for _, want := range []*leaseRecord{local, legacy} {
+		for range 4 {
+			if got := registry.selectReplica(identity.ServiceKey(), want.Namespace, nil, false); got != want {
+				t.Fatalf("namespace %q traffic selected the %q replica", want.Namespace, got.Namespace)
+			}
 		}
 	}
 }

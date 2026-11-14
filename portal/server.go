@@ -1287,7 +1287,7 @@ func (s *Server) closeIngress() {
 
 func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *leaseRecord, helloSpan []byte) error {
 	deadline := time.Now().Add(defaultClaimTimeout)
-	key, replica := record.ServiceKey(), record.replica
+	key, namespace, replica := record.ServiceKey(), record.Namespace, record.replica
 	var tried map[string]bool
 	if replica {
 		tried = make(map[string]bool)
@@ -1302,12 +1302,12 @@ func (s *Server) bridgeLeaseConn(ctx context.Context, conn net.Conn, record *lea
 		// waitUntil is zero while ready replicas are tried without waiting.
 		var waitUntil time.Time
 		if replica {
-			next := s.registry.selectReplica(key, tried, true)
+			next := s.registry.selectReplica(key, namespace, tried, true)
 			if next == nil {
 				// No untried replica is ready. Wait one slice on a live replica,
 				// then rescan all of them: a crashed client keeps its lease until
 				// expiry, so one wait target must not hold the whole deadline.
-				if next = s.registry.selectReplica(key, nil, false); next == nil {
+				if next = s.registry.selectReplica(key, namespace, nil, false); next == nil {
 					return errLeaseNotFound
 				}
 				clear(tried)

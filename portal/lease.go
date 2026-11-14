@@ -331,11 +331,12 @@ func (r *leaseRegistry) recordByKey(key types.ServiceIdentityKey, now time.Time)
 	return nil
 }
 
-// selectReplica rotates live leases of one identity under the registry lock,
-// skipping leases without a ready reverse stream when requireReady is set.
-// Selection order is compared only within an identity, so unrelated traffic
-// cannot skew its round-robin order.
-func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, tried map[string]bool, requireReady bool) *leaseRecord {
+// selectReplica rotates live leases of one identity and TLS namespace under the
+// registry lock, skipping leases without a ready reverse stream when
+// requireReady is set. Siblings in another namespace serve other certificates,
+// so they never receive this namespace's traffic. Selection order is compared
+// only within an identity, so unrelated traffic cannot skew its round-robin order.
+func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, namespace string, tried map[string]bool, requireReady bool) *leaseRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.isRoutableLocked(key) {
@@ -344,7 +345,7 @@ func (r *leaseRegistry) selectReplica(key types.ServiceIdentityKey, tried map[st
 	now := time.Now()
 	var selected *leaseRecord
 	for _, record := range r.records {
-		if record == nil || !record.replica || record.ServiceKey() != key {
+		if record == nil || !record.replica || record.ServiceKey() != key || record.Namespace != namespace {
 			continue
 		}
 		unready := requireReady && record.reverse.ReadyCount() == 0
