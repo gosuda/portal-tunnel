@@ -177,7 +177,7 @@ func dialEndpointTCP(ctx context.Context, host, port string) (net.Conn, error) {
 	address := net.JoinHostPort(host, port)
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	var proxyURL *url.URL
-	if !IsLocalRelayHost(host) {
+	if !types.IsLocalRelayHost(host) {
 		var proxyErr error
 		proxyURL, proxyErr = endpointProxy(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
 		if proxyErr != nil {
