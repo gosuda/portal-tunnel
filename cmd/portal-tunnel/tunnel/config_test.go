@@ -386,6 +386,13 @@ func TestLocalTLSSelectsHTTPHandler(t *testing.T) {
 	for _, config := range []Config{
 		{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs"},
 		{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem"},
+		{
+			TargetAddr:     "3000",
+			IdentityPath:   "identity.json",
+			PGNSZone:       "portal.example",
+			PGNSSequencers: []string{"https://seq.portal.example"},
+			PGNSWitnesses:  []string{"w1=0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"},
+		},
 	} {
 		spec, err := config.Spec()
 		if err != nil {
@@ -394,5 +401,87 @@ func TestLocalTLSSelectsHTTPHandler(t *testing.T) {
 		if spec.HTTP == nil {
 			t.Fatal("Local TLS targets need HTTP handling for h2 translation")
 		}
+	}
+}
+
+func TestPGNSConfigurationValidation(t *testing.T) {
+	const witnessHex = "w1=0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	// Compressed secp256k1 generator G
+	const validRecoveryPub = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	basePGNS := func() Config {
+		return Config{
+			TargetAddr:     "3000",
+			IdentityPath:   "identity.json",
+			PGNSZone:       "portal.example",
+			PGNSSequencers: []string{"https://seq.portal.example"},
+			PGNSWitnesses:  []string{witnessHex},
+		}
+	}
+
+	t.Run("identity default state dir and immutability", func(t *testing.T) {
+		cfg := Config{
+			TargetAddr:         " 3000 ",
+			IdentityPath:       "identity.json",
+			PGNSZone:           " portal.example ",
+			PGNSAlias:          " myapp ",
+			PGNSSiteLabel:      " prod ",
+			PGNSSequencers:     []string{" https://seq.portal.example ", ""},
+			PGNSWitnesses:      []string{" " + witnessHex + " "},
+			PGNSRecoveryPubKey: " " + validRecoveryPub + " ",
+			PGNSRelayEndpoints: []string{" https://r1.portal.example=93.184.216.34:443 "},
+		}
+		snapshot := Config{
+			TargetAddr:         cfg.TargetAddr,
+			IdentityPath:       cfg.IdentityPath,
+			PGNSZone:           cfg.PGNSZone,
+			PGNSAlias:          cfg.PGNSAlias,
+			PGNSSiteLabel:      cfg.PGNSSiteLabel,
+			PGNSSequencers:     []string{" https://seq.portal.example ", ""},
+			PGNSWitnesses:      []string{" " + witnessHex + " "},
+			PGNSRecoveryPubKey: cfg.PGNSRecoveryPubKey,
+			PGNSRelayEndpoints: []string{" https://r1.portal.example=93.184.216.34:443 "},
+		}
+		spec, err := cfg.Spec()
+		if err != nil {
+			t.Fatalf("Spec(): %v", err)
+		}
+		if spec.PGNS == nil || spec.PGNS.StateDir != "identity.json.pgns" {
+			t.Fatalf("StateDir = %+v, want identity.json.pgns", spec.PGNS)
+		}
+		if !reflect.DeepEqual(cfg, snapshot) {
+			t.Fatalf("Spec mutated input Config: %+v", cfg)
+		}
+	})
+
+	for _, tc := range []struct {
+		name      string
+		mutate    func(*Config)
+		wantError bool
+	}{
+		{"valid id mode", func(c *Config) {}, false},
+		{"in-memory identity requires pgns_state_dir", func(c *Config) { c.IdentityJSON = "{}"; c.IdentityPath = "" }, true},
+		{"in-memory identity with pgns_state_dir", func(c *Config) { c.IdentityJSON = "{}"; c.IdentityPath = ""; c.PGNSStateDir = "pgns-state" }, false},
+		{"missing zone", func(c *Config) { c.PGNSZone = "" }, true},
+		{"missing sequencers", func(c *Config) { c.PGNSSequencers = nil }, true},
+		{"missing witnesses", func(c *Config) { c.PGNSWitnesses = nil }, true},
+		{"recovery key forbidden on id mode", func(c *Config) { c.PGNSRecoveryPubKey = validRecoveryPub }, true},
+		{"recovery key allowed on app mode", func(c *Config) { c.PGNSAlias = "myapp"; c.PGNSRecoveryPubKey = validRecoveryPub }, false},
+		{"persist01 requires caa issuer", func(c *Config) { c.PGNSPersist01 = true }, true},
+		{"persist01 with caa issuer", func(c *Config) { c.PGNSPersist01 = true; c.PGNSACMECAIssuer = "pki.goog" }, false},
+		{"conflict with relay cache", func(c *Config) { c.TargetAddr = ""; c.Serve = "dist"; c.Cache = &CacheConfig{} }, true},
+		{"conflict with tls-auto", func(c *Config) { c.TLSAuto = true; c.TLSStateDir = "certs" }, true},
+		{"conflict with tls-cert", func(c *Config) { c.TLSCert = "cert.pem"; c.TLSKey = "key.pem" }, true},
+		{"conflict with raw tcp", func(c *Config) { c.TCPEnabled = true }, true},
+		{"non-public relay endpoint rejected", func(c *Config) { c.PGNSRelayEndpoints = []string{"https://r1.portal.example=127.0.0.1:443"} }, true},
+		{"doc IP relay endpoint rejected", func(c *Config) { c.PGNSRelayEndpoints = []string{"https://r1.portal.example=198.51.100.1:443"} }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := basePGNS()
+			tc.mutate(&cfg)
+			_, err := cfg.Spec()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Spec() error = %v, wantError = %v", err, tc.wantError)
+			}
+		})
 	}
 }

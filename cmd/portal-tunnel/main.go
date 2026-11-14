@@ -137,6 +137,24 @@ func registerPaymentTransportFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *
 	fs.BoolVar(&flags.exitOnStdinEOF, "exit-on-stdin-eof", false, "Stop when the caller-owned stdin pipe closes; requires a pipe or socket, ignores bytes, and uses normal tunnel shutdown")
 }
 
+func registerPGNSFlags(fs *flag.FlagSet, cfg *tunnel.Config, env *cli.Env) {
+	fs.StringVar(&cfg.PGNSZone, "pgns-zone", "", "Enable PGNS publication and self-sovereign verification for this zone (for example portal.example)")
+	fs.StringVar(&cfg.PGNSAlias, "pgns-alias", "", "Claim a global human-readable <alias>.app.<zone> name (requires higher PoW; omitted uses <service>.<id-tag>.id.<zone>)")
+	fs.StringVar(&cfg.PGNSSiteLabel, "pgns-site-label", "", "Optional privacy domain-separation label for *.id.<zone> key derivation")
+	cli.RepeatedStringFlag(fs, &cfg.PGNSSequencers, "pgns-sequencer", "PGNS sequencer HTTP(S) base URL; repeat for failover")
+	cli.RepeatedStringFlag(fs, &cfg.PGNSWitnesses, "pgns-witness", "PGNS witness descriptor (<name>=<hex-ed25519-pubkey>); repeat for quorum")
+	fs.IntVar(&cfg.PGNSWitnessThreshold, "pgns-witness-threshold", 0, "Minimum witness cosignatures k required to accept a PGNS checkpoint (0 requires all witnesses)")
+	fs.StringVar(&cfg.PGNSStateDir, "pgns-state-dir", "", "Persistent PGNS leaf certificate/ACME directory (default identity path plus .pgns; required with --identity-json)")
+	fs.StringVar(&cfg.PGNSRecoveryPubKey, "pgns-recovery-pubkey", "", "Compressed 33-byte hex secp256k1 cold recovery key hash-pinned on <alias>.app.<zone> leaves")
+	fs.StringVar(&cfg.PGNSACMEDirectory, "pgns-acme-directory", "", "ACME directory https:// URL for tunnel-local DNS-01 certificate issuance (for example Google Trust Services or Let's Encrypt)")
+	fs.StringVar(&cfg.PGNSACMEEmail, "pgns-acme-email", "", "Contact email for tunnel-local ACME account registration")
+	fs.StringVar(&cfg.PGNSACMECAIssuer, "pgns-acme-caa-issuer", "", "CAA issuer domain pin published alongside active ACME account URI (defaults to ACME directory host)")
+	env.String(fs, &cfg.PGNSACMEEABKID, "pgns-acme-eab-kid", "", "ACME External Account Binding key ID (pass via PGNS_ACME_EAB_KID)", "PGNS_ACME_EAB_KID")
+	env.String(fs, &cfg.PGNSACMEEABHMAC, "pgns-acme-eab-hmac", "", "ACME External Account Binding base64url HMAC key (pass via PGNS_ACME_EAB_HMAC)", "PGNS_ACME_EAB_HMAC")
+	fs.BoolVar(&cfg.PGNSPersist01, "pgns-persist01", false, "Publish _validation-persist.<fqdn> TXT for ACME PERSIST01 validation (requires CA issuer pinning)")
+	cli.RepeatedStringFlag(fs, &cfg.PGNSRelayEndpoints, "pgns-endpoint", "Public relay endpoint mapping <relay-url>=<ip>[:port][,<ip6>] when relay hostname cannot be DNS-resolved")
+}
+
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
 	fs.BoolVar(&cfg.TLSAuto, "tls-auto", false, "Obtain and renew exact service.address certificates; canonical TLS never falls back to Keyless")
 	fs.StringVar(&cfg.TLSStateDir, "tls-state-dir", "", "Persistent certificate/key directory for --tls-auto (default identity path plus .tls; required with --identity-json)")
@@ -149,6 +167,7 @@ func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlag
 	env := cli.NewEnv(os.Environ())
 	registerIdentityAuthFlags(fs, cfg, flags, env)
 	registerPaymentTransportFlags(fs, cfg, flags, env)
+	registerPGNSFlags(fs, cfg, env)
 }
 
 func runExposeCommand(args []string) error {
@@ -264,12 +283,13 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 	if flags.cache {
 		cfg.Cache = &tunnel.CacheConfig{TTL: flags.cacheTTL}
 	}
-	oidcFlagGiven, samlFlagGiven, emailFlagGiven, proofFlagGiven := false, false, false, false
+	oidcFlagGiven, samlFlagGiven, emailFlagGiven, proofFlagGiven, pgnsEABFlagGiven := false, false, false, false, false
 	fs.Visit(func(f *flag.Flag) {
 		oidcFlagGiven = oidcFlagGiven || strings.HasPrefix(f.Name, "auth-oidc-")
 		samlFlagGiven = samlFlagGiven || strings.HasPrefix(f.Name, "auth-saml-")
 		emailFlagGiven = emailFlagGiven || strings.HasPrefix(f.Name, "auth-smtp-")
 		proofFlagGiven = proofFlagGiven || f.Name == "auth-identity-proof"
+		pgnsEABFlagGiven = pgnsEABFlagGiven || f.Name == "pgns-acme-eab-kid" || f.Name == "pgns-acme-eab-hmac"
 	})
 	normalized, _ := cfg.AuthConfig.Normalize()
 	provider := normalized.Provider
@@ -284,6 +304,10 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 	}
 	if !cfg.IdentityHeaders && !proofFlagGiven {
 		cfg.IdentityProof = ""
+	}
+	if strings.TrimSpace(cfg.PGNSZone) == "" && !pgnsEABFlagGiven {
+		cfg.PGNSACMEEABKID = ""
+		cfg.PGNSACMEEABHMAC = ""
 	}
 	auth := cfg.AuthConfig
 	hasHTTPSource := strings.TrimSpace(cfg.Serve) != "" || len(cfg.HTTPRoutes) > 0 || strings.TrimSpace(cfg.TargetAddr) != ""

@@ -243,3 +243,56 @@ func TestExposeCertificateMonitoring(t *testing.T) {
 		}
 	}
 }
+
+func TestExposePGNSFlagsAndEnv(t *testing.T) {
+	const witnessHex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	t.Setenv("PGNS_ACME_EAB_KID", "eab-kid")
+	t.Setenv("PGNS_ACME_EAB_HMAC", "ZWFiLWhtYWM")
+
+	if spec, err := exposeSpec(t, "3000"); err != nil || spec.PGNS != nil {
+		t.Fatalf("plain portal expose leaked PGNS_ACME_EAB_* or failed: spec=%+v err=%v", spec.PGNS, err)
+	}
+
+	spec, err := exposeSpec(t,
+		"--pgns-zone", "portal.example",
+		"--pgns-alias", "myapp",
+		"--pgns-site-label", "prod",
+		"--pgns-sequencer", "https://seq1.portal.example",
+		"--pgns-sequencer", "https://seq2.portal.example",
+		"--pgns-witness", "w1="+witnessHex,
+		"--pgns-witness-threshold", "1",
+		"--pgns-state-dir", "pgns-state",
+		"--pgns-acme-directory", "https://dv.acme-v02.api.pki.goog/directory",
+		"--pgns-acme-email", "ops@portal.example",
+		"--pgns-acme-caa-issuer", "pki.goog",
+		"--pgns-persist01",
+		"--pgns-endpoint", "https://r1.portal.example=93.184.216.34:443",
+		"3000",
+	)
+	if err != nil {
+		t.Fatalf("valid PGNS expose flags failed: %v", err)
+	}
+	if spec.PGNS == nil || spec.PGNS.Zone != "portal.example" || spec.PGNS.Alias != "myapp" || spec.PGNS.SiteLabel != "prod" {
+		t.Fatalf("unexpected PGNS spec identity fields: %+v", spec.PGNS)
+	}
+	if spec.PGNS.ACMEEABKID != "eab-kid" || spec.PGNS.ACMEEABHMAC != "ZWFiLWhtYWM" || !spec.PGNS.Persist01 {
+		t.Fatalf("PGNS ACME/EAB fields not populated from env/flags: %+v", spec.PGNS)
+	}
+	if len(spec.PGNS.Sequencers) != 2 || len(spec.PGNS.Witnesses) != 1 || len(spec.PGNS.RelayEndpoints) != 1 {
+		t.Fatalf("repeated PGNS list flags mismatch: %+v", spec.PGNS)
+	}
+	if spec.HTTP == nil {
+		t.Fatal("PGNS exposure must enable HTTP handler for Local TLS h2")
+	}
+
+	for _, badArgs := range [][]string{
+		{"--pgns-zone", "portal.example", "--pgns-sequencer", "https://seq.example", "--pgns-witness", "w1=" + witnessHex, "--cache", "--serve", "./dist"},
+		{"--pgns-zone", "portal.example", "--pgns-sequencer", "https://seq.example", "--pgns-witness", "w1=" + witnessHex, "--tcp", "3000"},
+		{"--pgns-zone", "portal.example", "--pgns-sequencer", "https://seq.example", "--pgns-witness", "w1=" + witnessHex, "--pgns-acme-eab-kid", "only-kid", "3000"},
+		{"--pgns-acme-eab-kid", "only-kid", "3000"},
+	} {
+		if _, err := exposeSpec(t, badArgs...); err == nil {
+			t.Errorf("exposeSpec(%v) succeeded unexpectedly", badArgs)
+		}
+	}
+}

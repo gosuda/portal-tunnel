@@ -27,9 +27,26 @@ type Config struct {
 	TLSRequireLocal       bool   `toml:"tls_require_local,omitempty"`
 	TLSCert               string `toml:"tls_cert,omitempty"`
 	TLSKey                string `toml:"tls_key,omitempty"`
-	Name                  string `toml:"name,omitempty"`
-	IdentityPath          string `toml:"identity_path,omitempty"`
-	IdentityJSON          string `toml:"identity_json,omitempty"`
+
+	PGNSZone             string   `toml:"pgns_zone,omitempty"`
+	PGNSAlias            string   `toml:"pgns_alias,omitempty"`
+	PGNSSiteLabel        string   `toml:"pgns_site_label,omitempty"`
+	PGNSSequencers       []string `toml:"pgns_sequencers,omitempty"`
+	PGNSWitnesses        []string `toml:"pgns_witnesses,omitempty"`
+	PGNSWitnessThreshold int      `toml:"pgns_witness_threshold,omitempty"`
+	PGNSStateDir         string   `toml:"pgns_state_dir,omitempty"`
+	PGNSRecoveryPubKey   string   `toml:"pgns_recovery_pubkey,omitempty"`
+	PGNSACMEDirectory    string   `toml:"pgns_acme_directory,omitempty"`
+	PGNSACMEEmail        string   `toml:"pgns_acme_email,omitempty"`
+	PGNSACMECAIssuer     string   `toml:"pgns_acme_caa_issuer,omitempty"`
+	PGNSACMEEABKID       string   `toml:"pgns_acme_eab_kid,omitempty"`
+	PGNSACMEEABHMAC      string   `toml:"pgns_acme_eab_hmac,omitempty"`
+	PGNSPersist01        bool     `toml:"pgns_persist01,omitempty"`
+	PGNSRelayEndpoints   []string `toml:"pgns_endpoints,omitempty"`
+
+	Name         string `toml:"name,omitempty"`
+	IdentityPath string `toml:"identity_path,omitempty"`
+	IdentityJSON string `toml:"identity_json,omitempty"`
 
 	TargetAddr          string      `toml:"target,omitempty"`
 	Serve               string      `toml:"serve,omitempty"`
@@ -119,6 +136,7 @@ func (c *Config) Normalize() error {
 		c.HTTPRoutes = routes
 	}
 	c.StripRequestHeaders = slices.Clone(c.StripRequestHeaders)
+	c.normalizePGNS()
 	relays, err := utils.NormalizeRelayURLs(c.RelayURLs...)
 	if err != nil {
 		return err
@@ -133,6 +151,22 @@ func (c *Config) Normalize() error {
 	}
 	c.X402Config = c.X402Config.Normalize()
 	return nil
+}
+
+func (c *Config) normalizePGNS() {
+	c.PGNSZone = strings.TrimSpace(c.PGNSZone)
+	c.PGNSAlias = strings.TrimSpace(c.PGNSAlias)
+	c.PGNSSiteLabel = strings.TrimSpace(c.PGNSSiteLabel)
+	c.PGNSStateDir = strings.TrimSpace(c.PGNSStateDir)
+	c.PGNSRecoveryPubKey = strings.TrimSpace(c.PGNSRecoveryPubKey)
+	c.PGNSACMEDirectory = strings.TrimSpace(c.PGNSACMEDirectory)
+	c.PGNSACMEEmail = strings.TrimSpace(c.PGNSACMEEmail)
+	c.PGNSACMECAIssuer = strings.TrimSpace(c.PGNSACMECAIssuer)
+	c.PGNSACMEEABKID = strings.TrimSpace(c.PGNSACMEEABKID)
+	c.PGNSACMEEABHMAC = strings.TrimSpace(c.PGNSACMEEABHMAC)
+	c.PGNSSequencers = utils.CompactStrings(c.PGNSSequencers)
+	c.PGNSWitnesses = utils.CompactStrings(c.PGNSWitnesses)
+	c.PGNSRelayEndpoints = utils.CompactStrings(c.PGNSRelayEndpoints)
 }
 
 func normalizeConfigHTTPRoutes(routes []HTTPRoute) ([]HTTPRoute, error) {
@@ -167,6 +201,7 @@ func (c Config) Spec() (Spec, error) {
 		TLSStateDir:     c.TLSStateDir,
 		TLSRequireLocal: c.TLSRequireLocal,
 		TLSKey:          c.TLSKey,
+		PGNS:            buildConfigSpecPGNS(c),
 		Identity:        IdentitySpec{Name: c.Name, Path: c.IdentityPath, JSON: c.IdentityJSON},
 		Relays: RelaySpec{
 			URLs:      c.RelayURLs,
@@ -194,12 +229,55 @@ func (c Config) Spec() (Spec, error) {
 			spec.TLSStateDir = spec.Identity.Path + ".tls"
 		}
 	}
+	if spec.PGNS != nil && spec.PGNS.Zone != "" && spec.PGNS.StateDir == "" {
+		if spec.Identity.JSON == "" && spec.Identity.Path != "" {
+			spec.PGNS.StateDir = spec.Identity.Path + ".pgns"
+		}
+	}
 	return spec, spec.Validate()
+}
+
+func buildConfigSpecPGNS(c Config) *PGNSConfig {
+	configured := c.PGNSZone != "" ||
+		c.PGNSAlias != "" ||
+		c.PGNSSiteLabel != "" ||
+		len(c.PGNSSequencers) > 0 ||
+		len(c.PGNSWitnesses) > 0 ||
+		c.PGNSWitnessThreshold != 0 ||
+		c.PGNSStateDir != "" ||
+		c.PGNSRecoveryPubKey != "" ||
+		c.PGNSACMEDirectory != "" ||
+		c.PGNSACMEEmail != "" ||
+		c.PGNSACMECAIssuer != "" ||
+		c.PGNSACMEEABKID != "" ||
+		c.PGNSACMEEABHMAC != "" ||
+		c.PGNSPersist01 ||
+		len(c.PGNSRelayEndpoints) > 0
+	if !configured {
+		return nil
+	}
+	return &PGNSConfig{
+		Zone:             c.PGNSZone,
+		Alias:            c.PGNSAlias,
+		SiteLabel:        c.PGNSSiteLabel,
+		Sequencers:       c.PGNSSequencers,
+		Witnesses:        c.PGNSWitnesses,
+		WitnessThreshold: c.PGNSWitnessThreshold,
+		StateDir:         c.PGNSStateDir,
+		RecoveryPubKey:   c.PGNSRecoveryPubKey,
+		ACMEDirectory:    c.PGNSACMEDirectory,
+		ACMEEmail:        c.PGNSACMEEmail,
+		ACMECAIssuer:     c.PGNSACMECAIssuer,
+		ACMEEABKID:       c.PGNSACMEEABKID,
+		ACMEEABHMAC:      c.PGNSACMEEABHMAC,
+		Persist01:        c.PGNSPersist01,
+		RelayEndpoints:   c.PGNSRelayEndpoints,
+	}
 }
 
 func buildConfigSpecHTTP(c Config) *HTTPConfig {
 	auth := c.AuthConfig
-	localTLS := c.TLSAuto || c.TLSCert != ""
+	localTLS := c.TLSAuto || c.TLSCert != "" || c.PGNSZone != ""
 	httpRouting := c.Serve != "" || len(c.HTTPRoutes) != 0
 	httpPolicy := !auth.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) != 0
 	if !localTLS && !httpRouting && !httpPolicy {

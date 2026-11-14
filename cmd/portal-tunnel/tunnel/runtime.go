@@ -28,6 +28,7 @@ var (
 	errTLSCertificatePairRequired              = errors.New("tls_cert and tls_key must be configured together")
 	errLocalTLSWithRawTCP                      = errors.New("local TLS certificates cannot be combined with raw TCP")
 	errLocalTLSWithRelayCache                  = errors.New("local TLS certificates cannot be combined with relay cache")
+	errPGNSWithRelayCache                      = errors.New("PGNS cannot be combined with relay cache")
 	errCertificateMonitorModeUnsupported       = errors.New("TLS certificate monitoring cannot be combined with relay cache or raw TCP")
 	errTunnelTargetIsRequired                  = errors.New("tunnel target is required")
 	errHTTPTunnelCannotCombinedTCPOr           = errors.New("HTTP tunnel cannot be combined with TCP or UDP")
@@ -52,11 +53,30 @@ type Spec struct {
 	TLSRequireLocal    bool
 	TLSCert            string
 	TLSKey             string
+	PGNS               *PGNSConfig
 	Identity           IdentitySpec
 	Relays             RelaySpec
 	Metadata           types.LeaseMetadata
 	Transport          TransportSpec
 	HTTP               *HTTPConfig
+}
+
+type PGNSConfig struct {
+	Zone             string
+	Alias            string
+	SiteLabel        string
+	Sequencers       []string
+	Witnesses        []string
+	WitnessThreshold int
+	StateDir         string
+	RecoveryPubKey   string
+	ACMEDirectory    string
+	ACMEEmail        string
+	ACMECAIssuer     string
+	ACMEEABKID       string
+	ACMEEABHMAC      string
+	Persist01        bool
+	RelayEndpoints   []string
 }
 
 type IdentitySpec struct {
@@ -128,6 +148,9 @@ func validateHTTPCache(spec Spec) error {
 	httpConfig := spec.HTTP
 	if httpConfig.Cache == nil {
 		return nil
+	}
+	if spec.PGNS != nil {
+		return errPGNSWithRelayCache
 	}
 	if strings.TrimSpace(httpConfig.Serve) == "" {
 		return errRelayCacheRequiresStaticSite
@@ -217,6 +240,9 @@ func (spec Spec) Validate() error {
 			return errLocalTLSWithRelayCache
 		}
 	}
+	if err := validatePGNS(spec); err != nil {
+		return err
+	}
 	target := strings.TrimSpace(spec.Transport.Target)
 	if spec.HTTP == nil {
 		if target == "" {
@@ -252,6 +278,7 @@ type Runtime struct {
 	handler      http.Handler
 	target       string
 	udpTarget    string
+	pgns         *pgnsController
 	authProvider atomic.Pointer[authProviderCheck]
 }
 
@@ -360,7 +387,7 @@ func establishStartRuntime(ctx context.Context, spec Spec) (*Runtime, types.Iden
 	if err != nil {
 		return nil, types.Identity{}, nil, err
 	}
-	return runtime, listenerIdentity, routes, nil
+	return runtime, runtime.Identity, routes, nil
 }
 
 func monitorStartRuntimeAuth(ctx context.Context, spec Spec, runtime *Runtime) {
@@ -424,5 +451,5 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 // Close stops the exposure and releases the gateway's payment runtime, such
 // as RPC connections and claim logs.
 func (runtime *Runtime) Close() error {
-	return errors.Join(runtime.Exposure.Close(), runtime.gateway.Close())
+	return errors.Join(runtime.pgns.close(), runtime.Exposure.Close(), runtime.gateway.Close())
 }
