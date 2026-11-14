@@ -352,9 +352,18 @@ func (l *listener) run(ctx context.Context) {
 		l.report(listenerStatus{state: RelayConnecting})
 		err := l.registerAndConfigure(ctx)
 		if err != nil {
-			var stop bool
-			retries, stop = l.settlelistenerRegistration(ctx, err, retries)
-			if stop {
+			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			if l.closeForTerminalRelayError(err) {
+				return
+			}
+			retries++
+			if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
+				if ctx.Err() == nil {
+					l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
+				}
+				_ = l.Close()
 				return
 			}
 			continue
@@ -365,51 +374,24 @@ func (l *listener) run(ctx context.Context) {
 			log.Info().Str("address", l.identity.Address).Msg("relay listener registered")
 		}
 		err = l.runLease(ctx)
-		if l.settlelistenerLease(err) {
+		if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+			return
+		}
+		if l.closeForTerminalRelayError(err) {
+			return
+		}
+		if errors.Is(err, errLeaseRefreshRequired) {
+			l.resetForLeaseRefresh(err)
 			continue
 		}
+		log.Error().Err(err).
+			Str("relay_url", l.api.relayURL.String()).
+			Str("address", l.identity.Address).
+			Msg("listener connection retry budget exhausted; closing listener")
+		l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
+		_ = l.Close()
 		return
 	}
-}
-
-func (l *listener) settlelistenerRegistration(ctx context.Context, err error, retries int) (int, bool) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
-		return retries, true
-	}
-	if l.closeForTerminalRelayError(err) {
-		return retries, true
-	}
-	retries++
-	if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
-		if ctx.Err() == nil {
-			l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
-		}
-		_ = l.Close()
-		return retries, true
-	}
-	return retries, false
-}
-
-func (l *listener) settlelistenerLease(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
-		return false
-	}
-	if l.closeForTerminalRelayError(err) {
-		return false
-	}
-	if errors.Is(err, errLeaseRefreshRequired) {
-		l.resetForLeaseRefresh(err)
-		return true
-	}
-	relayURL := l.api.relayURL.String()
-	log.Error().
-		Err(err).
-		Str("relay_url", relayURL).
-		Str("address", l.identity.Address).
-		Msg("listener connection retry budget exhausted; closing listener")
-	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureRuntime, err: err})
-	_ = l.Close()
-	return false
 }
 
 func (l *listener) resetForLeaseRefresh(err error) {
@@ -687,7 +669,58 @@ func (l *listener) runLease(ctx context.Context) error {
 		}
 		return errLeaseRefreshRequired
 	}
-	return l.runLeaseExecute(ctx, lease)
+	leaseCtx, cancel := context.WithCancel(ctx)
+	probeReady := make(chan struct{}, 1)
+	errCh := make(chan error, defaultReadyTarget+1)
+	var workers sync.WaitGroup
+	reverseTransport := newLeaseReverseTransport(l)
+	defer func() {
+		cancel()
+		workers.Wait()
+		_ = reverseTransport.Close()
+	}()
+
+	workers.Go(func() { l.mitmManager.run(leaseCtx, probeReady) })
+	if l.cache != nil {
+		workers.Go(func() { l.runStaticCache(leaseCtx) })
+	}
+	for sessionSlot := range defaultReadyTarget {
+		sessionSlot++
+		workers.Go(func() {
+			if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, reverseTransport, probeReady); err != nil {
+				l.runLeaseReportError(leaseCtx, errCh, err)
+			}
+		})
+	}
+	// Certificate events update local status immediately. The renewal loop
+	// remains the owner of remote reports and access-token rotation.
+	var renew chan struct{}
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+		renew = make(chan struct{}, 1)
+		// Registration has no certificate report; publish usable material now.
+		if endpoint.local.Ready() {
+			renew <- struct{}{}
+		}
+		workers.Go(func() { l.runCertificateStatus(leaseCtx, endpoint.local, renew) })
+	}
+	if l.udpEnabled {
+		workers.Go(func() {
+			if err := l.runDatagramLoop(leaseCtx); err != nil {
+				l.runLeaseReportError(leaseCtx, errCh, err)
+			}
+		})
+	}
+	workers.Go(func() {
+		if err := l.runRenewLoop(leaseCtx, renew); err != nil {
+			l.runLeaseReportError(leaseCtx, errCh, err)
+		}
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	}
 }
 
 func (l *listener) runLeaseReportError(leaseCtx context.Context, errCh chan error, reportErr error) {
@@ -695,73 +728,6 @@ func (l *listener) runLeaseReportError(leaseCtx context.Context, errCh chan erro
 	case errCh <- reportErr:
 	case <-leaseCtx.Done():
 	}
-}
-
-func (l *listener) runLeaseStartProbe(leaseCtx context.Context, workers *sync.WaitGroup, probeReady chan struct{}) {
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
-		l.mitmManager.run(leaseCtx, probeReady)
-	}()
-	if l.cache != nil {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			l.runStaticCache(leaseCtx)
-		}()
-	}
-}
-
-func (l *listener) runLeaseStartSessions(leaseCtx context.Context, workers *sync.WaitGroup, errCh chan error, probeReady chan struct{}, lease listenerSnapshot) *leaseReverseTransport {
-	reverseTransport := newLeaseReverseTransport(l)
-	for sessionSlot := range defaultReadyTarget {
-		sessionSlot++
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			if err := l.runReverseSessionLoop(leaseCtx, lease.tenantTLS, sessionSlot, reverseTransport, probeReady); err != nil {
-				l.runLeaseReportError(leaseCtx, errCh, err)
-			}
-		}()
-	}
-	return reverseTransport
-}
-
-func (l *listener) runLeaseStartLoops(leaseCtx context.Context, workers *sync.WaitGroup, errCh chan error) {
-	// Certificate observations publish local status immediately. Remote reports
-	// stay serialized with access-token rotation in the existing renewal loop.
-	var renew chan struct{}
-	if lease, ok := l.leaseSnapshot(); ok {
-		if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
-			renew = make(chan struct{}, 1)
-			// Registration has no local certificate report. Publish already
-			// usable material now; pending issuance will signal its own change.
-			if endpoint.local.Ready() {
-				renew <- struct{}{}
-			}
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
-				l.runCertificateStatus(leaseCtx, endpoint.local, renew)
-			}()
-		}
-	}
-	if l.udpEnabled {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			if err := l.runDatagramLoop(leaseCtx); err != nil {
-				l.runLeaseReportError(leaseCtx, errCh, err)
-			}
-		}()
-	}
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
-		if err := l.runRenewLoop(leaseCtx, renew); err != nil {
-			l.runLeaseReportError(leaseCtx, errCh, err)
-		}
-	}()
 }
 
 // runCertificateStatus publishes installation and expiry without waiting for
@@ -794,136 +760,60 @@ func (l *listener) runCertificateStatus(ctx context.Context, client *localtls.Cl
 	}
 }
 
-func (l *listener) runLeaseAwait(ctx context.Context, cancel context.CancelFunc, workers *sync.WaitGroup, errCh chan error) error {
-	select {
-	case <-ctx.Done():
-		cancel()
-		workers.Wait()
-		return ctx.Err()
-	case err := <-errCh:
-		cancel()
-		workers.Wait()
-		return err
-	}
-}
-
-func (l *listener) runLeaseExecute(ctx context.Context, lease listenerSnapshot) error {
-	leaseCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	probeReady := make(chan struct{}, 1)
-	errCh := make(chan error, defaultReadyTarget+1)
-	var workers sync.WaitGroup
-	l.runLeaseStartProbe(leaseCtx, &workers, probeReady)
-	reverseTransport := l.runLeaseStartSessions(leaseCtx, &workers, errCh, probeReady, lease)
-	defer reverseTransport.Close()
-	l.runLeaseStartLoops(leaseCtx, &workers, errCh)
-	return l.runLeaseAwait(ctx, cancel, &workers, errCh)
-}
-
-type runReverseSessionLoopState struct {
-	listener    *listener
-	sessionSlot int
-	retries     int
-}
-
-func (s *runReverseSessionLoopState) runReverseSessionLoopOpenFailed(ctx context.Context, lease listenerSnapshot, openErr error) (bool, error) {
-	l := s.listener
-	if errors.Is(openErr, context.Canceled) || errors.Is(openErr, net.ErrClosed) {
-		return true, nil
-	}
-	if staleLeaseError(openErr) {
-		return true, errLeaseRefreshRequired
-	}
-	l.reportRefusal(openErr)
-	if l.isAlternateReverseEndpoint(lease.reverse.URL) {
-		stop, failErr := l.failoverReverseEndpoint(ctx, lease, s.sessionSlot, openErr, "reverse endpoint connect")
-		if failErr != nil {
-			return true, failErr
-		}
-		if stop {
-			return true, nil
-		}
-		return false, nil
-	}
-	s.retries++
-	if !l.waitRetry(ctx, "reverse session connect", openErr, s.retries, s.sessionSlot) {
-		return true, openErr
-	}
-	return false, nil
-}
-
-func (s *runReverseSessionLoopState) runReverseSessionLoopClaimRetry(ctx context.Context, lease listenerSnapshot, claimErr error) (bool, error) {
-	l := s.listener
-	if l.isAlternateReverseEndpoint(lease.reverse.URL) {
-		stop, failErr := l.failoverReverseEndpoint(ctx, lease, s.sessionSlot, claimErr, "reverse endpoint session")
-		if failErr != nil {
-			return true, failErr
-		}
-		if stop {
-			return true, nil
-		}
-		return false, nil
-	}
-	s.retries++
-	if !l.waitRetry(ctx, "reverse session connect", claimErr, s.retries, s.sessionSlot) {
-		return true, claimErr
-	}
-	return false, nil
-}
-
-func (s *runReverseSessionLoopState) runReverseSessionLoopSettle(ctx context.Context, lease listenerSnapshot, conn net.Conn, tenantTLS tenantTLSClient, probeReady chan<- struct{}) (bool, error) {
-	l := s.listener
-	l.reportStreamReady()
-	select {
-	case probeReady <- struct{}{}:
-	default:
-	}
-	claimed, claimErr := l.claimReverseSession(ctx, conn, tenantTLS)
-	switch {
-	case claimErr == nil:
-		s.retries = 0
-		return false, nil
-	case errors.Is(claimErr, context.Canceled), errors.Is(claimErr, net.ErrClosed):
-		return true, nil
-	case claimed:
-		log.Debug().
-			Err(claimErr).
-			Str("relay_url", l.api.relayURL.String()).
-			Str("address", l.identity.Address).
-			Int("reverse_session_slot", s.sessionSlot).
-			Msg("tenant tls handshake failed")
-		s.retries = 0
-		return false, nil
-	default:
-		return s.runReverseSessionLoopClaimRetry(ctx, lease, claimErr)
-	}
-}
-
 func (l *listener) runReverseSessionLoop(ctx context.Context, tenantTLS tenantTLSClient, sessionSlot int, reverseTransport *leaseReverseTransport, probeReady chan<- struct{}) error {
-	state := &runReverseSessionLoopState{listener: l, sessionSlot: sessionSlot}
+	var retries int
 	for {
 		lease, _ := l.leaseSnapshot()
+		operation := "reverse endpoint connect"
 		conn, err := reverseTransport.Open(ctx)
 		if err != nil {
-			if done, returnErr := state.runReverseSessionLoopOpenFailed(ctx, lease, err); done {
-				return returnErr
+			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			if staleLeaseError(err) {
+				return errLeaseRefreshRequired
+			}
+			l.reportRefusal(err)
+		} else {
+			l.reportStreamReady()
+			select {
+			case probeReady <- struct{}{}:
+			default:
+			}
+			var claimed bool
+			claimed, err = l.claimReverseSession(ctx, conn, tenantTLS)
+			if err == nil {
+				retries = 0
+				continue
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			if claimed {
+				log.Debug().Err(err).
+					Str("relay_url", l.api.relayURL.String()).
+					Str("address", l.identity.Address).
+					Int("reverse_session_slot", sessionSlot).
+					Msg("tenant tls handshake failed")
+				retries = 0
+				continue
+			}
+			operation = "reverse endpoint session"
+		}
+		if l.isAlternateReverseEndpoint(lease.reverse.URL) {
+			if refreshErr := l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability); refreshErr != nil {
+				return refreshErr
+			}
+			if !l.waitRetry(ctx, operation, err, 1, sessionSlot) {
+				return nil
 			}
 			continue
 		}
-		if done, returnErr := state.runReverseSessionLoopSettle(ctx, lease, conn, tenantTLS, probeReady); done {
-			return returnErr
+		retries++
+		if !l.waitRetry(ctx, "reverse session connect", err, retries, sessionSlot) {
+			return err
 		}
 	}
-}
-
-func (l *listener) failoverReverseEndpoint(ctx context.Context, lease listenerSnapshot, sessionSlot int, err error, operation string) (bool, error) {
-	if refreshErr := l.refreshReverseEndpointAfterFailure(ctx, lease.reverse.Capability); refreshErr != nil {
-		return false, refreshErr
-	}
-	if !l.waitRetry(ctx, operation, err, 1, sessionSlot) {
-		return true, nil
-	}
-	return false, nil
 }
 
 func (l *listener) claimReverseSession(ctx context.Context, conn net.Conn, tenantTLS tenantTLSClient) (bool, error) {
@@ -1334,40 +1224,71 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	pending := &listenerSnapshot{
+		hostname:       resp.CanonicalHostname,
+		legacyHostname: resp.LegacyCanonicalHostname,
+		aliasHostname:  resp.Hostname,
+		udpAddr:        resp.UDPAddr,
+		tcpAddr:        resp.TCPAddr,
+		accessToken:    resp.AccessToken,
+		reverse:        resp.ReverseEndpoint,
+		expiresAt:      resp.ExpiresAt,
+	}
+	// Registration owns these resources until the snapshot is installed. The
+	// same cleanup handles setup failures and a canceled installation we reclaim.
+	defer func() {
+		if pending == nil {
+			return
+		}
+		if pending.accessToken != "" {
+			_ = l.api.unregister(context.Background(), pending.accessToken)
+		}
+		if pending.tenantTLS != nil {
+			_ = pending.tenantTLS.Close()
+		}
+		pending.certificateObserver.Close()
+	}()
 	if resp.Namespace != types.LocalTLSNamespaceV1 && (l.tlsRequireLocal || l.tlsCertFile != "") {
-		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return fmt.Errorf("%w: relay does not support the required Local TLS namespace", errRelayIncompatible)
 	}
-	if err := l.confirmNewRegistration(resp); err != nil {
-		return err
-	}
-	var observer *certmonitor.CertificateObserver
-	if l.certificateMonitor != nil {
-		observer, err = certmonitor.StartCertificateObserver(resp.CanonicalHostname, *l.certificateMonitor)
-		if err != nil {
-			_ = l.api.unregister(context.Background(), resp.AccessToken)
-			return err
-		}
-	}
-	tenantTLS, err := l.dialRegistrationTLS(ctx, resp, observer)
-	if err != nil {
-		observer.Close()
-		return err
-	}
-	return l.storeRegistrationLease(ctx, resp, tenantTLS, observer)
-}
-
-func (l *listener) confirmNewRegistration(resp types.RegisterResponse) error {
 	if err := l.validateReverseEndpointTransport(resp.ReverseEndpoint); err != nil {
-		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return err
 	}
 	if l.udpEnabled && !resp.UDPEnabled {
-		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return &types.APIRequestError{
 			Code:    types.APIErrorCodeFeatureUnavailable,
 			Message: "relay did not enable required udp support",
 		}
+	}
+	if l.certificateMonitor != nil {
+		pending.certificateObserver, err = certmonitor.StartCertificateObserver(resp.CanonicalHostname, *l.certificateMonitor)
+		if err != nil {
+			return err
+		}
+	}
+	pending.tenantTLS, err = l.dialRegistrationTLS(ctx, resp, pending.certificateObserver)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	pending.chainCheckedAt = time.Now()
+	oldLease := l.lease.Swap(*pending)
+	pending = nil // The installed lease now owns TLS, observations, and the token.
+	if l.http2Enabled.Load() {
+		l.enableHTTP2()
+	}
+	if oldLease.tenantTLS != nil {
+		_ = oldLease.tenantTLS.Close()
+		oldLease.certificateObserver.Close()
+	}
+	if err := ctx.Err(); err != nil {
+		pending = l.clearLease("registration canceled")
+		return err
+	}
+	if l.udpEnabled && l.datagram != nil {
+		l.datagram.Clear("lease updated")
 	}
 	return nil
 }
@@ -1383,78 +1304,40 @@ func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterR
 		AccessToken: resp.AccessToken,
 	})
 	if err != nil {
-		_ = l.api.unregister(context.Background(), resp.AccessToken)
 		return nil, err
 	}
-	var tenantTLS tenantTLSClient = legacy
-	if resp.Namespace == types.LocalTLSNamespaceV1 {
-		l.api.mu.RLock()
-		issuanceDisabled := l.api.issuanceDisabled
-		l.api.mu.RUnlock()
-		local, localErr := localtls.NewClient(ctx, localtls.ClientConfig{
-			RelayURL: l.api.relayURL.String(), Hostname: resp.CanonicalHostname,
-			AccessToken: resp.AccessToken, CertificateDir: l.tlsStateDir, IssuanceDisabled: issuanceDisabled,
-			CertFile: l.tlsCertFile, KeyFile: l.tlsKeyFile,
-			InstalledCertificates: observer.Events(),
-		})
-		if localErr != nil {
-			_ = legacy.Close()
-			_ = l.api.unregister(context.Background(), resp.AccessToken)
-			return nil, localErr
-		}
-		if l.http2Enabled.Load() {
-			local.SetNextProtos([]string{"h2", "http/1.1"})
-		}
-		tenantTLS = &namespaceTLS{local: local, legacy: legacy, hostname: resp.CanonicalHostname, legacyHostname: legacyHostname, aliasHostname: resp.Hostname}
+	if resp.Namespace != types.LocalTLSNamespaceV1 {
+		return legacy, nil
 	}
-	if ctx.Err() != nil {
-		_ = l.api.unregister(context.Background(), resp.AccessToken)
-		_ = tenantTLS.Close()
-		return nil, ctx.Err()
+	l.api.mu.RLock()
+	issuanceDisabled := l.api.issuanceDisabled
+	l.api.mu.RUnlock()
+	local, err := localtls.NewClient(ctx, localtls.ClientConfig{
+		RelayURL:              l.api.relayURL.String(),
+		Hostname:              resp.CanonicalHostname,
+		AccessToken:           resp.AccessToken,
+		CertificateDir:        l.tlsStateDir,
+		IssuanceDisabled:      issuanceDisabled,
+		CertFile:              l.tlsCertFile,
+		KeyFile:               l.tlsKeyFile,
+		InstalledCertificates: observer.Events(),
+	})
+	if err != nil {
+		_ = legacy.Close()
+		return nil, err
 	}
-	return tenantTLS, nil
+	if l.http2Enabled.Load() {
+		local.SetNextProtos([]string{"h2", "http/1.1"})
+	}
+	return &namespaceTLS{
+		local:          local,
+		legacy:         legacy,
+		hostname:       resp.CanonicalHostname,
+		legacyHostname: legacyHostname,
+		aliasHostname:  resp.Hostname,
+	}, nil
 }
 
-func (l *listener) storeRegistrationLease(ctx context.Context, resp types.RegisterResponse, tenantTLS tenantTLSClient, observer *certmonitor.CertificateObserver) error {
-	next := listenerSnapshot{
-		hostname:            resp.CanonicalHostname,
-		legacyHostname:      resp.LegacyCanonicalHostname,
-		aliasHostname:       resp.Hostname,
-		udpAddr:             resp.UDPAddr,
-		tcpAddr:             resp.TCPAddr,
-		accessToken:         resp.AccessToken,
-		reverse:             resp.ReverseEndpoint,
-		expiresAt:           resp.ExpiresAt,
-		tenantTLS:           tenantTLS,
-		certificateObserver: observer,
-		chainCheckedAt:      time.Now(),
-	}
-	oldLease := l.lease.Swap(next)
-	if l.http2Enabled.Load() {
-		l.enableHTTP2()
-	}
-	if oldLease.tenantTLS != nil {
-		_ = oldLease.tenantTLS.Close()
-		oldLease.certificateObserver.Close()
-	}
-	if err := ctx.Err(); err != nil {
-		lease := l.clearLease("registration canceled")
-		if lease != nil {
-			if lease.accessToken != "" {
-				_ = l.api.unregister(context.Background(), lease.accessToken)
-			}
-			if lease.tenantTLS != nil {
-				_ = lease.tenantTLS.Close()
-				lease.certificateObserver.Close()
-			}
-		}
-		return err
-	}
-	if l.udpEnabled && l.datagram != nil {
-		l.datagram.Clear("lease updated")
-	}
-	return nil
-}
 func (l *listener) waitRetry(ctx context.Context, operation string, err error, retries, reverseSessionSlot int) bool {
 	if ctx.Err() != nil {
 		return false
