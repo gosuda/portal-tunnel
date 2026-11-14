@@ -247,9 +247,9 @@ func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registe
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, errRelayReturnedMismatchedLeaseIdentity
 	}
-	resp.Hostname = utils.NormalizeHostname(resp.Hostname)
-	resp.CanonicalHostname = utils.NormalizeHostname(resp.CanonicalHostname)
-	resp.LegacyCanonicalHostname = utils.NormalizeHostname(resp.LegacyCanonicalHostname)
+	resp.Hostname = types.NormalizeHostname(resp.Hostname)
+	resp.CanonicalHostname = types.NormalizeHostname(resp.CanonicalHostname)
+	resp.LegacyCanonicalHostname = types.NormalizeHostname(resp.LegacyCanonicalHostname)
 	if resp.Namespace != registerReq.Namespace {
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, fmt.Errorf("%w: unexpected hostname namespace", errRelayIncompatible)

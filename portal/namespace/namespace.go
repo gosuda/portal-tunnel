@@ -23,11 +23,11 @@ var (
 
 // AliasHostname composes a single DNS label under the relay root.
 func AliasHostname(name, rootHost string) (string, error) {
-	label, err := utils.NormalizeDNSLabel(name)
+	label, err := types.NormalizeDNSLabel(name)
 	if err != nil {
 		return "", err
 	}
-	rootHost = utils.NormalizeHostname(rootHost)
+	rootHost = types.NormalizeHostname(rootHost)
 	if rootHost == "" {
 		return "", errRootHostIsRequired
 	}
@@ -43,7 +43,7 @@ func MatchesAlias(hostname, name, legacyHostname string) bool {
 	if hostname == "" {
 		return true
 	}
-	label, err := utils.NormalizeDNSLabel(name)
+	label, err := types.NormalizeDNSLabel(name)
 	if err != nil || label == "" {
 		return false
 	}
@@ -73,7 +73,7 @@ func IsAddressHostname(hostname, rootHost string) bool {
 // be mistaken for a canonical label, so a friendly hostname never collides
 // with an identity-bound one.
 func NormalizeServiceName(raw string) (string, error) {
-	label, err := utils.NormalizeDNSLabel(raw)
+	label, err := types.NormalizeDNSLabel(raw)
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +88,7 @@ func NormalizeServiceName(raw string) (string, error) {
 // first label of a legacy canonical hostname, with a lowercase 0x prefix.
 // Routing must additionally validate depth relative to its configured root.
 func CanonicalAddress(hostname string) (string, error) {
-	label, rest, ok := strings.Cut(utils.NormalizeHostWithoutPort(hostname), ".")
+	label, rest, ok := strings.Cut(types.NormalizeHostWithoutPort(hostname), ".")
 	if !ok || label == "" || rest == "" {
 		return "", errHostnameDoesNotContainCanonicalLease
 	}
@@ -133,11 +133,11 @@ func LocalTLSHostname(name, address, rootHost string) (string, error) {
 // IsLocalTLSHostname recognizes the exact two-label namespace relative to the
 // configured root, never by an absolute DNS depth.
 func IsLocalTLSHostname(hostname, rootHost string) bool {
-	root := utils.NormalizeHostWithoutPort(rootHost)
+	root := types.NormalizeHostWithoutPort(rootHost)
 	if ip := net.ParseIP(root); ip != nil && ip.IsLoopback() {
 		root = "localhost"
 	}
-	relative, ok := strings.CutSuffix(utils.NormalizeHostWithoutPort(hostname), "."+root)
+	relative, ok := strings.CutSuffix(types.NormalizeHostWithoutPort(hostname), "."+root)
 	if !ok || root == "" {
 		return false
 	}

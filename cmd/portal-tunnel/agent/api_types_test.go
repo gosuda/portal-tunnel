@@ -44,7 +44,7 @@ func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
 		Allow:      []string{"alice@example.com"},
 		SAMLConfig: appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata"},
 	}
-	changes := authChanges(stored, desired)
+	changes := AuthChanges(stored, desired)
 	want := map[string]json.RawMessage{
 		"auth":                   json.RawMessage(`"saml"`),
 		"auth_identity_headers":  json.RawMessage(`false`),
@@ -64,7 +64,7 @@ func TestAuthChangesApplyToTheDesiredSettings(t *testing.T) {
 	if !reflect.DeepEqual(applied, wantApplied) {
 		t.Fatalf("applied = %+v, want %+v", applied, wantApplied)
 	}
-	if authChanges(applied, applied) != nil {
+	if AuthChanges(applied, applied) != nil {
 		t.Fatal("equal settings have changes")
 	}
 }

@@ -511,7 +511,7 @@ func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 // selectable) as one atomic unit; re-selection republishes membership
 // through the selection loop.
 func (e *Exposure) AddRelay(relayURL string) error {
-	relayURL, err := utils.NormalizeRelayURL(relayURL)
+	relayURL, err := types.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}
@@ -538,7 +538,7 @@ func (e *Exposure) AddRelay(relayURL string) error {
 // as one atomic unit; re-selection republishes membership through the
 // selection loop.
 func (e *Exposure) RemoveRelay(relayURL string) error {
-	relayURL, err := utils.NormalizeRelayURL(relayURL)
+	relayURL, err := types.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}

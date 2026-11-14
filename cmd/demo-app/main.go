@@ -101,7 +101,7 @@ func runTCPCommand(args []string) error {
 }
 
 func normalizeDemoName(cfg demoConfig) (demoConfig, error) {
-	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	normalizedName, err := types.NormalizeDNSLabel(cfg.name)
 	if err != nil {
 		return cfg, fmt.Errorf("invalid --name value: %w", err)
 	}

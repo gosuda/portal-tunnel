@@ -191,7 +191,7 @@ func (r AgentTunnelUpdateRequest) applyAuth(auth *appauth.Config) error {
 	return nil
 }
 
-func authChanges(stored, desired appauth.Config) map[string]json.RawMessage {
+func AuthChanges(stored, desired appauth.Config) map[string]json.RawMessage {
 	fields := func(auth appauth.Config) map[string]json.RawMessage {
 		data, _ := json.Marshal(auth.Public())
 		var out map[string]json.RawMessage

@@ -41,7 +41,7 @@ func (api *RelayAPI) serveVote(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.ID = ""
 	}
-	hostname := utils.NormalizeHostname(req.Hostname)
+	hostname := types.NormalizeHostname(req.Hostname)
 	if !commentVote && hostname == "" {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
 		return
@@ -110,11 +110,11 @@ func setVoterCookie(w http.ResponseWriter, r *http.Request, minted string) {
 func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.PolicyLease {
 	known := make(map[string]bool)
 	for _, lease := range public {
-		known[utils.NormalizeHostname(lease.CanonicalHostname)] = true
+		known[types.NormalizeHostname(lease.CanonicalHostname)] = true
 	}
 	leases := make([]types.PolicyLease, 0)
 	for _, lease := range server.PolicyLeases() {
-		hostname := utils.NormalizeHostname(lease.CanonicalHostname)
+		hostname := types.NormalizeHostname(lease.CanonicalHostname)
 		if known[hostname] && lease.IdentityKey != "" {
 			leases = append(leases, lease)
 			delete(known, hostname)

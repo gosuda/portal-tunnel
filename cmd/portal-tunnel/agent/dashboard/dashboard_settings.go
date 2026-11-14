@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"cmp"
@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -98,14 +99,14 @@ func (m *agentDashboardModel) ensureSelectedSettingsDraft() {
 	m.ensureSettingsDraft(tunnel)
 }
 
-func (m *agentDashboardModel) ensureSettingsDraft(tunnel AgentTunnelStatus) {
+func (m *agentDashboardModel) ensureSettingsDraft(tunnel agent.AgentTunnelStatus) {
 	if m.settingsEditTunnelID == tunnel.ID {
 		return
 	}
 	m.loadSettingsDraft(tunnel)
 }
 
-func (m *agentDashboardModel) loadSettingsDraft(tunnel AgentTunnelStatus) {
+func (m *agentDashboardModel) loadSettingsDraft(tunnel agent.AgentTunnelStatus) {
 	metadata := tunnel.Metadata
 	m.settingsEditTunnelID = tunnel.ID
 	m.settingsMaxRelays.SetValue(strconv.Itoa(tunnel.MaxActiveRelays))
@@ -148,20 +149,20 @@ func (m agentDashboardModel) applySettingsEdit() (tea.Model, tea.Cmd) {
 	tags := utils.SplitCSV(m.metadataTags.Value())
 	owner := strings.TrimSpace(m.metadataOwner.Value())
 	thumbnail := strings.TrimSpace(m.metadataThumbnail.Value())
-	metadata := AgentMetadataRequest{
+	metadata := agent.AgentMetadataRequest{
 		Description: &description,
 		Tags:        &tags,
 		Owner:       &owner,
 		Thumbnail:   &thumbnail,
 		Hide:        &hide,
 	}
-	req := AgentTunnelUpdateRequest{
+	req := agent.AgentTunnelUpdateRequest{
 		MaxActiveRelays: &maxActiveRelays,
 		Metadata:        &metadata,
 	}
 	m.err = nil
 	return m, agentDashboardRun(func(ctx context.Context) error {
-		return UpdateTunnel(ctx, m.stateDir, tunnel.ID, req)
+		return agent.UpdateTunnel(ctx, m.stateDir, tunnel.ID, req)
 	})
 }
 
@@ -187,7 +188,7 @@ func (m agentDashboardModel) renderSettingsSection(width, rows int) agentDashboa
 	return pane
 }
 
-func (m agentDashboardModel) settingsActionBar(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) agentDashboardView {
+func (m agentDashboardModel) settingsActionBar(th *agentDashboardTheme, width int, tunnel agent.AgentTunnelStatus) agentDashboardView {
 	changed := m.settingsChanged(tunnel)
 	applyLabel := "Apply"
 	if m.settingsEditTunnelID == tunnel.ID && !changed {
@@ -201,7 +202,7 @@ func (m agentDashboardModel) settingsActionBar(th *agentDashboardTheme, width in
 	return bar
 }
 
-func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, width int, tunnel AgentTunnelStatus) {
+func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, width int, tunnel agent.AgentTunnelStatus) {
 	th := &m.theme
 	rows := []struct {
 		label string
@@ -224,7 +225,7 @@ func (m agentDashboardModel) renderSettingsInputRows(pane *agentDashboardView, w
 	addSettingsPayments(pane, th, width, tunnel)
 }
 
-func addSettingsPayments(pane *agentDashboardView, th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) {
+func addSettingsPayments(pane *agentDashboardView, th *agentDashboardTheme, width int, tunnel agent.AgentTunnelStatus) {
 	paidRouteCount := 0
 	for _, route := range tunnel.HTTPRoutes {
 		if strings.TrimSpace(route.Amount) != "" {
@@ -308,7 +309,7 @@ func agentDashboardX402Network(network string, testnet bool) string {
 	return "default"
 }
 
-func (m agentDashboardModel) settingsChanged(tunnel AgentTunnelStatus) bool {
+func (m agentDashboardModel) settingsChanged(tunnel agent.AgentTunnelStatus) bool {
 	if m.settingsEditTunnelID != tunnel.ID {
 		return false
 	}

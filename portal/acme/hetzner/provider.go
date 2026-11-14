@@ -16,6 +16,7 @@ import (
 	"github.com/hetznercloud/hcloud-go/v2/hcloud/exp/zoneutil"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -288,8 +289,8 @@ func (p *Provider) findZone(ctx context.Context, client *hcloud.Client, domain s
 	if client == nil {
 		return nil, errHetznerClientIsNil
 	}
-	domain = utils.NormalizeHostname(domain)
-	candidates := utils.DomainCandidates(domain)
+	domain = types.NormalizeHostname(domain)
+	candidates := types.DomainCandidates(domain)
 	return searchFindZoneCandidates(ctx, p, client, candidates, domain)
 }
 
@@ -317,7 +318,7 @@ func fetchFindZoneCandidate(ctx context.Context, p *Provider, client *hcloud.Cli
 	if zone == nil {
 		return nil, nil
 	}
-	zoneName := utils.NormalizeBaseDomain(zone.Name)
+	zoneName := types.NormalizeBaseDomain(zone.Name)
 	if zoneName == "" {
 		return nil, nil
 	}

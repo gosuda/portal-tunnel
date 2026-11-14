@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"cmp"
@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -66,7 +67,7 @@ func agentDashboardSecretState(set bool) string {
 	return "not set"
 }
 
-func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
+func agentDashboardSecretSet(provider string, tunnel agent.AgentTunnelStatus) bool {
 	switch provider {
 	case appauth.ProviderOIDC:
 		return tunnel.AuthOIDCClientSecretSet
@@ -77,7 +78,7 @@ func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
 	}
 }
 
-func agentDashboardProviderCheck(th *agentDashboardTheme, tunnel AgentTunnelStatus) (string, lipgloss.Style) {
+func agentDashboardProviderCheck(th *agentDashboardTheme, tunnel agent.AgentTunnelStatus) (string, lipgloss.Style) {
 	switch {
 	case tunnel.AuthProviderError != "":
 		return th.glyph.ledFailed + " failed", th.failed
@@ -98,7 +99,7 @@ func (v *agentDashboardView) addAccessValue(th *agentDashboardTheme, width int, 
 	v.addLine(th.muted.Render(agentDashboardCell(label, labelWidth)) + " " + style.Render(agentDashboardFit(value, max(1, width-labelWidth-1))))
 }
 
-func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) {
+func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int, tunnel agent.AgentTunnelStatus) {
 	mode, style := agentDashboardAccessMode(tunnel.Provider), th.text
 	if tunnel.AuthProviderError != "" {
 		mode, style = mode+" "+th.glyph.ledFailed+" check failed", th.failed
@@ -198,7 +199,7 @@ type agentDashboardAccess struct {
 	applying    bool
 	applied     bool
 	err         error
-	base        AgentTunnelStatus
+	base        agent.AgentTunnelStatus
 
 	add, issuer, clientID, secret                         textinput.Model
 	metadataURL, metadataFile, entityID, subjectAttribute textinput.Model
@@ -230,10 +231,10 @@ func newAgentDashboardAccess(theme agentDashboardTheme) agentDashboardAccess {
 
 func (m agentDashboardModel) accessing() bool { return m.access.tunnelID != "" }
 
-func (m agentDashboardModel) accessTunnel() (AgentTunnelStatus, bool) {
-	index := slices.IndexFunc(m.status.Tunnels, func(tunnel AgentTunnelStatus) bool { return tunnel.ID == m.access.tunnelID })
+func (m agentDashboardModel) accessTunnel() (agent.AgentTunnelStatus, bool) {
+	index := slices.IndexFunc(m.status.Tunnels, func(tunnel agent.AgentTunnelStatus) bool { return tunnel.ID == m.access.tunnelID })
 	if index < 0 {
-		return AgentTunnelStatus{}, false
+		return agent.AgentTunnelStatus{}, false
 	}
 	return m.status.Tunnels[index], true
 }
@@ -278,13 +279,13 @@ func (m *agentDashboardModel) syncAccess() {
 	}
 }
 
-func sameAccessSettings(a, b AgentTunnelStatus) bool {
-	return authChanges(a.AuthConfig, b.AuthConfig) == nil &&
+func sameAccessSettings(a, b agent.AgentTunnelStatus) bool {
+	return agent.AuthChanges(a.AuthConfig, b.AuthConfig) == nil &&
 		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet &&
 		a.AuthSMTPPasswordSet == b.AuthSMTPPasswordSet
 }
 
-func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
+func (a *agentDashboardAccess) load(tunnel agent.AgentTunnelStatus) {
 	a.base = tunnel
 	a.applied = false
 	a.provider = tunnel.Provider
@@ -320,7 +321,7 @@ func (a *agentDashboardAccess) forgetSecret() {
 	a.clearSecret = false
 }
 
-func (a *agentDashboardAccess) setClearSecret(clear bool, stored AgentTunnelStatus) {
+func (a *agentDashboardAccess) setClearSecret(clear bool, stored agent.AgentTunnelStatus) {
 	a.clearSecret = clear
 	if clear {
 		a.secret.Reset()
@@ -336,7 +337,7 @@ func (a *agentDashboardAccess) setClearSecret(clear bool, stored AgentTunnelStat
 	}
 }
 
-func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelStatus) {
+func (a *agentDashboardAccess) setProvider(provider string, stored agent.AgentTunnelStatus) {
 	if provider == a.provider {
 		return
 	}
@@ -496,7 +497,7 @@ func accessApplyLabel(a agentDashboardAccess, changed bool) string {
 	return applyLabel
 }
 
-func (m agentDashboardModel) accessBodyRows(th *agentDashboardTheme, inner int, a agentDashboardAccess, tunnel AgentTunnelStatus) (agentDashboardView, int) {
+func (m agentDashboardModel) accessBodyRows(th *agentDashboardTheme, inner int, a agentDashboardAccess, tunnel agent.AgentTunnelStatus) (agentDashboardView, int) {
 	var body agentDashboardView
 	focusLine := body.addAccessBodyFields(th, inner, a, tunnel)
 	body.addLine("")
@@ -505,7 +506,7 @@ func (m agentDashboardModel) accessBodyRows(th *agentDashboardTheme, inner int, 
 	return body, focusLine
 }
 
-func (v *agentDashboardView) addAccessBodyFields(th *agentDashboardTheme, inner int, a agentDashboardAccess, tunnel AgentTunnelStatus) int {
+func (v *agentDashboardView) addAccessBodyFields(th *agentDashboardTheme, inner int, a agentDashboardAccess, tunnel agent.AgentTunnelStatus) int {
 	focusLine := 0
 	for index, field := range a.fields() {
 		focused := index == a.focusIndex()
@@ -564,7 +565,7 @@ func (a agentDashboardAccess) providerInput(field agentDashboardAccessRow) (stri
 	return "", textinput.Model{}, false
 }
 
-func (a agentDashboardAccess) accessSecretField(tunnel AgentTunnelStatus) (string, textinput.Model) {
+func (a agentDashboardAccess) accessSecretField(tunnel agent.AgentTunnelStatus) (string, textinput.Model) {
 	input, label := a.secret, "Client secret"
 	if a.provider == appauth.ProviderEmail {
 		label = "SMTP password"
@@ -576,7 +577,7 @@ func (a agentDashboardAccess) accessSecretField(tunnel AgentTunnelStatus) (strin
 	return label, input
 }
 
-func (v *agentDashboardView) addAccessProviderCheck(th *agentDashboardTheme, inner int, tunnel AgentTunnelStatus) {
+func (v *agentDashboardView) addAccessProviderCheck(th *agentDashboardTheme, inner int, tunnel agent.AgentTunnelStatus) {
 	if tunnel.Provider != appauth.ProviderOIDC && tunnel.Provider != appauth.ProviderSAML && tunnel.Provider != appauth.ProviderEmail {
 		return
 	}
@@ -606,7 +607,7 @@ func agentDashboardAccessEntryPlaceholder(provider string) string {
 	}
 }
 
-func agentDashboardSecretPlaceholder(a agentDashboardAccess, stored AgentTunnelStatus) string {
+func agentDashboardSecretPlaceholder(a agentDashboardAccess, stored agent.AgentTunnelStatus) string {
 	switch {
 	case a.clearSecret:
 		return "will be removed"
@@ -668,15 +669,15 @@ func (v *agentDashboardView) addFieldRow(line string, width, field int) {
 	v.addLine(line)
 }
 
-func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdateRequest {
+func (a agentDashboardAccess) request(stored agent.AgentTunnelStatus) agent.AgentTunnelUpdateRequest {
 	if a.provider == "" {
 		if stored.Provider == "" {
-			return AgentTunnelUpdateRequest{}
+			return agent.AgentTunnelUpdateRequest{}
 		}
-		return AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{"auth": json.RawMessage(`""`)}}
+		return agent.AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{"auth": json.RawMessage(`""`)}}
 	}
 	draft := a.accessDraft(stored)
-	req := AgentTunnelUpdateRequest{Auth: authChanges(stored.AuthConfig, draft)}
+	req := agent.AgentTunnelUpdateRequest{Auth: agent.AuthChanges(stored.AuthConfig, draft)}
 	for key, value := range a.secretChanges(stored) {
 		if req.Auth == nil {
 			req.Auth = make(map[string]json.RawMessage)
@@ -686,7 +687,7 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	return req
 }
 
-func (a agentDashboardAccess) accessDraft(stored AgentTunnelStatus) appauth.Config {
+func (a agentDashboardAccess) accessDraft(stored agent.AgentTunnelStatus) appauth.Config {
 	draft := appauth.Config{Provider: a.provider, IdentityHeaders: a.headers}
 	if appauth.ProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.Allow) == 0) {
 		draft.EmailList = a.allowed
@@ -724,7 +725,7 @@ func (a agentDashboardAccess) accessProviderConfigs() (appauth.OIDCConfig, appau
 	return oidc, saml, email
 }
 
-func (a agentDashboardAccess) secretChanges(stored AgentTunnelStatus) map[string]json.RawMessage {
+func (a agentDashboardAccess) secretChanges(stored agent.AgentTunnelStatus) map[string]json.RawMessage {
 	var changes map[string]json.RawMessage
 	for _, owned := range []struct{ provider, key string }{
 		{appauth.ProviderOIDC, "auth_oidc_client_secret"},
@@ -759,7 +760,7 @@ func (m agentDashboardModel) applyAccess() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := UpdateTunnel(ctx, stateDir, tunnelID, req)
+		err := agent.UpdateTunnel(ctx, stateDir, tunnelID, req)
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = errors.New("the agent did not answer in time; the change may still be applied, the next status shows it")
 		}

@@ -84,7 +84,7 @@ func run(args []string) error {
 		printUsage(os.Stderr)
 		return err
 	}
-	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	normalizedName, err := types.NormalizeDNSLabel(cfg.name)
 	if err != nil {
 		return fmt.Errorf("invalid --name value: %w", err)
 	}

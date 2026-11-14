@@ -29,6 +29,7 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -350,7 +351,7 @@ func caDirectoryDigest(caDirURL string) string {
 }
 
 func (m *Manager) certificateFiles() (certFile, keyFile string) {
-	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return certificateFilePaths(m.cfg.KeyDir, lego.LEDirectoryProduction)
 	}
 	return certificateFilePaths(m.cfg.KeyDir, m.cfg.CADirURL)
@@ -440,7 +441,7 @@ func localDevelopmentCertificateReusable(cert *x509.Certificate, domains []strin
 }
 
 func localDevelopmentDomains(baseHost string) []string {
-	baseHost = utils.NormalizeBaseDomain(baseHost)
+	baseHost = types.NormalizeBaseDomain(baseHost)
 	domains := []string{"localhost", "*.localhost", "127.0.0.1", "::1"}
 	if baseHost != "" && baseHost != "localhost" {
 		domains = append(domains, baseHost)

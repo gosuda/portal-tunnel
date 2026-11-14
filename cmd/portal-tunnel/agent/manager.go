@@ -205,7 +205,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 func newTunnelConfig(req AgentTunnelRequest) (TunnelConfig, error) {
 	id := strings.TrimSpace(req.ID)
 	name := strings.TrimSpace(req.Name)
-	id = cmp.Or(id, agentTunnelID(name))
+	id = cmp.Or(id, AgentTunnelID(name))
 	if id == "" {
 		return TunnelConfig{}, errTunnelNameIsRequired
 	}
@@ -238,7 +238,7 @@ func newTunnelConfig(req AgentTunnelRequest) (TunnelConfig, error) {
 	}}, nil
 }
 
-func agentTunnelID(name string) string {
+func AgentTunnelID(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	var out strings.Builder
 	dash := false

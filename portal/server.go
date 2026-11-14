@@ -90,7 +90,7 @@ func parseRedirectTarget(portalURL string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
 	}
-	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
+	hasHTTPSOrigin := target.Scheme == "https" && types.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
 		return nil, errHTTPRedirectRequiresPortalURLAbsolute
 	}
@@ -147,11 +147,11 @@ func applyValidateServerConfigACME(cfg ServerConfig) (ServerConfig, error) {
 }
 
 func applyValidateServerConfigRelayURLs(cfg ServerConfig) (ServerConfig, error) {
-	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
+	selfRelayURL, err := types.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {
 		return ServerConfig{}, fmt.Errorf("normalize portal url: %w", err)
 	}
-	if utils.PortalRootHost(selfRelayURL) == "" {
+	if types.PortalRootHost(selfRelayURL) == "" {
 		return ServerConfig{}, errRootHostIsRequired
 	}
 	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
@@ -198,7 +198,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg = next
 	if cfg.TenantCertificates {
 		issuanceConfig := cfg.ACME
-		issuanceConfig.BaseDomain = utils.PortalRootHost(cfg.PortalURL)
+		issuanceConfig.BaseDomain = types.PortalRootHost(cfg.PortalURL)
 		if err := issuanceConfig.ValidateTenantIssuanceState(); err != nil {
 			return ServerConfig{}, fmt.Errorf("TENANT_CERTIFICATES requires usable TENANT_ISSUANCE_STATE_DIR: %w", err)
 		}
@@ -215,7 +215,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 // leaves SNI_PORT unset: the explicit PORTAL_URL port when the canonical
 // origin names one, otherwise 443.
 func DefaultSNIPort(portalURL string) int {
-	normalized, err := utils.NormalizeRelayURL(portalURL)
+	normalized, err := types.NormalizeRelayURL(portalURL)
 	if err != nil {
 		return 443
 	}
@@ -407,7 +407,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
-	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
+	if baseDomain := types.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
 		return nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
@@ -487,7 +487,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	identityPath := filepath.Join(validated.StateDir, types.RelayIdentityFilename)
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(validated.PortalURL))
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, types.PortalRootHost(validated.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
@@ -1532,7 +1532,7 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	helloSpan := clientHello.HandshakeMessage
-	serverName := utils.NormalizeHostname(clientHello.ServerName)
+	serverName := types.NormalizeHostname(clientHello.ServerName)
 	localTLS := namespace.IsLocalTLSHostname(serverName, s.registry.rootHostname)
 	relayAPI := serverName == "" || serverName == s.identity.Name
 	if !localTLS && (relayAPI || s.registry.cache.Has(serverName)) {

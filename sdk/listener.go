@@ -195,7 +195,7 @@ type listener struct {
 func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
 
-	entryRelayURL, err := utils.NormalizeRelayURL(relayURL)
+	entryRelayURL, err := types.NormalizeRelayURL(relayURL)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -1528,7 +1528,7 @@ func (c *namespaceTLS) TerminateConn(ctx context.Context, conn net.Conn, binding
 		_ = conn.Close()
 		return nil, err
 	}
-	hostname := utils.NormalizeHostname(hello.ServerName)
+	hostname := types.NormalizeHostname(hello.ServerName)
 	if hostname == c.hostname {
 		return c.local.TerminateConn(ctx, buffered, binding)
 	}
@@ -1642,7 +1642,7 @@ func reverseMuxEnded(mux *transport.ReverseMux) bool {
 }
 
 func validatePublicReverseHostname(host string) error {
-	if utils.IsLocalOnlyRelayHost(host) {
+	if types.IsLocalOnlyRelayHost(host) {
 		return fmt.Errorf("overlay gateway host %q is local-only", host)
 	}
 	if addr, err := netip.ParseAddr(host); err == nil && !utils.IsPublicIP(addr) {

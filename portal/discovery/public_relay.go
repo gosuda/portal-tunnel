@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -29,7 +30,7 @@ func requirePublicRelayURL(raw string) error {
 		return errDiscoveredRelayMustHavePublicHTTPS
 	}
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if utils.IsLocalOnlyRelayHost(host) {
+	if types.IsLocalOnlyRelayHost(host) {
 		return fmt.Errorf("discovered relay host %q is local-only", host)
 	}
 	if ip, err := netip.ParseAddr(host); err == nil && !utils.IsPublicIP(ip) {

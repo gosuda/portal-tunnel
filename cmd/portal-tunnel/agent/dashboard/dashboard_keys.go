@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"slices"

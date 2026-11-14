@@ -105,7 +105,7 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 
 	return &leaseRegistry{
 		records:        make([]*leaseRecord, 0),
-		rootHostname:   utils.NormalizeHostname(rootHostname),
+		rootHostname:   types.NormalizeHostname(rootHostname),
 		tokenAuthority: tokenAuthority,
 		tokenIssuer:    tokenIssuer,
 		reverseURL:     utils.ResolveAPIURL(issuerURL, types.PathSDKConnect).String(),
@@ -283,7 +283,7 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 }
 
 func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
-	host = utils.NormalizeHostname(host)
+	host = types.NormalizeHostname(host)
 	if host == "" {
 		return nil, false
 	}
@@ -308,7 +308,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 			if hostname == host {
 				return record, true
 			}
-			if wildcard == nil && utils.HostnameMatchesPattern(hostname, host) {
+			if wildcard == nil && types.HostnameMatchesPattern(hostname, host) {
 				wildcard = record
 			}
 		}
@@ -1493,7 +1493,7 @@ func (s *Server) HandleTenantCertificate(w http.ResponseWriter, r *http.Request,
 	}
 	// Free registration is not a public CA issuance grant. Local development
 	// certificates consume no public quota and retain automatic issuance.
-	if !utils.IsLocalRelayHost(s.identity.Name) && !slices.Contains(approved, record.ServiceKey()) {
+	if !types.IsLocalRelayHost(s.identity.Name) && !slices.Contains(approved, record.ServiceKey()) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTenantIssuanceNotApproved, "this service is not approved for automatic tenant certificate issuance")
 		return
 	}

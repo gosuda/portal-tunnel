@@ -45,7 +45,7 @@ func NewHTTPTLSClient(ctx context.Context, relayURL *url.URL, timeout time.Durat
 	}
 
 	var rootCAs *x509.CertPool
-	if IsLocalRelayHost(serverName) {
+	if types.IsLocalRelayHost(serverName) {
 		rootCAPEM, err := FetchEndpointCertificateChain(ctx, relayURL.String(), serverName)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("bootstrap localhost relay trust: %w", err)
@@ -154,7 +154,7 @@ func dialEndpointTLS(ctx context.Context, host, port, serverName string) (*tls.C
 	tlsConn := tls.Client(rawConn, &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
-		InsecureSkipVerify: IsLocalRelayHost(host),
+		InsecureSkipVerify: types.IsLocalRelayHost(host),
 		NextProtos:         []string{"http/1.1"},
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
@@ -177,7 +177,7 @@ func dialEndpointTCP(ctx context.Context, host, port string) (net.Conn, error) {
 	address := net.JoinHostPort(host, port)
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	var proxyURL *url.URL
-	if !IsLocalRelayHost(host) {
+	if !types.IsLocalRelayHost(host) {
 		var proxyErr error
 		proxyURL, proxyErr = endpointProxy(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
 		if proxyErr != nil {

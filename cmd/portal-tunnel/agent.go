@@ -19,6 +19,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/internal/cli"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/dashboard"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
 )
 
@@ -76,7 +77,7 @@ func parseAgentRunArgs(args []string) (string, bool, bool, string, error) {
 	fs.StringVar(&configPath, "config", service.DefaultConfigPath(), "Portal agent TOML config path")
 	fs.BoolVar(&serviceMode, "service", false, "Run the foreground service process")
 	fs.BoolVar(&foreground, "foreground", false, "Run in the current process without installing the OS service")
-	env.String(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme with --foreground: amber or green", "PORTAL_TUI_THEME")
+	env.String(fs, &theme, "theme", dashboard.DefaultDashboardTheme, "Dashboard color theme with --foreground: amber or green", "PORTAL_TUI_THEME")
 	if err := cli.ParseFlagSet(fs, args, printAgentRunUsage); err != nil {
 		return "", false, false, "", err
 	}
@@ -218,7 +219,7 @@ func runAgentForeground(configPath string, cfg agent.Config, theme string) error
 		stop()
 		return err
 	}
-	dashboardErr := agent.RunDashboard(resolvedConfigPath, cfg.Agent.StateDir, theme, true)
+	dashboardErr := dashboard.RunDashboard(resolvedConfigPath, cfg.Agent.StateDir, theme, true)
 	stop()
 	runErr := <-errCh
 	if errors.Is(runErr, context.Canceled) {
@@ -337,7 +338,7 @@ func runAgentDashboardCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	return agent.RunDashboard(configPath, resolvedStateDir, theme, false)
+	return dashboard.RunDashboard(configPath, resolvedStateDir, theme, false)
 }
 
 func parseRunAgentDashboardCommandArgs(args []string) (string, string, string, error) {
@@ -348,7 +349,7 @@ func parseRunAgentDashboardCommandArgs(args []string) (string, string, string, e
 	fs := cli.NewFlagSet("agent dashboard", printAgentDashboardUsage)
 	fs.StringVar(&configPath, "config", "", "Portal agent TOML config path")
 	fs.StringVar(&stateDir, "state-dir", "", "Portal agent state directory")
-	env.String(fs, &theme, "theme", agent.DefaultDashboardTheme, "Dashboard color theme: amber or green", "PORTAL_TUI_THEME")
+	env.String(fs, &theme, "theme", dashboard.DefaultDashboardTheme, "Dashboard color theme: amber or green", "PORTAL_TUI_THEME")
 	if err := cli.ParseFlagSet(fs, args, printAgentDashboardUsage); err != nil {
 		return "", "", "", err
 	}
@@ -383,7 +384,7 @@ func resolveDashboardStateDir(configPath, stateDir string) (string, error) {
 }
 
 func validateDashboardTheme(fs *flag.FlagSet, theme string) error {
-	err := agent.ValidateDashboardTheme(theme)
+	err := dashboard.ValidateDashboardTheme(theme)
 	if err == nil {
 		return nil
 	}
