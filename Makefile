@@ -1,8 +1,9 @@
-.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-wasm build-server build-server-bin clean check-env-example env-reference
+.PHONY: help install fmt vet lint lint-auto test test-unit test-e2e tidy all run build build-frontend build-docs build-tunnel build-wasm build-server build-server-bin clean check-env-example env-reference
 
 .DEFAULT_GOAL := help
 
 GO_PACKAGES := . ./cmd/... ./e2e/... ./pgns/... ./portal/... ./sdk/... ./types/... ./utils/...
+GO_UNIT_PACKAGES := . ./cmd/... ./pgns/... ./portal/... ./sdk/... ./types/... ./utils/...
 GO_BUILD_FLAGS := -trimpath -ldflags "-s -w"
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.52.0
@@ -55,6 +56,13 @@ lint-auto:
 test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
 	cd frontend && npm test
+
+test-unit:
+	go test -v -coverprofile=coverage.out $(GO_UNIT_PACKAGES)
+	cd frontend && npm test
+
+test-e2e:
+	go test -v ./e2e/...
 
 tidy:
 	go get -u ./...

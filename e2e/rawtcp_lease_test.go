@@ -301,9 +301,11 @@ func reallowDeniedBridge(t *testing.T, event string, h *tcpLeaseHarness) {
 }
 
 func TestTCPLeaseBridgeLifecycle(t *testing.T) {
+	t.Parallel()
 	for _, carrier := range []string{"native", "websocket"} {
 		for _, event := range []string{"unregister", "expiry", "deny", "shutdown"} {
 			t.Run(carrier+"/"+event, func(t *testing.T) {
+				t.Parallel()
 				h := newTCPLeaseHarness(t, carrier)
 				public, reverse := h.connect()
 				tcpLeaseRoundTrip(t, public, reverse)
@@ -341,8 +343,10 @@ func assertHalfCloseEchoRoundTrip(t *testing.T, public *net.TCPConn, reverse net
 }
 
 func TestTCPLeaseBridgeResponseAfterHalfClose(t *testing.T) {
+	t.Parallel()
 	for _, carrier := range []string{"native", "websocket"} {
 		t.Run(carrier, func(t *testing.T) {
+			t.Parallel()
 			h := newTCPLeaseHarness(t, carrier)
 			public, reverse := h.connect()
 			assertHalfCloseEchoRoundTrip(t, public, reverse)

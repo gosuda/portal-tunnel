@@ -149,6 +149,7 @@ func stallThenUploadCacheObject(t *testing.T, ctx context.Context, client *http.
 }
 
 func TestStalledMultipartUploadReleasesAdmission(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	base, stateDir, relay := startCacheRelay(t, ctx, cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: time.Minute})
@@ -371,6 +372,7 @@ func assertOfflineCacheExpiry(t *testing.T, client *http.Client, publicURL strin
 }
 
 func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
+	t.Parallel()
 	const offlineTTL = time.Second
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -416,6 +418,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 }
 
 func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	base, stateDir, relay := startCacheRelay(t, ctx, cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: time.Minute})
