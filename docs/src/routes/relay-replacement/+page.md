@@ -24,6 +24,16 @@ and operator-managed relay certificates. Keep discovery, overlay, raw TCP,
 UDP, static relay caching, ENS automation, and automatic tenant issuance off.
 Do not use `WithAutomaticTLS` or `WithTLSCertificate` in this example.
 
+The CLI/agent's built-in application authentication is also outside this
+profile: its `PublicHosts` come from relay-reported URLs on :8443/:9443 and
+do not include the stable :443 host, so authenticated customer requests can
+receive HTTP 421. There is no CLI setting to add that public origin. SDK
+embedders using `sdk/appauth` must provide `Config.PublicHosts` with the exact
+stable HTTPS URL on :443 (or its default-port form), and preserve the correct
+ownership lifetime/epoch when using aliases. Keep callback and redirect URLs
+consistent with that origin. Do not disable host validation or trust an
+arbitrary request Host to work around the mismatch.
+
 Local TLS leases publish exact service/address DNS records. Their cleanup
 checks ownership within one relay, not across two processes. Merely sharing a
 DNS zone or state directory does not make overlapping Local TLS replacement
@@ -155,13 +165,31 @@ authentication; application authentication still belongs to the service.
 It must be a dedicated instance for this customer entry; tunnel control
 endpoints bypass it. It requires nginx 1.21.4 or later with the stream and
 [`stream_ssl_preread`](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html)
-modules available. Install the configuration as `/etc/nginx/portal-entry.conf`.
+modules available. A standalone `-c` file does not inherit module loading from
+the system's default `nginx.conf`. The example explicitly includes
+`/etc/nginx/modules-enabled/*.conf`, the Debian/Ubuntu package module loaders.
+Install matching packages from a release that meets the minimum nginx version,
+for example `sudo apt-get install nginx libnginx-mod-stream`. Ubuntu 22.04's
+stock nginx 1.18 does not meet this example's requirements; installing its
+stream package alone is insufficient. For a static nginx build, omit that
+include to avoid loading a built-in module again. On other distributions, replace it with the
+distribution's module-loader include or an absolute `load_module` path for
+the matching stream module. Use `nginx -V` to inspect build options; an
+`unknown directive "stream"` or `"ssl_preread"` error must be resolved before
+starting the entry point.
+
+The example sets `map_hash_bucket_size 512` to accommodate exact hostnames up
+to the DNS length limit plus hash overhead; the default bucket can be too
+small even for a legacy address-bearing name. Check the final allowlist with
+the configuration test below whenever names change.
+
+Install the configuration as `/etc/nginx/portal-entry.conf`.
 The example uses its own PID file, `/run/nginx-portal-entry.pid`, and separate
 logs so signals do not target another nginx master. Provision the prefix and
 log directories, validate, and start this dedicated instance before cutover:
 
 ```sh
-sudo install -d /var/lib/nginx-portal-entry /var/log/nginx
+sudo install -d /var/lib/nginx-portal-entry/logs /var/log/nginx
 sudo nginx -p /var/lib/nginx-portal-entry/ -c /etc/nginx/portal-entry.conf -t
 sudo nginx -p /var/lib/nginx-portal-entry/ -c /etc/nginx/portal-entry.conf
 ```
