@@ -927,94 +927,65 @@ func (l *listener) runDatagramLoop(ctx context.Context) error {
 
 		conn, err := l.openQUICBackhaulSession(ctx)
 		if err != nil {
-			done, dialErr := l.runDatagramLoopDialFailed(ctx, err)
-			if done {
-				return dialErr
+			if staleLeaseError(err) {
+				l.datagram.Clear("lease refresh required")
+				return errLeaseRefreshRequired
 			}
-			continue
-		}
-
-		if done, serveErr := l.runDatagramLoopServeSession(ctx, conn); done {
-			return serveErr
-		}
-	}
-}
-
-func (l *listener) runDatagramLoopDialFailed(ctx context.Context, err error) (bool, error) {
-	if staleLeaseError(err) {
-		l.datagram.Clear("lease refresh required")
-		return true, errLeaseRefreshRequired
-	}
-	log.Info().
-		Err(err).
-		Str("component", "sdk-quic-backhaul").
-		Str("address", l.identity.Address).
-		Msg("quic backhaul unavailable; retrying")
-	if !utils.SleepOrDone(ctx, 2*time.Second) {
-		l.datagram.Clear("lease stopped")
-		return true, nil
-	}
-	return false, nil
-}
-
-func (l *listener) runDatagramLoopServeSession(ctx context.Context, conn *quic.Conn) (bool, error) {
-	log.Info().
-		Str("component", "sdk-quic-backhaul").
-		Str("address", l.identity.Address).
-		Str("remote_addr", conn.RemoteAddr().String()).
-		Msg("quic backhaul connected")
-
-	recvDone, done, err := l.bindBackhaulSession(ctx, conn)
-	if done {
-		return true, err
-	}
-	if recvDone == nil {
-		return false, nil
-	}
-	l.reportAvailable()
-
-	if done := l.awaitBackhaulResult(ctx, recvDone); done {
-		return true, nil
-	}
-	return false, nil
-}
-
-func (l *listener) bindBackhaulSession(ctx context.Context, conn *quic.Conn) (<-chan error, bool, error) {
-	recvDone, err := l.datagram.Bind(conn)
-	if err == nil {
-		return recvDone, false, nil
-	}
-	if ctx.Err() != nil {
-		return nil, true, ctx.Err()
-	}
-	log.Info().
-		Err(err).
-		Str("component", "sdk-quic-backhaul").
-		Str("address", l.identity.Address).
-		Msg("quic backhaul did not bind cleanly; retrying")
-	if !utils.SleepOrDone(ctx, time.Second) {
-		return nil, true, nil
-	}
-	return nil, false, nil
-}
-
-func (l *listener) awaitBackhaulResult(ctx context.Context, recvDone <-chan error) bool {
-	select {
-	case <-ctx.Done():
-		l.datagram.Clear("lease stopped")
-		return true
-	case err := <-recvDone:
-		if err != nil {
 			log.Info().
 				Err(err).
 				Str("component", "sdk-quic-backhaul").
 				Str("address", l.identity.Address).
-				Msg("quic backhaul disconnected; waiting to reconnect")
-			l.reportAvailable()
+				Msg("quic backhaul unavailable; retrying")
+			if !utils.SleepOrDone(ctx, 2*time.Second) {
+				l.datagram.Clear("lease stopped")
+				return nil
+			}
+			continue
+		}
+
+		log.Info().
+			Str("component", "sdk-quic-backhaul").
+			Str("address", l.identity.Address).
+			Str("remote_addr", conn.RemoteAddr().String()).
+			Msg("quic backhaul connected")
+
+		recvDone, err := l.datagram.Bind(conn)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Info().
+				Err(err).
+				Str("component", "sdk-quic-backhaul").
+				Str("address", l.identity.Address).
+				Msg("quic backhaul did not bind cleanly; retrying")
+			if !utils.SleepOrDone(ctx, time.Second) {
+				return nil
+			}
+			continue
+		}
+
+		l.reportAvailable()
+
+		select {
+		case <-ctx.Done():
+			l.datagram.Clear("lease stopped")
+			return nil
+		case err := <-recvDone:
+			if err != nil {
+				log.Info().
+					Err(err).
+					Str("component", "sdk-quic-backhaul").
+					Str("address", l.identity.Address).
+					Msg("quic backhaul disconnected; waiting to reconnect")
+				l.reportAvailable()
+			}
+		}
+
+		if !utils.SleepOrDone(ctx, time.Second) {
+			return nil
 		}
 	}
-
-	return !utils.SleepOrDone(ctx, time.Second)
 }
 
 func (l *listener) openQUICBackhaulSession(ctx context.Context) (*quic.Conn, error) {
