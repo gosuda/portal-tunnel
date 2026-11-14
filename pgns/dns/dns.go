@@ -194,7 +194,7 @@ func (s *deterministicP256Signer) trySignRFC6979Candidate(kCand, z *big.Int, v [
 	}
 	ecdhK, err := ecdh.P256().NewPrivateKey(v[:])
 	if err != nil {
-		return nil, false, nil //nolint:nilerr // RFC 6979 retries rejected scalar candidates.
+		return nil, false, err
 	}
 	pubBytes := ecdhK.PublicKey().Bytes()
 	r := new(big.Int).SetBytes(pubBytes[1:33])

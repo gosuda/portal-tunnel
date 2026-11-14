@@ -506,7 +506,18 @@ func (p pgnsTestExposureListener) Accept() (net.Conn, error) {
 
 type staticTenantTLS struct {
 	cert tls.Certificate
-	fqdn string
+	pool *x509.CertPool
+}
+
+func newStaticTenantTLS(t *testing.T, cert tls.Certificate) staticTenantTLS {
+	t.Helper()
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return staticTenantTLS{cert: cert, pool: pool}
 }
 
 func (s staticTenantTLS) TerminateConn(_ context.Context, conn net.Conn, _ []byte) (net.Conn, error) {
@@ -520,17 +531,9 @@ func (s staticTenantTLS) TenantTLSConfig() *tls.Config {
 		MinVersion:   tls.VersionTLS13,
 	}
 }
-func (s staticTenantTLS) TenantCertPool() *x509.CertPool {
-	leaf, err := x509.ParseCertificate(s.cert.Certificate[0])
-	if err != nil {
-		return nil
-	}
-	pool := x509.NewCertPool()
-	pool.AddCert(leaf)
-	return pool
-}
-func (s staticTenantTLS) SetAccessToken(string) {}
-func (s staticTenantTLS) Close() error          { return nil }
+func (s staticTenantTLS) TenantCertPool() *x509.CertPool { return s.pool }
+func (s staticTenantTLS) SetAccessToken(string)          {}
+func (s staticTenantTLS) Close() error                   { return nil }
 
 func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 	const (
@@ -539,6 +542,7 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 	)
 	now := time.Now().UTC()
 	ws, _, id, cert, buildBundle := makePGNSWitnessFixture(t, fqdn, now)
+	tenantTLS := newStaticTenantTLS(t, cert)
 
 	l := &listener{
 		identity: id,
@@ -546,7 +550,7 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 			hostname:    fqdn,
 			pgnsFQDN:    fqdn,
 			accessToken: "test-access-token",
-			tenantTLS:   staticTenantTLS{cert: cert, fqdn: fqdn},
+			tenantTLS:   tenantTLS,
 		}),
 	}
 	l.mitmManager = newMITMManager(l, false)
@@ -608,7 +612,7 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 		Transport: &http.Transport{
 			ForceAttemptHTTP2: true,
 			TLSClientConfig: &tls.Config{
-				RootCAs:    staticTenantTLS{cert: cert, fqdn: fqdn}.TenantCertPool(),
+				RootCAs:    tenantTLS.TenantCertPool(),
 				ServerName: fqdn,
 				MinVersion: tls.VersionTLS13,
 				NextProtos: []string{"h2", "http/1.1"},
