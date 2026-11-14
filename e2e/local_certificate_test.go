@@ -136,7 +136,7 @@ func TestLocalCertificateExpiryWithdrawsCanonical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf.NotAfter = time.Now().Add(30 * time.Second).Truncate(time.Second)
+	leaf.NotAfter = time.Now().Add(4 * time.Second).Truncate(time.Second)
 	der, err := x509.CreateCertificate(rand.Reader, leaf, leaf, leaf.PublicKey, pair.PrivateKey)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestLocalCertificateExpiryWithdrawsCanonical(t *testing.T) {
 		t.Fatal(err)
 	}
 	exposure, ready := namespaceService(t, h, id, marker, sdk.WithTLSCertificate(certFile, keyFile))
-	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()

@@ -55,19 +55,35 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Compile browser tunnel WASM
-        run: make build-wasm
-
       - name: Run Make checks
         run: |
           make vet
           make lint
-          make test
+          make test-unit
       - name: Run frontend checks
         working-directory: frontend
         run: |
           npm run lint
           npm run build
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Compile browser tunnel WASM
+        run: make build-wasm
+
+      - name: Run E2E tests
+        run: make test-e2e
 
   tunnel-image:
     name: Build Tunnel Image
