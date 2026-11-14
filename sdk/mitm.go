@@ -1,10 +1,14 @@
 package sdk
 
 import (
+	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,12 +16,15 @@ import (
 	"net"
 	"net/url"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -429,4 +436,370 @@ func (m *mitmManager) reportProbeDetection(l *listener, report mitmProbeReport) 
 		return
 	}
 	event.Msg("tls termination suspected by self-probe")
+}
+
+// VerifyTLSChannelBinding performs the client-side identity-bound TLS channel
+// binding handshake (#653) on an established TLS connection to a canonical
+// Portal hostname. It verifies that the tunnel endpoint terminated the exact
+// same TLS session (Ec == Et) and signed (context || hostname || nonce || Et)
+// with the secp256k1 identity embedded in hostname. On any mismatch, it closes
+// conn immediately so no application bytes are ever sent over a MITMed stream.
+// A reply without the answer tag, such as one from a tunnel that does not
+// offer binding, also closes conn, with an error that says the tunnel did not
+// answer rather than an exporter mismatch.
+//
+// hostname must be the lease's canonical hostname exactly as the relay
+// publishes it: the tunnel signs that name, so another canonical form that
+// embeds the same address fails with a signer mismatch. The exchange ends,
+// closing conn, as soon as ctx is done. It sets a deadline on conn and clears
+// it when it returns, so a deadline set earlier does not survive; set it again
+// afterwards.
+func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string) error {
+	if conn == nil {
+		return errTLSConnectionIsRequired
+	}
+	var clientExporter []byte
+	var expectedAddr string
+	var nonce [types.TLSChannelBindingNonceSize]byte
+	c, e, n, err := prepareChannelBindingClient(conn, hostname)
+	if err != nil {
+		return err
+	}
+	clientExporter, expectedAddr, nonce = c, e, n
+	_ = conn.SetDeadline(time.Now().Add(defaultChannelBindingTimeout))
+	defer conn.SetDeadline(time.Time{})
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	defer stop()
+	flow := &exchangeVerifyTLSChannelBindingFlow{
+		conn:           conn,
+		hostname:       hostname,
+		nonce:          nonce,
+		clientExporter: clientExporter,
+		expectedAddr:   expectedAddr,
+		stop:           stop,
+	}
+	return flow.completeVerifyTLSChannelBinding(ctx)
+}
+
+func prepareChannelBindingClient(conn net.Conn, hostname string) ([]byte, string, [types.TLSChannelBindingNonceSize]byte, error) {
+	var nonce [types.TLSChannelBindingNonceSize]byte
+	var expectedAddr string
+	e, err := namespace.CanonicalAddress(hostname)
+	if err != nil {
+		_ = conn.Close()
+		return nil, "", nonce, err
+	}
+	expectedAddr = e
+	exportFn, ok := probeExporter(conn)
+	if !ok {
+		_ = conn.Close()
+		return nil, "", nonce, errTLSConnectionDoesNotSupportKeying
+	}
+	var clientExporter []byte
+	c, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
+	if err != nil {
+		_ = conn.Close()
+		return nil, "", nonce, fmt.Errorf("export client tls keying material: %w", err)
+	}
+	clientExporter = c
+	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
+		_ = conn.Close()
+		return nil, "", nonce, fmt.Errorf("generate channel binding nonce: %w", err)
+	}
+	return clientExporter, expectedAddr, nonce, nil
+}
+
+type exchangeVerifyTLSChannelBindingFlow struct {
+	conn           net.Conn
+	hostname       string
+	nonce          [types.TLSChannelBindingNonceSize]byte
+	clientExporter []byte
+	expectedAddr   string
+	stop           func() bool
+}
+
+func (f *exchangeVerifyTLSChannelBindingFlow) completeVerifyTLSChannelBinding(ctx context.Context) error {
+	reqFrame := make([]byte, types.TLSChannelBindingRequestSize)
+	copy(reqFrame, types.TLSChannelBindingRequestMagic)
+	copy(reqFrame[len(types.TLSChannelBindingRequestMagic):], f.nonce[:])
+	if _, err := f.conn.Write(reqFrame); err != nil {
+		_ = f.conn.Close()
+		return fmt.Errorf("write channel binding request: %w", cmp.Or(ctx.Err(), err))
+	}
+	var compactSig []byte
+	s, err := f.readBindingFlowAnswer(ctx)
+	if err != nil {
+		return err
+	}
+	compactSig = s
+	if err := verifyChannelBindingSigner(f.hostname, f.nonce[:], f.clientExporter, f.expectedAddr, compactSig); err != nil {
+		_ = f.conn.Close()
+		return err
+	}
+	if !f.stop() {
+		_ = f.conn.Close()
+		return ctx.Err()
+	}
+	return nil
+}
+
+func (f *exchangeVerifyTLSChannelBindingFlow) readBindingFlowAnswer(ctx context.Context) ([]byte, error) {
+	tunnelExporter, compactSig, err := readChannelBindingAnswer(ctx, f.conn)
+	if err != nil {
+		_ = f.conn.Close()
+		return nil, err
+	}
+	if subtle.ConstantTimeCompare(f.clientExporter, tunnelExporter) != 1 {
+		_ = f.conn.Close()
+		return nil, errTLSChannelBindingExporterMismatchRelay
+	}
+	return compactSig, nil
+}
+
+func readChannelBindingAnswer(ctx context.Context, conn net.Conn) ([]byte, []byte, error) {
+	var answer [types.TLSChannelBindingAnswerSize]byte
+	tag := answer[:len(types.TLSChannelBindingAnswerTag)]
+	if _, err := io.ReadFull(conn, tag); err != nil {
+		return nil, nil, fmt.Errorf("read channel binding answer: %w", cmp.Or(ctx.Err(), err))
+	}
+	if string(tag) != types.TLSChannelBindingAnswerTag {
+		return nil, nil, errTunnelDidNotAnswerChannelBinding
+	}
+	signed := answer[len(tag):]
+	if _, err := io.ReadFull(conn, signed); err != nil {
+		return nil, nil, fmt.Errorf("read channel binding answer: %w", cmp.Or(ctx.Err(), err))
+	}
+	tunnelExporter := append([]byte(nil), signed[:types.TLSChannelBindingExporterSize]...)
+	compactSig := append([]byte(nil), signed[types.TLSChannelBindingExporterSize:]...)
+	return tunnelExporter, compactSig, nil
+}
+
+// DialCanonicalTLS dials addr, completes a TLS 1.3 handshake for the canonical
+// Portal hostname, and enforces identity-bound TLS channel binding (#653)
+// before returning the connection for application traffic.
+func DialCanonicalTLS(ctx context.Context, addr, hostname string, baseTLSConfig *tls.Config) (net.Conn, error) {
+	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
+	if _, err := namespace.CanonicalAddress(normalizedHost); err != nil {
+		return nil, err
+	}
+	tlsConf := buildDialCanonicalTLSConfig(normalizedHost, baseTLSConfig)
+	tlsConn, err := dialCanonicalTLSTransport(ctx, addr, tlsConf)
+	if err != nil {
+		return nil, err
+	}
+	if err := VerifyTLSChannelBinding(ctx, tlsConn, normalizedHost); err != nil {
+		return nil, err
+	}
+	return tlsConn, nil
+}
+
+func buildDialCanonicalTLSConfig(normalizedHost string, baseTLSConfig *tls.Config) *tls.Config {
+	tlsConf := &tls.Config{}
+	if baseTLSConfig != nil {
+		tlsConf = baseTLSConfig.Clone()
+	}
+	if tlsConf.ServerName == "" {
+		tlsConf.ServerName = normalizedHost
+	}
+	if tlsConf.MinVersion < tls.VersionTLS13 {
+		tlsConf.MinVersion = tls.VersionTLS13
+	}
+	return tlsConf
+}
+
+func dialCanonicalTLSTransport(ctx context.Context, addr string, tlsConf *tls.Config) (*tls.Conn, error) {
+	var rawConn net.Conn
+	c, err := (&net.Dialer{Timeout: defaultDialTimeout}).DialContext(ctx, "tcp", utils.EnsurePort(addr))
+	if err != nil {
+		return nil, err
+	}
+	rawConn = c
+	tlsConn := tls.Client(rawConn, tlsConf)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = tlsConn.Close()
+		return nil, err
+	}
+	return tlsConn, nil
+}
+
+func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
+	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
+	buf := make([]byte, 0, len(types.TLSChannelBindingDomain)+1+len(normalizedHost)+1+len(nonce)+len(exported))
+	buf = append(buf, types.TLSChannelBindingDomain...)
+	buf = append(buf, 0)
+	buf = append(buf, normalizedHost...)
+	buf = append(buf, 0)
+	buf = append(buf, nonce...)
+	buf = append(buf, exported...)
+	return buf
+}
+func verifyChannelBindingSigner(hostname string, nonce, clientExporter []byte, expectedAddr string, compactSig []byte) error {
+	payload := tlsChannelBindingPayload(hostname, nonce, clientExporter)
+	pubKey, err := identity.RecoverSHA256Secp256k1Compact(payload, compactSig)
+	if err != nil {
+		return fmt.Errorf("recover channel binding signer: %w", err)
+	}
+	recoveredAddr, err := identity.AddressFromCompressedPublicKeyHex(hex.EncodeToString(pubKey.SerializeCompressed()))
+	if err != nil {
+		return fmt.Errorf("resolve channel binding signer address: %w", err)
+	}
+	if !strings.EqualFold(recoveredAddr, expectedAddr) {
+		return fmt.Errorf("tls channel binding signer %s does not match canonical hostname identity %s", recoveredAddr, expectedAddr)
+	}
+	return nil
+}
+func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.Reader, exportFn func(string, []byte, int) ([]byte, error)) (net.Conn, error) {
+	l := m.listener
+	hostname := ""
+	if lease, ok := l.leaseSnapshot(); ok {
+		hostname = lease.hostname
+		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+			if sni := utils.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
+				if sni != lease.hostname && sni != lease.legacyHostname {
+					_ = conn.Close()
+					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
+				}
+				hostname = sni
+			}
+		}
+	}
+	if hostname == "" {
+		_ = conn.Close()
+		return nil, errListenerCanonicalHostnameUnavailableChannelBinding
+	}
+	var reqFrame [types.TLSChannelBindingRequestSize]byte
+	if _, err := io.ReadFull(reader, reqFrame[:]); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read channel binding request: %w", err)
+	}
+	nonce := bytes.Clone(reqFrame[len(types.TLSChannelBindingRequestMagic):])
+	var exported []byte
+	e, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("export server channel binding keying material: %w", err)
+	}
+	exported = e
+	var compactSig []byte
+	s, err := signChannelBindingPayload(hostname, nonce, exported, l.identity)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	compactSig = s
+	return m.writeChannelBindingAnswer(conn, reader, exported, compactSig)
+}
+
+func signChannelBindingPayload(hostname string, nonce, exported []byte, id types.Identity) ([]byte, error) {
+	payload := tlsChannelBindingPayload(hostname, nonce, exported)
+	authority := identity.NewLocalAuthority(id)
+	var compactSig []byte
+	sig, err := authority.SignSHA256Secp256k1(payload)
+	if err != nil {
+		return nil, fmt.Errorf("sign channel binding payload: %w", err)
+	}
+	c, err := sig.Compact()
+	if err != nil {
+		return nil, fmt.Errorf("encode channel binding signature: %w", err)
+	}
+	compactSig = c
+	return compactSig, nil
+}
+
+func (m *mitmManager) writeChannelBindingAnswer(conn net.Conn, reader *bufio.Reader, exported, compactSig []byte) (net.Conn, error) {
+	var answer [types.TLSChannelBindingAnswerSize]byte
+	n := copy(answer[:], types.TLSChannelBindingAnswerTag)
+	n += copy(answer[n:], exported)
+	copy(answer[n:], compactSig)
+	_ = conn.SetWriteDeadline(time.Now().Add(channelBindingRequestTimeout))
+	if _, err := conn.Write(answer[:]); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("write channel binding answer: %w", err)
+	}
+	return wrapBufferedConn(conn, reader), nil
+}
+
+func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
+	if conn == nil {
+		return conn, false, nil
+	}
+	// HTTP/2 framing starts immediately after ALPN. Native channel binding
+	// uses the HTTP/1.1/raw path, never an h2 application stream.
+	if conn, ok := conn.(*tls.Conn); ok && conn.ConnectionState().NegotiatedProtocol == "h2" {
+		return conn, false, nil
+	}
+
+	exportFn, ok := probeExporter(conn)
+	if !ok {
+		return conn, false, nil
+	}
+
+	m.mu.Lock()
+	hasPending := len(m.pending) > 0
+	m.mu.Unlock()
+
+	canChannelBind := m.listener != nil && m.listener.cache == nil
+	if m.listener != nil && m.listener.cache != nil {
+		if lease, ok := m.listener.leaseSnapshot(); ok {
+			if conn, ok := conn.(*tls.Conn); ok {
+				_, canonical := lease.tenantTLS.(*namespaceTLS)
+				canChannelBind = canonical && utils.NormalizeHostname(conn.ConnectionState().ServerName) == lease.hostname
+			}
+		}
+	}
+	if !hasPending && !canChannelBind {
+		return conn, false, nil
+	}
+
+	frameSize := len(mitmProbeNonce{})
+	peekLen := len(types.TLSChannelBindingRequestMagic)
+	if hasPending {
+		peekLen = frameSize
+	}
+	reader := bufio.NewReaderSize(conn, frameSize)
+	_ = conn.SetReadDeadline(time.Now().Add(mitmProbePeekTimeout))
+	peeked, _ := reader.Peek(peekLen)
+	defer conn.SetDeadline(time.Time{})
+
+	if canChannelBind && bytes.HasPrefix(peeked, []byte(types.TLSChannelBindingRequestMagic)) {
+
+		_ = conn.SetReadDeadline(time.Now().Add(channelBindingRequestTimeout))
+		boundConn, err := m.serveChannelBindingHandshake(conn, reader, exportFn)
+		if err != nil {
+			return nil, true, err
+		}
+		return boundConn, false, nil
+	}
+
+	if len(peeked) != frameSize || !hasPending {
+		return wrapBufferedConn(conn, reader), false, nil
+	}
+	return m.consumePendingProbe(conn, reader, exportFn, peeked)
+}
+
+func (m *mitmManager) consumePendingProbe(conn net.Conn, reader *bufio.Reader, exportFn func(string, []byte, int) ([]byte, error), peeked []byte) (net.Conn, bool, error) {
+	frameSize := len(mitmProbeNonce{})
+	var nonce mitmProbeNonce
+	copy(nonce[:], peeked[:frameSize])
+	m.mu.Lock()
+	_, ok := m.pending[nonce]
+	m.mu.Unlock()
+	if !ok {
+		return wrapBufferedConn(conn, reader), false, nil
+	}
+
+	defer conn.Close()
+
+	frame := make([]byte, frameSize)
+	if _, err := io.ReadFull(reader, frame); err != nil {
+		return nil, true, fmt.Errorf("read mitm probe frame: %w", err)
+	}
+
+	actual, err := exportFn(mitmProbeExporterLabel, nil, 32)
+	if err != nil {
+		return nil, true, fmt.Errorf("export server probe keying material: %w", err)
+	}
+
+	m.completeProbe(nonce, actual)
+	return nil, true, nil
 }
