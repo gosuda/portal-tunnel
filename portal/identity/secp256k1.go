@@ -26,6 +26,7 @@ var (
 	errInvalidCompactSignatureHeader         = errors.New("invalid compact signature header")
 	errInvalidEs256kSignatureR               = errors.New("invalid es256k signature r")
 	errInvalidEs256kSignatureS               = errors.New("invalid es256k signature s")
+	errInvalidEs256kSignatureHighS           = errors.New("invalid es256k signature s: must be low-s")
 	errSignatureIsRequired                   = errors.New("signature is required")
 	errPublicKeyIsRequired                   = errors.New("public key is required")
 	errPublicKeyMustHexEncoded               = errors.New("public key must be hex encoded")
@@ -248,21 +249,70 @@ func RecoverSHA256Secp256k1Compact(payload, signature []byte) (*secp256k1.Public
 	return publicKey, nil
 }
 
+// SignSHA256Secp256k1LowSRaw64 signs the SHA-256 digest of payload and returns
+// a canonical BIP-62 low-S 64-byte r || s secp256k1 signature.
+func SignSHA256Secp256k1LowSRaw64(payload []byte, privateKey *secp256k1.PrivateKey) ([]byte, error) {
+	if privateKey == nil {
+		return nil, errSigningKeyIsRequired
+	}
+	hash := sha256.Sum256(payload)
+	sig := ecdsa.Sign(privateKey, hash[:])
+	r := sig.R()
+	s := sig.S()
+	if r.IsZero() || s.IsZero() || s.IsOverHalfOrder() {
+		return nil, errInvalidEs256kSignatureHighS
+	}
+	out := make([]byte, rawSecp256k1SignatureSize)
+	r.PutBytesUnchecked(out[:32])
+	s.PutBytesUnchecked(out[32:])
+	return out, nil
+}
+
+// SignSHA256Secp256k1LowSRaw64FromHex decodes a hex private key and returns a
+// canonical BIP-62 low-S 64-byte r || s secp256k1 signature.
+func SignSHA256Secp256k1LowSRaw64FromHex(payload []byte, privateKeyHex string) ([]byte, error) {
+	privateKey, _, err := parseSecp256k1PrivateKeyHex(privateKeyHex, true)
+	if err != nil {
+		return nil, err
+	}
+	return SignSHA256Secp256k1LowSRaw64(payload, privateKey)
+}
+
+// ParseSecp256k1CompressedPubKey33 parses a 33-byte compressed secp256k1 point.
+func ParseSecp256k1CompressedPubKey33(raw [33]byte) (*secp256k1.PublicKey, error) {
+	if raw[0] != 0x02 && raw[0] != 0x03 {
+		return nil, errInvalidSecp256k1PublicKey
+	}
+	publicKey, err := secp256k1.ParsePubKey(raw[:])
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errInvalidSecp256k1PublicKey, err)
+	}
+	return publicKey, nil
+}
+
 // VerifySHA256Secp256k1Raw64 verifies an ES256K raw r || s signature over the
 // SHA-256 digest of payload.
 func VerifySHA256Secp256k1Raw64(payload, signature []byte, publicKey *secp256k1.PublicKey) error {
 	if publicKey == nil {
 		return errVerificationKeyIsRequired
 	}
-	if len(signature) != rawSecp256k1SignatureSize {
-		return errInvalidEs256kSignatureLength
-	}
-
-	parsed, err := secp256k1SignatureFromRaw64(signature)
+	parsed, err := secp256k1SignatureFromRaw64(signature, false)
 	if err != nil {
 		return err
 	}
+	return verifySHA256Secp256k1Signature(payload, parsed, publicKey)
+}
 
+// VerifySHA256Secp256k1LowSRaw64 verifies a strict BIP-62 low-S ES256K raw
+// r || s signature over the SHA-256 digest of payload.
+func VerifySHA256Secp256k1LowSRaw64(payload, signature []byte, publicKey *secp256k1.PublicKey) error {
+	if publicKey == nil {
+		return errVerificationKeyIsRequired
+	}
+	parsed, err := secp256k1SignatureFromRaw64(signature, true)
+	if err != nil {
+		return err
+	}
 	return verifySHA256Secp256k1Signature(payload, parsed, publicKey)
 }
 
@@ -273,7 +323,7 @@ func copySecp256k1CompactSignature(compact []byte) ([]byte, error) {
 	if _, err := secp256k1CompactRecoveryID(compact[0]); err != nil {
 		return nil, err
 	}
-	if _, err := secp256k1SignatureFromRaw64(compact[1:]); err != nil {
+	if _, err := secp256k1SignatureFromRaw64(compact[1:], false); err != nil {
 		return nil, err
 	}
 
@@ -293,7 +343,7 @@ func secp256k1CompactRecoveryID(header byte) (byte, error) {
 	}
 }
 
-func secp256k1SignatureFromRaw64(signature []byte) (*ecdsa.Signature, error) {
+func secp256k1SignatureFromRaw64(signature []byte, requireLowS bool) (*ecdsa.Signature, error) {
 	if len(signature) != rawSecp256k1SignatureSize {
 		return nil, errInvalidEs256kSignatureLength
 	}
@@ -304,6 +354,9 @@ func secp256k1SignatureFromRaw64(signature []byte) (*ecdsa.Signature, error) {
 	}
 	if overflow := s.SetByteSlice(signature[32:]); overflow || s.IsZero() {
 		return nil, errInvalidEs256kSignatureS
+	}
+	if requireLowS && s.IsOverHalfOrder() {
+		return nil, errInvalidEs256kSignatureHighS
 	}
 	return ecdsa.NewSignature(&r, &s), nil
 }

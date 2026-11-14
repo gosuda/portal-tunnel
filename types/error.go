@@ -33,6 +33,8 @@ const (
 	APIErrorCodeTCPPortDisabled           = "tcp_port_disabled"
 	APIErrorCodeTCPPortCapacityExceeded   = "tcp_port_capacity_exceeded"
 	APIErrorCodeTransportMismatch         = "transport_mismatch"
+	APIErrorCodePGNSProofInvalid          = "pgns_proof_invalid"
+	APIErrorCodePGNSWatermarkStale        = "pgns_watermark_stale"
 
 	MITMProbeReasonExporterMismatch = "tls_exporter_mismatch"
 	MITMProbeReasonProbeTimeout     = "probe_timeout"

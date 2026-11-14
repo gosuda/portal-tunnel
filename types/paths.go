@@ -28,6 +28,7 @@ const (
 	PathV1TenantCertificate = PathV1Prefix + "/tenant-certificate"
 	PathV1Prefix            = "/v1"
 	PathV1Sign              = PathV1Prefix + "/sign"
+	PathV1ResolvePrefix     = PathV1Prefix + "/resolve/"
 
 	PathSDKPrefix            = "/sdk"
 	PathSDKDomain            = PathSDKPrefix + "/domain"

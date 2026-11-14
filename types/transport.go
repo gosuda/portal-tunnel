@@ -7,15 +7,17 @@ import (
 
 // Reverse stream activation markers precede application traffic.
 const (
-	ReverseMarkerKeepalive = 0x00
-	ReverseMarkerRawStart  = 0x01
-	ReverseMarkerTLSStart  = 0x02
+	ReverseMarkerKeepalive     = 0x00
+	ReverseMarkerRawStart      = 0x01
+	ReverseMarkerTLSStart      = 0x02
+	ReverseMarkerLocalTLSStart = 0x03
 	// TLSBindingSize binds one reverse connection to keyless transcript signing.
 	TLSBindingSize = 16
 )
 
 const (
 	QUICBackhaulALPN        = "portal-tunnel"
+	ALPNPortalCBV1          = "portal-cb-v1"
 	KeylessRelayKeyID       = "relay-cert"
 	OverlayCapabilityPrefix = "ov1"
 	OverlayStreamPort       = "4017"

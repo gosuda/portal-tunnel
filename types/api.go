@@ -63,11 +63,19 @@ func (e *APIRequestError) Is(target error) bool {
 	return true
 }
 
+type PGNSRegistrationProof struct {
+	Zone           string `json:"zone"`
+	Leaf           []byte `json:"leaf"`
+	InclusionProof []byte `json:"inclusion_proof,omitempty"`
+	Checkpoint     []byte `json:"checkpoint,omitempty"`
+}
+
 type RegisterRequest struct {
-	ChallengeID   string `json:"challenge_id"`
-	SIWEMessage   string `json:"siwe_message"`
-	SIWESignature string `json:"siwe_signature"`
-	ReportedIP    string `json:"reported_ip,omitempty"`
+	ChallengeID   string                 `json:"challenge_id"`
+	SIWEMessage   string                 `json:"siwe_message"`
+	SIWESignature string                 `json:"siwe_signature"`
+	ReportedIP    string                 `json:"reported_ip,omitempty"`
+	PGNSProof     *PGNSRegistrationProof `json:"pgns_proof,omitempty"`
 }
 
 // LocalTLSNamespaceV1 is explicitly negotiated before issuing two-label tenant
