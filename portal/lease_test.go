@@ -598,34 +598,27 @@ func TestPortPoolRollbackReturnsPortWithoutReservation(t *testing.T) {
 	}
 }
 
-func TestLeaseHostnameConflictRollsBackRawPorts(t *testing.T) {
+func TestRawLeaseRegistersWithoutAliasWhenNameIsTaken(t *testing.T) {
 	registry := newTestRegistry(t, true, true)
 	request := types.RegisterChallengeRequest{
-		Identity:   newTestLeaseIdentity(t, "conflict"),
+		Identity:   newTestLeaseIdentity(t, "shared"),
 		UDPEnabled: true,
 		TCPEnabled: true,
 	}
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	_, _, first, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	checkHostnameConflictFreesPorts(t, registry, request)
-	request.Identity = newTestLeaseIdentity(t, "accepted")
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
-		t.Fatalf("rejected identities exhausted raw ports: %v", err)
+	request.Identity = newTestLeaseIdentity(t, "shared")
+	_, _, second, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("raw lease depended on alias availability: %v", err)
 	}
-}
-
-func checkHostnameConflictFreesPorts(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest) {
-	t.Helper()
-	for i := range 3 {
-		request.Identity = newTestLeaseIdentity(t, "conflict")
-		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errHostnameConflict) {
-			t.Fatalf("rejected registration %d error = %v, want hostname conflict", i, err)
-		}
-		if len(registry.udpPorts.available) != 1 || len(registry.tcpPorts.available) != 1 ||
-			len(registry.udpPorts.reserved) != 0 || len(registry.tcpPorts.reserved) != 0 {
-			t.Fatalf("rejected registration %d retained ports: UDP=%+v TCP=%+v", i, registry.udpPorts, registry.tcpPorts)
-		}
+	if first.Hostname != "shared.example.com" || second.Hostname != "" {
+		t.Fatalf("aliases = (%q, %q), want first holder only", first.Hostname, second.Hostname)
+	}
+	if first.UDPAddr == second.UDPAddr || first.TCPAddr == second.TCPAddr {
+		t.Fatalf("raw endpoints are shared: first=%s/%s second=%s/%s", first.UDPAddr, first.TCPAddr, second.UDPAddr, second.TCPAddr)
 	}
 }
 
@@ -1322,13 +1315,13 @@ func TestLeaseRegistryAllowsCanonicalFallbackForSameName(t *testing.T) {
 func registerCanonicalFallbackPair(t *testing.T, registry *leaseRegistry, firstIdentity types.Identity, secondIdentity types.Identity) (types.RegisterResponse, types.RegisterResponse) {
 	t.Helper()
 	_, _, first, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: firstIdentity,
+		Identity: firstIdentity, Namespace: types.LocalTLSNamespaceV1,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(conflict first) error = %v", err)
 	}
 	_, _, second, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: secondIdentity,
+		Identity: secondIdentity, Namespace: types.LocalTLSNamespaceV1,
 	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(conflict second) error = %v", err)
@@ -1356,7 +1349,7 @@ func reconnectSecondFallbackLease(t *testing.T, registry *leaseRegistry, secondI
 	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstAccessToken}); err != nil {
 		t.Fatalf("Unregister(first) error = %v", err)
 	}
-	_, _, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{Identity: secondIdentity}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{Identity: secondIdentity, Namespace: types.LocalTLSNamespaceV1}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(second reconnect) error = %v", err)
 	}
@@ -1367,7 +1360,7 @@ func reconnectSecondFallbackLease(t *testing.T, registry *leaseRegistry, secondI
 
 func reconnectFirstFallbackLease(t *testing.T, registry *leaseRegistry, firstIdentity types.Identity, first types.RegisterResponse) {
 	t.Helper()
-	_, _, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{Identity: firstIdentity}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{Identity: firstIdentity, Namespace: types.LocalTLSNamespaceV1}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(first reconnect) error = %v", err)
 	}

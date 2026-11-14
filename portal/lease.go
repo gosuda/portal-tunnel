@@ -1081,7 +1081,10 @@ func (r *leaseRegistry) checkRegisterHostnameLocked(record *leaseRecord, identit
 			return errHostnameConflict
 		}
 		if existing.Hostname != "" && existing.Hostname == record.Hostname {
-			if req.Namespace != types.LocalTLSNamespaceV1 {
+			// Raw endpoints use <root>:<port> and Local TLS has its own canonical
+			// hostname, so only alias-only HTTP leases need the alias.
+			aliasOnlyHTTP := req.Namespace != types.LocalTLSNamespaceV1 && !req.UDPEnabled && !req.TCPEnabled
+			if aliasOnlyHTTP {
 				return errHostnameConflict
 			}
 			record.Hostname = ""
