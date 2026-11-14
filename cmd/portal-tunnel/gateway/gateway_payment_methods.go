@@ -24,11 +24,3 @@ func NormalizePaymentMethods(methods []string) ([]string, error) {
 	slices.Sort(out)
 	return out, nil
 }
-
-func paymentMethodSet(methods []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(methods))
-	for _, method := range methods {
-		set[method] = struct{}{}
-	}
-	return set
-}
