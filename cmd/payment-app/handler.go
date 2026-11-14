@@ -211,7 +211,7 @@ func (h *paymentHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (h *paymentHandler) renderPaidPhoto(w http.ResponseWriter, r *http.Request) {
 	data := h.newPaymentPageData(r)
-	data.URL = types.PublicURLForPath(r, paidPhotoPath)
+	data.URL = utils.PublicURLForPath(r, paidPhotoPath)
 	if settlement, ok := x402http.SettlementFrom(r.Context()); ok {
 		data.TransactionID = settlement.Transaction
 	}
@@ -243,7 +243,7 @@ func (h *paymentHandler) newPaymentPageData(r *http.Request) paymentPageData {
 	return paymentPageData{
 		PageTitle:        "Portal Sui Wallet Payment",
 		PageDescription:  description,
-		URL:              types.PublicURLForPath(r, "/"),
+		URL:              utils.PublicURLForPath(r, "/"),
 		OGImage:          h.metadata.Thumbnail,
 		ProtectedPath:    paidPhotoPath,
 		Network:          h.network,

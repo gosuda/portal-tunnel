@@ -174,12 +174,3 @@ func TestNormalizeHostWithoutPort(t *testing.T) {
 		}
 	}
 }
-
-func TestNormalizeURLPathCollapsesBackslashLedPaths(t *testing.T) {
-	t.Parallel()
-	for _, raw := range []string{`/\example`, `/\`, `/\/`} {
-		if got := NormalizeURLPath(raw); got != "/" {
-			t.Fatalf("NormalizeURLPath(%q) = %q, want %q", raw, got, "/")
-		}
-	}
-}

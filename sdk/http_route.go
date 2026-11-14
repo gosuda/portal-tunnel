@@ -87,7 +87,7 @@ func (h *HTTPRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // It returns an empty prefix and nil handler when no route matches. The handler
 // applies the same upstream path rewriting as ServeHTTP.
 func (h *HTTPRoutes) Match(path string) (string, http.Handler) {
-	path = types.NormalizeURLPath(path)
+	path = utils.NormalizeURLPath(path)
 	for _, route := range h.routes {
 		if route.prefix != "/" && path != route.prefix && !strings.HasPrefix(path, route.prefix+"/") {
 			continue
@@ -116,7 +116,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	if !strings.HasPrefix(prefix, "/") {
 		return nil, fmt.Errorf("http route prefix %q must start with /", prefix)
 	}
-	prefix = types.NormalizeURLPath(prefix)
+	prefix = utils.NormalizeURLPath(prefix)
 
 	if staticRoot := strings.TrimSpace(routeConfig.StaticRoot); staticRoot != "" {
 		return &httpRoute{
@@ -149,7 +149,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 		return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
 	}
 	upstream.Fragment = ""
-	upstream.Path = types.NormalizeURLPath(upstream.Path)
+	upstream.Path = utils.NormalizeURLPath(upstream.Path)
 
 	return &httpRoute{
 		prefix:         prefix,
@@ -177,7 +177,7 @@ func (r *httpRoute) baseHandler() http.Handler {
 }
 
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {
-	path := types.NormalizeURLPath(pr.In.URL.Path)
+	path := utils.NormalizeURLPath(pr.In.URL.Path)
 	rawPath := pr.In.URL.RawPath
 	if r.prefix != "/" {
 		switch path {
@@ -236,7 +236,7 @@ func (r *httpRoute) rewriteProxyResponse(resp *http.Response) error {
 }
 
 func (r *httpRoute) mapPublicPath(raw string) string {
-	raw = types.NormalizeURLPath(raw)
+	raw = utils.NormalizeURLPath(raw)
 	if r.prefix != "/" && (raw == r.prefix || strings.HasPrefix(raw, r.prefix+"/")) {
 		return raw
 	}

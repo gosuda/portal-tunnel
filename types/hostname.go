@@ -1,14 +1,11 @@
 package types
 
 import (
-	"cmp"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"unicode"
@@ -254,24 +251,6 @@ func HostnameMatchesPattern(pattern, hostname string) bool {
 	return ok && rest == suffix
 }
 
-func NormalizeURLPath(raw string) string {
-	clean := path.Clean(strings.TrimSpace(raw))
-	if clean == "." || clean == "" {
-		return "/"
-	}
-	if !strings.HasPrefix(clean, "/") {
-		clean = "/" + clean
-	}
-	// Prevent scheme-relative or otherwise ambiguous paths like "//example" or "/\example".
-	if len(clean) > 1 && (clean[1] == '/' || clean[1] == '\\') {
-		clean = "/"
-	}
-	if clean != "/" {
-		clean = strings.TrimSuffix(clean, "/")
-	}
-	return clean
-}
-
 // IsLocalRelayHost identifies the existing local-development TLS trust exception.
 func IsLocalRelayHost(host string) bool {
 	host = NormalizeHostname(host)
@@ -377,30 +356,4 @@ func isHexAddress(s string) bool {
 	}
 	_, err := hex.DecodeString(s)
 	return err == nil
-}
-
-// PublicURLForPath resolves a public absolute URL from request forwarding headers.
-func PublicURLForPath(r *http.Request, path string) string {
-	if r == nil {
-		return ""
-	}
-	scheme, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
-	scheme = strings.ToLower(strings.TrimSpace(scheme))
-	if scheme == "" {
-		if r.TLS != nil {
-			scheme = "https"
-		} else {
-			scheme = "http"
-		}
-	}
-	host, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Host"), ",")
-	host = strings.TrimSpace(host)
-	host = cmp.Or(host, strings.TrimSpace(r.Host))
-	if host == "" {
-		return path
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return scheme + "://" + host + path
 }

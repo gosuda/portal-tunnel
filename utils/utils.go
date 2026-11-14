@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -66,6 +67,24 @@ func NormalizeChildHostnames(inputs []string, baseDomain string) []string {
 		}
 		return hostname
 	})
+}
+
+func NormalizeURLPath(raw string) string {
+	clean := path.Clean(strings.TrimSpace(raw))
+	if clean == "." || clean == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(clean, "/") {
+		clean = "/" + clean
+	}
+	// Prevent scheme-relative or otherwise ambiguous paths like "//example" or "/\example".
+	if len(clean) > 1 && (clean[1] == '/' || clean[1] == '\\') {
+		clean = "/"
+	}
+	if clean != "/" {
+		clean = strings.TrimSuffix(clean, "/")
+	}
+	return clean
 }
 
 func NormalizeRelayURLs(inputs ...string) ([]string, error) {

@@ -99,7 +99,7 @@ type ExposedHTTPRoute struct {
 func normalizeComposeHTTPRoutesPrefix(raw string) string {
 	prefix := strings.TrimSpace(raw)
 	if prefix != "" && strings.HasPrefix(prefix, "/") {
-		prefix = types.NormalizeURLPath(prefix)
+		prefix = utils.NormalizeURLPath(prefix)
 	}
 	return prefix
 }
@@ -223,7 +223,7 @@ func (g *httpGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL != nil {
 		path = r.URL.Path
 	}
-	path = types.NormalizeURLPath(path)
+	path = utils.NormalizeURLPath(path)
 
 	if g.servesX402 {
 		if path == X402ClientPath {
@@ -263,7 +263,7 @@ func (g *httpGateway) servePrepare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
-	path := types.NormalizeURLPath(req.Path)
+	path := utils.NormalizeURLPath(req.Path)
 	method := http.MethodGet
 	if raw := strings.ToUpper(strings.TrimSpace(req.Method)); raw != "" {
 		method = raw
@@ -295,7 +295,7 @@ func (g *httpGateway) writeRouteChallenge(w http.ResponseWriter, r *http.Request
 	}{
 		X402Version: int(facilitatortypes.X402VersionV2),
 		Error:       "payment required",
-		Resource:    &facilitatortypes.ResourceInfo{URL: types.PublicURLForPath(r, policy.prefix)},
+		Resource:    &facilitatortypes.ResourceInfo{URL: utils.PublicURLForPath(r, policy.prefix)},
 		Accepts:     []facilitatortypes.PaymentRequirements{policy.requirements},
 	}
 	raw, err := json.Marshal(body)
