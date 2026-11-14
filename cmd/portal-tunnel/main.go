@@ -131,7 +131,7 @@ func registerPaymentTransportFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *
 	env.Int(fs, &cfg.MaxActiveRelays, "max-active-relays", discovery.DefaultMaxActiveRelays, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	fs.StringVar(&flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
 	fs.StringVar(&flags.logFormat, "log-format", "text", "Log output format: text (default human-readable console) or json (one structured JSON log record per line on stdout; integrations filter relay lifecycle records by event=relay_status)")
-	fs.BoolVar(&flags.exitOnStdinEOF, "exit-on-stdin-eof", false, "Stop when the caller-owned stdin pipe closes; requires a pipe, ignores bytes, and uses normal tunnel shutdown")
+	fs.BoolVar(&flags.exitOnStdinEOF, "exit-on-stdin-eof", false, "Stop when the caller-owned stdin pipe closes; requires a pipe or socket, ignores bytes, and uses normal tunnel shutdown")
 }
 
 func registerExposeFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *exposeFlags) {
@@ -188,7 +188,8 @@ func runExposeCommand(args []string) error {
 		if err != nil {
 			return fmt.Errorf("inspect stdin: %w", err)
 		}
-		if info.Mode()&os.ModeNamedPipe == 0 {
+		// Node.js and other runtimes pass Unix socketpairs as piped stdin.
+		if info.Mode()&(os.ModeNamedPipe|os.ModeSocket) == 0 {
 			return errStdinPipeRequired
 		}
 		go func() {

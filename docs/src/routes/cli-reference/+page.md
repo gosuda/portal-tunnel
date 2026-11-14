@@ -158,7 +158,7 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--cache` | bool | `false` | Opt in to relay storage and browser TLS termination for `--serve` |
 | `--cache-ttl` | duration | `0` | Requested offline cache lifetime; `0` uses relay policy; requires `--cache` |
 | `--log-format` | string | `text` | Log output format; `json` sends application log records as one structured JSON record per line on stdout for machine integration; top-level command errors stay on stderr (see [Machine-Readable Relay Lifecycle](#machine-readable-relay-lifecycle)) |
-| `--exit-on-stdin-eof` | bool | `false` | Bind the tunnel lifetime to a caller-owned stdin pipe; closing its last writer requests normal shutdown |
+| `--exit-on-stdin-eof` | bool | `false` | Bind the tunnel lifetime to a caller-owned stdin pipe or socket; closing its last writer requests normal shutdown |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
 
@@ -287,7 +287,8 @@ portal expose --http-route /=7317 --identity-path ./portal-identity.json \
 ```
 
 Create the child with piped stdin and keep its writer open while the tunnel is
-desired. Portal drains and ignores bytes; stdin is not a command protocol. A
+desired. Pipes and Unix sockets are accepted, including the socketpair that
+Node.js `child_process` uses for `stdio: 'pipe'`. Portal drains and ignores bytes; stdin is not a command protocol. A
 terminal, regular file, or null device is rejected when this flag is enabled.
 Without the flag, stdin does not control the tunnel's lifetime.
 

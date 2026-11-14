@@ -82,6 +82,19 @@ func TestPortalExposeStdinLifetime(t *testing.T) {
 			t.Fatalf("non-pipe stdin: err=%v output=%s", err, out)
 		}
 	})
+	t.Run("socket", func(t *testing.T) {
+		// Node.js child_process pipes stdin through a Unix socketpair.
+		child, owner := stdinSocketPair(t)
+		relay := startMembershipRelay(t, t.Context())
+		process := newStdinLifetimeProcess(t, bin, relay.relayURL, "--exit-on-stdin-eof")
+		process.inputReader.Close()
+		process.stdin.Close()
+		process.inputReader, process.stdin = child, owner
+		process.start(t, "")
+		process.waitReady(t, relay)
+		process.stdin.Close()
+		process.waitExit(t)
+	})
 	t.Run("closed", func(t *testing.T) {
 		relay := startMembershipRelay(t, t.Context())
 		process := newStdinLifetimeProcess(t, bin, relay.relayURL, "--exit-on-stdin-eof")
