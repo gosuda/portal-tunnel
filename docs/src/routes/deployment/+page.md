@@ -80,7 +80,7 @@ and [the architecture](/architecture#ivnp-backed-overlay-networking).
 
 ## Optional Observability
 
-The [observability Compose overlay](https://github.com/gosuda/portal-tunnel/blob/main/deploy/observability/README.md)
+The [observability Compose overlay](https://github.com/gosuda/portal-tunnel/blob/main/docs/examples/observability/README.md)
 adds Prometheus and Grafana without changing the base deployment. It scrapes
 the authenticated `/api/admin/metrics` route. The dashboard follows the current
 aggregate metrics contract; transport-specific and application traffic

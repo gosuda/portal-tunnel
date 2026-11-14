@@ -13,7 +13,7 @@ secret reads the exported value and is mounted for its `nobody` user only:
 ```sh
 : "${ADMIN_TOKEN:?Export the relay ADMIN_TOKEN first}"
 export GRAFANA_ADMIN_PASSWORD='choose-a-strong-password'
-docker compose -f docker-compose.yml -f deploy/observability/compose.yml \
+docker compose -f docker-compose.yml -f docs/examples/observability/compose.yml \
   --profile observability up -d
 ```
 

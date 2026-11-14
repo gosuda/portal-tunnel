@@ -4,7 +4,7 @@ services:
     profiles: [observability]
     network_mode: service:portal
     volumes:
-      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docs/examples/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     secrets:
       - source: portal_admin_token
@@ -25,8 +25,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD for the observability stack}
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./docs/examples/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/examples/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
     restart: unless-stopped
