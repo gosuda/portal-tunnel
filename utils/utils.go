@@ -17,12 +17,11 @@ import (
 )
 
 var (
-	errAddressMustContain40HexadecimalCharacters = errors.New("address must contain 40 hexadecimal characters")
-	errTargetAddressIsRequired                   = errors.New("target address is required")
-	errTargetURLHostIsEmpty                      = errors.New("target url host is empty")
-	errTargetURLPathNotSupported                 = errors.New("target url path is not supported")
-	errTargetURLQueryNotSupported                = errors.New("target url query is not supported")
-	errTargetURLFragmentNotSupported             = errors.New("target url fragment is not supported")
+	errTargetAddressIsRequired       = errors.New("target address is required")
+	errTargetURLHostIsEmpty          = errors.New("target url host is empty")
+	errTargetURLPathNotSupported     = errors.New("target url path is not supported")
+	errTargetURLQueryNotSupported    = errors.New("target url query is not supported")
+	errTargetURLFragmentNotSupported = errors.New("target url fragment is not supported")
 )
 
 func SplitCSV(raw string) []string {

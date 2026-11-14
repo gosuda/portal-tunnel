@@ -304,9 +304,9 @@ func agentDashboardX402Network(network string, testnet bool) string {
 		return network
 	}
 	if testnet {
-		return "sui:testnet"
+		return "default testnet"
 	}
-	return "sui:mainnet"
+	return "default"
 }
 
 func (m agentDashboardModel) settingsChanged(tunnel agent.AgentTunnelStatus) bool {

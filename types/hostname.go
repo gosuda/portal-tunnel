@@ -1,7 +1,6 @@
 package types
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -14,22 +13,19 @@ import (
 )
 
 var (
-	errNameIsRequired                       = errors.New("name is required")
-	errNameIsInvalid                        = errors.New("name is invalid")
-	errNameMustSingleDNSLabel               = errors.New("name must be a single dns label")
-	errNameMust63CharactersOrFewer          = errors.New("name must be 63 characters or fewer")
-	errNameMustNotStartOrEnd                = errors.New("name must not start or end with hyphen")
-	errNameMustContainOnlyLettersNumbers    = errors.New("name must contain only letters, numbers, or hyphen")
-	errRelayURLIsEmpty                      = errors.New("relay url is empty")
-	errRelayURLIsInvalid                    = errors.New("relay url is invalid")
-	errRelayURLHostIsEmpty                  = errors.New("relay url host is empty")
-	errRelayURLMustNotIncludeCredentials    = errors.New("relay url must not include credentials")
-	errRelayURLHasInvalidPort               = errors.New("relay url has an invalid port")
-	errRelayURLPortMustBetween1             = errors.New("relay url port must be between 1 and 65535")
-	errRelayURLMustUseHTTPS                 = errors.New("relay url must use https")
-	errRootHostIsRequired                   = errors.New("root host is required")
-	errNameMustNotLookLikeCanonical         = errors.New("name must not look like a canonical hostname (40 hexadecimal characters, alone or after a hyphen)")
-	errHostnameDoesNotContainCanonicalLease = errors.New("hostname does not contain a canonical lease address")
+	errNameIsRequired                    = errors.New("name is required")
+	errNameIsInvalid                     = errors.New("name is invalid")
+	errNameMustSingleDNSLabel            = errors.New("name must be a single dns label")
+	errNameMust63CharactersOrFewer       = errors.New("name must be 63 characters or fewer")
+	errNameMustNotStartOrEnd             = errors.New("name must not start or end with hyphen")
+	errNameMustContainOnlyLettersNumbers = errors.New("name must contain only letters, numbers, or hyphen")
+	errRelayURLIsEmpty                   = errors.New("relay url is empty")
+	errRelayURLIsInvalid                 = errors.New("relay url is invalid")
+	errRelayURLHostIsEmpty               = errors.New("relay url host is empty")
+	errRelayURLMustNotIncludeCredentials = errors.New("relay url must not include credentials")
+	errRelayURLHasInvalidPort            = errors.New("relay url has an invalid port")
+	errRelayURLPortMustBetween1          = errors.New("relay url port must be between 1 and 65535")
+	errRelayURLMustUseHTTPS              = errors.New("relay url must use https")
 )
 
 func NormalizeDNSLabel(raw string) (string, error) {
@@ -270,90 +266,4 @@ func IsLocalRelayHost(host string) bool {
 func IsLocalOnlyRelayHost(host string) bool {
 	host = NormalizeHostname(host)
 	return IsLocalRelayHost(host) || strings.Contains(host, "%") || strings.HasSuffix(host, ".local")
-}
-
-func LeaseHostname(name, rootHost string) (string, error) {
-	label, err := NormalizeDNSLabel(name)
-	if err != nil {
-		return "", err
-	}
-	rootHost = NormalizeHostname(rootHost)
-	if rootHost == "" {
-		return "", errRootHostIsRequired
-	}
-	if ip := net.ParseIP(rootHost); ip != nil && ip.IsLoopback() {
-		rootHost = "localhost"
-	}
-	return label + "." + rootHost, nil
-}
-
-// NormalizeServiceName normalizes a service name to a DNS label that cannot
-// be mistaken for a canonical label, so a friendly hostname never collides
-// with an identity-bound one.
-func NormalizeServiceName(raw string) (string, error) {
-	label, err := NormalizeDNSLabel(raw)
-	if err != nil {
-		return "", err
-	}
-	if hasCanonicalShape(label) {
-		return "", errNameMustNotLookLikeCanonical
-	}
-	return label, nil
-}
-
-// ExtractCanonicalHostnameAddress extracts the 40-character hexadecimal EVM
-// address from the second label of a service.address.root hostname, or the
-// first label of a legacy canonical hostname, with a lowercase 0x prefix.
-// Routing must additionally validate depth relative to its configured root.
-func ExtractCanonicalHostnameAddress(hostname string) (string, error) {
-	label, rest, ok := strings.Cut(NormalizeHostWithoutPort(hostname), ".")
-	if !ok || label == "" || rest == "" {
-		return "", errHostnameDoesNotContainCanonicalLease
-	}
-	// Service labels cannot have the legacy canonical shape. Check it first so
-	// a relay root beginning with a hexadecimal label cannot replace the owner.
-	if hasCanonicalShape(label) {
-		return "0x" + strings.ToLower(label[len(label)-40:]), nil
-	}
-	if address, root, found := strings.Cut(rest, "."); found && root != "" && isHexAddress(address) {
-		if normalized, err := NormalizeServiceName(label); err == nil && normalized == label {
-			return "0x" + strings.ToLower(address), nil
-		}
-	}
-	return "", errHostnameDoesNotContainCanonicalLease
-}
-
-// IsLocalTLSHostname recognizes the exact two-label namespace relative to the
-// configured root, never by an absolute DNS depth.
-func IsLocalTLSHostname(hostname, rootHost string) bool {
-	root := NormalizeHostWithoutPort(rootHost)
-	if ip := net.ParseIP(root); ip != nil && ip.IsLoopback() {
-		root = "localhost"
-	}
-	relative, ok := strings.CutSuffix(NormalizeHostWithoutPort(hostname), "."+root)
-	if !ok || root == "" {
-		return false
-	}
-	labels := strings.Split(relative, ".")
-	if len(labels) != 2 || !isHexAddress(labels[1]) {
-		return false
-	}
-	label, err := NormalizeServiceName(labels[0])
-	return err == nil && label == labels[0]
-}
-
-func hasCanonicalShape(label string) bool {
-	if isHexAddress(label) {
-		return true
-	}
-	prefix, address, ok := strings.Cut(label[max(len(label)-41, 0):], "-")
-	return ok && prefix == "" && isHexAddress(address)
-}
-
-func isHexAddress(s string) bool {
-	if len(s) != 40 {
-		return false
-	}
-	_, err := hex.DecodeString(s)
-	return err == nil
 }
