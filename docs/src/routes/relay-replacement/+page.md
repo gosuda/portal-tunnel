@@ -155,7 +155,22 @@ authentication; application authentication still belongs to the service.
 It must be a dedicated instance for this customer entry; tunnel control
 endpoints bypass it. It requires nginx 1.21.4 or later with the stream and
 [`stream_ssl_preread`](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html)
-modules available. Install its
+modules available. Install the configuration as `/etc/nginx/portal-entry.conf`.
+The example uses its own PID file, `/run/nginx-portal-entry.pid`, and separate
+logs so signals do not target another nginx master. Provision the prefix and
+log directories, validate, and start this dedicated instance before cutover:
+
+```sh
+sudo install -d /var/lib/nginx-portal-entry /var/log/nginx
+sudo nginx -p /var/lib/nginx-portal-entry/ -c /etc/nginx/portal-entry.conf -t
+sudo nginx -p /var/lib/nginx-portal-entry/ -c /etc/nginx/portal-entry.conf
+```
+
+Start it only once; a service manager can own the same start command. Use the
+same absolute `-p` and `-c` arguments for configuration checks and signals,
+and retain the PID path across reloads. Do not use a generic nginx service
+reload unless that service is configured to manage this exact instance.
+Install its
 `worker_shutdown_timeout` **before** the cutover so the workers being retired
 already have the deadline configured.
 
@@ -165,8 +180,8 @@ change the `customer_relay` upstream server from `127.0.0.1:8443` to
 the configuration, and reload that nginx instance:
 
 ```sh
-nginx -t
-nginx -s reload
+sudo nginx -p /var/lib/nginx-portal-entry/ -c /etc/nginx/portal-entry.conf -t
+sudo nginx -p /var/lib/nginx-portal-entry/ -c /etc/nginx/portal-entry.conf -s reload
 ```
 
 nginx's [reload behavior](https://nginx.org/en/docs/control.html#reconfiguration)
