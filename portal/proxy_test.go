@@ -2,6 +2,8 @@ package portal
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"testing"
 	"testing/synctest"
@@ -184,4 +186,36 @@ func TestBridgeCancellationInterruptsThrottle(t *testing.T) {
 			t.Fatal("bridge retained workers while throttle canceled")
 		}
 	})
+}
+
+type proxyShortWriteConn struct {
+	net.Conn
+}
+
+func (c *proxyShortWriteConn) Write(b []byte) (int, error) {
+	return 0, nil
+}
+
+func TestCopyProxyZeroWriteReturnsShortWrite(t *testing.T) {
+	var p proxy
+	bps := NewBPSManager(0)
+	key := types.NewServiceIdentityKey("tenant", "address")
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	dst := &proxyShortWriteConn{Conn: local}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- p.copyProxyDrain(ctx, dst, key, bps, []byte("proxy-short-write"))
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("copyProxyDrain() error = %v, want %v", err, io.ErrShortWrite)
+		}
+	case <-ctx.Done():
+		t.Fatal("copyProxyDrain() did not return on zero-byte write")
+	}
 }

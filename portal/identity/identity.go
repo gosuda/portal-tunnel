@@ -9,6 +9,7 @@ import (
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -27,7 +28,7 @@ func normalizeOptionalName(raw string) (string, error) {
 	if trimmed == "" {
 		return "", nil
 	}
-	return utils.NormalizeServiceName(trimmed)
+	return namespace.NormalizeServiceName(trimmed)
 }
 
 // NormalizeIdentity returns the canonical comparison form of a wire identity:

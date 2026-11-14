@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -245,13 +246,13 @@ func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registe
 	if resp.Namespace == types.LocalTLSNamespaceV1 {
 		aliasCanonical = resp.LegacyCanonicalHostname
 		_, root, ok := strings.Cut(aliasCanonical, ".")
-		expected, err := utils.LocalTLSLeaseHostname(registerReq.Identity.Name, registerReq.Identity.Address, root)
+		expected, err := namespace.LocalTLSHostname(registerReq.Identity.Name, registerReq.Identity.Address, root)
 		if !ok || err != nil || expected != resp.CanonicalHostname {
 			_ = c.unregister(context.Background(), resp.AccessToken)
 			return types.RegisterResponse{}, fmt.Errorf("%w: invalid canonical namespace", errRelayIncompatible)
 		}
 	}
-	if !aliasHostnameMatches(resp.Hostname, registerReq.Identity.Name, aliasCanonical) {
+	if !namespace.MatchesAlias(resp.Hostname, registerReq.Identity.Name, aliasCanonical) {
 		resp.Hostname = ""
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)
@@ -261,18 +262,6 @@ func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registe
 	}
 	resp.ReverseEndpoint = reverseEndpoint
 	return resp, nil
-}
-
-func aliasHostnameMatches(hostname, name, canonicalHostname string) bool {
-	if hostname == "" {
-		return true
-	}
-	label, err := utils.NormalizeDNSLabel(name)
-	if err != nil || label == "" {
-		return false
-	}
-	_, root, ok := strings.Cut(canonicalHostname, ".")
-	return ok && hostname == label+"."+root
 }
 
 func (c *apiClient) renew(ctx context.Context, req types.RenewRequest) (types.RenewResponse, error) {
