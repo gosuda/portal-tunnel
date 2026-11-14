@@ -158,6 +158,20 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	}
 	defer tlsConn.Close()
 	defer stopClose()
+	if l.replica {
+		// Any sibling can answer the existing identity-bound exchange; no
+		// instance-local nonce/result state needs to follow replica selection.
+		if err := tlsConn.HandshakeContext(probeCtx); err != nil {
+			return report, fmt.Errorf("mitm probe tls handshake: %w", err)
+		}
+		err := VerifyTLSChannelBinding(probeCtx, tlsConn, lease.hostname)
+		if errors.Is(err, errTLSChannelBindingExporterMismatchRelay) {
+			report.Detected = true
+			report.Reason = types.MITMProbeReasonExporterMismatch
+			return report, nil
+		}
+		return report, err
+	}
 	resultCh := m.reserveProbe(nonce)
 	defer m.releaseProbe(nonce)
 	if err := m.finishprobeTLSPassthroughHandshake(probeCtx, tlsConn, nonce, frame); err != nil {

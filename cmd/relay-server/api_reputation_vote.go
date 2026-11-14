@@ -114,8 +114,10 @@ func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.P
 	}
 	leases := make([]types.PolicyLease, 0)
 	for _, lease := range server.PolicyLeases() {
-		if known[types.NormalizeHostname(lease.CanonicalHostname)] && lease.IdentityKey != "" {
+		hostname := types.NormalizeHostname(lease.CanonicalHostname)
+		if known[hostname] && lease.IdentityKey != "" {
 			leases = append(leases, lease)
+			delete(known, hostname)
 		}
 	}
 	return leases

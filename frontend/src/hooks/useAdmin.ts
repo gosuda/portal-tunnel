@@ -79,8 +79,10 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
 }
 
 function toAdminServer(row: PolicyLease): AdminServer {
+  const server = leaseToServer(row);
   return {
-    ...leaseToServer(row),
+    ...server,
+    id: row.lease_id || server.id,
     identityKey: row.identity_key.trim(),
     address: row.address.trim(),
     isBanned: row.is_banned,

@@ -35,7 +35,7 @@ func TestLeaseCloseRejectsRawTCPStillStarting(t *testing.T) {
 	reverse, peer := net.Pipe()
 	defer peer.Close()
 	defer reverse.Close()
-	if err := registry.activateBridge(record, bridge, reverse); err != nil {
+	if err := registry.activateBridge(record, bridge, reverse, nil); err != nil {
 		t.Fatal(err)
 	}
 	record.Close()
@@ -64,7 +64,7 @@ func checkClosedLeaseDropsEndpoints(t *testing.T, client, peer net.Conn) {
 
 func checkClosedLeaseBlocksReactivate(t *testing.T, registry *leaseRegistry, record *leaseRecord, bridge *leaseBridge, reverse net.Conn) {
 	t.Helper()
-	if err := registry.activateBridge(record, bridge, reverse); !errors.Is(err, net.ErrClosed) {
+	if err := registry.activateBridge(record, bridge, reverse, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("closed lease activated bridge: %v", err)
 	}
 }

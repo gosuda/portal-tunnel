@@ -1,4 +1,4 @@
-.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-server build-server-bin clean check-env-example env-reference
+.PHONY: help install fmt vet lint lint-auto test tidy all run build build-frontend build-docs build-tunnel build-wasm build-server build-server-bin clean check-env-example env-reference
 
 .DEFAULT_GOAL := help
 
@@ -25,6 +25,7 @@ help:
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-docs        - Build documentation site (SvelteKit)"
 	@echo "  make build-tunnel      - Build portal-tunnel binaries"
+	@echo "  make build-wasm        - Build portal-tunnel WebAssembly client"
 	@echo "  make build-server      - Build Go relay server"
 	@echo "  make run               - Run relay server"
 	@echo "  make clean             - Remove build artifacts"
@@ -119,8 +120,16 @@ build-docs:
 	@cd docs && bun install --frozen-lockfile && bun run build
 	@echo "[docs] build complete"
 
+# Build WebAssembly tunnel client for browser smoke tests and relay assets
+build-wasm:
+	@echo "[wasm] building portal-tunnel wasm..."
+	@mkdir -p cmd/relay-server/dist/tunnel
+	@test "$$(go env GOVERSION)" = "$(GO_TOOLCHAIN_VERSION)"
+	@CGO_ENABLED=0 GOOS=js GOARCH=wasm go build $(GO_BUILD_FLAGS) -o cmd/relay-server/dist/tunnel/portal-js-wasm.wasm ./cmd/portal-tunnel/wasm
+	@cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/relay-server/dist/tunnel/wasm_exec.js
+
 # Build portal-tunnel binaries for installer distribution
-build-tunnel:
+build-tunnel: build-wasm
 	@echo "[tunnel] building portal-tunnel binaries..."
 	@mkdir -p cmd/relay-server/dist/tunnel
 	@for GOOS in linux darwin windows; do \
@@ -132,10 +141,6 @@ build-tunnel:
 			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build $(GO_BUILD_FLAGS) -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \
 	done
-	@echo " - cmd/relay-server/dist/tunnel/portal-js-wasm.wasm"
-	@test "$$(go env GOVERSION)" = "$(GO_TOOLCHAIN_VERSION)"
-	@CGO_ENABLED=0 GOOS=js GOARCH=wasm go build $(GO_BUILD_FLAGS) -o cmd/relay-server/dist/tunnel/portal-js-wasm.wasm ./cmd/portal-tunnel/wasm
-	@cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/relay-server/dist/tunnel/wasm_exec.js
 
 # Build Go relay server
 build-server: build-tunnel build-frontend build-server-bin
