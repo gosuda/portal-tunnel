@@ -409,13 +409,13 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-	publicURL := ready[0].PublicURL
+	publicURL := ready[0].AliasURL
 	awaitCachePopulated(readyCtx, t, client, publicURL)
 	assertCacheSemantics(t, ctx, client, publicURL, relay, &originCalls)
 	assertOfflineCacheExpiry(t, client, publicURL, exposure, offlineTTL)
 }
 
-func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
+func TestNamespaceCanonicalNeverUsesAliasCache(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	base, stateDir, relay := startCacheRelay(t, ctx, cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: time.Minute})
@@ -426,7 +426,7 @@ func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	exposure, ready := namespaceService(t, h, id, "live origin", sdk.WithAutomaticTLS(t.TempDir(), true), sdk.WithStaticRelayCache(writeCacheSite(t), time.Minute))
-	if ready.LegacyURL == "" || ready.LegacyURL == ready.PublicURL {
+	if ready.AliasURL == "" || ready.AliasURL == ready.PublicURL {
 		t.Fatalf("cache migration URLs=%+v", ready)
 	}
 	client, transport, ok := tenantTLSClient(h.sniAddr, h.certificate)
@@ -437,12 +437,12 @@ func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
 	defer transport.CloseIdleConnections()
 	deadline, stop := context.WithTimeout(ctx, 15*time.Second)
 	defer stop()
-	awaitCachePopulated(deadline, t, client, ready.LegacyURL)
+	awaitCachePopulated(deadline, t, client, ready.AliasURL)
 	namespaceResponse(t, h, ready.PublicURL, "live origin", true)
 	parsed, _ := url.Parse(ready.PublicURL)
 	// Even when the relay terminates TLS for a legacy snapshot, a forged HTTP
 	// authority must not make that snapshot available under a canonical name.
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, ready.LegacyURL, nil)
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, ready.AliasURL, nil)
 	request.Host = parsed.Host
 	response, err := client.Do(request)
 	if err != nil {
@@ -455,7 +455,7 @@ func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
 	if err := exposure.Close(); err != nil {
 		t.Fatal(err)
 	}
-	assertOfflineCacheAvailable(t, client, ready.LegacyURL)
+	assertOfflineCacheAvailable(t, client, ready.AliasURL)
 	transport.CloseIdleConnections()
 	response, err = client.Get(ready.PublicURL)
 	if err == nil {

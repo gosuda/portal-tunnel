@@ -654,6 +654,10 @@ func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
 		writeAPIErrorResponse(w, err)
 		return
 	}
+	if record.Hostname == "" {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeFeatureUnavailable, "relay cache unavailable: no friendly alias granted")
+		return
+	}
 	generation := s.registry.cache.Generation(record.id)
 	if !s.registry.isRoutable(record.ServiceKey()) {
 		writeAPIErrorResponse(w, errLeaseRejected)

@@ -169,10 +169,10 @@ func TestLocalCertificateExpiryWithdrawsCanonical(t *testing.T) {
 	for {
 		select {
 		case update := <-exposure.Updates():
-			if update.State != sdk.RelayReady || update.PublicURL != "" || update.LegacyURL != ready.LegacyURL {
+			if update.State != sdk.RelayReady || update.PublicURL != "" || update.AliasURL != ready.AliasURL {
 				continue
 			}
-			if status := exposure.Relays()[0]; status.PublicURL != "" || status.LegacyURL != ready.LegacyURL {
+			if status := exposure.Relays()[0]; status.PublicURL != "" || status.AliasURL != ready.AliasURL {
 				t.Fatalf("snapshot disagrees with expiry event: %+v", status)
 			}
 			for _, lease := range h.server.PublicLeases() {
@@ -180,7 +180,7 @@ func TestLocalCertificateExpiryWithdrawsCanonical(t *testing.T) {
 					t.Fatal("relay still advertises the expired canonical")
 				}
 			}
-			if body, ok := tenantGet(h.sniAddr, h.certificate, ready.LegacyURL); !ok || body != marker {
+			if body, ok := tenantGet(h.sniAddr, h.certificate, ready.AliasURL); !ok || body != marker {
 				t.Fatalf("expiry removed the separate legacy endpoint: %q, %v", body, ok)
 			}
 			return
@@ -324,10 +324,10 @@ func TestServiceNamespaceHTTPAndSiblingIsolation(t *testing.T) {
 	if bytes.Equal(leaves[0].RawSubjectPublicKeyInfo, leaves[1].RawSubjectPublicKeyInfo) {
 		t.Fatal("sibling services share leaf private key")
 	}
-	if api.AliasURL == "" || api.LegacyURL == "" {
+	if api.AliasURL == "" {
 		t.Fatalf("compatibility URLs missing: %+v", api)
 	}
-	for _, legacy := range []string{api.AliasURL, api.LegacyURL} {
+	for _, legacy := range []string{api.AliasURL} {
 		leaf := namespaceResponse(t, h, legacy, "api", false)
 		if !leaf.IsCA {
 			t.Fatal("friendly/legacy path switched to tenant leaf")

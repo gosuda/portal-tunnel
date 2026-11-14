@@ -92,19 +92,16 @@ const (
 // RelayStatus is an immutable snapshot of one relay's externally visible state.
 type RelayStatus struct {
 	RelayURL string
-	// PublicURL is the identity-bound canonical URL. With negotiated Local TLS,
-	// it stays empty until a valid local certificate exists and is never cached
-	// by the relay. Old relays and non-Local-TLS exposures retain their legacy URL.
+	// PublicURL is the Local TLS canonical URL when configured, otherwise the
+	// granted friendly alias. A Local TLS URL stays empty until its certificate
+	// is ready and is never served from a relay snapshot.
 	PublicURL string
-	// LegacyURL preserves the old one-label canonical origin and its optional
-	// relay cache. It is not a redirect to PublicURL.
-	LegacyURL string
 	// AliasURL is the <name>.<root host> URL when the relay granted that
 	// alias to this lease, else empty: another identity may own the name
 	// (canonical fallback). A set alias is held by the lease: it stays set
 	// while the lease is held (also RelayConnecting while reverse sessions
-	// reconnect), is cleared on RelayFailed, and always reaches the live
-	// origin. The RelayReady rule is for display only: show the alias only
+	// reconnect), and is cleared on RelayFailed. Opted-in static content may
+	// be served by the relay, including during offline retention. The RelayReady rule is for display only: show the alias only
 	// while State is RelayReady.
 	AliasURL string
 	// AliasEpoch is the relay-issued alias ownership generation, shared by replicas.
@@ -121,7 +118,7 @@ type RelayStatus struct {
 	Failure    RelayFailure
 	Err        error
 	// CertificateError describes an automatic issuance policy refusal. A live
-	// legacy endpoint or an already valid local certificate can still work.
+	// alias or an already valid local certificate can still work.
 	CertificateError error
 	// Approval is set while the relay refuses this lease's reverse connection.
 	// State stays RelayConnecting and no endpoint field is set, because nothing
@@ -225,7 +222,7 @@ func WithStaticRelayCache(path string, ttl time.Duration) Option {
 
 // WithTLSCertificate requires a locally held tenant certificate and private key.
 // Expose validates the pair before registering. Its only DNS SAN must be the
-// exact new canonical hostname. Friendly and legacy URLs remain Keyless.
+// exact new canonical hostname. Friendly aliases remain Keyless unless explicitly cached.
 // Files are reloaded during certificate refresh; errors never enable relay signing.
 // This option requires a namespace-capable relay and cannot be used with raw TCP.
 func WithTLSCertificate(certFile, keyFile string) Option {
@@ -239,7 +236,7 @@ func WithTLSCertificate(certFile, keyFile string) Option {
 // The tunnel generates and persists private keys in directory. New canonical
 // hostnames never fall back to Keyless. requireLocal additionally rejects old
 // relays without namespace support and waits for canonical readiness; false
-// allows a live legacy endpoint to satisfy WaitReady while issuance is pending.
+// allows a live alias to satisfy WaitReady while issuance is pending.
 // This is local-key ownership, not independent authentication of the relay.
 func WithAutomaticTLS(directory string, requireLocal bool) Option {
 	return func(opts *options) {
@@ -1215,19 +1212,16 @@ func mergeRelayStatusFieldsLocked(previous RelayStatus, update listenerStatus, r
 
 	if update.state == RelayFailed {
 		status.AliasURL = ""
-		status.LegacyURL = ""
 	}
 	if update.state == RelayConnecting {
 		status.PublicURL = ""
-		status.LegacyURL = ""
 		status.AliasURL = ""
 		status.UDPAddr = ""
 		status.TCPAddr = ""
 	}
-	hasEndpoint := update.publicURL != "" || update.legacyURL != "" || update.aliasURL != ""
+	hasEndpoint := update.publicURL != "" || update.aliasURL != ""
 	if hasEndpoint || update.state == RelayReady {
 		status.PublicURL = update.publicURL
-		status.LegacyURL = update.legacyURL
 		status.AliasURL = update.aliasURL
 	}
 	if update.udpAddr != "" || update.state == RelayConnecting || update.state == RelayReady {
@@ -1251,7 +1245,7 @@ func mergeRelayStatusFieldsLocked(previous RelayStatus, update listenerStatus, r
 }
 
 func (e *Exposure) announceRelayStatusChange(previous, status RelayStatus) {
-	publicURL := cmp.Or(status.PublicURL, status.LegacyURL)
+	publicURL := cmp.Or(status.PublicURL, status.AliasURL)
 	advertised := (previous.State != RelayReady || previous.PublicURL != status.PublicURL) && status.State == RelayReady && publicURL != ""
 	if advertised {
 		message := "service ready at " + publicURL
@@ -1333,7 +1327,6 @@ func relayStatusEqual(a, b RelayStatus) bool {
 	}
 	return certErrorsEqual && a.RelayURL == b.RelayURL &&
 		a.PublicURL == b.PublicURL &&
-		a.LegacyURL == b.LegacyURL &&
 		a.AliasURL == b.AliasURL &&
 		a.AliasEpoch == b.AliasEpoch &&
 		a.UDPAddr == b.UDPAddr &&
@@ -1410,7 +1403,6 @@ func relayStatusLogEvent(event *zerolog.Event, status RelayStatus) *zerolog.Even
 		Str("relay_url", status.RelayURL).
 		Str("state", string(status.State)).
 		Str("public_url", status.PublicURL).
-		Str("legacy_url", status.LegacyURL).
 		Bool("deselected", status.Deselected)
 	if status.State == RelayReady && !status.Deselected && status.AliasURL != "" {
 		event = event.Str("alias_url", status.AliasURL)

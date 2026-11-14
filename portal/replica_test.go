@@ -78,7 +78,7 @@ func TestAliasEpochFollowsOwnershipRatherThanLeases(t *testing.T) {
 		t.Fatal("replacing a live lease changed uninterrupted ownership")
 	}
 	other := newTestLeaseIdentity(t, owner.Name)
-	_, _, fallback, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true, AllowCanonicalFallback: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, fallback, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,3 +1,18 @@
+## Breaking URL and cache contract
+
+Only friendly aliases and negotiated Local TLS canonical URLs remain. Old
+`<address>.<root>`, `<name>-<address>.<root>`, and `<hash>--<address>.<root>`
+canonical URLs, `legacy_canonical_hostname`, and `LegacyURL` are removed with
+no redirects. Clients requiring these URLs must upgrade; clients able to use
+only a granted alias may continue to do so. Unnamed HTTP services require Local
+TLS. Dedicated raw TCP/UDP addresses use the relay control hostname.
+
+`--cache` / `--cache-ttl` now target the currently granted friendly alias and
+can coexist with canonical Local TLS. An absent alias makes caching unavailable.
+Alias reassignment detaches old snapshots and publication credentials before
+the new owner is served. Canonical URLs remain ciphertext passthrough even
+when offline and never fall back to cached content.
+
 # Release notes
 
 ## Unreleased

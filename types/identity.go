@@ -16,19 +16,6 @@ const (
 	DNSSECKeyFileName     = "dnssec-csk.json"
 )
 
-// Canonical lease labels keep the full 40-character address as their suffix
-// within the 63-octet DNS label limit. A service name of up to
-// CanonicalLeaseNameMaxLength octets is embedded as is ("<name>-<address>");
-// a longer one is replaced by the first CanonicalLeaseNameHashLength
-// characters of a domain-separated SHA-256 of the name
-// ("<hash>--<address>"). A normalized name never ends with a hyphen, so the
-// two forms cannot produce the same label.
-const (
-	CanonicalLeaseNameMaxLength  = 22
-	CanonicalLeaseNameHashLength = 21
-	CanonicalLeaseNameHashDomain = "portal-canonical-name-v1"
-)
-
 // Identity-bound TLS channel binding runs on a native client's own TLS
 // connection to a canonical hostname, before any application data, between a
 // client and a tunnel that may run different versions. The client sends the
@@ -149,22 +136,21 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 type Lease struct {
 	// CanonicalReady describes Local TLS material, independently of Ready's
 	// reverse transport count. Legacy namespaces do not use this field.
-	CanonicalReady          bool          `json:"canonical_ready,omitempty"`
-	Namespace               string        `json:"namespace,omitempty"`
-	LegacyCanonicalHostname string        `json:"legacy_canonical_hostname,omitempty"`
-	Name                    string        `json:"name,omitempty"`
-	Address                 string        `json:"address"`
-	ExpiresAt               time.Time     `json:"expires_at"`
-	FirstSeenAt             time.Time     `json:"first_seen_at"`
-	LastSeenAt              time.Time     `json:"last_seen_at"`
-	Hostname                string        `json:"hostname"`
-	CanonicalHostname       string        `json:"canonical_hostname"`
-	UDPEnabled              bool          `json:"udp_enabled,omitempty"`
-	UDPAddr                 string        `json:"udp_addr,omitempty"`
-	TCPEnabled              bool          `json:"tcp_enabled,omitempty"`
-	TCPAddr                 string        `json:"tcp_addr,omitempty"`
-	Metadata                LeaseMetadata `json:"metadata"`
-	Ready                   int           `json:"ready"`
+	CanonicalReady    bool          `json:"canonical_ready,omitempty"`
+	Namespace         string        `json:"namespace,omitempty"`
+	Name              string        `json:"name,omitempty"`
+	Address           string        `json:"address"`
+	ExpiresAt         time.Time     `json:"expires_at"`
+	FirstSeenAt       time.Time     `json:"first_seen_at"`
+	LastSeenAt        time.Time     `json:"last_seen_at"`
+	Hostname          string        `json:"hostname"`
+	CanonicalHostname string        `json:"canonical_hostname"`
+	UDPEnabled        bool          `json:"udp_enabled,omitempty"`
+	UDPAddr           string        `json:"udp_addr,omitempty"`
+	TCPEnabled        bool          `json:"tcp_enabled,omitempty"`
+	TCPAddr           string        `json:"tcp_addr,omitempty"`
+	Metadata          LeaseMetadata `json:"metadata"`
+	Ready             int           `json:"ready"`
 }
 
 type PolicyLease struct {

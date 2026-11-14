@@ -125,17 +125,17 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 	if !ok {
 		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
-	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
+	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok && endpoint.alias != nil {
 		// Probe the relay-owned certificate path even before local issuance is
 		// ready. The canonical hostname uses independent local TLS material.
-		lease.hostname = lease.legacyHostname
-		lease.tenantTLS = endpoint.legacy
+		lease.hostname = lease.aliasHostname
+		lease.tenantTLS = endpoint.alias
 	}
 	if lease.hostname == "" {
 		return mitmProbeReport{}, errListenerHostnameIsUnavailable
 	}
 
-	publicURL := l.publicURLForLease(lease)
+	publicURL := l.leaseURL(lease.hostname)
 	if publicURL == "" {
 		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
@@ -164,7 +164,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (mitmProbeReport,
 		if err := tlsConn.HandshakeContext(probeCtx); err != nil {
 			return report, fmt.Errorf("mitm probe tls handshake: %w", err)
 		}
-		err := VerifyTLSChannelBinding(probeCtx, tlsConn, lease.hostname)
+		err := verifyTLSChannelBinding(probeCtx, tlsConn, lease.hostname, l.identity.Address)
 		if errors.Is(err, errTLSChannelBindingExporterMismatchRelay) {
 			report.Detected = true
 			report.Reason = types.MITMProbeReasonExporterMismatch
@@ -345,7 +345,7 @@ func (m *mitmManager) completeProbe(nonce mitmProbeNonce, actual []byte) {
 }
 
 func (m *mitmManager) run(ctx context.Context, ready <-chan struct{}) {
-	if m.listener.cache != nil || runtime.GOOS == "js" {
+	if m.listener.cache != nil || m.listener.udpEnabled || m.listener.tcpEnabled || runtime.GOOS == "js" {
 		return
 	}
 	select {
@@ -470,17 +470,26 @@ func (m *mitmManager) reportProbeDetection(l *listener, report mitmProbeReport) 
 // it when it returns, so a deadline set earlier does not survive; set it again
 // afterwards.
 func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string) error {
+	expected, err := namespace.CanonicalAddress(hostname)
+	if err != nil {
+		return err
+	}
+	return verifyTLSChannelBinding(ctx, conn, hostname, expected)
+}
+
+// Self-probes know the expected owner independently of a reassignable alias.
+func verifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname, expected string) error {
 	if conn == nil {
 		return errTLSConnectionIsRequired
 	}
 	var clientExporter []byte
 	var expectedAddr string
 	var nonce [types.TLSChannelBindingNonceSize]byte
-	c, e, n, err := prepareChannelBindingClient(conn, hostname)
+	c, n, err := prepareChannelBindingClient(conn)
 	if err != nil {
 		return err
 	}
-	clientExporter, expectedAddr, nonce = c, e, n
+	clientExporter, expectedAddr, nonce = c, expected, n
 	_ = conn.SetDeadline(time.Now().Add(defaultChannelBindingTimeout))
 	defer conn.SetDeadline(time.Time{})
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
@@ -496,32 +505,23 @@ func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string
 	return flow.completeVerifyTLSChannelBinding(ctx)
 }
 
-func prepareChannelBindingClient(conn net.Conn, hostname string) ([]byte, string, [types.TLSChannelBindingNonceSize]byte, error) {
+func prepareChannelBindingClient(conn net.Conn) ([]byte, [types.TLSChannelBindingNonceSize]byte, error) {
 	var nonce [types.TLSChannelBindingNonceSize]byte
-	var expectedAddr string
-	e, err := namespace.CanonicalAddress(hostname)
-	if err != nil {
-		_ = conn.Close()
-		return nil, "", nonce, err
-	}
-	expectedAddr = e
 	exportFn, ok := probeExporter(conn)
 	if !ok {
 		_ = conn.Close()
-		return nil, "", nonce, errTLSConnectionDoesNotSupportKeying
+		return nil, nonce, errTLSConnectionDoesNotSupportKeying
 	}
-	var clientExporter []byte
-	c, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
+	exported, err := exportFn(types.TLSChannelBindingExporterLabel, nil, types.TLSChannelBindingExporterSize)
 	if err != nil {
 		_ = conn.Close()
-		return nil, "", nonce, fmt.Errorf("export client tls keying material: %w", err)
+		return nil, nonce, fmt.Errorf("export client tls keying material: %w", err)
 	}
-	clientExporter = c
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		_ = conn.Close()
-		return nil, "", nonce, fmt.Errorf("generate channel binding nonce: %w", err)
+		return nil, nonce, fmt.Errorf("generate channel binding nonce: %w", err)
 	}
-	return clientExporter, expectedAddr, nonce, nil
+	return exported, nonce, nil
 }
 
 type exchangeVerifyTLSChannelBindingFlow struct {
@@ -670,7 +670,7 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		hostname = lease.hostname
 		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
 			if sni := types.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
-				if sni != lease.hostname && sni != lease.legacyHostname {
+				if sni != lease.hostname && sni != lease.aliasHostname {
 					_ = conn.Close()
 					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
 				}
