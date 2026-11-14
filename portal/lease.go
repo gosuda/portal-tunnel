@@ -934,7 +934,9 @@ func (r *leaseRegistry) allocateRegisterTransportsLocked(record *leaseRecord, re
 }
 
 func (r *leaseRegistry) checkRegisterCapacityLocked(record *leaseRecord, now time.Time) error {
-	if (record.datagram == nil || r.udpMaxLeases <= 0) && (record.tcpPort <= 0 || r.tcpMaxLeases <= 0) {
+	checkUDP := record.datagram != nil && r.udpMaxLeases > 0
+	checkTCP := record.tcpPort > 0 && r.tcpMaxLeases > 0
+	if !checkUDP && !checkTCP {
 		return nil
 	}
 	identityKey := record.ServiceKey()
@@ -951,10 +953,10 @@ func (r *leaseRegistry) checkRegisterCapacityLocked(record *leaseRecord, now tim
 			tcpLeases++
 		}
 	}
-	if record.datagram != nil && r.udpMaxLeases > 0 && udpLeases >= r.udpMaxLeases {
+	if checkUDP && udpLeases >= r.udpMaxLeases {
 		return errUDPCapacityExceeded
 	}
-	if record.tcpPort > 0 && r.tcpMaxLeases > 0 && tcpLeases >= r.tcpMaxLeases {
+	if checkTCP && tcpLeases >= r.tcpMaxLeases {
 		return errTCPPortCapacityExceeded
 	}
 	return nil
