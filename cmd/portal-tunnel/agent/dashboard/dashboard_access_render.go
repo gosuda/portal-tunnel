@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
@@ -63,7 +64,7 @@ func accessApplyLabel(a agentDashboardAccess, changed bool) string {
 	return applyLabel
 }
 
-func (m agentDashboardModel) accessBodyRows(th *agentDashboardTheme, inner int, a agentDashboardAccess, tunnel AgentTunnelStatus) (agentDashboardView, int) {
+func (m agentDashboardModel) accessBodyRows(th *agentDashboardTheme, inner int, a agentDashboardAccess, tunnel agent.AgentTunnelStatus) (agentDashboardView, int) {
 	var body agentDashboardView
 	focusLine := body.addAccessBodyFields(th, inner, a, tunnel)
 	body.addLine("")
@@ -72,7 +73,7 @@ func (m agentDashboardModel) accessBodyRows(th *agentDashboardTheme, inner int, 
 	return body, focusLine
 }
 
-func (v *agentDashboardView) addAccessBodyFields(th *agentDashboardTheme, inner int, a agentDashboardAccess, tunnel AgentTunnelStatus) int {
+func (v *agentDashboardView) addAccessBodyFields(th *agentDashboardTheme, inner int, a agentDashboardAccess, tunnel agent.AgentTunnelStatus) int {
 	focusLine := 0
 	for index, field := range a.fields() {
 		focused := index == a.focusIndex()
@@ -131,7 +132,7 @@ func (a agentDashboardAccess) providerInput(field agentDashboardAccessRow) (stri
 	return "", textinput.Model{}, false
 }
 
-func (a agentDashboardAccess) accessSecretField(tunnel AgentTunnelStatus) (string, textinput.Model) {
+func (a agentDashboardAccess) accessSecretField(tunnel agent.AgentTunnelStatus) (string, textinput.Model) {
 	input, label := a.secret, "Client secret"
 	if a.provider == appauth.ProviderEmail {
 		label = "SMTP password"
@@ -143,7 +144,7 @@ func (a agentDashboardAccess) accessSecretField(tunnel AgentTunnelStatus) (strin
 	return label, input
 }
 
-func (v *agentDashboardView) addAccessProviderCheck(th *agentDashboardTheme, inner int, tunnel AgentTunnelStatus) {
+func (v *agentDashboardView) addAccessProviderCheck(th *agentDashboardTheme, inner int, tunnel agent.AgentTunnelStatus) {
 	if tunnel.Provider != appauth.ProviderOIDC && tunnel.Provider != appauth.ProviderSAML && tunnel.Provider != appauth.ProviderEmail {
 		return
 	}
@@ -173,7 +174,7 @@ func agentDashboardAccessEntryPlaceholder(provider string) string {
 	}
 }
 
-func agentDashboardSecretPlaceholder(a agentDashboardAccess, stored AgentTunnelStatus) string {
+func agentDashboardSecretPlaceholder(a agentDashboardAccess, stored agent.AgentTunnelStatus) string {
 	switch {
 	case a.clearSecret:
 		return "will be removed"

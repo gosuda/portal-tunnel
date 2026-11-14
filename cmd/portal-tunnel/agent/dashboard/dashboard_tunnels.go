@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 )
 
 const agentDashboardTunnelLead = 5
@@ -34,7 +36,7 @@ func (m agentDashboardModel) deleteTunnel(tunnelID string) (tea.Model, tea.Cmd) 
 		tunnelID = tunnel.ID
 	}
 	return m, agentDashboardRun(func(ctx context.Context) error {
-		return DeleteTunnel(ctx, m.stateDir, tunnelID)
+		return agent.DeleteTunnel(ctx, m.stateDir, tunnelID)
 	})
 }
 
@@ -120,7 +122,7 @@ func (m agentDashboardModel) addTunnelsTable(pane *agentDashboardView, th *agent
 	pane.lines = append(pane.lines, tail...)
 }
 
-func (v *agentDashboardView) addTunnelRow(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus, selected bool) {
+func (v *agentDashboardView) addTunnelRow(th *agentDashboardTheme, width int, tunnel agent.AgentTunnelStatus, selected bool) {
 	led, style := agentDashboardTunnelLook(th, tunnel.State)
 	marker := th.glyph.unselected
 	if selected {
@@ -143,14 +145,14 @@ func agentDashboardTunnelLook(th *agentDashboardTheme, state string) (string, li
 	}
 }
 
-func tunnelDashboardName(tunnel AgentTunnelStatus) string {
+func tunnelDashboardName(tunnel agent.AgentTunnelStatus) string {
 	if strings.TrimSpace(tunnel.Name) != "" {
 		return tunnel.Name
 	}
 	return tunnel.ID
 }
 
-func tunnelDashboardTarget(tunnel AgentTunnelStatus) string {
+func tunnelDashboardTarget(tunnel agent.AgentTunnelStatus) string {
 	if tunnel.Serve != "" {
 		return tunnel.Serve
 	}

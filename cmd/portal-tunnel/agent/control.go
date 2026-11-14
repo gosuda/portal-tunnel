@@ -39,7 +39,7 @@ type endpoint struct {
 }
 
 type controlHandler struct {
-	manager            *manager
+	manager            *Manager
 	token              string
 	auth               *walletAuthenticator
 	shutdown           func()

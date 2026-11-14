@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"strings"
@@ -6,14 +6,15 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 )
 
 func TestTunnelDashboardName(t *testing.T) {
-	if got := tunnelDashboardName(AgentTunnelStatus{ID: "web-1", Name: "web"}); got != "web" {
+	if got := tunnelDashboardName(agent.AgentTunnelStatus{ID: "web-1", Name: "web"}); got != "web" {
 		t.Fatalf("name = %q, want the public name", got)
 	}
-	if got := tunnelDashboardName(AgentTunnelStatus{ID: "web-1", Name: "  "}); got != "web-1" {
+	if got := tunnelDashboardName(agent.AgentTunnelStatus{ID: "web-1", Name: "  "}); got != "web-1" {
 		t.Fatalf("name = %q, want the id when the name is blank", got)
 	}
 }
@@ -28,14 +29,14 @@ func TestTunnelDashboardTarget(t *testing.T) {
 	}
 	tests := []struct {
 		name   string
-		tunnel AgentTunnelStatus
+		tunnel agent.AgentTunnelStatus
 		want   string
 	}{
-		{name: "target address", tunnel: AgentTunnelStatus{TargetAddr: " 127.0.0.1:3000 "}, want: "127.0.0.1:3000"},
-		{name: "static site wins over the target", tunnel: AgentTunnelStatus{Serve: "./site", TargetAddr: "127.0.0.1:3000"}, want: "./site"},
-		{name: "free routes", tunnel: AgentTunnelStatus{HTTPRoutes: routes("", "")}, want: "2 routes"},
-		{name: "paid routes", tunnel: AgentTunnelStatus{HTTPRoutes: routes("", "0.01", "0.02")}, want: "3 routes, 2 paid"},
-		{name: "nothing to show", tunnel: AgentTunnelStatus{}, want: "-"},
+		{name: "target address", tunnel: agent.AgentTunnelStatus{TargetAddr: " 127.0.0.1:3000 "}, want: "127.0.0.1:3000"},
+		{name: "static site wins over the target", tunnel: agent.AgentTunnelStatus{Serve: "./site", TargetAddr: "127.0.0.1:3000"}, want: "./site"},
+		{name: "free routes", tunnel: agent.AgentTunnelStatus{HTTPRoutes: routes("", "")}, want: "2 routes"},
+		{name: "paid routes", tunnel: agent.AgentTunnelStatus{HTTPRoutes: routes("", "0.01", "0.02")}, want: "3 routes, 2 paid"},
+		{name: "nothing to show", tunnel: agent.AgentTunnelStatus{}, want: "-"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

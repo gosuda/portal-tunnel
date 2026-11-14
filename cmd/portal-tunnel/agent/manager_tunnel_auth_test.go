@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func TestUpdateTunnelAuthChangesOnlyWhatIsSent(t *testing.T) {
@@ -113,7 +112,7 @@ func checkAuthUpdateClearsSecret(t *testing.T, saved TunnelConfig, status AgentT
 	}
 }
 
-func checkTunnelAuthUpdateStep(t *testing.T, m *manager, path, newSecret string, step tunnelAuthUpdateStep) {
+func checkTunnelAuthUpdateStep(t *testing.T, m *Manager, path, newSecret string, step tunnelAuthUpdateStep) {
 	t.Helper()
 	code, body := callControl(t, m, http.MethodPatch, types.PathAgentTunnelsPrefix+"app", step.body)
 	if code != http.StatusAccepted {
@@ -182,7 +181,7 @@ type updateRejectionCase struct {
 	name, id, body, want string
 }
 
-func checkUpdateRejectionUnchanged(t *testing.T, m *manager, path, secret string, tc updateRejectionCase) {
+func checkUpdateRejectionUnchanged(t *testing.T, m *Manager, path, secret string, tc updateRejectionCase) {
 	t.Helper()
 	fileBefore, err := os.ReadFile(path)
 	if err != nil {
@@ -210,7 +209,7 @@ func checkUpdateRejectionUnchanged(t *testing.T, m *manager, path, secret string
 }
 
 func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
-	addedRelay, err := utils.NormalizeRelayURL("https://127.0.0.1:2")
+	addedRelay, err := types.NormalizeRelayURL("https://127.0.0.1:2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +246,7 @@ func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
 	}
 }
 
-func connectTunnelRelay(t *testing.T, m *manager, tunnelID, relayURL string) {
+func connectTunnelRelay(t *testing.T, m *Manager, tunnelID, relayURL string) {
 	t.Helper()
 	if code, body := callControl(t, m, http.MethodPost, types.PathAgentTunnelsPrefix+tunnelID+"/relays", `{"relay_url":"`+relayURL+`"}`); code != http.StatusAccepted {
 		t.Fatalf("connect relay: status = %d, body = %s", code, body)

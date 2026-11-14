@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"cmp"
@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
@@ -58,7 +59,7 @@ func agentDashboardSecretState(set bool) string {
 	return "not set"
 }
 
-func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
+func agentDashboardSecretSet(provider string, tunnel agent.AgentTunnelStatus) bool {
 	switch provider {
 	case appauth.ProviderOIDC:
 		return tunnel.AuthOIDCClientSecretSet
@@ -69,7 +70,7 @@ func agentDashboardSecretSet(provider string, tunnel AgentTunnelStatus) bool {
 	}
 }
 
-func agentDashboardProviderCheck(th *agentDashboardTheme, tunnel AgentTunnelStatus) (string, lipgloss.Style) {
+func agentDashboardProviderCheck(th *agentDashboardTheme, tunnel agent.AgentTunnelStatus) (string, lipgloss.Style) {
 	switch {
 	case tunnel.AuthProviderError != "":
 		return th.glyph.ledFailed + " failed", th.failed
@@ -90,7 +91,7 @@ func (v *agentDashboardView) addAccessValue(th *agentDashboardTheme, width int, 
 	v.addLine(th.muted.Render(agentDashboardCell(label, labelWidth)) + " " + style.Render(agentDashboardFit(value, max(1, width-labelWidth-1))))
 }
 
-func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int, tunnel AgentTunnelStatus) {
+func (v *agentDashboardView) addAccessSummary(th *agentDashboardTheme, width int, tunnel agent.AgentTunnelStatus) {
 	mode, style := agentDashboardAccessMode(tunnel.Provider), th.text
 	if tunnel.AuthProviderError != "" {
 		mode, style = mode+" "+th.glyph.ledFailed+" check failed", th.failed

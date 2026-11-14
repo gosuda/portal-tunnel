@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"cmp"
@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
@@ -26,7 +27,7 @@ func (m agentDashboardModel) connectSelectedRelay() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, agentDashboardRun(func(ctx context.Context) error {
-		return ConnectRelay(ctx, m.stateDir, tunnel.ID, relay.RelayURL)
+		return agent.ConnectRelay(ctx, m.stateDir, tunnel.ID, relay.RelayURL)
 	})
 }
 
@@ -39,7 +40,7 @@ func (m agentDashboardModel) disconnectSelectedRelay() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, agentDashboardRun(func(ctx context.Context) error {
-		return DisconnectRelay(ctx, m.stateDir, tunnel.ID, relay.RelayURL)
+		return agent.DisconnectRelay(ctx, m.stateDir, tunnel.ID, relay.RelayURL)
 	})
 }
 
@@ -101,7 +102,7 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 	return pane
 }
 
-func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, relay AgentRelayStatus) lipgloss.Style {
+func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, relay agent.AgentRelayStatus) lipgloss.Style {
 	if selected {
 		return th.selected
 	}
@@ -117,21 +118,21 @@ func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, relay Agen
 	return th.muted
 }
 
-func relayDashboardVersion(relay AgentRelayStatus) string {
+func relayDashboardVersion(relay agent.AgentRelayStatus) string {
 	if version := strings.TrimSpace(relay.Version); version != "" {
 		return version
 	}
 	return "-"
 }
 
-func relayDashboardURL(relay AgentRelayStatus) string {
+func relayDashboardURL(relay agent.AgentRelayStatus) string {
 	if publicURL := relayDashboardPublicURL(relayDashboardEndpoint(relay)); publicURL != "" {
 		return publicURL
 	}
 	return relayDashboardRelayLabel(relay.RelayURL)
 }
 
-func relayDashboardEndpoint(relay AgentRelayStatus) string {
+func relayDashboardEndpoint(relay agent.AgentRelayStatus) string {
 	if relay.State == sdk.RelayReady {
 		return cmp.Or(relay.AliasURL, relay.PublicURL, relay.LegacyURL)
 	}
@@ -175,7 +176,7 @@ func relayDashboardRelayLabel(rawURL string) string {
 	return host
 }
 
-func relayDashboardMode(relay AgentRelayStatus) string {
+func relayDashboardMode(relay agent.AgentRelayStatus) string {
 	switch {
 	case relay.Approval == sdk.RelayApprovalPending:
 		return "waiting"

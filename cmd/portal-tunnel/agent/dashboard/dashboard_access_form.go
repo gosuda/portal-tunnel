@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"errors"
@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
@@ -44,7 +45,7 @@ type agentDashboardAccess struct {
 	applying    bool
 	applied     bool
 	err         error
-	base        AgentTunnelStatus
+	base        agent.AgentTunnelStatus
 
 	add, issuer, clientID, secret                         textinput.Model
 	metadataURL, metadataFile, entityID, subjectAttribute textinput.Model
@@ -76,10 +77,10 @@ func newAgentDashboardAccess(theme agentDashboardTheme) agentDashboardAccess {
 
 func (m agentDashboardModel) accessing() bool { return m.access.tunnelID != "" }
 
-func (m agentDashboardModel) accessTunnel() (AgentTunnelStatus, bool) {
-	index := slices.IndexFunc(m.status.Tunnels, func(tunnel AgentTunnelStatus) bool { return tunnel.ID == m.access.tunnelID })
+func (m agentDashboardModel) accessTunnel() (agent.AgentTunnelStatus, bool) {
+	index := slices.IndexFunc(m.status.Tunnels, func(tunnel agent.AgentTunnelStatus) bool { return tunnel.ID == m.access.tunnelID })
 	if index < 0 {
-		return AgentTunnelStatus{}, false
+		return agent.AgentTunnelStatus{}, false
 	}
 	return m.status.Tunnels[index], true
 }
@@ -124,13 +125,13 @@ func (m *agentDashboardModel) syncAccess() {
 	}
 }
 
-func sameAccessSettings(a, b AgentTunnelStatus) bool {
-	return authChanges(a.AuthConfig, b.AuthConfig) == nil &&
+func sameAccessSettings(a, b agent.AgentTunnelStatus) bool {
+	return agent.AuthChanges(a.AuthConfig, b.AuthConfig) == nil &&
 		a.AuthOIDCClientSecretSet == b.AuthOIDCClientSecretSet &&
 		a.AuthSMTPPasswordSet == b.AuthSMTPPasswordSet
 }
 
-func (a *agentDashboardAccess) load(tunnel AgentTunnelStatus) {
+func (a *agentDashboardAccess) load(tunnel agent.AgentTunnelStatus) {
 	a.base = tunnel
 	a.applied = false
 	a.provider = tunnel.Provider
@@ -166,7 +167,7 @@ func (a *agentDashboardAccess) forgetSecret() {
 	a.clearSecret = false
 }
 
-func (a *agentDashboardAccess) setClearSecret(clear bool, stored AgentTunnelStatus) {
+func (a *agentDashboardAccess) setClearSecret(clear bool, stored agent.AgentTunnelStatus) {
 	a.clearSecret = clear
 	if clear {
 		a.secret.Reset()
@@ -182,7 +183,7 @@ func (a *agentDashboardAccess) setClearSecret(clear bool, stored AgentTunnelStat
 	}
 }
 
-func (a *agentDashboardAccess) setProvider(provider string, stored AgentTunnelStatus) {
+func (a *agentDashboardAccess) setProvider(provider string, stored agent.AgentTunnelStatus) {
 	if provider == a.provider {
 		return
 	}

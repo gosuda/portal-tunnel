@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"errors"
@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -32,18 +33,18 @@ func keyRunes(text string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}
 }
 
-func testDashboardStatus() AgentStatusResponse {
-	relays := []AgentRelayStatus{
+func testDashboardStatus() agent.AgentStatusResponse {
+	relays := []agent.AgentRelayStatus{
 		{RelayURL: "https://relay-one.example.com", PublicURL: "https://web.relay-one.example.com", Version: "v2.4.1", State: sdk.RelayReady},
 		{RelayURL: "https://relay-two.example.org:8443", State: sdk.RelayConnecting, Version: "v2.4.0"},
 		{RelayURL: "https://relay-three.example.net"},
 		{RelayURL: "https://failed.example.net", State: sdk.RelayFailed},
 	}
-	return AgentStatusResponse{
+	return agent.AgentStatusResponse{
 		ConfigPath:    "/Users/someone/.config/portal/config.toml",
 		ControlAddr:   "127.0.0.1:41873",
 		WalletAddress: "0x52908400098527886E0F7030069857D2E4169EE7",
-		Tunnels: []AgentTunnelStatus{
+		Tunnels: []agent.AgentTunnelStatus{
 			{
 				ID: "web", Name: "web", State: "running", TargetAddr: "127.0.0.1:3000", Discovery: true, MaxActiveRelays: 3,
 				Metadata: types.LeaseMetadata{Description: "Main site", Tags: []string{"web", "prod"}, Owner: "me"},
@@ -107,7 +108,7 @@ func testDashboardScenarios() []dashboardScenario {
 		{"delete confirmation", []tea.Msg{load, keyF8}},
 		{"error banner", []tea.Msg{load, agentDashboardActionMsg{err: errors.New("tunnel name is required")}}},
 		{"agent unavailable", []tea.Msg{agentDashboardStatusMsg{err: errors.New("agent is not running")}}},
-		{"no tunnels", []tea.Msg{agentDashboardStatusMsg{status: AgentStatusResponse{ControlAddr: "127.0.0.1:41873"}}}},
+		{"no tunnels", []tea.Msg{agentDashboardStatusMsg{status: agent.AgentStatusResponse{ControlAddr: "127.0.0.1:41873"}}}},
 	}
 }
 
@@ -199,7 +200,7 @@ func TestDashboardViewFitsTheTerminal(t *testing.T) {
 		{"ascii", newAgentDashboardTheme("amber", agentDashboardTerminal{})},
 	}
 	wide := testDashboardStatus()
-	wide.Tunnels = append(wide.Tunnels, AgentTunnelStatus{ID: "wide", Name: "데모터널日本語", State: "stopped", Relays: wide.Tunnels[0].Relays})
+	wide.Tunnels = append(wide.Tunnels, agent.AgentTunnelStatus{ID: "wide", Name: "데모터널日本語", State: "stopped", Relays: wide.Tunnels[0].Relays})
 	scenarios := append(testDashboardScenarios(), dashboardScenario{"wide runes", []tea.Msg{agentDashboardStatusMsg{status: wide}, keyDown, keyDown, keyDown, keyDown, keyDown}})
 
 	for _, th := range themes {

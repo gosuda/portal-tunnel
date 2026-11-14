@@ -57,6 +57,13 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   connection-attempt history. A tunnel without a runtime reports no relay
   endpoints; reading status does not retain a second relay snapshot.
 
+- `cmd/portal-tunnel/agent/dashboard`: owns the terminal UI of the agent:
+  panes, input handling, and rendering. It reads tunnel state through the
+  exported agent surface (`agent.Manager`, status types) and applies changes
+  through the same control API any client uses. `dashboard.RunDashboard` is
+  the only entry; the agent package owns tunnel lifecycle and never imports
+  the dashboard.
+
 - `portal/discovery`: provides blind collaborator relay selection for `sdk.Exposure`.
   Relay selection returns public relay priorities; Portal does not construct an
   ordered list of intermediate relays. Explicit relay URLs, transport eligibility,

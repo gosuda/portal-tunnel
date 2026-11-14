@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"cmp"
@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -128,28 +129,28 @@ func (m agentDashboardModel) addTunnelFromInput() (tea.Model, tea.Cmd) {
 	m.addingTunnel = false
 	m.resetAddTunnelForm()
 	return m, agentDashboardRun(func(ctx context.Context) error {
-		return AddTunnel(ctx, m.stateDir, req)
+		return agent.AddTunnel(ctx, m.stateDir, req)
 	})
 }
 
-func (m agentDashboardModel) addTunnelRequest() (AgentTunnelRequest, error) {
+func (m agentDashboardModel) addTunnelRequest() (agent.AgentTunnelRequest, error) {
 	name := strings.TrimSpace(m.addName.Value())
-	if agentTunnelID(name) == "" {
-		return AgentTunnelRequest{}, fmt.Errorf("tunnel name is required")
+	if agent.AgentTunnelID(name) == "" {
+		return agent.AgentTunnelRequest{}, fmt.Errorf("tunnel name is required")
 	}
 	target, routes, err := m.addTunnelTarget()
 	if err != nil {
-		return AgentTunnelRequest{}, err
+		return agent.AgentTunnelRequest{}, err
 	}
 	x402, err := m.addTunnelX402Config(routes)
 	if err != nil {
-		return AgentTunnelRequest{}, err
+		return agent.AgentTunnelRequest{}, err
 	}
 	discovery, maxRelays, err := m.addTunnelRunSettings()
 	if err != nil {
-		return AgentTunnelRequest{}, err
+		return agent.AgentTunnelRequest{}, err
 	}
-	return AgentTunnelRequest{
+	return agent.AgentTunnelRequest{
 		Name:            name,
 		TargetAddr:      target,
 		HTTPRoutes:      routes,

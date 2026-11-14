@@ -27,7 +27,7 @@ var (
 	errTunnelIsNotRunning                 = errors.New("tunnel is not running")
 )
 
-type manager struct {
+type Manager struct {
 	controlAddr string
 
 	configMu sync.Mutex
@@ -38,8 +38,8 @@ type manager struct {
 	rootCtx context.Context
 }
 
-func newManager(cfg Config, controlAddr string) *manager {
-	manager := &manager{
+func NewManager(cfg Config, controlAddr string) *Manager {
+	manager := &Manager{
 		controlAddr: controlAddr,
 		cfg:         cfg,
 		tunnels:     make(map[string]*managedTunnel, len(cfg.Tunnels)),
@@ -51,7 +51,7 @@ func newManager(cfg Config, controlAddr string) *manager {
 	return manager
 }
 
-func (m *manager) Start(ctx context.Context) {
+func (m *Manager) Start(ctx context.Context) {
 	m.mu.Lock()
 	m.rootCtx = ctx
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))
@@ -65,7 +65,7 @@ func (m *manager) Start(ctx context.Context) {
 	}
 }
 
-func (m *manager) Stop(ctx context.Context) error {
+func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.RLock()
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))
 	for _, tunnel := range m.tunnels {
@@ -101,7 +101,7 @@ func (m *manager) Stop(ctx context.Context) error {
 	}
 }
 
-func (m *manager) ConnectRelay(id, relayURL string) error {
+func (m *Manager) ConnectRelay(id, relayURL string) error {
 	id = strings.TrimSpace(id)
 	if err := validateAgentPathComponent("tunnel id", id); err != nil {
 		return err
@@ -116,7 +116,7 @@ func (m *manager) ConnectRelay(id, relayURL string) error {
 	return tunnel.ConnectRelay(relayURL)
 }
 
-func (m *manager) DisconnectRelay(id, relayURL string) error {
+func (m *Manager) DisconnectRelay(id, relayURL string) error {
 	id = strings.TrimSpace(id)
 	if err := validateAgentPathComponent("tunnel id", id); err != nil {
 		return err
@@ -131,7 +131,7 @@ func (m *manager) DisconnectRelay(id, relayURL string) error {
 	return tunnel.DisconnectRelay(relayURL)
 }
 
-func (m *manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
+func (m *Manager) UpdateTunnel(id string, req AgentTunnelUpdateRequest) error {
 	if req.Empty() {
 		return errTunnelUpdateRequiresLeastOneField
 	}
@@ -179,7 +179,7 @@ func applyTunnelMetadata(tunnel *TunnelConfig, metadata *AgentMetadataRequest) e
 	return nil
 }
 
-func (m *manager) AddTunnel(req AgentTunnelRequest) error {
+func (m *Manager) AddTunnel(req AgentTunnelRequest) error {
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -201,7 +201,7 @@ func (m *manager) AddTunnel(req AgentTunnelRequest) error {
 func newTunnelConfig(req AgentTunnelRequest) (TunnelConfig, error) {
 	id := strings.TrimSpace(req.ID)
 	name := strings.TrimSpace(req.Name)
-	id = cmp.Or(id, agentTunnelID(name))
+	id = cmp.Or(id, AgentTunnelID(name))
 	if id == "" {
 		return TunnelConfig{}, errTunnelNameIsRequired
 	}
@@ -233,7 +233,7 @@ func newTunnelConfig(req AgentTunnelRequest) (TunnelConfig, error) {
 	}}, nil
 }
 
-func agentTunnelID(name string) string {
+func AgentTunnelID(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	var out strings.Builder
 	dash := false
@@ -251,7 +251,7 @@ func agentTunnelID(name string) string {
 	return strings.Trim(out.String(), "-")
 }
 
-func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error) error {
+func (m *Manager) updateTunnelConfig(id string, update func(*TunnelConfig) error) error {
 	id = strings.TrimSpace(id)
 	if err := validateAgentPathComponent("tunnel id", id); err != nil {
 		return err
@@ -278,7 +278,7 @@ func (m *manager) updateTunnelConfig(id string, update func(*TunnelConfig) error
 	return m.writeConfigAndApply(path, mode, cfg)
 }
 
-func (m *manager) DeleteTunnel(id string) error {
+func (m *Manager) DeleteTunnel(id string) error {
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
 
@@ -306,7 +306,7 @@ func (m *manager) DeleteTunnel(id string) error {
 	return m.writeConfigAndApply(path, mode, cfg)
 }
 
-func (m *manager) loadConfigDocument() (Config, string, os.FileMode, error) {
+func (m *Manager) loadConfigDocument() (Config, string, os.FileMode, error) {
 	m.mu.RLock()
 	configPath := m.cfg.sourcePath
 	m.mu.RUnlock()
@@ -317,7 +317,7 @@ func (m *manager) loadConfigDocument() (Config, string, os.FileMode, error) {
 	return cfg, path, mode, nil
 }
 
-func (m *manager) writeConfigAndApply(path string, mode os.FileMode, cfg Config) error {
+func (m *Manager) writeConfigAndApply(path string, mode os.FileMode, cfg Config) error {
 	cfg.sourcePath = path
 	if err := cfg.normalize(path); err != nil {
 		return err
@@ -331,7 +331,7 @@ func (m *manager) writeConfigAndApply(path string, mode os.FileMode, cfg Config)
 	return m.applyConfig(cfg)
 }
 
-func (m *manager) applyConfig(cfg Config) error {
+func (m *Manager) applyConfig(cfg Config) error {
 	m.mu.Lock()
 	m.cfg = cfg
 	rootCtx := m.rootCtx
@@ -355,7 +355,7 @@ func (m *manager) applyConfig(cfg Config) error {
 	return err
 }
 
-func (m *manager) planTunnelUpdatesLocked(next map[string]TunnelConfig) (toStop, toStart, toUpdate []*managedTunnel) {
+func (m *Manager) planTunnelUpdatesLocked(next map[string]TunnelConfig) (toStop, toStart, toUpdate []*managedTunnel) {
 	toStop = make([]*managedTunnel, 0)
 	toStart = make([]*managedTunnel, 0)
 	toUpdate = make([]*managedTunnel, 0)
@@ -390,7 +390,7 @@ func (m *manager) planTunnelUpdatesLocked(next map[string]TunnelConfig) (toStop,
 	return toStop, toStart, toUpdate
 }
 
-func (m *manager) Snapshot() AgentStatusResponse {
+func (m *Manager) Snapshot() AgentStatusResponse {
 	m.mu.RLock()
 	configPath := m.cfg.sourcePath
 	tunnels := make([]*managedTunnel, 0, len(m.tunnels))

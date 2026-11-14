@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"context"
@@ -11,18 +11,19 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
-func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdateRequest {
+func (a agentDashboardAccess) request(stored agent.AgentTunnelStatus) agent.AgentTunnelUpdateRequest {
 	if a.provider == "" {
 		if stored.Provider == "" {
-			return AgentTunnelUpdateRequest{}
+			return agent.AgentTunnelUpdateRequest{}
 		}
-		return AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{"auth": json.RawMessage(`""`)}}
+		return agent.AgentTunnelUpdateRequest{Auth: map[string]json.RawMessage{"auth": json.RawMessage(`""`)}}
 	}
 	draft := a.accessDraft(stored)
-	req := AgentTunnelUpdateRequest{Auth: authChanges(stored.AuthConfig, draft)}
+	req := agent.AgentTunnelUpdateRequest{Auth: agent.AuthChanges(stored.AuthConfig, draft)}
 	for key, value := range a.secretChanges(stored) {
 		if req.Auth == nil {
 			req.Auth = make(map[string]json.RawMessage)
@@ -32,7 +33,7 @@ func (a agentDashboardAccess) request(stored AgentTunnelStatus) AgentTunnelUpdat
 	return req
 }
 
-func (a agentDashboardAccess) accessDraft(stored AgentTunnelStatus) appauth.Config {
+func (a agentDashboardAccess) accessDraft(stored agent.AgentTunnelStatus) appauth.Config {
 	draft := appauth.Config{Provider: a.provider, IdentityHeaders: a.headers}
 	if appauth.ProviderTakesEmailList(a.provider) && (a.provider != stored.Provider || len(stored.Allow) == 0) {
 		draft.EmailList = a.allowed
@@ -70,7 +71,7 @@ func (a agentDashboardAccess) accessProviderConfigs() (appauth.OIDCConfig, appau
 	return oidc, saml, email
 }
 
-func (a agentDashboardAccess) secretChanges(stored AgentTunnelStatus) map[string]json.RawMessage {
+func (a agentDashboardAccess) secretChanges(stored agent.AgentTunnelStatus) map[string]json.RawMessage {
 	var changes map[string]json.RawMessage
 	for _, owned := range []struct{ provider, key string }{
 		{appauth.ProviderOIDC, "auth_oidc_client_secret"},
@@ -105,7 +106,7 @@ func (m agentDashboardModel) applyAccess() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := UpdateTunnel(ctx, stateDir, tunnelID, req)
+		err := agent.UpdateTunnel(ctx, stateDir, tunnelID, req)
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = errors.New("the agent did not answer in time; the change may still be applied, the next status shows it")
 		}

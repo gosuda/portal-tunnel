@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"errors"
@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 )
 
 func TestDashboardAccessRequestNamesOnlyWhatChanged(t *testing.T) {
@@ -64,7 +66,7 @@ func accessRequestNameCases(typed func(string) tea.Msg) []accessRequestNameCase 
 	}
 }
 
-func checkAccessRequestName(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, step accessRequestNameCase) {
+func checkAccessRequestName(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, step accessRequestNameCase) {
 	t.Helper()
 	model := accessScreen(t, theme, status, step.down, step.keys...)
 	if got := accessBody(t, model); !sameJSON(t, got, step.want) {
@@ -217,7 +219,7 @@ func TestDashboardAccessShowsAChangeMadeElsewhere(t *testing.T) {
 	})
 }
 
-func checkChangedMeanwhileReshown(t *testing.T, theme agentDashboardTheme, status, elsewhere AgentStatusResponse, keys []tea.Msg) {
+func checkChangedMeanwhileReshown(t *testing.T, theme agentDashboardTheme, status, elsewhere agent.AgentStatusResponse, keys []tea.Msg) {
 	t.Helper()
 	model := accessScreen(t, theme, status, accessWeb, keys...)
 	model = send(model, agentDashboardStatusMsg{status: elsewhere})

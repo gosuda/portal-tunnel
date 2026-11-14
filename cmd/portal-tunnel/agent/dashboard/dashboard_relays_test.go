@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"slices"
@@ -7,21 +7,22 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
 func TestRelayDashboardMode(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		relay AgentRelayStatus
+		relay agent.AgentRelayStatus
 		want  string
 	}{
 		{name: "unknown", want: "-"},
-		{name: "ready", relay: AgentRelayStatus{State: sdk.RelayReady, PublicURL: "https://app.example"}, want: "direct"},
-		{name: "connecting", relay: AgentRelayStatus{State: sdk.RelayConnecting}, want: "connecting..."},
-		{name: "waiting", relay: AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalPending}, want: "waiting"},
-		{name: "refused", relay: AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalRefused}, want: "refused"},
-		{name: "failed with retained URL", relay: AgentRelayStatus{State: sdk.RelayFailed, PublicURL: "https://app.example"}, want: "failed"},
+		{name: "ready", relay: agent.AgentRelayStatus{State: sdk.RelayReady, PublicURL: "https://app.example"}, want: "direct"},
+		{name: "connecting", relay: agent.AgentRelayStatus{State: sdk.RelayConnecting}, want: "connecting..."},
+		{name: "waiting", relay: agent.AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalPending}, want: "waiting"},
+		{name: "refused", relay: agent.AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalRefused}, want: "refused"},
+		{name: "failed with retained URL", relay: agent.AgentRelayStatus{State: sdk.RelayFailed, PublicURL: "https://app.example"}, want: "failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := relayDashboardMode(tc.relay); got != tc.want {
@@ -45,9 +46,9 @@ func checkDisconnectFollowsMembership(t *testing.T, tunnelState string, relaySta
 	t.Helper()
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	model := newAgentDashboardModel("config.toml", "state", theme)
-	model.status = AgentStatusResponse{Tunnels: []AgentTunnelStatus{{
+	model.status = agent.AgentStatusResponse{Tunnels: []agent.AgentTunnelStatus{{
 		ID: "web", State: tunnelState,
-		Relays: []AgentRelayStatus{{RelayURL: "https://relay.example", State: relayState}},
+		Relays: []agent.AgentRelayStatus{{RelayURL: "https://relay.example", State: relayState}},
 	}}}
 	_, command := model.disconnectSelectedRelay()
 	want := tunnelState == "running"
@@ -67,10 +68,10 @@ func checkDisconnectFollowsMembership(t *testing.T, tunnelState string, relaySta
 }
 
 func TestRelayDashboardVersion(t *testing.T) {
-	if got := relayDashboardVersion(AgentRelayStatus{Version: " v2.4.1 "}); got != "v2.4.1" {
+	if got := relayDashboardVersion(agent.AgentRelayStatus{Version: " v2.4.1 "}); got != "v2.4.1" {
 		t.Fatalf("version = %q, want the trimmed version", got)
 	}
-	if got := relayDashboardVersion(AgentRelayStatus{}); got != "-" {
+	if got := relayDashboardVersion(agent.AgentRelayStatus{}); got != "-" {
 		t.Fatalf("version = %q, want a dash when unknown", got)
 	}
 }
@@ -78,25 +79,25 @@ func TestRelayDashboardVersion(t *testing.T) {
 func TestRelayDashboardURL(t *testing.T) {
 	tests := []struct {
 		name  string
-		relay AgentRelayStatus
+		relay agent.AgentRelayStatus
 		want  string
 	}{
 		{
 			name:  "public URL is shown without credentials, query and fragment",
-			relay: AgentRelayStatus{RelayURL: "https://relay.example.com", PublicURL: "https://user:secret@web.relay.example.com/app?token=1#frag"},
+			relay: agent.AgentRelayStatus{RelayURL: "https://relay.example.com", PublicURL: "https://user:secret@web.relay.example.com/app?token=1#frag"},
 			want:  "https://web.relay.example.com/app",
 		},
 		{
 			name:  "short URL is shown instead of the identity-bound URL",
-			relay: AgentRelayStatus{RelayURL: "https://relay.example.com", PublicURL: "https://web-0x1234.relay.example.com/", AliasURL: "https://web.relay.example.com/"},
+			relay: agent.AgentRelayStatus{RelayURL: "https://relay.example.com", PublicURL: "https://web-0x1234.relay.example.com/", AliasURL: "https://web.relay.example.com/"},
 			want:  "https://web.relay.example.com/",
 		},
 		{
 			name:  "relay host is shown while not connected",
-			relay: AgentRelayStatus{RelayURL: "https://relay.example.com:8443/api/v1"},
+			relay: agent.AgentRelayStatus{RelayURL: "https://relay.example.com:8443/api/v1"},
 			want:  "relay.example.com",
 		},
-		{name: "nothing known", relay: AgentRelayStatus{}, want: "-"},
+		{name: "nothing known", relay: agent.AgentRelayStatus{}, want: "-"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"encoding/json"
@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
@@ -25,7 +26,7 @@ var (
 
 const fakeSecret = "not-a-real-secret-0123"
 
-func testAccessStatus() AgentStatusResponse {
+func testAccessStatus() agent.AgentStatusResponse {
 	status := testDashboardStatus()
 	web, api, paid, idle := &status.Tunnels[0], &status.Tunnels[1], &status.Tunnels[2], &status.Tunnels[4]
 	web.Provider = appauth.ProviderOIDC
@@ -87,14 +88,14 @@ func storedEmailPasswordCases(typed func(string) tea.Msg) []storedEmailPasswordC
 	}
 }
 
-func checkStoredEmailPasswordCase(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, step storedEmailPasswordCase) {
+func checkStoredEmailPasswordCase(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, step storedEmailPasswordCase) {
 	t.Helper()
 	if got := accessBody(t, accessScreen(t, theme, status, accessOpen, step.keys...)); !sameJSON(t, got, step.want) {
 		t.Fatalf("request body = %s\nwant           %s", got, step.want)
 	}
 }
 
-func settingsOf(t *testing.T, status AgentStatusResponse, down int) string {
+func settingsOf(t *testing.T, status agent.AgentStatusResponse, down int) string {
 	t.Helper()
 	steps := []tea.Msg{agentDashboardStatusMsg{status: status}}
 	for range down {
@@ -136,7 +137,7 @@ func TestDashboardSettingsShowHowEachTunnelIsProtected(t *testing.T) {
 	}
 }
 
-func checkTunnelProtectedView(t *testing.T, status AgentStatusResponse, down int, want, not []string) {
+func checkTunnelProtectedView(t *testing.T, status agent.AgentStatusResponse, down int, want, not []string) {
 	t.Helper()
 	view := settingsOf(t, status, down)
 	for _, want := range want {
@@ -203,14 +204,14 @@ func TestAgentDashboardProviderCheckTellsTheStatesApart(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{})
 	tests := []struct {
 		name   string
-		tunnel AgentTunnelStatus
+		tunnel agent.AgentTunnelStatus
 		want   string
 	}{
-		{"usable", AgentTunnelStatus{State: "running", AuthProviderChecked: true}, "[*] ok"},
-		{"unusable", AgentTunnelStatus{State: "running", AuthProviderChecked: true, AuthProviderError: "no such host"}, "[!] failed"},
-		{"still checking", AgentTunnelStatus{State: "running"}, "[~] checking..."},
-		{"tunnel starting", AgentTunnelStatus{State: "starting"}, "[~] checking..."},
-		{"tunnel not running", AgentTunnelStatus{State: "stopped"}, "[ ] not checked"},
+		{"usable", agent.AgentTunnelStatus{State: "running", AuthProviderChecked: true}, "[*] ok"},
+		{"unusable", agent.AgentTunnelStatus{State: "running", AuthProviderChecked: true, AuthProviderError: "no such host"}, "[!] failed"},
+		{"still checking", agent.AgentTunnelStatus{State: "running"}, "[~] checking..."},
+		{"tunnel starting", agent.AgentTunnelStatus{State: "starting"}, "[~] checking..."},
+		{"tunnel not running", agent.AgentTunnelStatus{State: "stopped"}, "[ ] not checked"},
 	}
 	for _, tt := range tests {
 		if got, _ := agentDashboardProviderCheck(&theme, tt.tunnel); got != tt.want {
@@ -249,7 +250,7 @@ const (
 	accessIdle   = 4
 )
 
-func accessScreen(t *testing.T, theme agentDashboardTheme, status AgentStatusResponse, down int, keys ...tea.Msg) agentDashboardModel {
+func accessScreen(t *testing.T, theme agentDashboardTheme, status agent.AgentStatusResponse, down int, keys ...tea.Msg) agentDashboardModel {
 	t.Helper()
 	steps := []tea.Msg{agentDashboardStatusMsg{status: status}}
 	for range down {

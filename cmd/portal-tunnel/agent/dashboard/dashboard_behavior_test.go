@@ -1,4 +1,4 @@
-package agent
+package dashboard
 
 import (
 	"errors"
@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
@@ -319,7 +320,7 @@ func checkDeleteAsksFirst(t *testing.T, model agentDashboardModel, key tea.KeyMs
 func TestDashboardDeleteQuestionIgnoresOtherClicks(t *testing.T) {
 	theme := newAgentDashboardTheme("amber", agentDashboardTerminal{unicode: true})
 	status := testDashboardStatus()
-	status.Tunnels[0].Relays = []AgentRelayStatus{{RelayURL: "https://failed.example.net", State: sdk.RelayFailed}}
+	status.Tunnels[0].Relays = []agent.AgentRelayStatus{{RelayURL: "https://failed.example.net", State: sdk.RelayFailed}}
 	model := newTestDashboard(t, theme, 100, 40, agentDashboardStatusMsg{status: status})
 	asked, _ := press(model, keyF8)
 	if !strings.Contains(asked.View(), `Delete tunnel "web"?`) {
