@@ -1,10 +1,12 @@
 package utils
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -143,10 +145,9 @@ func fetchChainOverHTTPS(ctx context.Context, u *url.URL) ([]byte, error) {
 }
 
 func dialEndpointTLS(ctx context.Context, host, port, serverName string) (*tls.Conn, error) {
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	rawConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	rawConn, err := dialEndpointTCP(ctx, host, port)
 	if err != nil {
-		return nil, fmt.Errorf("dial relay endpoint: %w", err)
+		return nil, err
 	}
 	tlsConn := tls.Client(rawConn, &tls.Config{
 		MinVersion:         tls.VersionTLS12,
@@ -159,6 +160,94 @@ func dialEndpointTLS(ctx context.Context, host, port, serverName string) (*tls.C
 		return nil, fmt.Errorf("tls handshake with relay endpoint: %w", err)
 	}
 	return tlsConn, nil
+}
+
+// dialEndpointTCP honors the same HTTP(S)_PROXY and NO_PROXY rules as the REST
+// client: endpoints routed through a proxy by the environment are reached over
+// an HTTP CONNECT tunnel, all others through a direct TCP connection.
+func dialEndpointTCP(ctx context.Context, host, port string) (net.Conn, error) {
+	address := net.JoinHostPort(host, port)
+	proxyURL, err := http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
+	if err != nil {
+		return nil, fmt.Errorf("resolve proxy for relay endpoint: %w", err)
+	}
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	if proxyURL == nil {
+		rawConn, dialErr := dialer.DialContext(ctx, "tcp", address)
+		if dialErr != nil {
+			return nil, fmt.Errorf("dial relay endpoint: %w", dialErr)
+		}
+		return rawConn, nil
+	}
+	return dialConnectTunnel(ctx, dialer, proxyURL, address)
+}
+
+// dialConnectTunnel opens address through an HTTP proxy and returns the raw
+// tunneled connection.
+func dialConnectTunnel(ctx context.Context, dialer *net.Dialer, proxyURL *url.URL, address string) (net.Conn, error) {
+	scheme := strings.ToLower(proxyURL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return nil, fmt.Errorf("relay endpoint proxy scheme %q is not supported", proxyURL.Scheme)
+	}
+	proxyConn, err := dialer.DialContext(ctx, "tcp", proxyDialAddress(proxyURL))
+	if err != nil {
+		return nil, fmt.Errorf("dial relay endpoint proxy: %w", err)
+	}
+	connectDeadline := time.Now().Add(5 * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(connectDeadline) {
+		connectDeadline = ctxDeadline
+	}
+	_ = proxyConn.SetDeadline(connectDeadline)
+	if scheme == "https" {
+		proxyTLSConn := tls.Client(proxyConn, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: proxyURL.Hostname()})
+		if err := proxyTLSConn.HandshakeContext(ctx); err != nil {
+			_ = proxyConn.Close()
+			return nil, fmt.Errorf("tls handshake with relay endpoint proxy: %w", err)
+		}
+		proxyConn = proxyTLSConn
+	}
+	connectRequest := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: address},
+		Host:   address,
+		Header: make(http.Header),
+	}
+	if user := proxyURL.User; user != nil {
+		password, _ := user.Password()
+		credentials := base64.StdEncoding.EncodeToString([]byte(user.Username() + ":" + password))
+		connectRequest.Header.Set("Proxy-Authorization", "Basic "+credentials)
+	}
+	if err := connectRequest.Write(proxyConn); err != nil {
+		_ = proxyConn.Close()
+		return nil, fmt.Errorf("connect relay endpoint through proxy: %w", err)
+	}
+	// The buffered reader is safe to discard once the response is read: the
+	// endpoint's TLS server does not speak until the client sends its handshake.
+	reader := bufio.NewReader(&io.LimitedReader{R: proxyConn, N: maxProxyResponseHeaderBytes})
+	response, err := http.ReadResponse(reader, connectRequest)
+	if err != nil {
+		_ = proxyConn.Close()
+		return nil, fmt.Errorf("read relay endpoint proxy response: %w", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_ = proxyConn.Close()
+		return nil, fmt.Errorf("connect relay endpoint through proxy: %s", response.Status)
+	}
+	_ = proxyConn.SetDeadline(time.Time{})
+	return proxyConn, nil
+}
+
+const maxProxyResponseHeaderBytes = 1 << 20
+
+func proxyDialAddress(proxyURL *url.URL) string {
+	if proxyURL.Port() != "" {
+		return proxyURL.Host
+	}
+	if strings.EqualFold(proxyURL.Scheme, "https") {
+		return net.JoinHostPort(proxyURL.Hostname(), "443")
+	}
+	return net.JoinHostPort(proxyURL.Hostname(), "80")
 }
 
 func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
