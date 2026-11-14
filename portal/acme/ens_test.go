@@ -58,6 +58,13 @@ func (z *fakeZone) EnsureAddressRecord(_ context.Context, name, publicIP string)
 	return nil
 }
 
+func (z *fakeZone) DeleteAddressRecords(_ context.Context, name string) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	delete(z.a, name)
+	return nil
+}
+
 func (z *fakeZone) EnsureTXTRecord(_ context.Context, name, value string) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
@@ -341,13 +348,6 @@ func TestCanonicalDNSLifecycle(t *testing.T) {
 			}
 		})
 	}
-}
-
-func (z *failingNamespaceDNSZone) DeleteAddressRecords(ctx context.Context, name string) error {
-	if name == z.unavailableChild {
-		return errTestNamespaceDeletionUnavailable
-	}
-	return z.fakeZone.DeleteAddressRecords(ctx, name)
 }
 
 type namespaceDNSPublicationZone struct {

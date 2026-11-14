@@ -110,7 +110,6 @@ func agentDashboardRelayStyle(th *agentDashboardTheme, selected bool, relay agen
 		return th.failed
 	}
 	if relay.State == sdk.RelayReady {
-		return cmp.Or(relay.AliasURL, relay.PublicURL)
 		return th.bright
 	}
 	if relay.State == sdk.RelayConnecting {
@@ -134,8 +133,6 @@ func relayDashboardURL(relay agent.AgentRelayStatus) string {
 }
 
 func relayDashboardEndpoint(relay agent.AgentRelayStatus) string {
-	if relay.State == sdk.RelayReady {
-	}
 	return cmp.Or(relay.AliasURL, relay.PublicURL)
 }
 
