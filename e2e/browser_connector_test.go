@@ -152,16 +152,33 @@ func startSmokeRelay(t *testing.T, ctx context.Context, relayURL, stateDir strin
 	return relay
 }
 
-func launchSmokeBrowser(t *testing.T, ctx context.Context, browser, pageURL string, logFile *os.File) (<-chan struct{}, *error) {
-	t.Helper()
-	cmd := exec.CommandContext(ctx, browser,
+func headlessBrowserArgs(userDataDir string, extra ...string) []string {
+	args := []string{
 		"--headless",
 		"--disable-gpu",
+		"--disable-dev-shm-usage",
+		"--disable-background-networking",
+		"--disable-extensions",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--password-store=basic",
+		"--use-mock-keychain",
 		"--ignore-certificate-errors",
 		"--no-sandbox",
-		"--user-data-dir="+filepath.Join(t.TempDir(), "chrome"),
-		pageURL,
-	)
+		"--user-data-dir=" + userDataDir,
+	}
+	return append(args, extra...)
+}
+
+func headlessBrowserEnv() []string {
+	return append(os.Environ(), "DBUS_SESSION_BUS_ADDRESS=disabled:")
+}
+
+func launchSmokeBrowser(t *testing.T, ctx context.Context, browser, pageURL string, logFile *os.File) (<-chan struct{}, *error) {
+	t.Helper()
+	args := headlessBrowserArgs(filepath.Join(t.TempDir(), "chrome"), pageURL)
+	cmd := exec.CommandContext(ctx, browser, args...)
+	cmd.Env = headlessBrowserEnv()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = browserSysProcAttr()
