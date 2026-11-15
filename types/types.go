@@ -10,12 +10,13 @@ import (
 )
 
 const (
-	HeaderAccessToken       = "X-Portal-Access-Token"
-	HeaderAccessCredential  = "X-Portal-Access-Credential"
-	HeaderReverseCapability = "X-Portal-Reverse-Capability"
-	HeaderPortalUser        = "X-Portal-User"
-	HeaderPortalAuth        = "X-Portal-Auth"
-	HeaderPortalProof       = "X-Portal-Proof"
+	HeaderAccessToken            = "X-Portal-Access-Token"
+	HeaderAccessCredential       = "X-Portal-Access-Credential"
+	HeaderReverseCapability      = "X-Portal-Reverse-Capability"
+	HeaderPortalUser             = "X-Portal-User"
+	HeaderPortalAuth             = "X-Portal-Auth"
+	HeaderPortalProof            = "X-Portal-Proof"
+	HeaderPGNSSequencerSignature = "X-PGNS-Sequencer-Signature"
 
 	// ReverseSubprotocol marks a WebSocket carrying reverse connections as yamux streams;
 	// an initial capability rides beside it and every logical stream authenticates again.

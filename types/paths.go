@@ -29,6 +29,14 @@ const (
 	PathV1Prefix            = "/v1"
 	PathV1Sign              = PathV1Prefix + "/sign"
 	PathV1ResolvePrefix     = PathV1Prefix + "/resolve/"
+	PathV1Submit            = PathV1Prefix + "/submit"
+	PathV1Cosign            = PathV1Prefix + "/cosign"
+
+	PathPGNSCheckpoint  = "/checkpoint"
+	PathPGNSBatchPrefix = "/batch/"
+	PathPGNSTilesPrefix = "/tiles/"
+	PathPGNSState       = "/state"
+	PathPGNSHealthz     = "/healthz"
 
 	PathSDKPrefix            = "/sdk"
 	PathSDKDomain            = PathSDKPrefix + "/domain"

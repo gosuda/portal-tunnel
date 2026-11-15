@@ -673,6 +673,7 @@ func buildDialCanonicalTLSConfig(normalizedHost string, baseTLSConfig *tls.Confi
 	if tlsConf.MinVersion < tls.VersionTLS13 {
 		tlsConf.MinVersion = tls.VersionTLS13
 	}
+	tlsConf.NextProtos = nil
 	return tlsConf
 }
 

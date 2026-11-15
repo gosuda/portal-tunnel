@@ -163,7 +163,7 @@ func registerPGNSThroughChallenge(t *testing.T, registry *leaseRegistry, id type
 	if err != nil {
 		return nil, nil, types.RegisterResponse{}, err
 	}
-	return registry.RegisterWithPGNS(challenge.Request, sourceAddr, "", types.RelayDescriptor{}, nil, nil, pgnsLeaf)
+	return registry.Register(challenge.Request, sourceAddr, "", types.RelayDescriptor{}, nil, nil, pgnsLeaf)
 }
 
 func assertAPIErrorCodeStatus(t *testing.T, err error, wantCode string, wantStatus int) {
@@ -232,6 +232,32 @@ func TestLeaseRegistryPGNSAdmissionAndWatermarks(t *testing.T) {
 	t.Cleanup(idRecord.Close)
 	if looked, ok := registry.Lookup(idFQDN); !ok || looked != idRecord {
 		t.Fatalf("Lookup(%q) failed", idFQDN)
+	}
+
+	// Reject proof-less *.id registration when relay has PGNS disabled (empty WitnessSet).
+	disabledRegistry := newTestRegistry(t, false, false)
+	if _, _, _, err := registerPGNSThroughChallenge(t, disabledRegistry, idOwner, false, &types.PGNSRegistrationProof{
+		Zone: zone,
+		Leaf: rawIDLeaf,
+	}); err == nil {
+		t.Fatal("expected proof-less .id registration on PGNS-disabled relay to fail")
+	} else {
+		assertAPIErrorCodeStatus(t, err, types.APIErrorCodePGNSProofInvalid, http.StatusForbidden)
+	}
+
+	// Reject proof-less *.id registration when leaf.IssuedAt exceeds RelayCheckpointMaxLead (+60s).
+	futureIDLeaf := makeTestPGNSLeaf(t, idFQDN, idPriv, 2, now+pgns.RelayCheckpointMaxLead+15, now+3600, [32]byte{})
+	rawFutureIDLeaf, err := futureIDLeaf.MarshalCanonical()
+	if err != nil {
+		t.Fatalf("MarshalCanonical futureIDLeaf: %v", err)
+	}
+	if _, _, _, err := registerPGNSThroughChallenge(t, registry, idOwner, false, &types.PGNSRegistrationProof{
+		Zone: zone,
+		Leaf: rawFutureIDLeaf,
+	}); err == nil {
+		t.Fatal("expected future-dated proof-less .id leaf to fail")
+	} else {
+		assertAPIErrorCodeStatus(t, err, types.APIErrorCodePGNSProofInvalid, http.StatusForbidden)
 	}
 
 	// Reject cache opt-in on PGNS registration.

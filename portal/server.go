@@ -207,8 +207,10 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 			return ServerConfig{}, fmt.Errorf("TENANT_CERTIFICATES requires usable TENANT_ISSUANCE_STATE_DIR: %w", err)
 		}
 	}
-	if len(cfg.PGNSWitnesses.Witnesses) > 0 && (cfg.PGNSWitnesses.Threshold <= 0 || cfg.PGNSWitnesses.Threshold > len(cfg.PGNSWitnesses.Witnesses)) {
-		return ServerConfig{}, fmt.Errorf("invalid pgns witness threshold %d for %d witnesses", cfg.PGNSWitnesses.Threshold, len(cfg.PGNSWitnesses.Witnesses))
+	if !cfg.PGNSWitnesses.IsZero() {
+		if err := cfg.PGNSWitnesses.Validate(); err != nil {
+			return ServerConfig{}, err
+		}
 	}
 	if cfg.SNIPort == 0 {
 		cfg.SNIPort = DefaultSNIPort(cfg.PortalURL)

@@ -28,14 +28,16 @@ const (
 )
 
 var (
-	errPGNSWitnessSetRequired   = errors.New("sdk: pgns witness set is required")
-	errPGNSResolverRequired     = errors.New("sdk: pgns resolver is required")
-	errPGNSResolveURLInvalid    = errors.New("sdk: pgns resolve url is invalid")
-	errPGNSTargetListEmpty      = errors.New("sdk: pgns leaf has no dialable endpoints")
-	errPGNSSPKIMismatch         = errors.New("sdk: pgns peer certificate spki does not match leaf")
-	errPGNSALPNMismatch         = errors.New("sdk: pgns peer did not negotiate portal-cb-v1")
-	errPGNSResolveMirrorEmpty   = errors.New("sdk: pgns resolve urls yielded no valid endpoints")
-	errPGNSPeerCertificateEmpty = errors.New("sdk: pgns peer did not present a certificate")
+	errPGNSWitnessSetRequired    = errors.New("sdk: pgns witness set is required")
+	errPGNSResolverRequired      = errors.New("sdk: pgns resolver is required")
+	errPGNSResolveURLInvalid     = errors.New("sdk: pgns resolve url is invalid")
+	errPGNSTargetListEmpty       = errors.New("sdk: pgns leaf has no dialable endpoints")
+	errPGNSSPKIMismatch          = errors.New("sdk: pgns peer certificate spki does not match leaf")
+	errPGNSALPNMismatch          = errors.New("sdk: pgns peer did not negotiate portal-cb-v1")
+	errPGNSResolveMirrorEmpty    = errors.New("sdk: pgns resolve urls yielded no valid endpoints")
+	errPGNSPeerCertificateEmpty  = errors.New("sdk: pgns peer did not present a certificate")
+	errPGNSHTTPSRequired         = errors.New("sdk: pgns http client requires https scheme")
+	errPGNSRedirectLimitExceeded = errors.New("sdk: stopped after 10 redirects")
 )
 
 // PGNSResolverConfig configures client-side verification and dialing for PGNS FQDNs.
@@ -45,7 +47,6 @@ type PGNSResolverConfig struct {
 	ResolveURLs []string
 	HTTPClient  *http.Client
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
-	Now         func() time.Time
 }
 
 // PGNSResolver verifies CDN-cached ResolveBundles against a k-of-m witness quorum
@@ -56,7 +57,6 @@ type PGNSResolver struct {
 	resolveURLs []string
 	httpClient  *http.Client
 	dialContext func(ctx context.Context, network, addr string) (net.Conn, error)
-	nowFn       func() time.Time
 
 	mu           sync.Mutex
 	hasSeenEpoch bool
@@ -70,8 +70,8 @@ func NewPGNSResolver(cfg PGNSResolverConfig) (*PGNSResolver, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Witnesses.Threshold <= 0 || cfg.Witnesses.Threshold > len(cfg.Witnesses.Witnesses) {
-		return nil, errPGNSWitnessSetRequired
+	if err := cfg.Witnesses.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", errPGNSWitnessSetRequired, err)
 	}
 	resolveURLs, err := normalizeResolveURLs(cfg.ResolveURLs, zone)
 	if err != nil {
@@ -80,10 +80,6 @@ func NewPGNSResolver(cfg PGNSResolverConfig) (*PGNSResolver, error) {
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
 		httpClient = utils.NewHTTPClient(utils.WithHTTPTimeout(10 * time.Second))
-	}
-	nowFn := cfg.Now
-	if nowFn == nil {
-		nowFn = time.Now
 	}
 	dialFn := cfg.DialContext
 	if dialFn == nil {
@@ -95,7 +91,6 @@ func NewPGNSResolver(cfg PGNSResolverConfig) (*PGNSResolver, error) {
 		resolveURLs: resolveURLs,
 		httpClient:  httpClient,
 		dialContext: dialFn,
-		nowFn:       nowFn,
 	}, nil
 }
 
@@ -154,7 +149,7 @@ func (r *PGNSResolver) Resolve(ctx context.Context, fqdn string) (pgns.PortalLea
 			lastErr = err
 			continue
 		}
-		nowSec := uint64(max(0, r.nowFn().UTC().Unix()))
+		nowSec := uint64(max(0, time.Now().UTC().Unix()))
 		leaf, cp, err := pgns.VerifyResolveBundle(rawBundle, normFQDN, r.zone, r.witnesses, nowSec)
 		if err != nil {
 			lastErr = err
@@ -217,21 +212,35 @@ func DialPGNS(ctx context.Context, resolver *PGNSResolver, fqdn string) (net.Con
 	if err != nil {
 		return nil, err
 	}
-	return dialPGNSLeaf(ctx, leaf, normFQDN, resolver.dialContext, resolver.nowFn)
+	return dialPGNSLeaf(ctx, leaf, normFQDN, resolver.dialContext)
 }
 
 // NewPGNSHTTPClient returns an HTTP client configured to dial PGNS hostnames
 // over SPKI-pinned, portal-cb-v1 channel-bound TLS streams without trusting relays or WebPKI.
+// Plaintext http:// requests and https->http redirects are rejected fail-closed.
 func NewPGNSHTTPClient(resolver *PGNSResolver) *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			ForceAttemptHTTP2: false,
-			TLSNextProto:      make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
-			DialTLSContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-				return DialPGNS(ctx, resolver, types.NormalizeHostWithoutPort(addr))
-			},
-		},
+	client := utils.NewHTTPClient(
+		utils.WithoutHTTP2(),
+		utils.WithHTTPCheckRedirect(func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errPGNSRedirectLimitExceeded
+			}
+			if req.URL == nil || !strings.EqualFold(req.URL.Scheme, "https") {
+				return errPGNSHTTPSRequired
+			}
+			return nil
+		}),
+	)
+	tr := client.Transport.(*http.Transport)
+	tr.Proxy = nil
+	tr.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
+	tr.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, errPGNSHTTPSRequired
 	}
+	tr.DialTLSContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+		return DialPGNS(ctx, resolver, types.NormalizeHostWithoutPort(addr))
+	}
+	return client
 }
 
 func dialPGNSLeaf(
@@ -239,7 +248,6 @@ func dialPGNSLeaf(
 	leaf pgns.PortalLeafRecord,
 	fqdn string,
 	dialContext func(ctx context.Context, network, addr string) (net.Conn, error),
-	nowFn func() time.Time,
 ) (net.Conn, error) {
 	targets, err := pgnsCandidateTargets(leaf)
 	if err != nil {
@@ -248,10 +256,7 @@ func dialPGNSLeaf(
 	if dialContext == nil {
 		dialContext = (&net.Dialer{Timeout: defaultDialTimeout}).DialContext
 	}
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-	tlsConf := buildPGNSDialTLSConfig(fqdn, leaf, nowFn)
+	tlsConf := buildPGNSVerifiedTLSConfig(fqdn, leaf)
 	return racePGNSAttempts(ctx, targets, fqdn, leaf.OwnerPubKey, tlsConf, dialContext)
 }
 
@@ -262,18 +267,10 @@ func pgnsCandidateTargets(leaf pgns.PortalLeafRecord) ([]netip.AddrPort, error) 
 	targets := make([]netip.AddrPort, 0, len(leaf.Endpoints)*2)
 	for _, ep := range leaf.Endpoints {
 		if ep.IPv6 != ([16]byte{}) {
-			addr6 := netip.AddrFrom16(ep.IPv6).Unmap()
-			if !utils.IsPublicIP(addr6) {
-				return nil, fmt.Errorf("%w: non-public ipv6 %s", pgns.ErrInvalidEndpoint, addr6)
-			}
-			targets = append(targets, netip.AddrPortFrom(addr6, ep.Port))
+			targets = append(targets, netip.AddrPortFrom(netip.AddrFrom16(ep.IPv6).Unmap(), ep.Port))
 		}
 		if ep.IPv4 != ([4]byte{}) {
-			addr4 := netip.AddrFrom4(ep.IPv4)
-			if !utils.IsPublicIP(addr4) {
-				return nil, fmt.Errorf("%w: non-public ipv4 %s", pgns.ErrInvalidEndpoint, addr4)
-			}
-			targets = append(targets, netip.AddrPortFrom(addr4, ep.Port))
+			targets = append(targets, netip.AddrPortFrom(netip.AddrFrom4(ep.IPv4), ep.Port))
 		}
 	}
 	if len(targets) == 0 {
@@ -282,14 +279,15 @@ func pgnsCandidateTargets(leaf pgns.PortalLeafRecord) ([]netip.AddrPort, error) 
 	return targets, nil
 }
 
-func buildPGNSDialTLSConfig(fqdn string, leaf pgns.PortalLeafRecord, nowFn func() time.Time) *tls.Config {
+func buildPGNSVerifiedTLSConfig(fqdn string, leaf pgns.PortalLeafRecord) *tls.Config {
 	return &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		ServerName:         fqdn,
-		NextProtos:         []string{types.ALPNPortalCBV1},
-		InsecureSkipVerify: true, // Authenticated via SPKI pin + portal-cb-v1 OwnerPubKey channel binding.
+		MinVersion: tls.VersionTLS13,
+		ServerName: fqdn,
+		NextProtos: []string{types.ALPNPortalCBV1},
+		// codeql[go/disabled-certificate-check]: SPKI pin and portal-cb-v1 channel binding verified in VerifyConnection.
+		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection performs SPKI pin verification below.
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			return verifyPGNSConnectionState(cs, fqdn, leaf, nowFn())
+			return verifyPGNSConnectionState(cs, fqdn, leaf, time.Now())
 		},
 	}
 }

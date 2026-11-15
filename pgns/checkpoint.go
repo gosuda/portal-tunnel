@@ -20,6 +20,7 @@ const (
 	CheckpointOriginPrefix = "portal-pgns-v1/"
 	checkpointSMTTag       = "smt-v1"
 	epochRecordDomain      = "portal-pgns-epoch-v1\x00"
+	cosignRequestDomain    = "portal-pgns-cosign-v1\x00"
 	cosigHeaderV1          = "cosignature/v1"
 	cosigSignaturePrefix   = "— " // U+2014 + space per c2sp.org/signed-note
 
@@ -28,6 +29,29 @@ const (
 	RelayCheckpointMaxAge  = uint64(600)
 	RelayCheckpointMaxLead = uint64(60)
 )
+
+// SignSequencerCosignRequest signs rawBatch with priv using domain separation for POST /v1/cosign.
+func SignSequencerCosignRequest(priv ed25519.PrivateKey, rawBatch []byte) string {
+	msg := make([]byte, 0, len(cosignRequestDomain)+len(rawBatch))
+	msg = append(msg, cosignRequestDomain...)
+	msg = append(msg, rawBatch...)
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, msg))
+}
+
+// VerifySequencerCosignRequest verifies an Ed25519 signature over rawBatch for POST /v1/cosign.
+func VerifySequencerCosignRequest(pub ed25519.PublicKey, rawBatch []byte, sigB64 string) bool {
+	if len(pub) != ed25519.PublicKeySize || sigB64 == "" {
+		return false
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sigB64))
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	msg := make([]byte, 0, len(cosignRequestDomain)+len(rawBatch))
+	msg = append(msg, cosignRequestDomain...)
+	msg = append(msg, rawBatch...)
+	return ed25519.Verify(pub, msg, sig)
+}
 
 var (
 	// ErrInvalidCheckpoint marks malformed or threshold-insufficient signed checkpoints.
@@ -221,6 +245,40 @@ type WitnessSet struct {
 	Witnesses []WitnessKey
 }
 
+// IsZero reports whether ws has neither threshold nor witness keys configured.
+func (ws WitnessSet) IsZero() bool {
+	return ws.Threshold == 0 && len(ws.Witnesses) == 0
+}
+
+// Validate verifies witness quorum bounds, non-empty unique names, and unique 32-byte Ed25519 keys.
+func (ws WitnessSet) Validate() error {
+	if ws.Threshold <= 0 || ws.Threshold > len(ws.Witnesses) {
+		return fmt.Errorf("%w: invalid witness threshold %d/%d", ErrInvalidCheckpoint, ws.Threshold, len(ws.Witnesses))
+	}
+	seenName := make(map[string]struct{}, len(ws.Witnesses))
+	seenPub := make(map[[ed25519.PublicKeySize]byte]struct{}, len(ws.Witnesses))
+	for _, w := range ws.Witnesses {
+		name := strings.TrimSpace(w.Name)
+		if name == "" {
+			return fmt.Errorf("%w: empty witness name", ErrInvalidCheckpoint)
+		}
+		if len(w.PublicKey) != ed25519.PublicKeySize {
+			return fmt.Errorf("%w: invalid witness %q public key", ErrInvalidCheckpoint, name)
+		}
+		if _, dup := seenName[name]; dup {
+			return fmt.Errorf("%w: duplicate witness %q", ErrInvalidCheckpoint, name)
+		}
+		var pubArr [ed25519.PublicKeySize]byte
+		copy(pubArr[:], w.PublicKey)
+		if _, dup := seenPub[pubArr]; dup {
+			return fmt.Errorf("%w: duplicate witness public key for %q", ErrInvalidCheckpoint, name)
+		}
+		seenName[name] = struct{}{}
+		seenPub[pubArr] = struct{}{}
+	}
+	return nil
+}
+
 // ParseWitnessSet parses "<name>=<hex-ed25519-pubkey>" witness specs and validates threshold k-of-m.
 func ParseWitnessSet(specs []string, threshold int) (WitnessSet, error) {
 	if len(specs) == 0 {
@@ -229,7 +287,6 @@ func ParseWitnessSet(specs []string, threshold int) (WitnessSet, error) {
 		}
 		return WitnessSet{}, nil
 	}
-	seen := make(map[string]struct{}, len(specs))
 	witnesses := make([]WitnessKey, 0, len(specs))
 	for _, rawSpec := range specs {
 		spec := strings.TrimSpace(rawSpec)
@@ -242,14 +299,10 @@ func ParseWitnessSet(specs []string, threshold int) (WitnessSet, error) {
 		if !ok || name == "" {
 			return WitnessSet{}, fmt.Errorf("%w: invalid witness spec %q (expected name=hexpubkey)", ErrInvalidCheckpoint, rawSpec)
 		}
-		if _, dup := seen[name]; dup {
-			return WitnessSet{}, fmt.Errorf("%w: duplicate witness %q", ErrInvalidCheckpoint, name)
-		}
 		pubBytes, err := hex.DecodeString(hexKey)
 		if err != nil || len(pubBytes) != ed25519.PublicKeySize {
 			return WitnessSet{}, fmt.Errorf("%w: invalid witness %q public key", ErrInvalidCheckpoint, name)
 		}
-		seen[name] = struct{}{}
 		witnesses = append(witnesses, WitnessKey{
 			Name:      name,
 			PublicKey: ed25519.PublicKey(pubBytes),
@@ -264,13 +317,14 @@ func ParseWitnessSet(specs []string, threshold int) (WitnessSet, error) {
 	if threshold <= 0 {
 		threshold = len(witnesses)
 	}
-	if threshold > len(witnesses) {
-		return WitnessSet{}, fmt.Errorf("%w: witness threshold %d exceeds witness count %d", ErrInvalidCheckpoint, threshold, len(witnesses))
-	}
-	return WitnessSet{
+	ws := WitnessSet{
 		Threshold: threshold,
 		Witnesses: witnesses,
-	}, nil
+	}
+	if err := ws.Validate(); err != nil {
+		return WitnessSet{}, err
+	}
+	return ws, nil
 }
 
 // WitnessCosignature holds one verified C2SP cosignature/v1 line.
@@ -318,8 +372,8 @@ func FormatSignedCheckpoint(body []byte, cosigs []WitnessCosignature) []byte {
 
 // ParseAndVerifySignedCheckpoint verifies a C2SP signed note against zone and ws quorum.
 func ParseAndVerifySignedCheckpoint(raw []byte, zone string, ws WitnessSet) (Checkpoint, []WitnessCosignature, error) {
-	if ws.Threshold <= 0 || ws.Threshold > len(ws.Witnesses) {
-		return Checkpoint{}, nil, fmt.Errorf("%w: invalid witness threshold %d/%d", ErrInvalidCheckpoint, ws.Threshold, len(ws.Witnesses))
+	if err := ws.Validate(); err != nil {
+		return Checkpoint{}, nil, err
 	}
 	sepIdx := bytes.Index(raw, []byte("\n\n"))
 	if sepIdx < 0 {
@@ -442,6 +496,10 @@ func UnmarshalWitnessState(data []byte) (WitnessState, error) {
 // VerifyRegistrationProof performs zero-RPC offline verification of a PGNS leaf,
 // its SMTInclusionProof, and witness-quorum SignedCheckpoint at unix time now.
 func VerifyRegistrationProof(zone string, ws WitnessSet, rawLeaf, rawProof, rawCheckpoint []byte, now uint64) (PortalLeafRecord, Checkpoint, error) {
+	return verifyRegistrationProof(zone, ws, rawLeaf, rawProof, rawCheckpoint, now, false)
+}
+
+func verifyRegistrationProof(zone string, ws WitnessSet, rawLeaf, rawProof, rawCheckpoint []byte, now uint64, allowExpired bool) (PortalLeafRecord, Checkpoint, error) {
 	cp, _, err := ParseAndVerifySignedCheckpoint(rawCheckpoint, zone, ws)
 	if err != nil {
 		return PortalLeafRecord{}, Checkpoint{}, err
@@ -456,7 +514,10 @@ func VerifyRegistrationProof(zone string, ws WitnessSet, rawLeaf, rawProof, rawC
 	if _, err := leaf.ValidateInZone(zone); err != nil {
 		return PortalLeafRecord{}, Checkpoint{}, err
 	}
-	if now >= leaf.ExpiresAt {
+	if leaf.IssuedAt > now && leaf.IssuedAt-now > RelayCheckpointMaxLead {
+		return PortalLeafRecord{}, Checkpoint{}, fmt.Errorf("%w: leaf issued_at %d ahead of %d", ErrStaleCheckpoint, leaf.IssuedAt, now)
+	}
+	if !allowExpired && now >= leaf.ExpiresAt {
 		return PortalLeafRecord{}, Checkpoint{}, fmt.Errorf("%w: leaf expired at %d (now %d)", ErrStaleCheckpoint, leaf.ExpiresAt, now)
 	}
 	proof, err := UnmarshalSMTProof(rawProof)
@@ -495,6 +556,39 @@ func VerifyBatchTransition(prev *WitnessState, b BatchTransitionProof, witnessNo
 	if err := CheckCheckpointFreshness(b.Timestamp, witnessNow, WitnessClockSkew, WitnessClockSkew); err != nil {
 		return WitnessState{}, err
 	}
+	return verifyCommittedBatch(prev, b)
+}
+
+// VerifyEpochBatch cryptographically verifies a witness-cosigned checkpoint and its
+// corresponding BatchTransitionProof (including all LeafTx transitions, SMT multiproof,
+// and transparency-log record/consistency proofs) for offline/replay consumers such as
+// pgns-dns and pgns-ct-monitor.
+func VerifyEpochBatch(prev *WitnessState, zone string, ws WitnessSet, rawCheckpoint, rawBatch []byte) (Checkpoint, BatchTransitionProof, WitnessState, error) {
+	normZone, err := NormalizeZone(zone)
+	if err != nil {
+		return Checkpoint{}, BatchTransitionProof{}, WitnessState{}, err
+	}
+	cp, _, err := ParseAndVerifySignedCheckpoint(rawCheckpoint, normZone, ws)
+	if err != nil {
+		return Checkpoint{}, BatchTransitionProof{}, WitnessState{}, err
+	}
+	batch, err := UnmarshalBatchTransitionProof(rawBatch)
+	if err != nil {
+		return Checkpoint{}, BatchTransitionProof{}, WitnessState{}, err
+	}
+	metaMismatch := batch.Zone != normZone || batch.Epoch != cp.Epoch || batch.Timestamp != cp.Timestamp
+	rootMismatch := batch.NewSMTRoot != cp.SMTRoot || batch.NewLogRoot != cp.LogRoot || cp.LogSize != batch.Epoch+1
+	if metaMismatch || rootMismatch {
+		return Checkpoint{}, BatchTransitionProof{}, WitnessState{}, fmt.Errorf("%w: checkpoint/batch header mismatch", ErrInvalidBatch)
+	}
+	nextState, err := verifyCommittedBatch(prev, batch)
+	if err != nil {
+		return Checkpoint{}, BatchTransitionProof{}, WitnessState{}, err
+	}
+	return cp, batch, nextState, nil
+}
+
+func verifyCommittedBatch(prev *WitnessState, b BatchTransitionProof) (WitnessState, error) {
 	prevLogSize, prevLogRoot, prevSMTRoot, err := verifyBatchHeaderState(prev, b)
 	if err != nil {
 		return WitnessState{}, err

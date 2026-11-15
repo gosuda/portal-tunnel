@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"golang.org/x/mod/sumdb/tlog"
 
 	"github.com/gosuda/portal-tunnel/v2/pgns"
 )
@@ -91,7 +92,7 @@ func TestMonitorSPKIAudit(t *testing.T) {
 	smt.Put(pgns.SMTKey(fqdn), rawLeaf)
 	batchBytes, _ := pgns.CanonicalBatchBytes([]pgns.LeafTx{tx})
 	recHash := pgns.EpochRecordHash(0, ts, smt.Root(), batchBytes)
-	logRoot, _, _ := pgns.ComputeAppendLogRoot(0, recHash, nil)
+	logRoot, added0, _ := pgns.ComputeAppendLogRoot(0, recHash, nil)
 	batch := pgns.BatchTransitionProof{
 		Zone:        zone,
 		Epoch:       0,
@@ -134,5 +135,72 @@ func TestMonitorSPKIAudit(t *testing.T) {
 	}
 	if err := mon.CheckCertificate(wildcardCert); !errors.Is(err, ErrUnauthorizedCertificate) {
 		t.Fatalf("wildcard cert got %v, want %v", err, ErrUnauthorizedCertificate)
+	}
+
+	// Forged batch with tampered TxEntries (dropped tx while keeping NewSMTRoot) MUST fail ApplyEpoch.
+	forgedBatch := batch
+	forgedBatch.TxEntries = nil
+	forgedBatch.PrevLeaves = nil
+	rawForgedBatch, _ := forgedBatch.MarshalBinary()
+	mon2, err := New(zone, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mon2.ApplyEpoch(rawCP, rawForgedBatch); err == nil {
+		t.Fatal("expected ApplyEpoch to reject forged batch TxEntries")
+	}
+
+	// Advancing to an epoch past leaf.ExpiresAt MUST prune the expired leaf so CheckCertificate rejects it.
+	hr := tlog.HashReaderFunc(func(indexes []int64) ([]tlog.Hash, error) {
+		out := make([]tlog.Hash, len(indexes))
+		for i, idx := range indexes {
+			out[i] = added0[idx]
+		}
+		return out, nil
+	})
+	ts1 := leaf.ExpiresAt
+	emptyBatchBytes, _ := pgns.CanonicalBatchBytes(nil)
+	recHash1 := pgns.EpochRecordHash(1, ts1, smt.Root(), emptyBatchBytes)
+	logRoot1, added1, err := pgns.ComputeAppendLogRoot(1, recHash1, hr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allHashes := append(append([]tlog.Hash(nil), added0...), added1...)
+	hrFull := tlog.HashReaderFunc(func(indexes []int64) ([]tlog.Hash, error) {
+		out := make([]tlog.Hash, len(indexes))
+		for i, idx := range indexes {
+			out[i] = allHashes[idx]
+		}
+		return out, nil
+	})
+	cons1, _ := tlog.ProveTree(2, 1, hrFull)
+	recP1, _ := tlog.ProveRecord(2, 1, hrFull)
+	batch1 := pgns.BatchTransitionProof{
+		Zone:              zone,
+		Epoch:             1,
+		Timestamp:         ts1,
+		PrevLogRoot:       logRoot,
+		NewLogRoot:        logRoot1,
+		PrevSMTRoot:       smt.Root(),
+		NewSMTRoot:        smt.Root(),
+		ConsistencyProof:  cons1,
+		AppendRecordProof: recP1,
+	}
+	rawBatch1, _ := batch1.MarshalBinary()
+	cpBody1 := pgns.Checkpoint{
+		Origin:    pgns.CheckpointOriginPrefix + zone,
+		LogSize:   2,
+		LogRoot:   logRoot1,
+		Epoch:     1,
+		Timestamp: ts1,
+		SMTRoot:   smt.Root(),
+	}.FormatBody()
+	cosig1, _ := pgns.CosignCheckpoint(cpBody1, wKey, wPriv, ts1)
+	rawCP1 := pgns.FormatSignedCheckpoint(cpBody1, []pgns.WitnessCosignature{cosig1})
+	if err := mon.ApplyEpoch(rawCP1, rawBatch1); err != nil {
+		t.Fatalf("ApplyEpoch(1 expired): %v", err)
+	}
+	if err := mon.CheckCertificate(activeCert); !errors.Is(err, ErrUnauthorizedCertificate) {
+		t.Fatalf("expired leaf cert got %v, want %v", err, ErrUnauthorizedCertificate)
 	}
 }

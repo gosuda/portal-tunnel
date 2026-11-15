@@ -1121,3 +1121,77 @@ func TestPGNSChannelBindingALPNAndOwnerPubKey(t *testing.T) {
 	}
 	<-badServerErr
 }
+
+// INV: DialCanonicalTLS strips browser NextProtos ("h2", "http/1.1") from caller-supplied
+// baseTLSConfig so maybeHandleConn never skips the channel-binding handshake.
+func TestDialCanonicalTLSStripsBrowserNextProtos(t *testing.T) {
+	id, err := identity.Generate("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalHost, err := namespace.LocalTLSHostname("app", id.Address, "relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := makeSelfSignedTLSCert(t, canonicalHost)
+	parsedLeaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(parsedLeaf)
+
+	l := &listener{
+		identity: id,
+		lease:    utils.NewSnapshot(listenerSnapshot{hostname: canonicalHost, accessToken: "tok"}),
+	}
+	l.mitmManager = newMITMManager(l, false)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		raw, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		tlsConn := tls.Server(raw, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			NextProtos:   []string{"h2", "http/1.1", types.ALPNPortalCBV1},
+			MinVersion:   tls.VersionTLS13,
+		})
+		if err := tlsConn.Handshake(); err != nil {
+			_ = tlsConn.Close()
+			return
+		}
+		nextConn, handled, err := l.mitmManager.maybeHandleConn(tlsConn)
+		if err != nil || handled {
+			_ = tlsConn.Close()
+			return
+		}
+		defer nextConn.Close()
+		var buf [4]byte
+		if _, err := io.ReadFull(nextConn, buf[:]); err == nil {
+			_, _ = nextConn.Write(buf[:])
+		}
+	}()
+
+	conn, err := DialCanonicalTLS(t.Context(), ln.Addr().String(), canonicalHost, &tls.Config{
+		RootCAs:    pool,
+		NextProtos: []string{"h2", "http/1.1"},
+	})
+	if err != nil {
+		t.Fatalf("DialCanonicalTLS with browser NextProtos failed: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("pong")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var echo [4]byte
+	if _, err := io.ReadFull(conn, echo[:]); err != nil || string(echo[:]) != "pong" {
+		t.Fatalf("echo = %q, %v", echo[:], err)
+	}
+}

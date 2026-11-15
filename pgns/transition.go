@@ -41,16 +41,17 @@ func LeadingZeroBits(digest [32]byte) int {
 
 // PoWDigest returns SHA256("portal-pgns-pow-v1\x00" || txType || canonicalLeaf || uint64_be(nonce)).
 func PoWDigest(txType uint8, canonicalLeaf []byte, nonce uint64) [32]byte {
-	h := sha256.New()
-	_, _ = h.Write([]byte(powDomain))
-	_, _ = h.Write([]byte{txType})
-	_, _ = h.Write(canonicalLeaf)
-	var nonceBuf [8]byte
-	binary.BigEndian.PutUint64(nonceBuf[:], nonce)
-	_, _ = h.Write(nonceBuf[:])
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	buf := buildPoWBuffer(txType, canonicalLeaf)
+	binary.BigEndian.PutUint64(buf[len(buf)-8:], nonce)
+	return sha256.Sum256(buf)
+}
+
+func buildPoWBuffer(txType uint8, canonicalLeaf []byte) []byte {
+	buf := make([]byte, 0, len(powDomain)+1+len(canonicalLeaf)+8)
+	buf = append(buf, powDomain...)
+	buf = append(buf, txType)
+	buf = append(buf, canonicalLeaf...)
+	return append(buf, 0, 0, 0, 0, 0, 0, 0, 0)
 }
 
 // VerifyPoW checks that PoWDigest has at least requiredBits leading zero bits.
@@ -60,17 +61,11 @@ func VerifyPoW(txType uint8, canonicalLeaf []byte, nonce uint64, requiredBits in
 
 // MinePoW searches nonces from 0 upward for a PoW solution meeting requiredBits.
 func MinePoW(txType uint8, canonicalLeaf []byte, requiredBits int) uint64 {
-	var nonceBuf [8]byte
+	buf := buildPoWBuffer(txType, canonicalLeaf)
+	nonceSlice := buf[len(buf)-8:]
 	for nonce := uint64(0); ; nonce++ {
-		h := sha256.New()
-		_, _ = h.Write([]byte(powDomain))
-		_, _ = h.Write([]byte{txType})
-		_, _ = h.Write(canonicalLeaf)
-		binary.BigEndian.PutUint64(nonceBuf[:], nonce)
-		_, _ = h.Write(nonceBuf[:])
-		var digest [32]byte
-		copy(digest[:], h.Sum(nil))
-		if LeadingZeroBits(digest) >= requiredBits {
+		binary.BigEndian.PutUint64(nonceSlice, nonce)
+		if LeadingZeroBits(sha256.Sum256(buf)) >= requiredBits {
 			return nonce
 		}
 	}
@@ -109,7 +104,7 @@ func ValidateTransition(prev *PortalLeafRecord, tx LeafTx, timestamp uint64, zon
 	case TxTypeCreate:
 		return validateCreate(prev, tx, canonicalLeaf, parsed)
 	case TxTypeUpdate:
-		return validateUpdate(prev, tx, timestamp)
+		return validateUpdate(prev, tx, parsed, timestamp)
 	case TxTypeColdRecovery:
 		return validateColdRecovery(prev, tx, canonicalLeaf, parsed, timestamp)
 	case TxTypeReclaim:
@@ -176,14 +171,14 @@ func validateCreate(prev *PortalLeafRecord, tx LeafTx, canonicalLeaf []byte, par
 	return nil
 }
 
-func validateUpdate(prev *PortalLeafRecord, tx LeafTx, timestamp uint64) error {
+func validateUpdate(prev *PortalLeafRecord, tx LeafTx, parsed ParsedFQDN, timestamp uint64) error {
 	if prev == nil {
 		return fmt.Errorf("%w: update requires existing leaf", ErrTransitionInvalid)
 	}
 	if tx.PoWNonce != 0 {
 		return fmt.Errorf("%w: update pow_nonce must be 0", ErrTransitionInvalid)
 	}
-	if isPastReclaimGrace(prev.ExpiresAt, timestamp) {
+	if parsed.Class == ClassFriendlyAlias && isPastReclaimGrace(prev.ExpiresAt, timestamp) {
 		return fmt.Errorf("%w: leaf expired past reclaim grace window", ErrTransitionInvalid)
 	}
 	if prev.Seq == math.MaxUint64 || tx.Leaf.Seq != prev.Seq+1 {

@@ -48,6 +48,7 @@ const (
 	defaultReadyQueueLimit                   = 8
 	defaultLeaseBridgeLimit                  = 128
 	pgnsWatermarkRetention                   = 660 * time.Second
+	maxPGNSWatermarks                        = 65536
 	defaultReplicaLimit                      = 16
 )
 
@@ -553,12 +554,22 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 	return nil, netip.Addr{}, nil, identity.ErrRegisterChallengeNotFound
 }
 
-func (r *leaseRegistry) verifyPGNSRegistrationLocked(req types.RegisterRequest, challenge *identity.RegisterChallenge, now time.Time) (*pgns.PortalLeafRecord, error) {
-	if challenge.Request.Cache {
-		return nil, &apiError{types.APIErrorCodePGNSProofInvalid, "pgns leases cannot enable relay static cache", http.StatusBadRequest}
+func validatePGNSLeaseRequest(req types.RegisterChallengeRequest) error {
+	if req.Cache {
+		return &apiError{types.APIErrorCodePGNSProofInvalid, "pgns leases cannot enable relay static cache", http.StatusBadRequest}
 	}
-	if challenge.Request.Namespace != types.LocalTLSNamespaceV1 {
-		return nil, &apiError{types.APIErrorCodePGNSProofInvalid, "pgns registration requires local-tls-v1 namespace", http.StatusBadRequest}
+	if req.Namespace != types.LocalTLSNamespaceV1 {
+		return &apiError{types.APIErrorCodePGNSProofInvalid, "pgns registration requires local-tls-v1 namespace", http.StatusBadRequest}
+	}
+	return nil
+}
+
+func (r *leaseRegistry) verifyPGNSRegistrationLocked(req types.RegisterRequest, challenge *identity.RegisterChallenge, now time.Time) (*pgns.PortalLeafRecord, error) {
+	if err := validatePGNSLeaseRequest(challenge.Request); err != nil {
+		return nil, err
+	}
+	if err := r.pgnsWitnesses.Validate(); err != nil {
+		return nil, &apiError{types.APIErrorCodePGNSProofInvalid, "relay has no configured pgns witnesses", http.StatusForbidden}
 	}
 	proof := req.PGNSProof
 	zone, err := pgns.NormalizeZone(proof.Zone)
@@ -572,9 +583,6 @@ func (r *leaseRegistry) verifyPGNSRegistrationLocked(req types.RegisterRequest, 
 	nowUnix := uint64(max(now.Unix(), 0))
 	var leaf pgns.PortalLeafRecord
 	if len(proof.InclusionProof) > 0 || len(proof.Checkpoint) > 0 {
-		if r.pgnsWitnesses.Threshold <= 0 || len(r.pgnsWitnesses.Witnesses) == 0 {
-			return nil, &apiError{types.APIErrorCodePGNSProofInvalid, "relay has no configured pgns witnesses", http.StatusForbidden}
-		}
 		verified, _, err := pgns.VerifyRegistrationProof(zone, r.pgnsWitnesses, proof.Leaf, proof.InclusionProof, proof.Checkpoint, nowUnix)
 		if err != nil {
 			return nil, &apiError{types.APIErrorCodePGNSProofInvalid, err.Error(), http.StatusForbidden}
@@ -591,6 +599,9 @@ func (r *leaseRegistry) verifyPGNSRegistrationLocked(req types.RegisterRequest, 
 		}
 		if parsed.Class != pgns.ClassSelfCertifying {
 			return nil, &apiError{types.APIErrorCodePGNSProofInvalid, "proof-less pgns registration is permitted only for self-certifying .id hostnames", http.StatusForbidden}
+		}
+		if unmarshaled.IssuedAt > nowUnix && unmarshaled.IssuedAt-nowUnix > pgns.RelayCheckpointMaxLead {
+			return nil, &apiError{types.APIErrorCodePGNSProofInvalid, "pgns leaf issued_at is in the future", http.StatusForbidden}
 		}
 		if nowUnix >= unmarshaled.ExpiresAt {
 			return nil, &apiError{types.APIErrorCodePGNSProofInvalid, "pgns leaf expired", http.StatusForbidden}
@@ -670,17 +681,7 @@ func (r *leaseRegistry) collectCleanupExpiredLocked(now time.Time) []*leaseRecor
 		i++
 	}
 	for fqdn, wm := range r.pgnsWatermarks {
-		if now.Before(wm.retainUntil) {
-			continue
-		}
-		hasLive := false
-		for _, live := range r.byHost[fqdn] {
-			if live != nil && !live.isExpired(now) {
-				hasLive = true
-				break
-			}
-		}
-		if hasLive {
+		if now.Before(wm.retainUntil) || r.hasLiveHostLocked(fqdn, now) {
 			continue
 		}
 		delete(r.pgnsWatermarks, fqdn)
@@ -1101,11 +1102,8 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	}
 	var publicHostname, canonicalHostname, legacyCanonicalHostname string
 	if pgnsLeaf != nil {
-		if req.Cache {
-			return nil, "", &apiError{types.APIErrorCodePGNSProofInvalid, "pgns leases cannot enable relay static cache", http.StatusBadRequest}
-		}
-		if req.Namespace != types.LocalTLSNamespaceV1 {
-			return nil, "", &apiError{types.APIErrorCodePGNSProofInvalid, "pgns registration requires local-tls-v1 namespace", http.StatusBadRequest}
+		if err := validatePGNSLeaseRequest(req); err != nil {
+			return nil, "", err
 		}
 		canonicalHostname = pgnsLeaf.FQDN
 	} else {
@@ -1325,7 +1323,9 @@ func (r *leaseRegistry) recordPGNSWatermarkLocked(pgnsLeaf pgns.PortalLeafRecord
 	if r.pgnsWatermarks == nil {
 		r.pgnsWatermarks = make(map[string]pgnsWatermark)
 	}
-	retainUntil := now.UTC().Add(pgnsWatermarkRetention)
+	nowUTC := now.UTC()
+	retainUntil := nowUTC.Add(pgnsWatermarkRetention)
+	maxRetain := nowUTC.Add(time.Duration(pgns.MaxLeafTTL+pgns.RelayCheckpointMaxLead) * time.Second)
 	if pgnsLeaf.ExpiresAt <= uint64(math.MaxInt64) {
 		if leafExp := time.Unix(int64(pgnsLeaf.ExpiresAt), 0).UTC(); leafExp.After(retainUntil) {
 			retainUntil = leafExp
@@ -1334,11 +1334,47 @@ func (r *leaseRegistry) recordPGNSWatermarkLocked(pgnsLeaf pgns.PortalLeafRecord
 	if prev, ok := r.pgnsWatermarks[pgnsLeaf.FQDN]; ok && prev.retainUntil.After(retainUntil) {
 		retainUntil = prev.retainUntil
 	}
+	if retainUntil.After(maxRetain) {
+		retainUntil = maxRetain
+	}
+	if _, exists := r.pgnsWatermarks[pgnsLeaf.FQDN]; !exists && len(r.pgnsWatermarks) >= maxPGNSWatermarks {
+		r.evictPGNSWatermarksLocked(nowUTC)
+	}
 	r.pgnsWatermarks[pgnsLeaf.FQDN] = pgnsWatermark{
 		seq:         pgnsLeaf.Seq,
 		ownerPubKey: pgnsLeaf.OwnerPubKey,
 		retainUntil: retainUntil,
 	}
+}
+
+func (r *leaseRegistry) evictPGNSWatermarksLocked(now time.Time) {
+	var oldestFQDN string
+	var oldestTime time.Time
+	for fqdn, wm := range r.pgnsWatermarks {
+		if r.hasLiveHostLocked(fqdn, now) {
+			continue
+		}
+		if !now.Before(wm.retainUntil) {
+			delete(r.pgnsWatermarks, fqdn)
+			continue
+		}
+		if oldestFQDN == "" || wm.retainUntil.Before(oldestTime) {
+			oldestFQDN = fqdn
+			oldestTime = wm.retainUntil
+		}
+	}
+	if len(r.pgnsWatermarks) >= maxPGNSWatermarks && oldestFQDN != "" {
+		delete(r.pgnsWatermarks, oldestFQDN)
+	}
+}
+
+func (r *leaseRegistry) hasLiveHostLocked(fqdn string, now time.Time) bool {
+	for _, live := range r.byHost[fqdn] {
+		if live != nil && !live.isExpired(now) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *leaseRegistry) validateRegisterLocked(record *leaseRecord, pgnsLeaf *pgns.PortalLeafRecord, identityKey types.ServiceIdentityKey, req types.RegisterChallengeRequest, now time.Time) error {
@@ -1357,15 +1393,7 @@ func (r *leaseRegistry) validateRegisterLocked(record *leaseRecord, pgnsLeaf *pg
 	return r.checkRegisterCapacityLocked(record, now)
 }
 
-func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial) (*leaseRecord, *leaseRecord, types.RegisterResponse, error) {
-	return r.register(req, sourceAddr, reportedIP, self, descriptors, served, nil)
-}
-
-func (r *leaseRegistry) RegisterWithPGNS(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial, pgnsLeaf *pgns.PortalLeafRecord) (*leaseRecord, *leaseRecord, types.RegisterResponse, error) {
-	return r.register(req, sourceAddr, reportedIP, self, descriptors, served, pgnsLeaf)
-}
-
-func (r *leaseRegistry) register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial, pgnsLeaf *pgns.PortalLeafRecord) (*leaseRecord, *leaseRecord, types.RegisterResponse, error) {
+func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr netip.Addr, reportedIP string, self types.RelayDescriptor, descriptors []types.RelayDescriptor, served *acme.TLSMaterial, pgnsLeaf *pgns.PortalLeafRecord) (*leaseRecord, *leaseRecord, types.RegisterResponse, error) {
 	if r == nil {
 		return nil, nil, types.RegisterResponse{}, errFeatureUnavailable
 	}

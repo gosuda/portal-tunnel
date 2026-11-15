@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/pgns"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const maxCosignRequestBytes = 4 << 20 // 4 MiB
@@ -21,30 +22,37 @@ var (
 	errEpochConflict      = errors.New("witness: epoch conflicts with persisted state")
 	errWitnessKeyRequired = errors.New("witness: valid name and Ed25519 private key are required")
 	errWitnessPubInvalid  = errors.New("witness: invalid Ed25519 public key")
+	errSequencerPubSize   = errors.New("witness: invalid sequencer Ed25519 public key")
 )
 
 // Config configures a stateless PGNS witness node.
 type Config struct {
-	Name       string
-	PrivateKey ed25519.PrivateKey
-	StatePath  string
-	Now        func() time.Time
+	Zone               string
+	Name               string
+	PrivateKey         ed25519.PrivateKey
+	SequencerPublicKey ed25519.PublicKey
+	StatePath          string
 }
 
 // Witness verifies PGNS epoch transitions against an 88-byte persistent checkpoint
 // and returns deterministic C2SP cosignature/v1 signatures.
 type Witness struct {
-	mu        sync.Mutex
-	key       pgns.WitnessKey
-	priv      ed25519.PrivateKey
-	statePath string
-	nowFn     func() time.Time
-	hasState  bool
-	state     pgns.WitnessState
+	mu           sync.Mutex
+	zone         string
+	key          pgns.WitnessKey
+	priv         ed25519.PrivateKey
+	sequencerPub ed25519.PublicKey
+	statePath    string
+	hasState     bool
+	state        pgns.WitnessState
 }
 
 // New initializes a Witness, loading any persisted 88-byte checkpoint from cfg.StatePath.
 func New(cfg Config) (*Witness, error) {
+	normZone, err := pgns.NormalizeZone(cfg.Zone)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Name == "" || len(cfg.PrivateKey) != ed25519.PrivateKeySize {
 		return nil, errWitnessKeyRequired
 	}
@@ -52,15 +60,15 @@ func New(cfg Config) (*Witness, error) {
 	if !ok {
 		return nil, errWitnessPubInvalid
 	}
-	nowFn := cfg.Now
-	if nowFn == nil {
-		nowFn = time.Now
+	if len(cfg.SequencerPublicKey) != 0 && len(cfg.SequencerPublicKey) != ed25519.PublicKeySize {
+		return nil, errSequencerPubSize
 	}
 	w := &Witness{
-		key:       pgns.WitnessKey{Name: cfg.Name, PublicKey: pub},
-		priv:      append(ed25519.PrivateKey(nil), cfg.PrivateKey...),
-		statePath: cfg.StatePath,
-		nowFn:     nowFn,
+		zone:         normZone,
+		key:          pgns.WitnessKey{Name: cfg.Name, PublicKey: pub},
+		priv:         append(ed25519.PrivateKey(nil), cfg.PrivateKey...),
+		sequencerPub: append(ed25519.PublicKey(nil), cfg.SequencerPublicKey...),
+		statePath:    cfg.StatePath,
 	}
 	if cfg.StatePath != "" {
 		raw, err := os.ReadFile(cfg.StatePath)
@@ -93,11 +101,18 @@ func (w *Witness) State() (pgns.WitnessState, bool) {
 // VerifyAndCosign executes the 5-step stateless verification on b, atomically
 // persists the resulting 88-byte WitnessState, and returns a C2SP cosignature.
 func (w *Witness) VerifyAndCosign(b pgns.BatchTransitionProof) (pgns.WitnessCosignature, error) {
+	if b.Zone != w.zone {
+		return pgns.WitnessCosignature{}, fmt.Errorf("%w: batch zone %q != witness zone %q", pgns.ErrInvalidZone, b.Zone, w.zone)
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	var prevPtr *pgns.WitnessState
 	if w.hasState {
+		if b.Epoch == w.state.Epoch && b.Timestamp == w.state.Timestamp &&
+			b.NewLogRoot == w.state.LogRoot && b.NewSMTRoot == w.state.SMTRoot {
+			return w.signCheckpointLocked(w.state)
+		}
 		if b.Epoch <= w.state.Epoch {
 			return pgns.WitnessCosignature{}, fmt.Errorf("%w: got epoch %d, current %d", errEpochConflict, b.Epoch, w.state.Epoch)
 		}
@@ -105,21 +120,12 @@ func (w *Witness) VerifyAndCosign(b pgns.BatchTransitionProof) (pgns.WitnessCosi
 		prevPtr = &prev
 	}
 
-	nowSec := uint64(max(0, w.nowFn().UTC().Unix()))
+	nowSec := uint64(max(0, time.Now().UTC().Unix()))
 	nextState, err := pgns.VerifyBatchTransition(prevPtr, b, nowSec)
 	if err != nil {
 		return pgns.WitnessCosignature{}, err
 	}
-
-	cp := pgns.Checkpoint{
-		Origin:    pgns.CheckpointOriginPrefix + b.Zone,
-		LogSize:   nextState.LogSize,
-		LogRoot:   nextState.LogRoot,
-		Epoch:     nextState.Epoch,
-		Timestamp: nextState.Timestamp,
-		SMTRoot:   nextState.SMTRoot,
-	}
-	cosig, err := pgns.CosignCheckpoint(cp.FormatBody(), w.key, w.priv, b.Timestamp)
+	cosig, err := w.signCheckpointLocked(nextState)
 	if err != nil {
 		return pgns.WitnessCosignature{}, err
 	}
@@ -131,6 +137,18 @@ func (w *Witness) VerifyAndCosign(b pgns.BatchTransitionProof) (pgns.WitnessCosi
 	w.state = nextState
 	w.hasState = true
 	return cosig, nil
+}
+
+func (w *Witness) signCheckpointLocked(st pgns.WitnessState) (pgns.WitnessCosignature, error) {
+	cp := pgns.Checkpoint{
+		Origin:    pgns.CheckpointOriginPrefix + w.zone,
+		LogSize:   st.LogSize,
+		LogRoot:   st.LogRoot,
+		Epoch:     st.Epoch,
+		Timestamp: st.Timestamp,
+		SMTRoot:   st.SMTRoot,
+	}
+	return pgns.CosignCheckpoint(cp.FormatBody(), w.key, w.priv, st.Timestamp)
 }
 
 func persistWitnessStateAtomic(path string, encoded [pgns.WitnessStateBytes]byte) error {
@@ -157,15 +175,19 @@ func persistWitnessStateAtomic(path string, encoded [pgns.WitnessStateBytes]byte
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("witness: rename state: %w", err)
 	}
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
+	}
 	return nil
 }
 
 // Handler returns the HTTP endpoint serving POST /v1/cosign, GET /state, and GET /healthz.
 func (w *Witness) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/cosign", w.handleCosign)
-	mux.HandleFunc("GET /state", w.handleState)
-	mux.HandleFunc("GET /healthz", func(rw http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST "+types.PathV1Cosign, w.handleCosign)
+	mux.HandleFunc("GET "+types.PathPGNSState, w.handleState)
+	mux.HandleFunc("GET "+types.PathPGNSHealthz, func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = rw.Write([]byte("ok\n"))
 	})
@@ -181,6 +203,13 @@ func (w *Witness) handleCosign(rw http.ResponseWriter, r *http.Request) {
 	if len(body) > maxCosignRequestBytes {
 		http.Error(rw, "request body too large", http.StatusRequestEntityTooLarge)
 		return
+	}
+	if len(w.sequencerPub) > 0 {
+		sig := r.Header.Get(types.HeaderPGNSSequencerSignature)
+		if !pgns.VerifySequencerCosignRequest(w.sequencerPub, body, sig) {
+			http.Error(rw, "unauthorized sequencer signature", http.StatusUnauthorized)
+			return
+		}
 	}
 	batch, err := pgns.UnmarshalBatchTransitionProof(body)
 	if err != nil {

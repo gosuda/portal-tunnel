@@ -28,22 +28,31 @@ func pub33(k *secp256k1.PrivateKey) [33]byte {
 	return out
 }
 
-// INV: Sequencer collects k-of-m witness cosignatures to seal epochs, serves
-// verified ResolveBundles & C2SP tiles, prioritizes ColdRecovery over Update,
-// and rate-limits Update submissions to <= 6/min per FQDN.
+// INV: Sequencer collects authenticated k-of-m witness cosignatures to seal epochs,
+// serves verified ResolveBundles & C2SP tiles, enforces first-seen Create sniping
+// protection, treats exact retries idempotently, and rate-limits distinct Update
+// submissions to <= 6/min per FQDN.
 func TestSequencerLifecycleQuorumRateLimitAndTiles(t *testing.T) {
 	const zone = "portal.example"
-	now := int64(1_700_000_000)
-	nowFn := func() time.Time { return time.Unix(now, 0) }
+	now := uint64(time.Now().UTC().Unix())
 
-	// Spin up 3 stateless witnesses (threshold 2 of 3).
+	seqSeed := sha256.Sum256([]byte("seq-auth-ed25519"))
+	seqAuthPriv := ed25519.NewKeyFromSeed(seqSeed[:])
+	seqAuthPub := seqAuthPriv.Public().(ed25519.PublicKey)
+
+	// Spin up 3 witnesses (threshold 2 of 3) requiring sequencer authentication.
 	var ws pgns.WitnessSet
 	ws.Threshold = 2
 	var endpoints []string
 	for _, name := range []string{"w1", "w2", "w3"} {
 		seed := sha256.Sum256([]byte("seq-witness:" + name))
 		priv := ed25519.NewKeyFromSeed(seed[:])
-		w, err := witness.New(witness.Config{Name: name, PrivateKey: priv, Now: nowFn})
+		w, err := witness.New(witness.Config{
+			Zone:               zone,
+			Name:               name,
+			PrivateKey:         priv,
+			SequencerPublicKey: seqAuthPub,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,10 +63,10 @@ func TestSequencerLifecycleQuorumRateLimitAndTiles(t *testing.T) {
 	}
 
 	seq, err := New(Config{
-		Zone:             zone,
-		WitnessSet:       ws,
-		WitnessEndpoints: endpoints,
-		Now:              nowFn,
+		Zone:                zone,
+		WitnessSet:          ws,
+		WitnessEndpoints:    endpoints,
+		SequencerPrivateKey: seqAuthPriv,
 	})
 	if err != nil {
 		t.Fatalf("New sequencer: %v", err)
@@ -74,8 +83,8 @@ func TestSequencerLifecycleQuorumRateLimitAndTiles(t *testing.T) {
 		Flags:         pgns.FlagHTTP2,
 		FQDN:          fqdn,
 		Seq:           1,
-		IssuedAt:      uint64(now),
-		ExpiresAt:     uint64(now + 3600),
+		IssuedAt:      now,
+		ExpiresAt:     now + 3600,
 		OwnerPubKey:   pub33(owner),
 		TLSSPKISHA256: sha256.Sum256([]byte("spki-1")),
 		Endpoints: []pgns.Endpoint{{
@@ -103,11 +112,31 @@ func TestSequencerLifecycleQuorumRateLimitAndTiles(t *testing.T) {
 		t.Fatalf("POST /v1/submit status = %d, want 202", resp.StatusCode)
 	}
 
+	// Competing Create in mempool (e.g. different SPKI/nonce for same unclaimed FQDN) MUST be rejected (first-seen wins).
+	sniperLeaf := leaf1
+	sniperLeaf.TLSSPKISHA256 = sha256.Sum256([]byte("sniper-spki"))
+	rawSniperLeaf, _ := sniperLeaf.MarshalCanonical()
+	sniperTx := pgns.LeafTx{
+		TxType:   pgns.TxTypeCreate,
+		Leaf:     sniperLeaf,
+		PoWNonce: pgns.MinePoW(pgns.TxTypeCreate, rawSniperLeaf, pgns.PoWDifficultyID),
+	}
+	_ = sniperTx.SignOwner(owner)
+	sniperWire, _ := sniperTx.MarshalCanonical()
+	sniperResp, err := http.Post(seqSrv.URL+"/v1/submit", "application/octet-stream", bytes.NewReader(sniperWire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sniperResp.Body.Close()
+	if sniperResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("competing Create sniping status = %d, want 422", sniperResp.StatusCode)
+	}
+
 	if err := seq.SealEpoch(context.Background()); err != nil {
 		t.Fatalf("SealEpoch(0): %v", err)
 	}
 
-	// Verify /v1/resolve/<fqdn> returns self-verifying ResolveBundle with max-age=15.
+	// Verify /v1/resolve/<fqdn> returns self-verifying ResolveBundle with max-age=15 and first-seen SPKI.
 	resResp, err := http.Get(seqSrv.URL + "/v1/resolve/" + fqdn)
 	if err != nil {
 		t.Fatal(err)
@@ -118,16 +147,15 @@ func TestSequencerLifecycleQuorumRateLimitAndTiles(t *testing.T) {
 	}
 	var bundleBuf bytes.Buffer
 	_, _ = bundleBuf.ReadFrom(resResp.Body)
-	resolvedLeaf, cp0, err := pgns.VerifyResolveBundle(bundleBuf.Bytes(), fqdn, zone, ws, uint64(now))
+	resolvedLeaf, cp0, err := pgns.VerifyResolveBundle(bundleBuf.Bytes(), fqdn, zone, ws, uint64(time.Now().UTC().Unix()))
 	if err != nil {
 		t.Fatalf("VerifyResolveBundle: %v", err)
 	}
-	if resolvedLeaf.Seq != 1 || cp0.Epoch != 0 {
+	if resolvedLeaf.Seq != 1 || cp0.Epoch != 0 || resolvedLeaf.TLSSPKISHA256 != leaf1.TLSSPKISHA256 {
 		t.Fatalf("unexpected resolved state: seq=%d epoch=%d", resolvedLeaf.Seq, cp0.Epoch)
 	}
 
 	// Heartbeat 0-tx epoch 1 advances checkpoint epoch without mutating leaf.
-	now += 60
 	if err := seq.SealEpoch(context.Background()); err != nil {
 		t.Fatalf("SealEpoch(1 heartbeat): %v", err)
 	}
@@ -150,12 +178,14 @@ func TestSequencerLifecycleQuorumRateLimitAndTiles(t *testing.T) {
 		t.Fatalf("tile data len=%d, want %d", tileBuf.Len(), 2*tlog.HashSize)
 	}
 
-	// Per-FQDN Update rate limit: 6 allowed in 60s, 7th returns 429 Too Many Requests.
+	// Per-FQDN Update rate limit: 6 distinct updates allowed in 60s, exact retries of an in-flight
+	// pending update are idempotent and do NOT consume rate-limit budget, and the 7th distinct update returns 429.
+	nowUpd := uint64(time.Now().UTC().Unix())
 	for i := range maxUpdatesPerMinute + 1 {
 		upd := leaf1
 		upd.Seq = 2
-		upd.IssuedAt = uint64(now)
-		upd.ExpiresAt = uint64(now + 3600)
+		upd.IssuedAt = nowUpd
+		upd.ExpiresAt = nowUpd + 3600
 		upd.Endpoints[0].Priority = uint16(10 + i)
 		tx := pgns.LeafTx{TxType: pgns.TxTypeUpdate, Leaf: upd}
 		_ = tx.SignOwner(owner)
@@ -165,11 +195,24 @@ func TestSequencerLifecycleQuorumRateLimitAndTiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		r.Body.Close()
+		if i == 0 {
+			// Replay the exact same in-flight Update 10 times; all must return 202 without burning quota.
+			for range 10 {
+				dupResp, err := http.Post(seqSrv.URL+"/v1/submit", "application/octet-stream", bytes.NewReader(wire))
+				if err != nil {
+					t.Fatal(err)
+				}
+				dupResp.Body.Close()
+				if dupResp.StatusCode != http.StatusAccepted {
+					t.Fatalf("idempotent Update retry status=%d, want 202", dupResp.StatusCode)
+				}
+			}
+		}
 		if i < maxUpdatesPerMinute && r.StatusCode != http.StatusAccepted {
 			t.Fatalf("update %d status=%d, want 202", i, r.StatusCode)
 		}
 		if i == maxUpdatesPerMinute && r.StatusCode != http.StatusTooManyRequests {
-			t.Fatalf("7th update status=%d, want 429", r.StatusCode)
+			t.Fatalf("7th distinct update status=%d, want 429", r.StatusCode)
 		}
 	}
 }

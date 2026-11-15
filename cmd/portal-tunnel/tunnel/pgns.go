@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -24,7 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ const (
 	pgnsACMERegistrationFile = "acme-registration.json"
 
 	pgnsLeafTTL             = uint64(24 * 3600)
+	pgnsLeafRenewThreshold  = pgnsLeafTTL / 3
 	pgnsProbeBaseInterval   = 5 * time.Second
 	pgnsProbeJitterMax      = 2 * time.Second
 	pgnsProbeTimeout        = 4 * time.Second
@@ -76,7 +78,8 @@ var (
 	errPGNSRecoveryIDForbidden   = errors.New("pgns_recovery_pubkey is supported only with --pgns-alias")
 	errPGNSACMEEABUnpaired       = errors.New("pgns_acme_eab_kid and pgns_acme_eab_hmac must be configured together")
 	errPGNSACMEEABNeedsDirectory = errors.New("pgns_acme_eab credentials require pgns_acme_directory")
-	errPGNSPersistNeedsIssuer    = errors.New("pgns_persist01 requires pgns_acme_caa_issuer")
+	errPGNSACMEIssuerRequired    = errors.New("pgns_acme_caa_issuer is required for custom pgns_acme_directory URLs")
+	errPGNSPersistNeedsIssuer    = errors.New("pgns_persist01 requires pgns_acme_caa_issuer or a known ACME directory")
 	errPGNSNoDialableRelays      = errors.New("PGNS resolved zero public relay endpoints")
 	errPGNSHttpURLRequired       = errors.New("must be an http:// or https:// URL")
 	errPGNSCompressedPubKeyHex   = errors.New("expected 33-byte compressed hex secp256k1 public key")
@@ -87,6 +90,7 @@ var (
 	errPGNSEndpointDupIPv6       = errors.New("duplicate ipv6 address")
 	errPGNSMasterKeyInvalid      = errors.New("master identity has invalid secp256k1 private key")
 	errPGNSACMENoInitialLeaf     = errors.New("cannot stage ACME challenge before initial leaf exists")
+	errPGNSResolveNotFound       = errors.New("pgns leaf not found")
 )
 
 type pgnsRelayEndpoint struct {
@@ -189,13 +193,17 @@ func validatePGNSACME(cfg *PGNSConfig) error {
 	if hasKID && cfg.ACMEDirectory == "" {
 		return errPGNSACMEEABNeedsDirectory
 	}
+	issuer, err := resolveACMEIssuer(cfg.ACMECAIssuer, cfg.ACMEDirectory)
+	if err != nil {
+		return err
+	}
 	if cfg.ACMEDirectory != "" {
 		parsed, err := url.Parse(cfg.ACMEDirectory)
 		if err != nil || parsed.Host == "" || parsed.Scheme != "https" || parsed.User != nil {
 			return fmt.Errorf("invalid pgns_acme_directory %q: must be an https:// URL", cfg.ACMEDirectory)
 		}
 	}
-	if cfg.Persist01 && cfg.ACMECAIssuer == "" {
+	if cfg.Persist01 && issuer == "" {
 		return errPGNSPersistNeedsIssuer
 	}
 	return nil
@@ -319,13 +327,12 @@ type pgnsController struct {
 	acmeEABHMAC string
 	persist01   bool
 
-	nowFn    func() time.Time
-	probeFn  func(context.Context, string) error
 	exposure *sdk.Exposure
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	pubMu            sync.Mutex
 	mu               sync.Mutex
 	relays           []pgnsRelayEndpoint
 	preferredPrimary string
@@ -364,6 +371,10 @@ func preparePGNSRuntime(ctx context.Context, spec Spec, masterIdentity types.Ide
 	if err != nil {
 		return nil, types.Identity{}, err
 	}
+	acmeIssuer, err := resolveACMEIssuer(cfg.ACMECAIssuer, cfg.ACMEDirectory)
+	if err != nil {
+		return nil, types.Identity{}, err
+	}
 	relays, err := resolvePGNSRelayEndpoints(ctx, spec.Relays, explicitRelayURLs, cfg.RelayEndpoints)
 	if err != nil {
 		return nil, types.Identity{}, err
@@ -394,11 +405,10 @@ func preparePGNSRuntime(ctx context.Context, spec Spec, masterIdentity types.Ide
 		recoveryHash:     recoveryHash,
 		acmeDir:          cfg.ACMEDirectory,
 		acmeEmail:        resolveACMEEmail(cfg.ACMEEmail, fqdn),
-		acmeIssuer:       resolveACMEIssuer(cfg.ACMECAIssuer, cfg.ACMEDirectory),
+		acmeIssuer:       acmeIssuer,
 		acmeEABKID:       cfg.ACMEEABKID,
 		acmeEABHMAC:      cfg.ACMEEABHMAC,
 		persist01:        cfg.Persist01,
-		nowFn:            time.Now,
 		relays:           relays,
 		preferredPrimary: relays[0].url,
 		currentPrimary:   relays[0].url,
@@ -408,9 +418,20 @@ func preparePGNSRuntime(ctx context.Context, spec Spec, masterIdentity types.Ide
 	}
 	ctrl.loadExistingACMERegistration()
 	if err := ctrl.ensureLeafRegistered(ctx); err != nil {
+		ctrl.httpClient.CloseIdleConnections()
 		return nil, types.Identity{}, err
 	}
 	return ctrl, siteIdentity, nil
+}
+
+func (c *pgnsController) relayURLs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, len(c.relays))
+	for i, r := range c.relays {
+		out[i] = r.url
+	}
+	return out
 }
 
 func derivePGNSSiteIdentity(masterHex, zone, serviceName, alias, siteLabel string) (*secp256k1.PrivateKey, string, string, error) {
@@ -451,6 +472,9 @@ func compressedPub33(priv *secp256k1.PrivateKey) [33]byte {
 }
 
 func buildSiteIdentity(sitePriv *secp256k1.PrivateKey, serviceName string) (types.Identity, error) {
+	if serviceName == types.UnnamedServiceLabel {
+		serviceName = ""
+	}
 	payload, err := identity.Marshal(types.Identity{
 		Name:       serviceName,
 		PrivateKey: hex.EncodeToString(sitePriv.Serialize()),
@@ -525,10 +549,18 @@ func buildRelayEndpoint(ctx context.Context, normURL string, overrides map[strin
 	if err != nil {
 		return ep, false, err
 	}
+	port := uint16(443)
+	if rawPort := parsed.Port(); rawPort != "" {
+		parsedPort, portErr := strconv.ParseUint(rawPort, 10, 16)
+		if portErr != nil || parsedPort == 0 {
+			return ep, false, errPGNSEndpointPortZero
+		}
+		port = uint16(parsedPort)
+	}
 	host := parsed.Hostname()
-	if addr, port, parseErr := parsePublicAddrPort(host, 443); parseErr == nil {
+	if addr, hostPort, parseErr := parsePublicAddrPort(host, port); parseErr == nil {
 		assignAddr(&ep, addr)
-		ep.Port = port
+		ep.Port = hostPort
 		return ep, true, nil
 	}
 	addrs, _ := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
@@ -542,7 +574,7 @@ func buildRelayEndpoint(ctx context.Context, normURL string, overrides map[strin
 	if ep.IPv4 == ([4]byte{}) && ep.IPv6 == ([16]byte{}) {
 		return ep, false, nil
 	}
-	ep.Port = 443
+	ep.Port = port
 	return ep, true, nil
 }
 
@@ -592,10 +624,10 @@ func ensureInitialPGNSCert(stateDir, fqdn string) (certFile, keyFile string, spk
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	if err := utils.WriteFileAtomic(certFile, certPEM, 0o644); err != nil {
+	if err := utils.WriteFileAtomic(keyFile, keyPEM, 0o600); err != nil {
 		return "", "", [32]byte{}, err
 	}
-	if err := utils.WriteFileAtomic(keyFile, keyPEM, 0o600); err != nil {
+	if err := utils.WriteFileAtomic(certFile, certPEM, 0o644); err != nil {
 		return "", "", [32]byte{}, err
 	}
 	leaf, err := x509.ParseCertificate(der)
@@ -610,7 +642,11 @@ func reusableSingleSANCert(certFile, keyFile, fqdn string, now time.Time) ([32]b
 	if err != nil {
 		return [32]byte{}, false
 	}
-	if _, err := os.ReadFile(keyFile); err != nil {
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return [32]byte{}, false
+	}
+	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
 		return [32]byte{}, false
 	}
 	cert, err := utils.ParseCertificatePEM(certPEM)
@@ -647,7 +683,7 @@ func (c *pgnsController) proof(ctx context.Context) (*types.PGNSRegistrationProo
 	cached := c.lastProof
 	c.mu.Unlock()
 	if cached != nil {
-		nowUnix := uint64(max(0, c.nowFn().UTC().Unix()))
+		nowUnix := uint64(max(0, time.Now().UTC().Unix()))
 		if _, _, verErr := pgns.VerifyRegistrationProof(c.zone, c.witnesses, cached.Leaf, cached.InclusionProof, cached.Checkpoint, nowUnix); verErr == nil {
 			return cached, nil
 		}
@@ -656,15 +692,31 @@ func (c *pgnsController) proof(ctx context.Context) (*types.PGNSRegistrationProo
 }
 
 func (c *pgnsController) fetchVerifiedResolve(ctx context.Context) (*types.PGNSRegistrationProof, pgns.PortalLeafRecord, pgns.Checkpoint, error) {
-	nowUnix := uint64(max(0, c.nowFn().UTC().Unix()))
+	return c.fetchVerifiedResolveMode(ctx, false)
+}
+
+func (c *pgnsController) fetchVerifiedResolveMode(ctx context.Context, allowExpired bool) (*types.PGNSRegistrationProof, pgns.PortalLeafRecord, pgns.Checkpoint, error) {
+	nowUnix := uint64(max(0, time.Now().UTC().Unix()))
 	var lastErr error
+	notFoundCount := 0
 	for _, baseURL := range c.sequencers {
 		raw, err := c.httpGetBytes(ctx, baseURL+types.PathV1ResolvePrefix+url.PathEscape(c.fqdn), pgnsResolveMaxBytes)
 		if err != nil {
+			if errors.Is(err, errPGNSResolveNotFound) {
+				notFoundCount++
+			}
 			lastErr = err
 			continue
 		}
-		leaf, cp, err := pgns.VerifyResolveBundle(raw, c.fqdn, c.zone, c.witnesses, nowUnix)
+		var (
+			leaf pgns.PortalLeafRecord
+			cp   pgns.Checkpoint
+		)
+		if allowExpired {
+			leaf, cp, err = pgns.VerifyResolveBundleAllowExpired(raw, c.fqdn, c.zone, c.witnesses, nowUnix)
+		} else {
+			leaf, cp, err = pgns.VerifyResolveBundle(raw, c.fqdn, c.zone, c.witnesses, nowUnix)
+		}
 		if err != nil {
 			lastErr = err
 			continue
@@ -683,9 +735,14 @@ func (c *pgnsController) fetchVerifiedResolve(ctx context.Context) (*types.PGNSR
 		c.mu.Lock()
 		c.currentLeaf = leaf
 		c.hasLeaf = true
-		c.lastProof = proof
+		if nowUnix < leaf.ExpiresAt {
+			c.lastProof = proof
+		}
 		c.mu.Unlock()
 		return proof, leaf, cp, nil
+	}
+	if notFoundCount > 0 && notFoundCount == len(c.sequencers) {
+		return nil, pgns.PortalLeafRecord{}, pgns.Checkpoint{}, errPGNSResolveNotFound
 	}
 	if lastErr == nil {
 		lastErr = errPGNSSequencerRequired
@@ -703,6 +760,9 @@ func (c *pgnsController) httpGetBytes(ctx context.Context, targetURL string, max
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: %s", errPGNSResolveNotFound, targetURL)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, targetURL)
 	}
@@ -717,11 +777,25 @@ func (c *pgnsController) httpGetBytes(ctx context.Context, targetURL string, max
 }
 
 func (c *pgnsController) ensureLeafRegistered(ctx context.Context) error {
-	nowUnix := uint64(max(0, c.nowFn().UTC().Unix()))
-	_, existing, _, err := c.fetchVerifiedResolve(ctx)
+	nowUnix := uint64(max(0, time.Now().UTC().Unix()))
+	parsed, err := pgns.ParseScopedFQDN(c.fqdn, c.zone)
+	if err != nil {
+		return err
+	}
+	_, existing, _, err := c.fetchVerifiedResolveMode(ctx, true)
 	txType := pgns.TxTypeCreate
 	seq := uint64(1)
-	if err == nil {
+	if err != nil {
+		if !errors.Is(err, errPGNSResolveNotFound) {
+			return err
+		}
+	} else if parsed.Class == pgns.ClassSelfCertifying {
+		if existing.OwnerPubKey != c.sitePub33 {
+			return fmt.Errorf("pgns leaf %s owned by another key", c.fqdn)
+		}
+		txType = pgns.TxTypeUpdate
+		seq = existing.Seq + 1
+	} else {
 		pastGrace := nowUnix > existing.ExpiresAt && nowUnix-existing.ExpiresAt > pgns.ReclaimGrace
 		if !pastGrace {
 			if existing.OwnerPubKey != c.sitePub33 {
@@ -734,17 +808,23 @@ func (c *pgnsController) ensureLeafRegistered(ctx context.Context) error {
 			seq = existing.Seq + 1
 		}
 	}
-	return c.publishAndConfirm(ctx, txType, seq, true)
+	return c.publishAndConfirm(ctx, txType, seq, "")
 }
 
-func (c *pgnsController) publishAndConfirm(ctx context.Context, txType uint8, seq uint64, waitConfirm bool) error {
+func (c *pgnsController) publishAndConfirm(ctx context.Context, txType uint8, seq uint64, primaryOverride string) error {
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
+
 	if txType == pgns.TxTypeUpdate {
-		if _, latest, _, err := c.fetchVerifiedResolve(ctx); err == nil && latest.Seq+1 > seq {
+		if _, latest, _, err := c.fetchVerifiedResolveMode(ctx, true); err == nil && latest.Seq+1 > seq {
 			seq = latest.Seq + 1
+		} else if c.hasLeaf && c.currentLeaf.Seq+1 > seq {
+			seq = c.currentLeaf.Seq + 1
 		}
 	}
 	c.mu.Lock()
-	leaf := c.buildDesiredLeafLocked(seq)
+	primary := cmp.Or(primaryOverride, c.currentPrimary)
+	leaf := c.buildDesiredLeafLocked(seq, primary)
 	c.mu.Unlock()
 
 	rawTx, err := c.buildSignedTx(txType, leaf)
@@ -754,14 +834,11 @@ func (c *pgnsController) publishAndConfirm(ctx context.Context, txType uint8, se
 	if err := c.submitTx(ctx, rawTx); err != nil {
 		return err
 	}
-	if !waitConfirm {
-		return nil
-	}
 	return c.waitForSeqConfirmed(ctx, leaf.Seq)
 }
 
-func (c *pgnsController) buildDesiredLeafLocked(seq uint64) pgns.PortalLeafRecord {
-	nowUnix := uint64(max(0, c.nowFn().UTC().Unix()))
+func (c *pgnsController) buildDesiredLeafLocked(seq uint64, primaryURL string) pgns.PortalLeafRecord {
+	nowUnix := uint64(max(0, time.Now().UTC().Unix()))
 	flags := pgns.FlagHTTP2
 	issuer := ""
 	accountURI := ""
@@ -788,19 +865,19 @@ func (c *pgnsController) buildDesiredLeafLocked(seq uint64) pgns.PortalLeafRecor
 		ACMECAIssuer:      issuer,
 		ACMEAccountURI:    accountURI,
 		ACMEDNS01Digest:   digest,
-		Endpoints:         c.orderedEndpointsLocked(),
+		Endpoints:         c.orderedEndpointsLocked(primaryURL),
 	}
 }
 
-func (c *pgnsController) orderedEndpointsLocked() []pgns.Endpoint {
+func (c *pgnsController) orderedEndpointsLocked(primaryURL string) []pgns.Endpoint {
 	ordered := make([]pgnsRelayEndpoint, 0, len(c.relays))
 	for _, r := range c.relays {
-		if r.url == c.currentPrimary {
+		if r.url == primaryURL {
 			ordered = append(ordered, r)
 		}
 	}
 	for _, r := range c.relays {
-		if r.url != c.currentPrimary {
+		if r.url != primaryURL {
 			ordered = append(ordered, r)
 		}
 	}
@@ -810,12 +887,6 @@ func (c *pgnsController) orderedEndpointsLocked() []pgns.Endpoint {
 		ep.Priority = uint16((i + 1) * 10)
 		eps[i] = ep
 	}
-	sort.Slice(eps, func(i, j int) bool {
-		if eps[i].Priority != eps[j].Priority {
-			return eps[i].Priority < eps[j].Priority
-		}
-		return bytes.Compare(eps[i].RelayID[:], eps[j].RelayID[:]) < 0
-	})
 	return eps
 }
 
@@ -846,7 +917,7 @@ func (c *pgnsController) buildSignedTx(txType uint8, leaf pgns.PortalLeafRecord)
 func (c *pgnsController) submitTx(ctx context.Context, rawTx []byte) error {
 	var lastErr error
 	for _, baseURL := range c.sequencers {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/submit", bytes.NewReader(rawTx))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+types.PathV1Submit, bytes.NewReader(rawTx))
 		if err != nil {
 			lastErr = err
 			continue
@@ -894,9 +965,6 @@ func (c *pgnsController) start(parent context.Context, exposure *sdk.Exposure) {
 	workerCtx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	c.cancel = cancel
 	c.exposure = exposure
-	if c.probeFn == nil && exposure != nil {
-		c.probeFn = exposure.ProbeRelayPGNS
-	}
 	c.mu.Unlock()
 
 	c.wg.Add(1)
@@ -919,6 +987,9 @@ func (c *pgnsController) close() error {
 		cancel()
 	}
 	c.wg.Wait()
+	if c.httpClient != nil {
+		c.httpClient.CloseIdleConnections()
+	}
 	return nil
 }
 
@@ -940,28 +1011,58 @@ func (c *pgnsController) runHealthLoop(ctx context.Context) {
 func (c *pgnsController) probeOnce(ctx context.Context) {
 	c.mu.Lock()
 	relays := slices.Clone(c.relays)
-	probe := c.probeFn
+	exposure := c.exposure
 	c.mu.Unlock()
-	if probe == nil {
-		return
+
+	now := time.Now().UTC()
+	if exposure != nil {
+		probeOK := make(map[string]bool, len(relays))
+		for _, r := range relays {
+			probeCtx, cancel := context.WithTimeout(ctx, pgnsProbeTimeout)
+			probeOK[r.url] = exposure.ProbeRelayPGNS(probeCtx, r.url) == nil
+			cancel()
+		}
+		if c.trySwitchPrimary(ctx, now, probeOK) {
+			return
+		}
 	}
-	probeOK := make(map[string]bool, len(relays))
-	for _, r := range relays {
-		probeCtx, cancel := context.WithTimeout(ctx, pgnsProbeTimeout)
-		probeOK[r.url] = probe(probeCtx, r.url) == nil
-		cancel()
-	}
-	nextPrimary, seq, changed := c.evaluateFailover(c.nowFn().UTC(), probeOK)
+	c.maintainLeafIfNeeded(ctx, now)
+}
+
+func (c *pgnsController) trySwitchPrimary(ctx context.Context, now time.Time, probeOK map[string]bool) bool {
+	nextPrimary, seq, isFailback, changed := c.selectPrimarySwitch(now, probeOK)
 	if !changed {
-		return
+		return false
 	}
 	log.Info().Str("fqdn", c.fqdn).Str("primary_relay", nextPrimary).Uint64("seq", seq).Msg("updating pgns primary relay")
-	if err := c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, false); err != nil {
+	if err := c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, nextPrimary); err != nil {
 		log.Warn().Err(err).Str("fqdn", c.fqdn).Msg("failed to publish pgns primary relay update")
+		return false
+	}
+	c.commitPrimarySwitch(now, nextPrimary, isFailback)
+	return true
+}
+
+func (c *pgnsController) maintainLeafIfNeeded(ctx context.Context, now time.Time) {
+	nowUnix := uint64(max(0, now.Unix()))
+	c.mu.Lock()
+	if !c.hasLeaf {
+		c.mu.Unlock()
+		return
+	}
+	needsRenew := nowUnix+pgnsLeafRenewThreshold >= c.currentLeaf.ExpiresAt
+	needsSPKISync := c.currentLeaf.TLSSPKISHA256 != c.spkiSHA256 || c.currentLeaf.NextTLSSPKISHA256 != c.nextSPKI
+	seq := c.currentLeaf.Seq + 1
+	c.mu.Unlock()
+	if !needsRenew && !needsSPKISync {
+		return
+	}
+	if err := c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, ""); err != nil {
+		log.Warn().Err(err).Str("fqdn", c.fqdn).Msg("failed to publish pgns leaf maintenance update")
 	}
 }
 
-func (c *pgnsController) evaluateFailover(now time.Time, probeOK map[string]bool) (nextPrimary string, nextSeq uint64, changed bool) {
+func (c *pgnsController) selectPrimarySwitch(now time.Time, probeOK map[string]bool) (nextPrimary string, nextSeq uint64, isFailback, changed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, r := range c.relays {
@@ -972,29 +1073,34 @@ func (c *pgnsController) evaluateFailover(now time.Time, probeOK map[string]bool
 		}
 	}
 	if !c.hasLeaf {
-		return "", 0, false
+		return "", 0, false, false
 	}
 	if c.failCounts[c.currentPrimary] >= pgnsFailThreshold {
 		if candidate := c.pickHealthyStandbyLocked(probeOK); candidate != "" {
-			c.currentPrimary = candidate
-			c.lastFailoverAt = now
-			c.failbackCooldown = pgnsFailbackCooldown + randomDuration(pgnsFailbackJitterMax)
-			return candidate, c.currentLeaf.Seq + 1, true
+			return candidate, c.currentLeaf.Seq + 1, false, true
 		}
 	}
 	if c.currentPrimary != c.preferredPrimary && probeOK[c.preferredPrimary] {
 		if !now.Before(c.lastFailoverAt.Add(c.failbackCooldown)) {
-			c.currentPrimary = c.preferredPrimary
-			c.lastFailoverAt = now
-			return c.preferredPrimary, c.currentLeaf.Seq + 1, true
+			return c.preferredPrimary, c.currentLeaf.Seq + 1, true, true
 		}
 	}
-	return "", 0, false
+	return "", 0, false, false
+}
+
+func (c *pgnsController) commitPrimarySwitch(now time.Time, nextPrimary string, isFailback bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.currentPrimary = nextPrimary
+	c.lastFailoverAt = now
+	if !isFailback {
+		c.failbackCooldown = pgnsFailbackCooldown + randomDuration(pgnsFailbackJitterMax)
+	}
 }
 
 func (c *pgnsController) pickHealthyStandbyLocked(probeOK map[string]bool) string {
 	for _, r := range c.relays {
-		if r.url != c.currentPrimary && probeOK[r.url] {
+		if r.url != c.currentPrimary && r.ep.Port == 443 && probeOK[r.url] {
 			return r.url
 		}
 	}
@@ -1005,7 +1111,7 @@ func (c *pgnsController) runACMELoop(ctx context.Context) {
 	defer c.wg.Done()
 	for {
 		wait := pgnsACMECheckInterval
-		if c.shouldObtainACME(c.nowFn().UTC()) {
+		if c.shouldObtainACME(time.Now().UTC()) {
 			if err := c.obtainACMECertificate(ctx); err != nil && ctx.Err() == nil {
 				log.Warn().Err(err).Str("fqdn", c.fqdn).Msg("pgns acme certificate issuance failed")
 				wait = 30 * time.Second
@@ -1040,10 +1146,12 @@ func (c *pgnsController) shouldObtainACME(now time.Time) bool {
 }
 
 func (c *pgnsController) obtainACMECertificate(ctx context.Context) error {
-	client, accountURI, err := c.newLEGOClient(ctx)
+	client, accountURI, cleanupClient, err := c.newLEGOClient(ctx)
 	if err != nil {
 		return err
 	}
+	defer cleanupClient()
+
 	nextKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
@@ -1074,16 +1182,13 @@ func (c *pgnsController) obtainACMECertificate(ctx context.Context) error {
 		Bundle:     true,
 	})
 	if err != nil {
-		c.mu.Lock()
-		c.acmeDigest = [32]byte{}
-		c.nextSPKI = [32]byte{}
-		c.mu.Unlock()
-		return err
-	}
-	if err := utils.WriteFileAtomic(c.certFile, obtained.Certificate, 0o644); err != nil {
+		c.abortACMEStaging(ctx)
 		return err
 	}
 	if err := utils.WriteFileAtomic(c.keyFile, obtained.PrivateKey, 0o600); err != nil {
+		return err
+	}
+	if err := utils.WriteFileAtomic(c.certFile, obtained.Certificate, 0o644); err != nil {
 		return err
 	}
 	if c.exposure != nil {
@@ -1094,10 +1199,27 @@ func (c *pgnsController) obtainACMECertificate(ctx context.Context) error {
 	return c.promoteACMEKey(ctx, nextSPKI, accountURI)
 }
 
-func (c *pgnsController) newLEGOClient(ctx context.Context) (*lego.Client, string, error) {
+func (c *pgnsController) abortACMEStaging(ctx context.Context) {
+	c.mu.Lock()
+	hadStaged := c.nextSPKI != ([32]byte{}) || c.acmeDigest != ([32]byte{}) ||
+		(c.hasLeaf && (c.currentLeaf.NextTLSSPKISHA256 != ([32]byte{}) || c.currentLeaf.ACMEDNS01Digest != ([32]byte{})))
+	c.acmeDigest = [32]byte{}
+	c.nextSPKI = [32]byte{}
+	seq := c.currentLeaf.Seq + 1
+	hasLeaf := c.hasLeaf
+	c.mu.Unlock()
+	if !hadStaged || !hasLeaf {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	_ = c.publishAndConfirm(cleanupCtx, pgns.TxTypeUpdate, seq, "")
+}
+
+func (c *pgnsController) newLEGOClient(ctx context.Context) (*lego.Client, string, func(), error) {
 	acctKey, err := loadOrCreatePGNSACMEKey(filepath.Join(c.stateDir, pgnsACMEAccountKeyFile))
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	regPath := filepath.Join(c.stateDir, pgnsACMERegistrationFile)
 	var savedReg registration.Resource
@@ -1109,10 +1231,17 @@ func (c *pgnsController) newLEGOClient(ctx context.Context) (*lego.Client, strin
 	conf := lego.NewConfig(user)
 	conf.CADirURL = c.acmeDir
 	conf.Certificate.KeyType = certcrypto.EC256
-	conf.HTTPClient.Transport = pgnsACMETransport{ctx: ctx, base: conf.HTTPClient.Transport}
+	baseRT := conf.HTTPClient.Transport
+	cleanup := func() {
+		if tr, ok := baseRT.(*http.Transport); ok {
+			tr.CloseIdleConnections()
+		}
+	}
+	conf.HTTPClient.Transport = pgnsACMETransport{ctx: ctx, base: baseRT}
 	client, err := lego.NewClient(conf)
 	if err != nil {
-		return nil, "", err
+		cleanup()
+		return nil, "", nil, err
 	}
 	if user.reg == nil {
 		var reg *registration.Resource
@@ -1126,14 +1255,16 @@ func (c *pgnsController) newLEGOClient(ctx context.Context) (*lego.Client, strin
 			reg, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 		}
 		if err != nil {
-			return nil, "", err
+			cleanup()
+			return nil, "", nil, err
 		}
 		user.reg = reg
 		if err := utils.WriteJSONFile(regPath, reg, 0o600); err != nil {
-			return nil, "", err
+			cleanup()
+			return nil, "", nil, err
 		}
 	}
-	return client, user.reg.URI, nil
+	return client, user.reg.URI, cleanup, nil
 }
 
 func (c *pgnsController) stageACMEChallenge(ctx context.Context, digest, nextSPKI [32]byte, accountURI string) error {
@@ -1147,7 +1278,7 @@ func (c *pgnsController) stageACMEChallenge(ctx context.Context, digest, nextSPK
 	c.nextSPKI = nextSPKI
 	seq := c.currentLeaf.Seq + 1
 	c.mu.Unlock()
-	return c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, true)
+	return c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, "")
 }
 
 func (c *pgnsController) promoteACMEKey(ctx context.Context, newSPKI [32]byte, accountURI string) error {
@@ -1158,7 +1289,7 @@ func (c *pgnsController) promoteACMEKey(ctx context.Context, newSPKI [32]byte, a
 	c.acmeAccountURI = accountURI
 	seq := c.currentLeaf.Seq + 1
 	c.mu.Unlock()
-	return c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, true)
+	return c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, "")
 }
 
 func (c *pgnsController) clearACMEChallenge(ctx context.Context) error {
@@ -1170,7 +1301,7 @@ func (c *pgnsController) clearACMEChallenge(ctx context.Context) error {
 	c.acmeDigest = [32]byte{}
 	seq := c.currentLeaf.Seq + 1
 	c.mu.Unlock()
-	return c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, true)
+	return c.publishAndConfirm(ctx, pgns.TxTypeUpdate, seq, "")
 }
 
 type pgnsDNS01Provider struct {
@@ -1241,18 +1372,34 @@ func resolveACMEEmail(explicit, fqdn string) string {
 	return "acme@" + fqdn
 }
 
-func resolveACMEIssuer(explicit, directory string) string {
-	if explicit != "" {
-		return strings.ToLower(strings.TrimSuffix(explicit, "."))
+func resolveACMEIssuer(explicit, directory string) (string, error) {
+	if trimmed := types.NormalizeHostname(explicit); trimmed != "" {
+		return trimmed, nil
 	}
-	if directory == "" {
-		return ""
+	if strings.TrimSpace(directory) == "" {
+		return "", nil
 	}
 	parsed, err := url.Parse(directory)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("invalid pgns_acme_directory %q: %w", directory, err)
 	}
-	return strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	host := types.NormalizeHostname(parsed.Hostname())
+	switch {
+	case host == "letsencrypt.org" || strings.HasSuffix(host, ".letsencrypt.org"):
+		return "letsencrypt.org", nil
+	case host == "pki.goog" || strings.HasSuffix(host, ".pki.goog"):
+		return "pki.goog", nil
+	case host == "zerossl.com" || strings.HasSuffix(host, ".zerossl.com"):
+		return "zerossl.com", nil
+	case host == "buypass.com" || strings.HasSuffix(host, ".buypass.com") || strings.HasSuffix(host, ".buypass.no"):
+		return "buypass.com", nil
+	case host == "localhost":
+		return host, nil
+	}
+	if _, addrErr := netip.ParseAddr(host); addrErr == nil {
+		return host, nil
+	}
+	return "", errPGNSACMEIssuerRequired
 }
 
 func randomDuration(maxDur time.Duration) time.Duration {

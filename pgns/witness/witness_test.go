@@ -85,49 +85,81 @@ func testBatchCreateAndLog(t *testing.T, zone string, epoch, ts uint64) (pgns.Ba
 	}, logRoot
 }
 
-// INV: Witness persists an exact 88-byte checkpoint across restarts, cosigns valid
-// transitions via HTTP, and rejects epoch rollbacks or forged state roots without
-// corrupting persisted state.
+// INV: Witness persists an exact 88-byte checkpoint across restarts, enforces zone
+// isolation and optional sequencer request authentication, cosigns exact retries
+// idempotently, and rejects equivocating or forged transitions without corrupting state.
 func TestWitnessPersistenceAndHTTPVerification(t *testing.T) {
-	now := int64(1_700_000_000)
+	const zone = "portal.example"
+	now := uint64(time.Now().UTC().Unix())
 	seed := sha256.Sum256([]byte("witness-1"))
 	priv := ed25519.NewKeyFromSeed(seed[:])
+	seqSeed := sha256.Sum256([]byte("sequencer-auth-key"))
+	seqPriv := ed25519.NewKeyFromSeed(seqSeed[:])
+	seqPub := seqPriv.Public().(ed25519.PublicKey)
 	statePath := filepath.Join(t.TempDir(), "witness.state")
 
+	if _, err := New(Config{Name: "w1.pgns.example", PrivateKey: priv}); err == nil {
+		t.Fatal("expected New witness without Zone to fail")
+	}
+
 	w, err := New(Config{
-		Name:       "w1.pgns.example",
-		PrivateKey: priv,
-		StatePath:  statePath,
-		Now:        func() time.Time { return time.Unix(now, 0) },
+		Zone:               zone,
+		Name:               "w1.pgns.example",
+		PrivateKey:         priv,
+		SequencerPublicKey: seqPub,
+		StatePath:          statePath,
 	})
 	if err != nil {
 		t.Fatalf("New witness: %v", err)
 	}
 
-	batch0, logRoot0 := testBatchCreateAndLog(t, "portal.example", 0, uint64(now))
+	batch0, logRoot0 := testBatchCreateAndLog(t, zone, 0, now)
 	wire0, err := batch0.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	postCosign := func(target *Witness, body []byte, sig string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/cosign", bytes.NewReader(body))
+		if sig != "" {
+			req.Header.Set("X-PGNS-Sequencer-Signature", sig)
+		}
+		target.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Missing or invalid sequencer signature MUST return 401 Unauthorized and leave state absent.
+	if rec := postCosign(w, wire0, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated cosign status = %d, want 401", rec.Code)
+	}
+	if rec := postCosign(w, wire0, "deadbeef"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("forged signature cosign status = %d, want 401", rec.Code)
+	}
+
+	// Cross-zone batch MUST return 422 and leave state absent.
+	otherBatch, _ := testBatchCreateAndLog(t, "other.example", 0, now)
+	otherWire, err := otherBatch.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := postCosign(w, otherWire, pgns.SignSequencerCosignRequest(seqPriv, otherWire)); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("cross-zone batch status = %d, want 422", rec.Code)
 	}
 
 	// Forged SMT root via HTTP MUST return 422 and leave state absent.
 	forgedBatch := batch0
 	forgedBatch.NewSMTRoot[0] ^= 0xff
 	forgedWire, _ := forgedBatch.MarshalBinary()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/cosign", bytes.NewReader(forgedWire))
-	w.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnprocessableEntity {
+	if rec := postCosign(w, forgedWire, pgns.SignSequencerCosignRequest(seqPriv, forgedWire)); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("forged batch status = %d, want 422", rec.Code)
 	}
 	if _, ok := w.State(); ok {
-		t.Fatal("forged batch must not initialize witness state")
+		t.Fatal("rejected batches must not initialize witness state")
 	}
 
 	// Valid genesis batch returns 200 OK + C2SP cosignature and persists exact 88 bytes.
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/v1/cosign", bytes.NewReader(wire0))
-	w.Handler().ServeHTTP(rec, req)
+	rec := postCosign(w, wire0, pgns.SignSequencerCosignRequest(seqPriv, wire0))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("genesis batch status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -141,26 +173,28 @@ func TestWitnessPersistenceAndHTTPVerification(t *testing.T) {
 
 	// Verify returned cosignature verifies under WitnessSet(threshold=1).
 	cpBody := pgns.Checkpoint{
-		Origin:    pgns.CheckpointOriginPrefix + "portal.example",
+		Origin:    pgns.CheckpointOriginPrefix + zone,
 		LogSize:   1,
 		LogRoot:   logRoot0,
 		Epoch:     0,
-		Timestamp: uint64(now),
+		Timestamp: now,
 		SMTRoot:   batch0.NewSMTRoot,
 	}.FormatBody()
 	signed := append(append([]byte(nil), cpBody...), '\n')
 	signed = append(signed, rec.Body.Bytes()...)
 	ws := pgns.WitnessSet{Threshold: 1, Witnesses: []pgns.WitnessKey{w.Key()}}
-	if _, _, err := pgns.ParseAndVerifySignedCheckpoint(signed, "portal.example", ws); err != nil {
+	if _, _, err := pgns.ParseAndVerifySignedCheckpoint(signed, zone, ws); err != nil {
 		t.Fatalf("ParseAndVerifySignedCheckpoint: %v", err)
 	}
 
-	// Reload Witness from 88-byte state file and verify replay of epoch 0 returns 409 Conflict.
+	// Reload Witness from 88-byte state file: exact retry of committed epoch 0 cosigns idempotently (200),
+	// whereas an equivocating epoch 0 batch returns 409 Conflict.
 	w2, err := New(Config{
-		Name:       "w1.pgns.example",
-		PrivateKey: priv,
-		StatePath:  statePath,
-		Now:        func() time.Time { return time.Unix(now, 0) },
+		Zone:               zone,
+		Name:               "w1.pgns.example",
+		PrivateKey:         priv,
+		SequencerPublicKey: seqPub,
+		StatePath:          statePath,
 	})
 	if err != nil {
 		t.Fatalf("reload witness: %v", err)
@@ -169,18 +203,20 @@ func TestWitnessPersistenceAndHTTPVerification(t *testing.T) {
 	if !ok || st.Epoch != 0 || st.LogRoot != logRoot0 {
 		t.Fatalf("reloaded state mismatch: ok=%v st=%+v", ok, st)
 	}
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/v1/cosign", bytes.NewReader(wire0))
-	w2.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("replay epoch 0 status = %d, want 409", rec.Code)
+	if retryRec := postCosign(w2, wire0, pgns.SignSequencerCosignRequest(seqPriv, wire0)); retryRec.Code != http.StatusOK {
+		t.Fatalf("exact replay epoch 0 status = %d, want 200", retryRec.Code)
+	}
+	equivBatch, _ := testBatchCreateAndLog(t, zone, 0, now+1)
+	equivWire, _ := equivBatch.MarshalBinary()
+	if equivRec := postCosign(w2, equivWire, pgns.SignSequencerCosignRequest(seqPriv, equivWire)); equivRec.Code != http.StatusConflict {
+		t.Fatalf("equivocating epoch 0 status = %d, want 409", equivRec.Code)
 	}
 
 	// Verify GET /state returns 88 bytes matching state.
-	rec = httptest.NewRecorder()
-	w2.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/state", nil))
-	if rec.Code != http.StatusOK || rec.Body.Len() != pgns.WitnessStateBytes {
-		t.Fatalf("GET /state code=%d len=%d", rec.Code, rec.Body.Len())
+	stateRec := httptest.NewRecorder()
+	w2.Handler().ServeHTTP(stateRec, httptest.NewRequest(http.MethodGet, "/state", nil))
+	if stateRec.Code != http.StatusOK || stateRec.Body.Len() != pgns.WitnessStateBytes {
+		t.Fatalf("GET /state code=%d len=%d", stateRec.Code, stateRec.Body.Len())
 	}
 	_ = tlog.HashSize
 }

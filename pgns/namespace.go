@@ -75,9 +75,7 @@ type ParsedFQDN struct {
 
 // NormalizeZone canonicalizes a user-supplied PGNS zone string and validates it.
 func NormalizeZone(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	trimmed = strings.TrimSuffix(trimmed, ".")
-	lower := strings.ToLower(trimmed)
+	lower := types.NormalizeHostname(raw)
 	if err := ValidateZone(lower); err != nil {
 		return "", err
 	}
@@ -228,7 +226,7 @@ func DeriveAppSiteKey(masterKey *secp256k1.PrivateKey, fqdn string) (*secp256k1.
 	if masterKey == nil || masterKey.Key.IsZero() {
 		return nil, ErrKeyDerivationFailed
 	}
-	lowerFQDN := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(fqdn), "."))
+	lowerFQDN := types.NormalizeHostname(fqdn)
 	if err := validateCanonicalDomain(lowerFQDN, 4, maxFQDNLen); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidFQDN, err)
 	}

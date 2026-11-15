@@ -13,19 +13,22 @@ func exposeTunnelRuntime(ctx context.Context, spec Spec, listenerIdentity types.
 	opts := buildExposureOptions(spec)
 	var pgnsCtrl *pgnsController
 	effectiveIdentity := listenerIdentity
+	relayURLs := explicitRelayURLs
 	if spec.PGNS != nil {
 		var err error
 		pgnsCtrl, effectiveIdentity, err = preparePGNSRuntime(ctx, spec, listenerIdentity, explicitRelayURLs)
 		if err != nil {
 			return nil, fmt.Errorf("prepare pgns runtime: %w", err)
 		}
+		relayURLs = pgnsCtrl.relayURLs()
 		opts = append(opts,
 			sdk.WithTLSCertificate(pgnsCtrl.certFile, pgnsCtrl.keyFile),
 			sdk.WithPGNS(pgnsCtrl.fqdn, pgnsCtrl.proof),
 		)
 	}
-	exposure, err := sdk.Expose(ctx, effectiveIdentity, explicitRelayURLs, opts...)
+	exposure, err := sdk.Expose(ctx, effectiveIdentity, relayURLs, opts...)
 	if err != nil {
+		_ = pgnsCtrl.close()
 		return nil, fmt.Errorf("failed to start relays: %w", err)
 	}
 	runtime := &Runtime{Identity: effectiveIdentity, Exposure: exposure, target: spec.Transport.Target, pgns: pgnsCtrl}

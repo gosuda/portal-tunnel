@@ -74,7 +74,7 @@ func TestNamespaceReplacementDNSOwnership(t *testing.T) {
 	owner := newTestLeaseIdentity(t, "blog")
 	register := func(namespace string) (*leaseRecord, *leaseRecord) {
 		t.Helper()
-		record, replaced, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespace}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		record, replaced, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespace}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +119,7 @@ func TestNamespaceDNSParentHasSiblingAndLegacyOwners(t *testing.T) {
 	register := func(name, namespace string) *leaseRecord {
 		t.Helper()
 		owner.Name = name
-		record, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespace}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		record, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespace}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

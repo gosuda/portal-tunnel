@@ -726,4 +726,66 @@ func TestWitnessBatchVerificationAndCheckpoints(t *testing.T) {
 	if _, _, err := VerifyResolveBundle(rbRaw, "other.app."+testZone, testZone, ws, now+60); !errors.Is(err, ErrInvalidLeaf) {
 		t.Fatalf("expected FQDN mismatch error on VerifyResolveBundle, got %v", err)
 	}
+
+	// Non-canonical BatchTransitionProof wire encoding: present==1 with 0-length prevLeaf [1, 0, 0] MUST be rejected.
+	// Locate the single PrevLeaves absent byte (0x00) right after uint32(len(batch0Bytes)) + batch0Bytes.
+	nonCanon := make([]byte, 0, len(wireBatch0)+2)
+	prefixLen := 1 + len(testZone) + 8 + 8 + 32*4 + 4 + len(batch0Bytes)
+	nonCanon = append(nonCanon, wireBatch0[:prefixLen]...)
+	nonCanon = append(nonCanon, 1, 0, 0) // present=1, length=0
+	nonCanon = append(nonCanon, wireBatch0[prefixLen+1:]...)
+	if _, err := UnmarshalBatchTransitionProof(nonCanon); !errors.Is(err, ErrInvalidWire) {
+		t.Fatalf("expected ErrInvalidWire for non-canonical present=1 len=0 prevLeaf, got %v", err)
+	}
+
+	// WitnessSet.Validate MUST reject duplicate Ed25519 public keys even under distinct witness names.
+	dupPubWS := WitnessSet{
+		Threshold: 2,
+		Witnesses: []WitnessKey{
+			{Name: "w1", PublicKey: ws.Witnesses[0].PublicKey},
+			{Name: "w2", PublicKey: append(ed25519.PublicKey(nil), ws.Witnesses[0].PublicKey...)},
+		},
+	}
+	if err := dupPubWS.Validate(); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("expected WitnessSet.Validate to reject duplicate public keys, got %v", err)
+	}
+}
+
+// INV: Self-certifying *.id leaves remain renewable via TxTypeUpdate even after
+// ExpiresAt + ReclaimGrace, whereas *.app aliases past ReclaimGrace reject TxTypeUpdate
+// and require TxTypeReclaim.
+func TestPostReclaimGraceUpdateAllowsIDAndBlocksApp(t *testing.T) {
+	owner := testKeyFromSeed("grace-owner")
+	t0 := uint64(1_700_000_000)
+
+	tag, err := DeriveIDTag(compressedPub33(owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idFQDN := "web." + tag + ".id." + testZone
+	prevID := mustValidLeaf(t, idFQDN, owner, 1, t0, t0+3600, [32]byte{})
+
+	// 72 hours after expiry (> 24h ReclaimGrace), *.id owner can still renew via TxTypeUpdate.
+	lateNow := prevID.ExpiresAt + ReclaimGrace + 48*3600
+	renewIDLeaf := mustValidLeaf(t, idFQDN, owner, 2, lateNow, lateNow+3600, [32]byte{})
+	renewIDTx := LeafTx{TxType: TxTypeUpdate, Leaf: renewIDLeaf}
+	if err := renewIDTx.SignOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateTransition(&prevID, renewIDTx, lateNow, testZone); err != nil {
+		t.Fatalf("expired *.id leaf past ReclaimGrace failed TxTypeUpdate renewal: %v", err)
+	}
+
+	// Conversely, *.app leaf past ReclaimGrace MUST reject PoW-free TxTypeUpdate.
+	appFQDN := "myblog.app." + testZone
+	prevApp := mustValidLeaf(t, appFQDN, owner, 1, t0, t0+3600, [32]byte{})
+	lateAppNow := prevApp.ExpiresAt + ReclaimGrace + 1
+	renewAppLeaf := mustValidLeaf(t, appFQDN, owner, 2, lateAppNow, lateAppNow+3600, [32]byte{})
+	renewAppTx := LeafTx{TxType: TxTypeUpdate, Leaf: renewAppLeaf}
+	if err := renewAppTx.SignOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateTransition(&prevApp, renewAppTx, lateAppNow, testZone); !errors.Is(err, ErrTransitionInvalid) {
+		t.Fatalf("expected *.app TxTypeUpdate past ReclaimGrace to fail with ErrTransitionInvalid, got %v", err)
+	}
 }

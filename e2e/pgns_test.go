@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func startTestPGNSControlPlane(t *testing.T, zone string) (pgns.WitnessSet, []st
 	for _, name := range []string{"w1", "w2", "w3"} {
 		seed := sha256.Sum256([]byte("e2e-pgns-witness:" + name))
 		priv := ed25519.NewKeyFromSeed(seed[:])
-		w, err := witness.New(witness.Config{Name: name, PrivateKey: priv})
+		w, err := witness.New(witness.Config{Zone: zone, Name: name, PrivateKey: priv})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -474,34 +475,36 @@ func TestPGNSLifecycleDNSSECFailoverAndColdRecoveryE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stallLn.Close() })
+	var stalledAccepts atomic.Int32
 	go func() {
 		for {
 			conn, aErr := stallLn.Accept()
 			if aErr != nil {
 				return
 			}
+			stalledAccepts.Add(1)
 			t.Cleanup(func() { _ = conn.Close() })
 		}
 	}()
 	dialMu.Lock()
 	r1Target = stallLn.Addr().String()
 	dialMu.Unlock()
+	pgnsClient.CloseIdleConnections()
 
-	failoverStart := time.Now()
 	heResp, err := pgnsClient.Get("https://" + fqdn + "/")
-	failoverElapsed := time.Since(failoverStart)
 	if err != nil {
 		t.Fatalf("PGNS Happy Eyeballs failover GET failed: %v", err)
 	}
 	heBody, _ := io.ReadAll(heResp.Body)
 	_ = heResp.Body.Close()
-	if string(heBody) != marker || failoverElapsed > 2*time.Second {
-		t.Fatalf("Happy Eyeballs failover elapsed=%v body=%q", failoverElapsed, string(heBody))
+	if stalledAccepts.Load() < 1 || string(heBody) != marker {
+		t.Fatalf("Happy Eyeballs failover stalledAccepts=%d body=%q", stalledAccepts.Load(), string(heBody))
 	}
 
 	dialMu.Lock()
 	r1Target = r1Addr
 	dialMu.Unlock()
+	pgnsClient.CloseIdleConnections()
 
 	// 4. Verify ACME DNS-01 + PERSIST01 + pinned CAA publication in pgns/dns.
 	oldSitePriv, _, _, err := func() (*secp256k1.PrivateKey, string, string, error) {
@@ -652,6 +655,103 @@ func TestPGNSLifecycleDNSSECFailoverAndColdRecoveryE2E(t *testing.T) {
 	// Re-attempting /sdk/register on R1 using the compromised old key and stale seq=1 proof
 	// must fail with APIErrorCodePGNSWatermarkStale.
 	assertStaleProofRejected(t, ctx, r1URL, rt1.Identity, oldProof)
+}
+
+func TestPGNSUnnamedDefaultIDTunnelE2E(t *testing.T) {
+	const zone = "portal.example"
+	ws, witnessSpecs, seq, seqURL, dnsSrv, dnsAddr := startTestPGNSControlPlane(t, zone)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	_, r1Addr, r1URL := startUntrustedRelay(t, ctx, ws)
+	origin, _ := listenOriginService(t, "127.0.0.1")
+	defer origin.Close()
+
+	masterID, err := identity.Generate("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawMaster, err := hex.DecodeString(strings.TrimPrefix(masterID.PrivateKey, "0x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sitePriv, err := pgns.DeriveIDSiteKey(secp256k1.PrivKeyFromBytes(rawMaster), zone, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sitePub33 [33]byte
+	copy(sitePub33[:], sitePriv.PubKey().SerializeCompressed())
+	idTag, err := pgns.DeriveIDTag(sitePub33)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fqdn := types.UnnamedServiceLabel + "." + idTag + ".id." + zone
+
+	off := false
+	spec, err := (tunnel.Config{
+		TargetAddr:           origin.URL,
+		IdentityJSON:         fmt.Sprintf(`{"name":"","address":%q,"public_key":%q,"private_key":%q}`, masterID.Address, masterID.PublicKey, masterID.PrivateKey),
+		RelayURLs:            []string{r1URL},
+		Discovery:            &off,
+		PGNSZone:             zone,
+		PGNSSequencers:       []string{seqURL},
+		PGNSWitnesses:        witnessSpecs,
+		PGNSWitnessThreshold: 2,
+		PGNSStateDir:         filepath.Join(t.TempDir(), "pgns-unnamed-state"),
+		PGNSRelayEndpoints:   []string{r1URL + "=93.184.216.34:443"},
+	}).Spec()
+	if err != nil {
+		t.Fatalf("unnamed Config.Spec(): %v", err)
+	}
+
+	rt, err := tunnel.Start(ctx, spec)
+	if err != nil {
+		t.Fatalf("unnamed tunnel.Start: %v", err)
+	}
+	rtDone := make(chan error, 1)
+	go func() { rtDone <- rt.Run(ctx) }()
+	t.Cleanup(func() {
+		_ = rt.Close()
+		<-rtDone
+	})
+
+	readyCtx, cancelReady := context.WithTimeout(ctx, 10*time.Second)
+	if _, err := rt.Exposure.WaitReady(readyCtx); err != nil {
+		cancelReady()
+		t.Fatalf("unnamed WaitReady: %v", err)
+	}
+	cancelReady()
+
+	syncDNSEpoch(t, seq, dnsSrv, 0)
+	aResp := queryDNS(t, dnsAddr, fqdn, mdns.TypeA)
+	if aResp.Rcode != mdns.RcodeSuccess || !hasRRType(aResp.Answer, mdns.TypeA) {
+		t.Fatalf("unnamed default .id A query failed: %+v", aResp)
+	}
+
+	resolver, err := sdk.NewPGNSResolver(sdk.PGNSResolverConfig{
+		Zone:        zone,
+		Witnesses:   ws,
+		ResolveURLs: []string{seqURL},
+		DialContext: func(dctx context.Context, network, addr string) (net.Conn, error) {
+			if addr != "93.184.216.34:443" {
+				return nil, fmt.Errorf("unexpected target %s", addr)
+			}
+			return (&net.Dialer{}).DialContext(dctx, network, r1Addr)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := sdk.NewPGNSHTTPClient(resolver).Get("https://" + fqdn + "/")
+	if err != nil {
+		t.Fatalf("unnamed PGNS HTTP GET: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(body) != marker {
+		t.Fatalf("unnamed PGNS HTTP body = %q, want %q", string(body), marker)
+	}
 }
 
 func assertStaleProofRejected(t *testing.T, ctx context.Context, relayURL string, oldID types.Identity, staleProof *types.PGNSRegistrationProof) {

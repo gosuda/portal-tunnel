@@ -257,7 +257,7 @@ func (c *Client) newPin(chainPEM []byte) (*pinnedChain, error) {
 	}
 	server, err := t13server.NewServer(t13server.Config{
 		CertPEM:          chainPEM,
-		NextProtos:       []string{"http/1.1"},
+		NextProtos:       []string{"http/1.1", types.ALPNPortalCBV1},
 		KeyID:            types.KeylessRelayKeyID,
 		TranscriptSigner: remoteSigner,
 	})

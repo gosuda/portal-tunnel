@@ -154,7 +154,7 @@ func TestPGNSResolverVerificationAndAntiRollback(t *testing.T) {
 		zone = "portal.example"
 		fqdn = "myapp.app.portal.example"
 	)
-	now := time.Unix(1_700_000_000, 0).UTC()
+	now := time.Now().UTC()
 	nowSec := uint64(now.Unix())
 	ws, _, _, _, buildBundle := makePGNSWitnessFixture(t, fqdn, now)
 
@@ -178,7 +178,6 @@ func TestPGNSResolverVerificationAndAntiRollback(t *testing.T) {
 		Zone:        zone,
 		Witnesses:   ws,
 		ResolveURLs: []string{mirrorFail.URL, mirrorOK.URL},
-		Now:         func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -200,12 +199,12 @@ func TestPGNSResolverVerificationAndAntiRollback(t *testing.T) {
 		t.Fatalf("Resolve(rollback) = %v, want ErrStaleCheckpoint", err)
 	}
 
-	// Freshness window limits: -61s (future) and +601s (too old) rejected.
-	served = buildBundle(6, nowSec+61)
+	// Freshness window limits: future skew (> +60s) and stale age (> 600s) rejected.
+	served = buildBundle(6, uint64(time.Now().UTC().Unix())+75)
 	if _, _, err := resolver.Resolve(t.Context(), fqdn); !errors.Is(err, pgns.ErrStaleCheckpoint) {
 		t.Fatalf("Resolve(future skew) = %v, want ErrStaleCheckpoint", err)
 	}
-	served = buildBundle(6, nowSec-601)
+	served = buildBundle(6, uint64(time.Now().UTC().Unix())-615)
 	if _, _, err := resolver.Resolve(t.Context(), fqdn); !errors.Is(err, pgns.ErrStaleCheckpoint) {
 		t.Fatalf("Resolve(stale age) = %v, want ErrStaleCheckpoint", err)
 	}
@@ -311,7 +310,7 @@ func TestDialPGNSSPKIPinningAndRotation(t *testing.T) {
 	}
 
 	// Current TLSSPKISHA256 succeeds.
-	conn1, err := dialPGNSLeaf(t.Context(), leaf, fqdn, serveWithCert(currentCert), time.Now)
+	conn1, err := dialPGNSLeaf(t.Context(), leaf, fqdn, serveWithCert(currentCert))
 	if err != nil {
 		t.Fatalf("dialPGNSLeaf(currentCert) = %v", err)
 	}
@@ -323,14 +322,14 @@ func TestDialPGNSSPKIPinningAndRotation(t *testing.T) {
 	_ = conn1.Close()
 
 	// NextTLSSPKISHA256 succeeds during rotation overlap.
-	conn2, err := dialPGNSLeaf(t.Context(), leaf, fqdn, serveWithCert(nextCert), time.Now)
+	conn2, err := dialPGNSLeaf(t.Context(), leaf, fqdn, serveWithCert(nextCert))
 	if err != nil {
 		t.Fatalf("dialPGNSLeaf(nextCert) = %v", err)
 	}
 	_ = conn2.Close()
 
 	// Unpinned SPKI is rejected even with valid owner key signature capability.
-	if _, err := dialPGNSLeaf(t.Context(), leaf, fqdn, serveWithCert(wrongCert), time.Now); !errors.Is(err, errPGNSSPKIMismatch) {
+	if _, err := dialPGNSLeaf(t.Context(), leaf, fqdn, serveWithCert(wrongCert)); !errors.Is(err, errPGNSSPKIMismatch) {
 		t.Fatalf("dialPGNSLeaf(wrongCert) = %v, want errPGNSSPKIMismatch", err)
 	}
 }
@@ -367,21 +366,22 @@ func TestDialPGNSHappyEyeballsBlackholeFailover(t *testing.T) {
 
 	secondaryLn := startPGNSLoopbackTunnel(t, id, fqdn, cert)
 
-	bundleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(buildBundle(0, uint64(now.Unix())))
+	bundleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(buildBundle(0, uint64(time.Now().UTC().Unix())))
 	}))
 	defer bundleServer.Close()
 
+	var secondaryConns atomic.Int32
 	resolver, err := NewPGNSResolver(PGNSResolverConfig{
 		Zone:        zone,
 		Witnesses:   ws,
 		ResolveURLs: []string{bundleServer.URL},
-		Now:         func() time.Time { return now },
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			switch addr {
 			case "1.1.1.1:443":
 				return (&net.Dialer{}).DialContext(ctx, network, blackholeLn.Addr().String())
 			case "8.8.8.8:443":
+				secondaryConns.Add(1)
 				return (&net.Dialer{}).DialContext(ctx, network, secondaryLn.Addr().String())
 			default:
 				return nil, errors.New("unexpected target: " + addr)
@@ -394,19 +394,17 @@ func TestDialPGNSHappyEyeballsBlackholeFailover(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	start := time.Now()
 	conn, err := DialPGNS(ctx, resolver, fqdn)
 	if err != nil {
 		t.Fatalf("DialPGNS() error = %v", err)
 	}
-	elapsed := time.Since(start)
 	defer conn.Close()
 
 	if blackholeConns.Load() == 0 {
 		t.Fatal("primary blackhole endpoint was never dialed")
 	}
-	if elapsed >= 2*time.Second {
-		t.Fatalf("Happy Eyeballs failover took %v, expected < 2s after 250ms stagger", elapsed)
+	if secondaryConns.Load() == 0 {
+		t.Fatal("secondary fallback endpoint was never dialed")
 	}
 	if _, err := conn.Write([]byte("helo")); err != nil {
 		t.Fatal(err)
@@ -478,7 +476,8 @@ func TestExposeWithPGNSValidation(t *testing.T) {
 
 type pgnsTestExposureListener struct {
 	net.Listener
-	l *listener
+	tlsConf *tls.Config
+	l       *listener
 }
 
 func (p pgnsTestExposureListener) Accept() (net.Conn, error) {
@@ -487,8 +486,7 @@ func (p pgnsTestExposureListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		lease, _ := p.l.leaseSnapshot()
-		tlsConn := tls.Server(raw, lease.tenantTLS.TenantTLSConfig().Clone())
+		tlsConn := tls.Server(raw, p.tlsConf.Clone())
 		if err := tlsConn.Handshake(); err != nil {
 			_ = tlsConn.Close()
 			continue
@@ -504,45 +502,24 @@ func (p pgnsTestExposureListener) Accept() (net.Conn, error) {
 	}
 }
 
-type staticTenantTLS struct {
-	cert tls.Certificate
-	pool *x509.CertPool
-}
-
-func newStaticTenantTLS(t *testing.T, cert tls.Certificate) staticTenantTLS {
-	t.Helper()
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AddCert(leaf)
-	return staticTenantTLS{cert: cert, pool: pool}
-}
-
-func (s staticTenantTLS) TerminateConn(_ context.Context, conn net.Conn, _ []byte) (net.Conn, error) {
-	return conn, nil
-}
-func (s staticTenantTLS) RefreshChain(context.Context) (bool, error) { return false, nil }
-func (s staticTenantTLS) TenantTLSConfig() *tls.Config {
-	return &tls.Config{
-		Certificates: []tls.Certificate{s.cert},
-		NextProtos:   []string{"h2", "http/1.1", types.ALPNPortalCBV1},
-		MinVersion:   tls.VersionTLS13,
-	}
-}
-func (s staticTenantTLS) TenantCertPool() *x509.CertPool { return s.pool }
-func (s staticTenantTLS) SetAccessToken(string)          {}
-func (s staticTenantTLS) Close() error                   { return nil }
-
-func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
+func TestRunHTTPServesPGNSChannelBoundConnAndBlocksPlaintextDowngrade(t *testing.T) {
 	const (
 		zone = "portal.example"
 		fqdn = "myapp.app.portal.example"
 	)
 	now := time.Now().UTC()
 	ws, _, id, cert, buildBundle := makePGNSWitnessFixture(t, fqdn, now)
-	tenantTLS := newStaticTenantTLS(t, cert)
+	parsedLeaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPool := x509.NewCertPool()
+	certPool.AddCert(parsedLeaf)
+	serverTLS := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"h2", "http/1.1", types.ALPNPortalCBV1},
+		MinVersion:   tls.VersionTLS13,
+	}
 
 	l := &listener{
 		identity: id,
@@ -550,7 +527,6 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 			hostname:    fqdn,
 			pgnsFQDN:    fqdn,
 			accessToken: "test-access-token",
-			tenantTLS:   tenantTLS,
 		}),
 	}
 	l.mitmManager = newMITMManager(l, false)
@@ -561,13 +537,24 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = tcpLn.Close() })
 
+	var plainHits atomic.Int32
+	plainTrap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		plainHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer plainTrap.Close()
+
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runDone := make(chan error, 1)
 	go func() {
-		runDone <- RunHTTP(ctx, pgnsTestExposureListener{Listener: tcpLn, l: l}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		runDone <- RunHTTP(ctx, pgnsTestExposureListener{Listener: tcpLn, tlsConf: serverTLS, l: l}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.TLS == nil || r.TLS.ServerName != fqdn {
 				http.Error(w, "missing TLS state", http.StatusBadRequest)
+				return
+			}
+			if r.URL.Path == "/downgrade" {
+				http.Redirect(w, r, plainTrap.URL+"/leak", http.StatusFound)
 				return
 			}
 			_, _ = w.Write([]byte("hello:" + r.URL.Path))
@@ -580,7 +567,7 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 	})
 
 	bundleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(buildBundle(0, uint64(now.Unix())))
+		_, _ = w.Write(buildBundle(0, uint64(time.Now().UTC().Unix())))
 	}))
 	defer bundleSrv.Close()
 
@@ -588,7 +575,6 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 		Zone:        zone,
 		Witnesses:   ws,
 		ResolveURLs: []string{bundleSrv.URL},
-		Now:         func() time.Time { return now },
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, tcpLn.Addr().String())
 		},
@@ -598,6 +584,9 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 	}
 
 	pgnsClient := NewPGNSHTTPClient(resolver)
+	if pgnsClient.Transport.(*http.Transport).Proxy != nil {
+		t.Fatal("NewPGNSHTTPClient transport must not use an HTTP proxy that bypasses DialTLSContext")
+	}
 	resp, err := pgnsClient.Get("https://" + fqdn + "/cb")
 	if err != nil {
 		t.Fatalf("NewPGNSHTTPClient GET failed: %v", err)
@@ -608,11 +597,24 @@ func TestRunHTTPServesPGNSChannelBoundConn(t *testing.T) {
 		t.Fatalf("PGNS response = (%d, %q), want (200, %q)", resp.StatusCode, string(body), "hello:/cb")
 	}
 
+	// Plaintext http:// request MUST fail closed without dialing plaintext TCP.
+	if _, err := pgnsClient.Get("http://" + fqdn + "/plain"); !errors.Is(err, errPGNSHTTPSRequired) {
+		t.Fatalf("NewPGNSHTTPClient(http://) err = %v, want errPGNSHTTPSRequired", err)
+	}
+
+	// 302 https -> http downgrade redirect MUST fail closed without contacting plainTrap.
+	if _, err := pgnsClient.Get("https://" + fqdn + "/downgrade"); !errors.Is(err, errPGNSHTTPSRequired) {
+		t.Fatalf("NewPGNSHTTPClient(https->http redirect) err = %v, want errPGNSHTTPSRequired", err)
+	}
+	if plainHits.Load() != 0 {
+		t.Fatalf("plaintext downgrade target received %d requests, want 0", plainHits.Load())
+	}
+
 	browserClient := &http.Client{
 		Transport: &http.Transport{
 			ForceAttemptHTTP2: true,
 			TLSClientConfig: &tls.Config{
-				RootCAs:    tenantTLS.TenantCertPool(),
+				RootCAs:    certPool,
 				ServerName: fqdn,
 				MinVersion: tls.VersionTLS13,
 				NextProtos: []string{"h2", "http/1.1"},

@@ -2,7 +2,6 @@ package pgns
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -431,7 +430,7 @@ func LeafTxRecoverySigningPayload(canonicalLeaf []byte) []byte {
 	return out
 }
 
-// SignLeafTxOwner signs tx with ownerKey in strict BIP-62 low-S form and sets OwnerSig.
+// SignOwner signs tx with ownerKey in strict BIP-62 low-S form and sets OwnerSig.
 func (tx *LeafTx) SignOwner(ownerKey *secp256k1.PrivateKey) error {
 	if ownerKey == nil {
 		return errOwnerKeyRequired
@@ -514,15 +513,6 @@ func UnmarshalCanonicalBatch(data []byte) ([]LeafTx, error) {
 
 func isValidTxType(txType uint8) bool {
 	return txType >= TxTypeCreate && txType <= TxTypeReclaim
-}
-
-// OccupiedLeafDigest computes SHA256(CanonicalLeafBytes) for helper inspection.
-func (r PortalLeafRecord) CanonicalSHA256() ([32]byte, error) {
-	raw, err := r.MarshalCanonical()
-	if err != nil {
-		return [32]byte{}, err
-	}
-	return sha256.Sum256(raw), nil
 }
 
 func appendUint8String(dst []byte, s string) []byte {

@@ -109,6 +109,9 @@ func UnmarshalBatchTransitionProof(data []byte) (BatchTransitionProof, error) {
 			if leafErr != nil {
 				return BatchTransitionProof{}, leafErr
 			}
+			if len(prev) == 0 {
+				return BatchTransitionProof{}, fmt.Errorf("%w: non-canonical empty prev leaf with present=1", ErrInvalidWire)
+			}
 			b.PrevLeaves[i] = prev
 			off = nextOff2
 		default:
@@ -191,11 +194,22 @@ func UnmarshalResolveBundle(data []byte) (ResolveBundle, error) {
 // VerifyResolveBundle decodes and cryptographically verifies a CDN-served ResolveBundle
 // for expectedFQDN inside zone against ws at time now.
 func VerifyResolveBundle(raw []byte, expectedFQDN, zone string, ws WitnessSet, now uint64) (PortalLeafRecord, Checkpoint, error) {
+	return verifyResolveBundle(raw, expectedFQDN, zone, ws, now, false)
+}
+
+// VerifyResolveBundleAllowExpired verifies witness cosignatures, checkpoint freshness,
+// and SMT inclusion of expectedFQDN even when the committed leaf has already passed
+// ExpiresAt, allowing owners or reclaimers to inspect committed sequence state.
+func VerifyResolveBundleAllowExpired(raw []byte, expectedFQDN, zone string, ws WitnessSet, now uint64) (PortalLeafRecord, Checkpoint, error) {
+	return verifyResolveBundle(raw, expectedFQDN, zone, ws, now, true)
+}
+
+func verifyResolveBundle(raw []byte, expectedFQDN, zone string, ws WitnessSet, now uint64, allowExpired bool) (PortalLeafRecord, Checkpoint, error) {
 	bundle, err := UnmarshalResolveBundle(raw)
 	if err != nil {
 		return PortalLeafRecord{}, Checkpoint{}, err
 	}
-	leaf, cp, err := VerifyRegistrationProof(zone, ws, bundle.Leaf, bundle.InclusionProof, bundle.SignedCheckpoint, now)
+	leaf, cp, err := verifyRegistrationProof(zone, ws, bundle.Leaf, bundle.InclusionProof, bundle.SignedCheckpoint, now, allowExpired)
 	if err != nil {
 		return PortalLeafRecord{}, Checkpoint{}, err
 	}

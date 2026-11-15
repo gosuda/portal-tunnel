@@ -148,7 +148,7 @@ func registerPGNSFlags(fs *flag.FlagSet, cfg *tunnel.Config, env *cli.Env) {
 	fs.StringVar(&cfg.PGNSRecoveryPubKey, "pgns-recovery-pubkey", "", "Compressed 33-byte hex secp256k1 cold recovery key hash-pinned on <alias>.app.<zone> leaves")
 	fs.StringVar(&cfg.PGNSACMEDirectory, "pgns-acme-directory", "", "ACME directory https:// URL for tunnel-local DNS-01 certificate issuance (for example Google Trust Services or Let's Encrypt)")
 	fs.StringVar(&cfg.PGNSACMEEmail, "pgns-acme-email", "", "Contact email for tunnel-local ACME account registration")
-	fs.StringVar(&cfg.PGNSACMECAIssuer, "pgns-acme-caa-issuer", "", "CAA issuer domain pin published alongside active ACME account URI (defaults to ACME directory host)")
+	fs.StringVar(&cfg.PGNSACMECAIssuer, "pgns-acme-caa-issuer", "", "CAA issuer domain pin published alongside active ACME account URI (auto-detected for Let's Encrypt, Google Trust Services, ZeroSSL, and Buypass; required for custom ACME directories)")
 	env.String(fs, &cfg.PGNSACMEEABKID, "pgns-acme-eab-kid", "", "ACME External Account Binding key ID (pass via PGNS_ACME_EAB_KID)", "PGNS_ACME_EAB_KID")
 	env.String(fs, &cfg.PGNSACMEEABHMAC, "pgns-acme-eab-hmac", "", "ACME External Account Binding base64url HMAC key (pass via PGNS_ACME_EAB_HMAC)", "PGNS_ACME_EAB_HMAC")
 	fs.BoolVar(&cfg.PGNSPersist01, "pgns-persist01", false, "Publish _validation-persist.<fqdn> TXT for ACME PERSIST01 validation (requires CA issuer pinning)")

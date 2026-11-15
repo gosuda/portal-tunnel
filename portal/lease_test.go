@@ -43,7 +43,7 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 	registry.setIdentityAccess(identity.ServiceKey(), types.LeasePending, 1)
 	record, _, resp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: identity,
-	}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestLeaseRegistryPolicyViewsUsePushedAccess(t *testing.T) {
 func TestRefusalNamesTheAccessDecision(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	leaseIdentity := newTestLeaseIdentity(t, "refusal")
-	record, _, lease, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil)
+	record, _, lease, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestUnapprovedLeaseLimitCountsPendingChallenges(t *testing.T) {
 func TestAccessRevisionRejectsInFlightAllow(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	leaseIdentity := newTestLeaseIdentity(t, "revision")
-	_, _, lease, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, lease, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestLeaseRegistryCleanupExpiredPreservesIdentityBPS(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	record, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "expired"),
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -255,7 +255,7 @@ func seedIdleReverseStreamLease(t *testing.T) (*leaseRegistry, *leaseRecord, typ
 	t.Helper()
 	registry := newTestRegistry(t, false, false)
 	leaseIdentity := newTestLeaseIdentity(t, "streams")
-	record, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil)
+	record, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.20"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func registerUnapprovedSlotLease(t *testing.T, registry *leaseRegistry, leaseIde
 	if asked != from {
 		t.Fatalf("%s: challenge source = %v; want %v", leaseIdentity.Name, asked, from)
 	}
-	record, _, registered, err := registry.Register(challenge.Request, asked, "", types.RelayDescriptor{}, nil, nil)
+	record, _, registered, err := registry.Register(challenge.Request, asked, "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +530,7 @@ func checkPendingChallengeExpired(t *testing.T, registry *leaseRegistry, request
 
 func registerRestartLease(t *testing.T, before *leaseRegistry) types.RegisterResponse {
 	t.Helper()
-	_, _, resp, err := before.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "restart")}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, resp, err := before.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "restart")}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -605,12 +605,12 @@ func TestLeaseHostnameConflictRollsBackRawPorts(t *testing.T) {
 		UDPEnabled: true,
 		TCPEnabled: true,
 	}
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	checkHostnameConflictFreesPorts(t, registry, request)
 	request.Identity = newTestLeaseIdentity(t, "accepted")
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 		t.Fatalf("rejected identities exhausted raw ports: %v", err)
 	}
 }
@@ -619,7 +619,7 @@ func checkHostnameConflictFreesPorts(t *testing.T, registry *leaseRegistry, requ
 	t.Helper()
 	for i := range 3 {
 		request.Identity = newTestLeaseIdentity(t, "conflict")
-		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errHostnameConflict) {
+		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); !errors.Is(err, errHostnameConflict) {
 			t.Fatalf("rejected registration %d error = %v, want hostname conflict", i, err)
 		}
 		if len(registry.udpPorts.available) != 1 || len(registry.tcpPorts.available) != 1 ||
@@ -671,7 +671,7 @@ func TestLeaseCapacityRejectionRollsBackRawPorts(t *testing.T) {
 				UDPEnabled: true,
 				TCPEnabled: true,
 			}
-			if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+			if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			if tc.limitUDP {
@@ -682,7 +682,7 @@ func TestLeaseCapacityRejectionRollsBackRawPorts(t *testing.T) {
 			checkCapacityRejectionFreesPorts(t, registry, request, tc.wantError)
 			registry.setTransportPolicy(true, 2, true, 2)
 			request.Identity = newTestLeaseIdentity(t, "accepted")
-			if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+			if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 				t.Fatalf("capacity rejection exhausted raw ports: %v", err)
 			}
 		})
@@ -693,7 +693,7 @@ func checkCapacityRejectionFreesPorts(t *testing.T, registry *leaseRegistry, req
 	t.Helper()
 	for i := range 3 {
 		request.Identity = newTestLeaseIdentity(t, fmt.Sprintf("rejected-%d", i))
-		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, wantError) {
+		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); !errors.Is(err, wantError) {
 			t.Fatalf("rejected registration %d error = %v, want %v", i, err, wantError)
 		}
 		if len(registry.udpPorts.available) != 1 || len(registry.tcpPorts.available) != 1 ||
@@ -722,7 +722,7 @@ func seedLeaseTCPPortsExhaustionPair(t *testing.T, registry *leaseRegistry) {
 			Identity:   newTestLeaseIdentity(t, fmt.Sprintf("tcp-%d", i)),
 			TCPEnabled: true,
 		}
-		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -730,7 +730,7 @@ func seedLeaseTCPPortsExhaustionPair(t *testing.T, registry *leaseRegistry) {
 
 func rejectExhaustedTCPFreesUDP(t *testing.T, registry *leaseRegistry, both types.RegisterChallengeRequest) {
 	t.Helper()
-	if _, _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errTCPPortExhausted) {
+	if _, _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); !errors.Is(err, errTCPPortExhausted) {
 		t.Fatalf("Register() error = %v, want TCP port exhaustion", err)
 	}
 	if len(registry.udpPorts.available) != 2 || len(registry.udpPorts.reserved) != 0 {
@@ -742,7 +742,7 @@ func acceptUDPOnlyAfterExhaustion(t *testing.T, registry *leaseRegistry, both ty
 	t.Helper()
 	both.TCPEnabled = false
 	both.Identity = newTestLeaseIdentity(t, "udp")
-	if _, _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(both, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 		t.Fatalf("failed TCP allocation exhausted UDP ports: %v", err)
 	}
 }
@@ -790,7 +790,7 @@ func TestLeasePortsStayWithServiceIdentityAcrossReconnect(t *testing.T) {
 
 func registerFirstStickyLease(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest) (*leaseRecord, types.RegisterResponse) {
 	t.Helper()
-	firstRecord, _, first, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	firstRecord, _, first, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -803,7 +803,7 @@ func registerFirstStickyLease(t *testing.T, registry *leaseRegistry, request typ
 func rejectStickyPortsOtherOwner(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest, first types.RegisterResponse) {
 	t.Helper()
 	request.Identity = newTestLeaseIdentity(t, "shared")
-	_, _, other, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, other, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -818,7 +818,7 @@ func rejectStickyPortsOtherOwner(t *testing.T, registry *leaseRegistry, request 
 
 func reconnectStickyLeaseKeepsPorts(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest, first types.RegisterResponse) {
 	t.Helper()
-	_, _, reconnected, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, reconnected, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -831,11 +831,11 @@ func verifyStaleCleanupKeepsPorts(t *testing.T, registry *leaseRegistry, firstRe
 	t.Helper()
 	registry.closeRecord(firstRecord)
 	request.Identity = newTestLeaseIdentity(t, "third")
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errUDPPortExhausted) {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); !errors.Is(err, errUDPPortExhausted) {
 		t.Fatalf("stale cleanup released a live UDP port: %v", err)
 	}
 	request.UDPEnabled = false
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errTCPPortExhausted) {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); !errors.Is(err, errTCPPortExhausted) {
 		t.Fatalf("stale cleanup released a live TCP port: %v", err)
 	}
 }
@@ -881,7 +881,7 @@ func listenOccupiedUDPPort(t *testing.T, port int) io.Closer {
 
 func rejectOccupiedPortWithoutReserve(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest) {
 	t.Helper()
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err == nil {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); err == nil {
 		t.Fatal("registration succeeded with an occupied port")
 	}
 	if len(registry.udpPorts.reserved) != 0 || len(registry.tcpPorts.reserved) != 0 {
@@ -892,7 +892,7 @@ func rejectOccupiedPortWithoutReserve(t *testing.T, registry *leaseRegistry, req
 func registerOtherIdentitySucceeds(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest) {
 	t.Helper()
 	request.Identity = newTestLeaseIdentity(t, "different")
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 		t.Fatalf("occupied port prevented another identity using free ports: %v", err)
 	}
 }
@@ -900,7 +900,7 @@ func registerOtherIdentitySucceeds(t *testing.T, registry *leaseRegistry, reques
 func reuseRecoveredPortAfterClose(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest, port int) {
 	t.Helper()
 	request.Identity = newTestLeaseIdentity(t, "recovered")
-	_, _, response, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, response, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("registration could not reuse ports after the socket was closed: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestRegisterOverlayPreferenceFallsBackToDirect(t *testing.T) {
 	record, _, registered, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "overlay-fallback"),
 		Overlay:  true,
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -947,7 +947,7 @@ func registerLeaseRegistryLifecycleDemo(t *testing.T, registry *leaseRegistry) t
 	t.Helper()
 	_, _, resp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "demo"),
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -1031,7 +1031,7 @@ func checkLeaseRegistryTTLBoundsCase(t *testing.T, seconds int) {
 	request := types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "ttl"), TTL: seconds}
 	_, challengeErr := registry.issueRegisterChallenge(request, "example.com", "https://example.com"+types.PathSDKRegister, netip.Addr{})
 	started := time.Now().UTC().Truncate(time.Second)
-	_, _, response, registerErr := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	_, _, response, registerErr := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil, nil)
 	if seconds > 600 {
 		rejectOversizeTTL(t, registry, challengeErr, registerErr)
 		return
@@ -1090,7 +1090,7 @@ func seedInvalidRenewFixture(t *testing.T, registry *leaseRegistry) leaseRegistr
 		Identity: newTestLeaseIdentity(t, "invalid-renew"),
 		TTL:      60,
 		Metadata: types.LeaseMetadata{Description: "original", Tags: []string{"original"}},
-	}, netip.MustParseAddr("203.0.113.10"), "198.51.100.10", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "198.51.100.10", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1131,7 +1131,7 @@ func registerUnnamedLease(t *testing.T, registry *leaseRegistry) (types.Identity
 	leasedIdentity := newTestLeaseIdentity(t, "")
 	_, _, resp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: leasedIdentity,
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -1176,13 +1176,13 @@ func replaceUnnamedLease(t *testing.T, registry *leaseRegistry, unnamedIdentity 
 	t.Helper()
 	_, _, firstUnnamedResp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: unnamedIdentity,
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("first unnamed Register() error = %v", err)
 	}
 	secondUnnamedRecord, _, secondUnnamedResp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: unnamedIdentity,
-	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("second unnamed Register() error = %v", err)
 	}
@@ -1201,7 +1201,7 @@ func checkNamedCoexistence(t *testing.T, registry *leaseRegistry, unnamedIdentit
 	namedIdentity.Name = "myapp"
 	_, _, namedResp, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: namedIdentity,
-	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("named Register() error = %v", err)
 	}
@@ -1233,11 +1233,11 @@ func TestLeaseTokensAreBoundToLeaseInstance(t *testing.T) {
 
 func registerInstancePair(t *testing.T, registry *leaseRegistry, leaseIdentity types.Identity) (types.RegisterResponse, types.RegisterResponse, *leaseRecord) {
 	t.Helper()
-	_, _, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, firstResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("first Register() error = %v", err)
 	}
-	second, _, secondResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	second, _, secondResponse, err := registry.Register(types.RegisterChallengeRequest{Identity: leaseIdentity}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("second Register() error = %v", err)
 	}
@@ -1294,7 +1294,7 @@ func TestLeaseRegistryLegacyClientRejectsHostnameConflict(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	_, _, first, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "conflict"),
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(free legacy hostname) error = %v", err)
 	}
@@ -1303,7 +1303,7 @@ func TestLeaseRegistryLegacyClientRejectsHostnameConflict(t *testing.T) {
 	}
 	_, _, _, err = registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "conflict"),
-	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if !errors.Is(err, errHostnameConflict) {
 		t.Fatalf("Register(conflicting legacy hostname) error = %v, want hostname conflict", err)
 	}
@@ -1324,14 +1324,14 @@ func registerCanonicalFallbackPair(t *testing.T, registry *leaseRegistry, firstI
 	_, _, first, err := registry.Register(types.RegisterChallengeRequest{
 		AllowCanonicalFallback: true,
 		Identity:               firstIdentity,
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(conflict first) error = %v", err)
 	}
 	_, _, second, err := registry.Register(types.RegisterChallengeRequest{
 		AllowCanonicalFallback: true,
 		Identity:               secondIdentity,
-	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(conflict second) error = %v", err)
 	}
@@ -1358,7 +1358,7 @@ func reconnectSecondFallbackLease(t *testing.T, registry *leaseRegistry, secondI
 	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstAccessToken}); err != nil {
 		t.Fatalf("Unregister(first) error = %v", err)
 	}
-	_, _, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: secondIdentity}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: secondIdentity}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(second reconnect) error = %v", err)
 	}
@@ -1369,7 +1369,7 @@ func reconnectSecondFallbackLease(t *testing.T, registry *leaseRegistry, secondI
 
 func reconnectFirstFallbackLease(t *testing.T, registry *leaseRegistry, firstIdentity types.Identity, first types.RegisterResponse) {
 	t.Helper()
-	_, _, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: firstIdentity}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: firstIdentity}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(first reconnect) error = %v", err)
 	}
@@ -1416,7 +1416,7 @@ func TestLeaseBridgeRejectsExpiredAdmissionAfterWait(t *testing.T) {
 
 func TestLeaseConcurrentRenewAndBridgeAdmission(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
-	record, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "renew-bridge")}, netip.MustParseAddr("127.0.0.1"), "", types.RelayDescriptor{}, nil, nil)
+	record, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "renew-bridge")}, netip.MustParseAddr("127.0.0.1"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1480,7 +1480,7 @@ func TestRenewJudgesAgainstTheChainTheLeaseRegisteredUnder(t *testing.T) {
 	otherIssuer := second.issue(t, "example.com")
 
 	registry := newTestRegistry(t, false, false)
-	_, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, pinned)
+	_, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, pinned, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -1580,7 +1580,7 @@ func TestLookupRejectsHostnameNoLeaseHolds(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "lookup-guard"),
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	if _, ok := registry.Lookup("no-lease-holds-this-hostname-xyz"); ok {
@@ -1595,12 +1595,12 @@ func TestPublicLeasesOmitsHiddenLease(t *testing.T) {
 	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "hidden-lease"),
 		Metadata: types.LeaseMetadata{Hide: true},
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: newTestLeaseIdentity(t, "shown-lease"),
-	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil); err != nil {
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	leases := registry.PublicLeases(time.Now())
@@ -1708,7 +1708,7 @@ func admitBridgesConcurrently(t *testing.T, registry *leaseRegistry, record *lea
 
 func registerLeftBehindLease(t *testing.T, registry *leaseRegistry, tenant types.Identity, served *acme.TLSMaterial) (types.RegisterResponse, error) {
 	t.Helper()
-	record, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: tenant}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, served)
+	record, _, registered, err := registry.Register(types.RegisterChallengeRequest{Identity: tenant}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, served, nil)
 	if err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -1774,7 +1774,7 @@ func checkInitialFirstSeen(t *testing.T, registry *leaseRegistry, id types.Ident
 	record1, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:  id,
 		StartedAt: clientStartedAt,
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -1791,7 +1791,7 @@ func checkReconnectFirstSeen(t *testing.T, registry *leaseRegistry, id types.Ide
 	t.Helper()
 	record2, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: id,
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() reconnect error = %v", err)
 	}
@@ -1811,7 +1811,7 @@ func checkLiveReplacementFirstSeen(t *testing.T, registry *leaseRegistry, record
 		record3, _, _, err := registry.Register(types.RegisterChallengeRequest{
 			Identity:  id,
 			StartedAt: startedAt,
-		}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("Register() live replacement error = %v", err)
 		}
@@ -1837,7 +1837,7 @@ func checkExpiredReplacementFirstSeen(t *testing.T, registry *leaseRegistry, id 
 	beforeExpired := time.Now().UTC().Truncate(time.Second)
 	expiredRecord, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: id,
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() after expiry error = %v", err)
 	}
@@ -1854,7 +1854,7 @@ func checkFutureStartedAtClamped(t *testing.T, registry *leaseRegistry) {
 	record4, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:  futureID,
 		StartedAt: futureStartedAt,
-	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() future error = %v", err)
 	}
@@ -1870,7 +1870,7 @@ func checkAncientStartedAtFloored(t *testing.T, registry *leaseRegistry) {
 	record5, _, _, err := registry.Register(types.RegisterChallengeRequest{
 		Identity:  oldID,
 		StartedAt: time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC),
-	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.12"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() ancient error = %v", err)
 	}
@@ -1977,7 +1977,7 @@ func newTestLeaseIdentity(t *testing.T, name string) types.Identity {
 func TestTenantCertificateOwnershipTracksLiveLease(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	owner := newTestLeaseIdentity(t, "tenant")
-	record, _, _, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+	record, _, _, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1994,7 +1994,7 @@ func TestTenantCertificateOwnershipTracksLiveLease(t *testing.T) {
 	if _, err := registry.tenantCertificateNames(record); err == nil {
 		t.Fatal("expired lease can issue")
 	}
-	replacement, _, _, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+	replacement, _, _, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2033,7 +2033,7 @@ func TestTenantCertificateEndpointRequiresOptInAndAuthentication(t *testing.T) {
 	if got := request("", "{}").Code; got != http.StatusForbidden {
 		t.Fatalf("unauthenticated status=%d", got)
 	}
-	_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: newTestLeaseIdentity(t, "tenant")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2050,7 +2050,7 @@ func TestTenantCertificateRejectsReassignableAlias(t *testing.T) {
 	}
 	server := &Server{registry: registry, acmeManager: manager, cfg: utils.NewSnapshot(ServerConfig{TenantCertificates: true})}
 	server.identity.Name = "localhost"
-	_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: newTestLeaseIdentity(t, "alias")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: newTestLeaseIdentity(t, "alias")}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2085,7 +2085,7 @@ func TestPublicTenantCertificateRequiresExplicitApproval(t *testing.T) {
 	server.identity.Name = "example.com"
 	for i := range 3 {
 		owner := newTestLeaseIdentity(t, fmt.Sprintf("tenant%d", i))
-		_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil)
+		_, _, registration, err := registry.Register(types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1, Identity: owner}, netip.MustParseAddr("203.0.113.1"), "", types.RelayDescriptor{}, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2114,7 +2114,7 @@ func TestNegotiatedNamespaceSeparatesServicesAndLegacyCache(t *testing.T) {
 	}
 	register := func(id types.Identity, namespaceID string) (*leaseRecord, types.RegisterResponse) {
 		t.Helper()
-		record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: id, Namespace: namespaceID, Cache: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: id, Namespace: namespaceID, Cache: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2167,15 +2167,15 @@ func TestNamespaceNegotiationRejectsUnknownAndReservedNames(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	owner := newTestLeaseIdentity(t, "default")
 	for _, namespaceID := range []string{types.LocalTLSNamespaceV1, "unknown-future-namespace"} {
-		if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespaceID}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err == nil {
+		if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespaceID}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil); err == nil {
 			t.Fatalf("accepted reserved/unknown namespace %q", namespaceID)
 		}
 	}
-	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err != nil {
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil); err != nil {
 		t.Fatal("broke legacy default service", err)
 	}
 	owner.Name = ""
-	record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: types.LocalTLSNamespaceV1}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: types.LocalTLSNamespaceV1}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2192,7 +2192,7 @@ func TestCanonicalReadinessFollowsRenewedCertificateValidity(t *testing.T) {
 	owner := newTestLeaseIdentity(t, "")
 	_, _, registered, err := registry.Register(types.RegisterChallengeRequest{
 		Identity: owner, Namespace: types.LocalTLSNamespaceV1,
-	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

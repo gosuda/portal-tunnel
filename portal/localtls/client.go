@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -93,11 +94,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		accessToken:           strings.TrimSpace(config.AccessToken),
 		installedCertificates: config.InstalledCertificates,
 		hostname:              hostname,
-		nextProtos:            append([]string(nil), config.NextProtos...),
-	}
-
-	if len(client.nextProtos) == 0 {
-		client.nextProtos = []string{"http/1.1", types.ALPNPortalCBV1}
+		nextProtos:            withPortalCBProto(config.NextProtos),
 	}
 	if (config.CertFile == "") != (config.KeyFile == "") {
 		return nil, errTenantCertificatePairRequired
@@ -392,20 +389,21 @@ func (c *Client) publishInstalled(pin *pinnedChain) {
 
 // SetNextProtos selects ALPN for future connections once the HTTP consumer is ready.
 func (c *Client) SetNextProtos(protos []string) {
-	next := append([]string(nil), protos...)
-	hasCB := false
-	for _, proto := range next {
-		if proto == types.ALPNPortalCBV1 {
-			hasCB = true
-			break
-		}
-	}
-	if !hasCB {
-		next = append(next, types.ALPNPortalCBV1)
-	}
+	next := withPortalCBProto(protos)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nextProtos = next
+}
+
+func withPortalCBProto(protos []string) []string {
+	if len(protos) == 0 {
+		return []string{"http/1.1", types.ALPNPortalCBV1}
+	}
+	next := slices.Clone(protos)
+	if !slices.Contains(next, types.ALPNPortalCBV1) {
+		next = append(next, types.ALPNPortalCBV1)
+	}
+	return next
 }
 
 // Ready reports whether a new canonical connection can use a current local certificate.

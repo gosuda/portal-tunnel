@@ -282,16 +282,6 @@ func SignSHA256Secp256k1LowSRaw64(payload []byte, privateKey *secp256k1.PrivateK
 	return out, nil
 }
 
-// SignSHA256Secp256k1LowSRaw64FromHex decodes a hex private key and returns a
-// canonical BIP-62 low-S 64-byte r || s secp256k1 signature.
-func SignSHA256Secp256k1LowSRaw64FromHex(payload []byte, privateKeyHex string) ([]byte, error) {
-	privateKey, _, err := parseSecp256k1PrivateKeyHex(privateKeyHex, true)
-	if err != nil {
-		return nil, err
-	}
-	return SignSHA256Secp256k1LowSRaw64(payload, privateKey)
-}
-
 // ParseSecp256k1CompressedPubKey33 parses a 33-byte compressed secp256k1 point.
 func ParseSecp256k1CompressedPubKey33(raw [33]byte) (*secp256k1.PublicKey, error) {
 	if raw[0] != 0x02 && raw[0] != 0x03 {

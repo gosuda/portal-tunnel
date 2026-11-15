@@ -257,9 +257,8 @@ type Config struct {
 }
 
 type signedRRSet struct {
-	records   []dns.RR
-	rrsig     *dns.RRSIG
-	expiresAt uint64 // max source leaf expiry; 0 if permanent apex/glue
+	records []dns.RR
+	rrsig   *dns.RRSIG
 }
 
 type nsec3Entry struct {
@@ -287,14 +286,13 @@ type Server struct {
 	nameservers    []NameserverGlue
 	refreshBuckets uint64
 
-	applyMu   sync.Mutex
-	hasEpoch  bool
-	lastEpoch uint64
-	lastTime  uint64
-	leaves    map[string]pgns.PortalLeafRecord
-	rrCache   map[string]map[uint16]signedRRSet
-	nsec3Map  map[string]nsec3Entry
-	snapshot  atomic.Pointer[zoneSnapshot]
+	applyMu  sync.Mutex
+	hasEpoch bool
+	state    pgns.WitnessState
+	leaves   map[string]pgns.PortalLeafRecord
+	rrCache  map[string]map[uint16]signedRRSet
+	nsec3Map map[string]nsec3Entry
+	snapshot atomic.Pointer[zoneSnapshot]
 }
 
 // New initializes a deterministic PGNS DNSSEC signer and query server.
@@ -303,23 +301,42 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.WitnessSet.Threshold <= 0 || cfg.WitnessSet.Threshold > len(cfg.WitnessSet.Witnesses) {
-		return nil, pgns.ErrInvalidCheckpoint
+	if err := cfg.WitnessSet.Validate(); err != nil {
+		return nil, err
 	}
 	if cfg.Keys.KSK == nil || cfg.Keys.ZSK == nil || cfg.Keys.ZSKSigner == nil || cfg.Keys.DNSKEYRRSIG == nil {
 		return nil, errDNSSECKeyInvalid
 	}
-	nsList := cfg.Nameservers
-	if len(nsList) == 0 {
-		nsList = []NameserverGlue{{Host: "ns1." + normZone, IPv4: net.IPv4(192, 0, 2, 53)}}
+	zoneFQDN := dns.Fqdn(normZone)
+	rawNS := cfg.Nameservers
+	if len(rawNS) == 0 {
+		rawNS = []NameserverGlue{{Host: "ns1." + normZone, IPv4: net.IPv4(192, 0, 2, 53)}}
+	}
+	nsList := make([]NameserverGlue, len(rawNS))
+	for i, ns := range rawNS {
+		canonHost := dns.CanonicalName(strings.TrimSpace(ns.Host))
+		if canonHost == "." {
+			return nil, fmt.Errorf("%w: empty nameserver host", pgns.ErrInvalidFQDN)
+		}
+		if _, ok := dns.IsDomainName(canonHost); !ok {
+			return nil, fmt.Errorf("%w: invalid nameserver host %q", pgns.ErrInvalidFQDN, ns.Host)
+		}
+		if dns.IsSubDomain("id."+zoneFQDN, canonHost) || dns.IsSubDomain("app."+zoneFQDN, canonHost) {
+			return nil, fmt.Errorf("%w: nameserver glue %q overlaps tenant namespace", pgns.ErrInvalidFQDN, ns.Host)
+		}
+		nsList[i] = NameserverGlue{
+			Host: canonHost,
+			IPv4: ns.IPv4,
+			IPv6: ns.IPv6,
+		}
 	}
 	buckets := cmp.Or(cfg.RefreshBuckets, DefaultRefreshBuckets)
 	return &Server{
 		zone:           normZone,
-		zoneFQDN:       dns.Fqdn(normZone),
+		zoneFQDN:       zoneFQDN,
 		witnessSet:     cfg.WitnessSet,
 		keys:           cfg.Keys,
-		nameservers:    slices.Clone(nsList),
+		nameservers:    nsList,
 		refreshBuckets: buckets,
 		leaves:         make(map[string]pgns.PortalLeafRecord),
 		rrCache:        make(map[string]map[uint16]signedRRSet),
@@ -327,42 +344,37 @@ func New(cfg Config) (*Server, error) {
 	}, nil
 }
 
-// ApplyEpoch verifies rawCheckpoint (witness quorum) and rawBatch against SMTRoot_e,
-// deterministically updates RRsets and NSEC3 intervals anchored strictly to T_e,
-// and swaps the active DNS snapshot atomically.
+// ApplyEpoch verifies rawCheckpoint (witness quorum) and rawBatch against SMTRoot_e
+// and LogRoot_e, deterministically updates RRsets and NSEC3 intervals anchored strictly
+// to T_e, and swaps the active DNS snapshot atomically.
 func (s *Server) ApplyEpoch(rawCheckpoint, rawBatch []byte) error {
-	cp, _, err := pgns.ParseAndVerifySignedCheckpoint(rawCheckpoint, s.zone, s.witnessSet)
-	if err != nil {
-		return err
-	}
-	batch, err := pgns.UnmarshalBatchTransitionProof(rawBatch)
-	if err != nil {
-		return err
-	}
-	if batch.Zone != s.zone || batch.Epoch != cp.Epoch || batch.Timestamp != cp.Timestamp || batch.NewSMTRoot != cp.SMTRoot {
-		return fmt.Errorf("%w: checkpoint/batch header mismatch", pgns.ErrInvalidBatch)
-	}
-
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 
-	if !s.hasEpoch && cp.Epoch != 0 {
-		return fmt.Errorf("%w: expected genesis epoch 0, got %d", pgns.ErrInvalidBatch, cp.Epoch)
+	var prevPtr *pgns.WitnessState
+	if s.hasEpoch {
+		prev := s.state
+		prevPtr = &prev
 	}
-	if s.hasEpoch && cp.Epoch != s.lastEpoch+1 {
-		return fmt.Errorf("%w: expected epoch %d, got %d", pgns.ErrInvalidBatch, s.lastEpoch+1, cp.Epoch)
-	}
-
-	dirtyLeaves := make(map[string]struct{}, len(batch.TxEntries))
-	for _, tx := range batch.TxEntries {
-		s.leaves[tx.Leaf.FQDN] = tx.Leaf
-		dirtyLeaves[tx.Leaf.FQDN] = struct{}{}
+	cp, batch, nextState, err := pgns.VerifyEpochBatch(prevPtr, s.zone, s.witnessSet, rawCheckpoint, rawBatch)
+	if err != nil {
+		return err
 	}
 	te := cp.Timestamp
+	if te < uint64(s.keys.DNSKEYRRSIG.Inception) || uint64(s.keys.DNSKEYRRSIG.Expiration) <= te {
+		return fmt.Errorf("%w: apex DNSKEY RRSIG not valid at %d [%d, %d)", errDNSSECKeyInvalid, te, s.keys.DNSKEYRRSIG.Inception, s.keys.DNSKEYRRSIG.Expiration)
+	}
+
+	nextLeaves := maps.Clone(s.leaves)
+	dirtyLeaves := make(map[string]struct{}, len(batch.TxEntries))
+	for _, tx := range batch.TxEntries {
+		nextLeaves[tx.Leaf.FQDN] = tx.Leaf
+		dirtyLeaves[tx.Leaf.FQDN] = struct{}{}
+	}
 	// Prune leaves expired at T_e or mark leaves whose clamping/bucket refresh triggers.
-	for fqdn, leaf := range s.leaves {
+	for fqdn, leaf := range nextLeaves {
 		if te >= leaf.ExpiresAt {
-			delete(s.leaves, fqdn)
+			delete(nextLeaves, fqdn)
 			dirtyLeaves[fqdn] = struct{}{}
 			continue
 		}
@@ -371,12 +383,12 @@ func (s *Server) ApplyEpoch(rawCheckpoint, rawBatch []byte) error {
 		}
 	}
 
-	if err := s.rebuildZoneLocked(cp.Epoch, te, dirtyLeaves); err != nil {
+	if err := s.rebuildZoneLocked(cp.Epoch, te, nextLeaves, dirtyLeaves); err != nil {
 		return err
 	}
+	s.leaves = nextLeaves
+	s.state = nextState
 	s.hasEpoch = true
-	s.lastEpoch = cp.Epoch
-	s.lastTime = te
 	return nil
 }
 
@@ -384,7 +396,7 @@ func (s *Server) leafNeedsRefresh(fqdn string, leaf pgns.PortalLeafRecord, epoch
 	if leaf.ExpiresAt-te <= uint64(BaseAuthRecordTTL) {
 		return true
 	}
-	owner := dns.Fqdn(fqdn)
+	owner := dns.CanonicalName(fqdn)
 	sets := s.rrCache[owner]
 	if len(sets) == 0 {
 		return true
@@ -392,33 +404,32 @@ func (s *Server) leafNeedsRefresh(fqdn string, leaf pgns.PortalLeafRecord, epoch
 	key := pgns.SMTKey(fqdn)
 	bucket := binary.BigEndian.Uint64(key[:8]) % s.refreshBuckets
 	isBucketEpoch := bucket == (epoch % s.refreshBuckets)
-	for rtype, set := range sets {
-		if set.rrsig == nil {
-			return true
-		}
-		exp := uint64(set.rrsig.Expiration)
-		if exp <= te {
-			return true
-		}
-		if isBucketEpoch && (exp-te <= RRSIGRefreshThreshold || isBucketRefreshType(rtype)) {
+	for _, set := range sets {
+		if rrsigNeedsRefresh(set.rrsig, isBucketEpoch, te) {
 			return true
 		}
 	}
-	return s.subownerNeedsRefresh(fqdn, te)
+	return s.subownerNeedsRefresh(owner, te)
 }
 
-func isBucketRefreshType(rtype uint16) bool {
-	switch rtype {
-	case dns.TypeA, dns.TypeAAAA, dns.TypeHTTPS, dns.TypeCAA:
+func rrsigNeedsRefresh(sig *dns.RRSIG, isBucketEpoch bool, te uint64) bool {
+	if sig == nil {
 		return true
-	default:
-		return false
 	}
+	exp := uint64(sig.Expiration)
+	if exp <= te {
+		return true
+	}
+	rem := exp - te
+	if isBucketEpoch && rem <= RRSIGRefreshThreshold {
+		return true
+	}
+	return rem <= RRSIGRefreshThreshold/2
 }
 
-func (s *Server) subownerNeedsRefresh(fqdn string, te uint64) bool {
+func (s *Server) subownerNeedsRefresh(owner string, te uint64) bool {
 	for _, prefix := range []string{"_acme-challenge.", "_validation-persist."} {
-		sets := s.rrCache[prefix+dns.Fqdn(fqdn)]
+		sets := s.rrCache[prefix+owner]
 		for _, set := range sets {
 			if set.rrsig == nil || uint64(set.rrsig.Expiration) <= te+5*60 {
 				return true
@@ -428,10 +439,10 @@ func (s *Server) subownerNeedsRefresh(fqdn string, te uint64) bool {
 	return false
 }
 
-func (s *Server) rebuildZoneLocked(epoch, te uint64, dirtyLeaves map[string]struct{}) error {
+func (s *Server) rebuildZoneLocked(epoch, te uint64, leaves map[string]pgns.PortalLeafRecord, dirtyLeaves map[string]struct{}) error {
 	nextRR := make(map[string]map[uint16]signedRRSet, len(s.rrCache)+len(dirtyLeaves))
-	for fqdn, leaf := range s.leaves {
-		owner := dns.Fqdn(fqdn)
+	for fqdn, leaf := range leaves {
+		owner := dns.CanonicalName(fqdn)
 		if _, isDirty := dirtyLeaves[fqdn]; !isDirty && s.reuseCachedLeafLocked(nextRR, owner) {
 			continue
 		}
@@ -444,22 +455,22 @@ func (s *Server) rebuildZoneLocked(epoch, te uint64, dirtyLeaves map[string]stru
 		return err
 	}
 
-	activeOwners := make(map[string]struct{}, len(nextRR)+8)
-	for owner := range nextRR {
-		activeOwners[owner] = struct{}{}
-	}
-	// Structural Empty Non-Terminals: id.<zone>., app.<zone>., and active <id-tag>.id.<zone>.
-	activeOwners["id."+s.zoneFQDN] = struct{}{}
-	activeOwners["app."+s.zoneFQDN] = struct{}{}
-	for fqdn := range s.leaves {
-		if parsed, err := pgns.ParseScopedFQDN(fqdn, s.zone); err == nil && parsed.Class == pgns.ClassSelfCertifying {
-			activeOwners[parsed.IDTag+".id."+s.zoneFQDN] = struct{}{}
-		}
-	}
+	activeOwners := deriveActiveOwners(s.zoneFQDN, nextRR)
 
-	nextNSEC3, sortedHashes, err := s.rebuildNSEC3RingLocked(activeOwners, nextRR, epoch, te)
-	if err != nil {
-		return err
+	var (
+		nextNSEC3    map[string]nsec3Entry
+		sortedHashes []string
+		err          error
+	)
+	prevSnap := s.snapshot.Load()
+	if len(dirtyLeaves) == 0 && prevSnap != nil && !s.anyCachedNSEC3NeedsRefreshLocked(epoch, te) {
+		nextNSEC3 = s.nsec3Map
+		sortedHashes = prevSnap.sortedHashes
+	} else {
+		nextNSEC3, sortedHashes, err = s.rebuildNSEC3RingLocked(activeOwners, nextRR, epoch, te)
+		if err != nil {
+			return err
+		}
 	}
 
 	soaSet := nextRR[s.zoneFQDN][dns.TypeSOA]
@@ -474,6 +485,41 @@ func (s *Server) rebuildZoneLocked(epoch, te uint64, dirtyLeaves map[string]stru
 		soaSet:       soaSet,
 	})
 	return nil
+}
+
+func deriveActiveOwners(zoneFQDN string, rrsets map[string]map[uint16]signedRRSet) map[string]struct{} {
+	activeOwners := make(map[string]struct{}, len(rrsets)+8)
+	activeOwners[zoneFQDN] = struct{}{}
+	activeOwners["id."+zoneFQDN] = struct{}{}
+	activeOwners["app."+zoneFQDN] = struct{}{}
+	for owner := range rrsets {
+		cur := owner
+		for dns.IsSubDomain(zoneFQDN, cur) {
+			activeOwners[cur] = struct{}{}
+			if cur == zoneFQDN {
+				break
+			}
+			offset, end := dns.NextLabel(cur, 0)
+			if end || offset >= len(cur) {
+				break
+			}
+			cur = cur[offset:]
+		}
+	}
+	return activeOwners
+}
+
+func (s *Server) anyCachedNSEC3NeedsRefreshLocked(epoch, te uint64) bool {
+	if len(s.nsec3Map) == 0 {
+		return true
+	}
+	for hashUpper, entry := range s.nsec3Map {
+		isBucketEpoch := binary.BigEndian.Uint64([]byte(hashUpper[:8]))%s.refreshBuckets == epoch%s.refreshBuckets
+		if rrsigNeedsRefresh(entry.rrsig, isBucketEpoch, te) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) reuseCachedLeafLocked(dst map[string]map[uint16]signedRRSet, owner string) bool {
@@ -491,7 +537,7 @@ func (s *Server) reuseCachedLeafLocked(dst map[string]map[uint16]signedRRSet, ow
 }
 
 func (s *Server) synthesizeLeafOwner(dst map[string]map[uint16]signedRRSet, leaf pgns.PortalLeafRecord, te uint64) error {
-	owner := dns.Fqdn(leaf.FQDN)
+	owner := dns.CanonicalName(leaf.FQDN)
 	ttl30 := clampTTL(BaseRecordTTL, leaf.ExpiresAt, te)
 	ttl60 := clampTTL(BaseAuthRecordTTL, leaf.ExpiresAt, te)
 	leafExp := min(te+DefaultRRSIGLifetime, leaf.ExpiresAt+LeafExpiryGrace)
@@ -504,7 +550,7 @@ func (s *Server) synthesizeLeafOwner(dst map[string]map[uint16]signedRRSet, leaf
 			Hdr: dns.RR_Header{Name: owner, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl30},
 			A:   net.IP(append([]byte(nil), primary.IPv4[:]...)),
 		}
-		signed, err := s.signRRSet([]dns.RR{rr}, inception, uint32(leafExp), leaf.ExpiresAt)
+		signed, err := s.signRRSet([]dns.RR{rr}, inception, uint32(leafExp))
 		if err != nil {
 			return err
 		}
@@ -515,7 +561,7 @@ func (s *Server) synthesizeLeafOwner(dst map[string]map[uint16]signedRRSet, leaf
 			Hdr:  dns.RR_Header{Name: owner, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: ttl30},
 			AAAA: net.IP(append([]byte(nil), primary.IPv6[:]...)),
 		}
-		signed, err := s.signRRSet([]dns.RR{rr}, inception, uint32(leafExp), leaf.ExpiresAt)
+		signed, err := s.signRRSet([]dns.RR{rr}, inception, uint32(leafExp))
 		if err != nil {
 			return err
 		}
@@ -534,7 +580,7 @@ func (s *Server) synthesizeLeafOwner(dst map[string]map[uint16]signedRRSet, leaf
 			Value:    []dns.SVCBKeyValue{&dns.SVCBAlpn{Alpn: alpn}},
 		},
 	}
-	signedHTTPS, err := s.signRRSet([]dns.RR{httpsRR}, inception, uint32(leafExp), leaf.ExpiresAt)
+	signedHTTPS, err := s.signRRSet([]dns.RR{httpsRR}, inception, uint32(leafExp))
 	if err != nil {
 		return err
 	}
@@ -549,7 +595,7 @@ func (s *Server) synthesizeLeafOwner(dst map[string]map[uint16]signedRRSet, leaf
 		&dns.CAA{Hdr: dns.RR_Header{Name: owner, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: ttl60}, Flag: 0, Tag: "issuewild", Value: ";"},
 		&dns.CAA{Hdr: dns.RR_Header{Name: owner, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: ttl60}, Flag: 0, Tag: "issue", Value: issueVal},
 	}
-	signedCAA, err := s.signRRSet(caaRRs, inception, uint32(leafExp), leaf.ExpiresAt)
+	signedCAA, err := s.signRRSet(caaRRs, inception, uint32(leafExp))
 	if err != nil {
 		return err
 	}
@@ -563,7 +609,7 @@ func (s *Server) synthesizeLeafOwner(dst map[string]map[uint16]signedRRSet, leaf
 			Hdr: dns.RR_Header{Name: txtOwner, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl60},
 			Txt: []string{base64.RawURLEncoding.EncodeToString(leaf.ACMEDNS01Digest[:])},
 		}
-		signed, err := s.signRRSet([]dns.RR{txtRR}, inception, uint32(txtExp), leaf.ExpiresAt)
+		signed, err := s.signRRSet([]dns.RR{txtRR}, inception, uint32(txtExp))
 		if err != nil {
 			return err
 		}
@@ -577,7 +623,7 @@ func (s *Server) synthesizeLeafOwner(dst map[string]map[uint16]signedRRSet, leaf
 			Hdr: dns.RR_Header{Name: pOwner, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl60},
 			Txt: []string{txtVal},
 		}
-		signed, err := s.signRRSet([]dns.RR{pRR}, inception, uint32(leafExp), leaf.ExpiresAt)
+		signed, err := s.signRRSet([]dns.RR{pRR}, inception, uint32(leafExp))
 		if err != nil {
 			return err
 		}
@@ -593,7 +639,7 @@ func (s *Server) synthesizeApexAndGlue(dst map[string]map[uint16]signedRRSet, ep
 	apex := make(map[uint16]signedRRSet, 6)
 	soa := &dns.SOA{
 		Hdr:     dns.RR_Header{Name: s.zoneFQDN, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: ApexRecordTTL},
-		Ns:      dns.Fqdn(s.nameservers[0].Host),
+		Ns:      s.nameservers[0].Host,
 		Mbox:    "hostmaster." + s.zoneFQDN,
 		Serial:  uint32(epoch + 1),
 		Refresh: 300,
@@ -602,38 +648,40 @@ func (s *Server) synthesizeApexAndGlue(dst map[string]map[uint16]signedRRSet, ep
 		Minttl:  BaseRecordTTL,
 	}
 	var err error
-	if apex[dns.TypeSOA], err = s.signRRSet([]dns.RR{soa}, inception, exp, 0); err != nil {
+	if apex[dns.TypeSOA], err = s.signRRSet([]dns.RR{soa}, inception, exp); err != nil {
 		return err
 	}
 
 	nsRRs := make([]dns.RR, 0, len(s.nameservers))
 	for _, ns := range s.nameservers {
-		nsName := dns.Fqdn(ns.Host)
+		nsName := ns.Host
 		nsRRs = append(nsRRs, &dns.NS{
 			Hdr: dns.RR_Header{Name: s.zoneFQDN, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: ApexRecordTTL},
 			Ns:  nsName,
 		})
-		if dns.IsSubDomain(s.zoneFQDN, nsName) {
+		if dns.IsSubDomain(s.zoneFQDN, nsName) && nsName != s.zoneFQDN {
 			glue := dst[nsName]
 			if glue == nil {
 				glue = make(map[uint16]signedRRSet, 2)
 			}
 			if ip4 := ns.IPv4.To4(); ip4 != nil {
 				aRR := &dns.A{Hdr: dns.RR_Header{Name: nsName, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ApexRecordTTL}, A: append(net.IP(nil), ip4...)}
-				if glue[dns.TypeA], err = s.signRRSet([]dns.RR{aRR}, inception, exp, 0); err != nil {
+				if glue[dns.TypeA], err = s.signRRSet([]dns.RR{aRR}, inception, exp); err != nil {
 					return err
 				}
 			}
 			if ns.IPv6 != nil && ns.IPv6.To4() == nil {
 				aaaaRR := &dns.AAAA{Hdr: dns.RR_Header{Name: nsName, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: ApexRecordTTL}, AAAA: append(net.IP(nil), ns.IPv6...)}
-				if glue[dns.TypeAAAA], err = s.signRRSet([]dns.RR{aaaaRR}, inception, exp, 0); err != nil {
+				if glue[dns.TypeAAAA], err = s.signRRSet([]dns.RR{aaaaRR}, inception, exp); err != nil {
 					return err
 				}
 			}
-			dst[nsName] = glue
+			if len(glue) > 0 {
+				dst[nsName] = glue
+			}
 		}
 	}
-	if apex[dns.TypeNS], err = s.signRRSet(nsRRs, inception, exp, 0); err != nil {
+	if apex[dns.TypeNS], err = s.signRRSet(nsRRs, inception, exp); err != nil {
 		return err
 	}
 	apex[dns.TypeDNSKEY] = signedRRSet{
@@ -648,14 +696,14 @@ func (s *Server) synthesizeApexAndGlue(dst map[string]map[uint16]signedRRSet, ep
 		SaltLength: 0,
 		Salt:       "",
 	}
-	if apex[dns.TypeNSEC3PARAM], err = s.signRRSet([]dns.RR{param}, inception, exp, 0); err != nil {
+	if apex[dns.TypeNSEC3PARAM], err = s.signRRSet([]dns.RR{param}, inception, exp); err != nil {
 		return err
 	}
 	apexCAA := []dns.RR{
 		&dns.CAA{Hdr: dns.RR_Header{Name: s.zoneFQDN, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: ApexRecordTTL}, Flag: 0, Tag: "issue", Value: ";"},
 		&dns.CAA{Hdr: dns.RR_Header{Name: s.zoneFQDN, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: ApexRecordTTL}, Flag: 0, Tag: "issuewild", Value: ";"},
 	}
-	if apex[dns.TypeCAA], err = s.signRRSet(apexCAA, inception, exp, 0); err != nil {
+	if apex[dns.TypeCAA], err = s.signRRSet(apexCAA, inception, exp); err != nil {
 		return err
 	}
 	dst[s.zoneFQDN] = apex
@@ -663,15 +711,11 @@ func (s *Server) synthesizeApexAndGlue(dst map[string]map[uint16]signedRRSet, ep
 }
 
 func (s *Server) rebuildNSEC3RingLocked(activeOwners map[string]struct{}, rrsets map[string]map[uint16]signedRRSet, epoch, te uint64) (map[string]nsec3Entry, []string, error) {
-	type hashedOwner struct {
-		hashUpper string
-		owner     string
-	}
-	byHash := make(map[string]hashedOwner, len(activeOwners))
+	byHash := make(map[string]string, len(activeOwners))
 	hashes := make([]string, 0, len(activeOwners))
 	for owner := range activeOwners {
 		h := strings.ToUpper(dns.HashName(owner, dns.SHA1, 0, ""))
-		byHash[h] = hashedOwner{hashUpper: h, owner: owner}
+		byHash[h] = owner
 		hashes = append(hashes, h)
 	}
 	slices.Sort(hashes)
@@ -682,8 +726,12 @@ func (s *Server) rebuildNSEC3RingLocked(activeOwners map[string]struct{}, rrsets
 
 	for i, h := range hashes {
 		nextH := hashes[(i+1)%len(hashes)]
-		owner := byHash[h].owner
+		owner := byHash[h]
 		typeBitmap := ownerTypeBitMap(rrsets[owner])
+		if cached, ok := s.canReuseCachedNSEC3Locked(h, nextH, typeBitmap, epoch, te); ok {
+			out[h] = cached
+			continue
+		}
 		nsec3Owner := strings.ToLower(h) + "." + s.zoneFQDN
 		rr := &dns.NSEC3{
 			Hdr:        dns.RR_Header{Name: nsec3Owner, Rrtype: dns.TypeNSEC3, Class: dns.ClassINET, Ttl: BaseRecordTTL},
@@ -695,10 +743,6 @@ func (s *Server) rebuildNSEC3RingLocked(activeOwners map[string]struct{}, rrsets
 			HashLength: 20,
 			NextDomain: nextH,
 			TypeBitMap: typeBitmap,
-		}
-		if cached, ok := s.canReuseCachedNSEC3Locked(h, nextH, typeBitmap, epoch, te); ok {
-			out[h] = cached
-			continue
 		}
 		sig := &dns.RRSIG{
 			Hdr:        dns.RR_Header{Name: nsec3Owner, Rrtype: dns.TypeRRSIG, Class: dns.ClassINET, Ttl: BaseRecordTTL},
@@ -721,13 +765,11 @@ func (s *Server) canReuseCachedNSEC3Locked(hashUpper, nextH string, typeBitmap [
 	if !ok || cached.rrsig == nil {
 		return nsec3Entry{}, false
 	}
-	if uint64(cached.rrsig.Expiration) <= te+RRSIGRefreshThreshold {
-		return nsec3Entry{}, false
-	}
 	if cached.rr.NextDomain != nextH || !slices.Equal(cached.rr.TypeBitMap, typeBitmap) {
 		return nsec3Entry{}, false
 	}
-	if binary.BigEndian.Uint64([]byte(hashUpper[:8]))%s.refreshBuckets == epoch%s.refreshBuckets {
+	isBucketEpoch := binary.BigEndian.Uint64([]byte(hashUpper[:8]))%s.refreshBuckets == epoch%s.refreshBuckets
+	if rrsigNeedsRefresh(cached.rrsig, isBucketEpoch, te) {
 		return nsec3Entry{}, false
 	}
 	return cached, true
@@ -750,7 +792,7 @@ func ownerTypeBitMap(sets map[uint16]signedRRSet) []uint16 {
 	return types
 }
 
-func (s *Server) signRRSet(records []dns.RR, inception, expiration uint32, leafExpiresAt uint64) (signedRRSet, error) {
+func (s *Server) signRRSet(records []dns.RR, inception, expiration uint32) (signedRRSet, error) {
 	sig := &dns.RRSIG{
 		Hdr:        dns.RR_Header{Name: records[0].Header().Name, Rrtype: dns.TypeRRSIG, Class: dns.ClassINET, Ttl: records[0].Header().Ttl},
 		KeyTag:     s.keys.ZSK.KeyTag(),
@@ -762,7 +804,7 @@ func (s *Server) signRRSet(records []dns.RR, inception, expiration uint32, leafE
 	if err := sig.Sign(s.keys.ZSKSigner, records); err != nil {
 		return signedRRSet{}, err
 	}
-	return signedRRSet{records: records, rrsig: sig, expiresAt: leafExpiresAt}, nil
+	return signedRRSet{records: records, rrsig: sig}, nil
 }
 
 // ServeDNS implements miekg/dns.Handler purely from the pre-signed memory snapshot.
@@ -771,9 +813,16 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	resp.SetReply(r)
 	resp.Authoritative = true
 
+	edns := r.IsEdns0()
+	if edns != nil && edns.Version() != 0 {
+		resp.Rcode = dns.RcodeBadVers
+		resp.SetEdns0(1232, false)
+		_ = w.WriteMsg(resp)
+		return
+	}
 	if len(r.Question) == 0 {
 		resp.Rcode = dns.RcodeFormatError
-		_ = w.WriteMsg(resp)
+		writeDNSResponse(w, r, resp)
 		return
 	}
 	snap := s.snapshot.Load()
@@ -781,33 +830,45 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	qname := dns.CanonicalName(q.Name)
 	if snap == nil || q.Qclass != dns.ClassINET || !dns.IsSubDomain(snap.zoneFQDN, qname) {
 		resp.Rcode = dns.RcodeRefused
-		_ = w.WriteMsg(resp)
+		writeDNSResponse(w, r, resp)
 		return
 	}
-	do := hasDNSSECOK(r)
+	do := edns != nil && edns.Do()
 
 	if sets, exists := snap.rrsets[qname]; exists {
+		if q.Qtype == dns.TypeRRSIG {
+			answerOwnerRRSIGs(&resp.Answer, sets)
+			writeDNSResponse(w, r, resp)
+			return
+		}
 		if set, hasType := sets[q.Qtype]; hasType {
 			appendRRSetTo(&resp.Answer, set, do)
-			_ = w.WriteMsg(resp)
+			if q.Qtype == dns.TypeNS && qname == snap.zoneFQDN {
+				s.appendApexGlue(&resp.Extra, snap, do)
+			}
+			writeDNSResponse(w, r, resp)
 			return
 		}
 		// NODATA on existing owner name.
 		appendRRSetTo(&resp.Ns, snap.soaSet, do)
-		if entry, ok := snap.matchNSEC3(qname); ok {
-			appendNSEC3Entry(&resp.Ns, entry, do)
+		if do {
+			if entry, ok := snap.matchNSEC3(qname); ok {
+				appendNSEC3Entry(&resp.Ns, entry)
+			}
 		}
-		_ = w.WriteMsg(resp)
+		writeDNSResponse(w, r, resp)
 		return
 	}
 
 	// Check Empty Non-Terminal (ENT): exists in activeOwners with zero RRsets -> NOERROR NODATA.
 	if _, isENT := snap.activeOwners[qname]; isENT {
 		appendRRSetTo(&resp.Ns, snap.soaSet, do)
-		if entry, ok := snap.matchNSEC3(qname); ok {
-			appendNSEC3Entry(&resp.Ns, entry, do)
+		if do {
+			if entry, ok := snap.matchNSEC3(qname); ok {
+				appendNSEC3Entry(&resp.Ns, entry)
+			}
 		}
-		_ = w.WriteMsg(resp)
+		writeDNSResponse(w, r, resp)
 		return
 	}
 
@@ -816,10 +877,57 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	appendRRSetTo(&resp.Ns, snap.soaSet, do)
 	if do {
 		for _, entry := range snap.nxdomainProof(qname) {
-			appendNSEC3Entry(&resp.Ns, entry, true)
+			appendNSEC3Entry(&resp.Ns, entry)
 		}
 	}
+	writeDNSResponse(w, r, resp)
+}
+
+func answerOwnerRRSIGs(dst *[]dns.RR, sets map[uint16]signedRRSet) {
+	types := make([]uint16, 0, len(sets))
+	for typ := range sets {
+		types = append(types, typ)
+	}
+	slices.Sort(types)
+	for _, typ := range types {
+		if sig := sets[typ].rrsig; sig != nil {
+			*dst = append(*dst, dns.Copy(sig))
+		}
+	}
+}
+
+func (s *Server) appendApexGlue(dst *[]dns.RR, snap *zoneSnapshot, do bool) {
+	for _, ns := range s.nameservers {
+		glue, ok := snap.rrsets[ns.Host]
+		if !ok {
+			continue
+		}
+		if aSet, hasA := glue[dns.TypeA]; hasA {
+			appendRRSetTo(dst, aSet, do)
+		}
+		if aaaaSet, hasAAAA := glue[dns.TypeAAAA]; hasAAAA {
+			appendRRSetTo(dst, aaaaSet, do)
+		}
+	}
+}
+
+func writeDNSResponse(w dns.ResponseWriter, query, resp *dns.Msg) {
+	udpSize := udpResponseSize(query)
+	if edns := query.IsEdns0(); edns != nil {
+		resp.SetEdns0(uint16(udpSize), edns.Do())
+	}
+	if addr := w.LocalAddr(); addr != nil && strings.HasPrefix(addr.Network(), "udp") {
+		resp.Truncate(udpSize)
+	}
 	_ = w.WriteMsg(resp)
+}
+
+func udpResponseSize(query *dns.Msg) int {
+	edns := query.IsEdns0()
+	if edns == nil {
+		return dns.MinMsgSize
+	}
+	return min(max(int(edns.UDPSize()), dns.MinMsgSize), 4096)
 }
 
 func (snap *zoneSnapshot) matchNSEC3(owner string) (nsec3Entry, bool) {
@@ -929,14 +1037,9 @@ func appendRRSetTo(dst *[]dns.RR, set signedRRSet, do bool) {
 	}
 }
 
-func appendNSEC3Entry(dst *[]dns.RR, entry nsec3Entry, do bool) {
+func appendNSEC3Entry(dst *[]dns.RR, entry nsec3Entry) {
 	*dst = append(*dst, dns.Copy(entry.rr))
-	if do && entry.rrsig != nil {
+	if entry.rrsig != nil {
 		*dst = append(*dst, dns.Copy(entry.rrsig))
 	}
-}
-
-func hasDNSSECOK(r *dns.Msg) bool {
-	opt := r.IsEdns0()
-	return opt != nil && opt.Do()
 }

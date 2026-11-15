@@ -4,6 +4,7 @@ package sequencer
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"golang.org/x/mod/sumdb/tlog"
 
 	"github.com/gosuda/portal-tunnel/v2/pgns"
+	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
@@ -30,30 +33,31 @@ const (
 	updateRateWindowSec      = 60
 	maxSubmitBodyBytes       = 64 << 10
 	maxCosignRespBytes       = 4 << 10
+	maxPendingTxs            = 4 * pgns.MaxBatchSize
+	maxRetainedBatches       = 4096
 )
 
 var (
-	// ErrRateLimited marks excessive TxTypeUpdate submissions for one FQDN (> 6/min).
-	ErrRateLimited = errors.New("sequencer: per-fqdn update rate limit exceeded")
+	// ErrRateLimited marks excessive TxTypeUpdate submissions or a full mempool.
+	ErrRateLimited = errors.New("sequencer: rate limit exceeded")
 	// ErrQuorumFailed marks an epoch sealing attempt that gathered fewer than k witness cosignatures.
 	ErrQuorumFailed = errors.New("sequencer: insufficient witness cosignatures")
 )
 
 // Config configures a PGNS Sequencer instance.
 type Config struct {
-	Zone              string
-	WitnessSet        pgns.WitnessSet
-	WitnessEndpoints  []string
-	HTTPClient        *http.Client
-	ActiveInterval    time.Duration
-	HeartbeatInterval time.Duration
-	Now               func() time.Time
+	Zone                string
+	WitnessSet          pgns.WitnessSet
+	WitnessEndpoints    []string
+	SequencerPrivateKey ed25519.PrivateKey
+	HTTPClient          *http.Client
+	ActiveInterval      time.Duration
+	HeartbeatInterval   time.Duration
 }
 
 type pendingTx struct {
-	tx      pgns.LeafTx
-	key     [32]byte
-	addedAt uint64
+	tx  pgns.LeafTx
+	key [32]byte
 }
 
 // Sequencer validates LeafTx submissions, bundles them into epochs, collects k-of-m
@@ -62,10 +66,10 @@ type Sequencer struct {
 	zone              string
 	witnessSet        pgns.WitnessSet
 	witnessEndpoints  []string
+	sequencerPriv     ed25519.PrivateKey
 	httpClient        *http.Client
 	activeInterval    time.Duration
 	heartbeatInterval time.Duration
-	nowFn             func() time.Time
 
 	mu               sync.Mutex
 	sealMu           sync.Mutex
@@ -88,8 +92,11 @@ func New(cfg Config) (*Sequencer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.WitnessSet.Threshold <= 0 || cfg.WitnessSet.Threshold > len(cfg.WitnessSet.Witnesses) {
-		return nil, pgns.ErrInvalidCheckpoint
+	if err := cfg.WitnessSet.Validate(); err != nil {
+		return nil, err
+	}
+	if len(cfg.SequencerPrivateKey) != 0 && len(cfg.SequencerPrivateKey) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("%w: invalid sequencer private key length %d", pgns.ErrInvalidCheckpoint, len(cfg.SequencerPrivateKey))
 	}
 	if len(cfg.WitnessEndpoints) < cfg.WitnessSet.Threshold {
 		return nil, fmt.Errorf("%w: need at least %d witness endpoints, got %d", ErrQuorumFailed, cfg.WitnessSet.Threshold, len(cfg.WitnessEndpoints))
@@ -104,11 +111,7 @@ func New(cfg Config) (*Sequencer, error) {
 	}
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 5 * time.Second}
-	}
-	nowFn := cfg.Now
-	if nowFn == nil {
-		nowFn = time.Now
+		httpClient = utils.NewHTTPClient(utils.WithHTTPTimeout(5 * time.Second))
 	}
 	endpoints := make([]string, len(cfg.WitnessEndpoints))
 	for i, ep := range cfg.WitnessEndpoints {
@@ -118,10 +121,10 @@ func New(cfg Config) (*Sequencer, error) {
 		zone:              normZone,
 		witnessSet:        cfg.WitnessSet,
 		witnessEndpoints:  endpoints,
+		sequencerPriv:     slices.Clone(cfg.SequencerPrivateKey),
 		httpClient:        httpClient,
 		activeInterval:    activeInterval,
 		heartbeatInterval: heartbeatInterval,
-		nowFn:             nowFn,
 		smt:               pgns.NewSparseMerkleTree(),
 		batches:           make(map[uint64][]byte),
 		pending:           make(map[string]pendingTx),
@@ -163,7 +166,7 @@ func (s *Sequencer) SubmitTx(rawTx []byte) error {
 	if err != nil {
 		return err
 	}
-	nowSec := uint64(max(0, s.nowFn().UTC().Unix()))
+	nowSec := uint64(max(0, time.Now().UTC().Unix()))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -177,9 +180,16 @@ func (s *Sequencer) SubmitTx(rawTx []byte) error {
 		return err
 	}
 	if existing, exists := s.pending[tx.Leaf.FQDN]; exists {
-		// ColdRecovery strictly preempts non-recovery pending transitions on the same FQDN.
-		if existing.tx.TxType == pgns.TxTypeColdRecovery && tx.TxType != pgns.TxTypeColdRecovery {
-			return pgns.ErrTransitionInvalid
+		idempotent, err := checkPendingConflict(existing.tx, tx)
+		if err != nil {
+			return err
+		}
+		if idempotent {
+			return nil
+		}
+	} else if len(s.pending) >= maxPendingTxs {
+		if tx.TxType != pgns.TxTypeColdRecovery || !s.evictOneNonRecoveryLocked() {
+			return ErrRateLimited
 		}
 	}
 	if tx.TxType == pgns.TxTypeUpdate {
@@ -187,8 +197,44 @@ func (s *Sequencer) SubmitTx(rawTx []byte) error {
 			return ErrRateLimited
 		}
 	}
-	s.pending[tx.Leaf.FQDN] = pendingTx{tx: tx, key: key, addedAt: nowSec}
+	s.pending[tx.Leaf.FQDN] = pendingTx{tx: tx, key: key}
 	return nil
+}
+
+func checkPendingConflict(existing, incoming pgns.LeafTx) (bool, error) {
+	rawExisting, errA := existing.MarshalCanonical()
+	rawIncoming, errB := incoming.MarshalCanonical()
+	if errA == nil && errB == nil && bytes.Equal(rawExisting, rawIncoming) {
+		return true, nil
+	}
+	// ColdRecovery strictly preempts non-recovery transitions and lower/equal recovery seqs.
+	if existing.TxType == pgns.TxTypeColdRecovery {
+		if incoming.TxType != pgns.TxTypeColdRecovery || incoming.Leaf.Seq <= existing.Leaf.Seq {
+			return false, pgns.ErrTransitionInvalid
+		}
+		return false, nil
+	}
+	if incoming.TxType == pgns.TxTypeColdRecovery {
+		return false, nil
+	}
+	// First-seen Create/Reclaim wins in the mempool to prevent alias sniping.
+	if incoming.TxType == pgns.TxTypeCreate || incoming.TxType == pgns.TxTypeReclaim {
+		return false, pgns.ErrTransitionInvalid
+	}
+	if existing.TxType == pgns.TxTypeUpdate && incoming.TxType == pgns.TxTypeUpdate && incoming.Leaf.Seq < existing.Leaf.Seq {
+		return false, pgns.ErrTransitionInvalid
+	}
+	return false, nil
+}
+
+func (s *Sequencer) evictOneNonRecoveryLocked() bool {
+	for fqdn, item := range s.pending {
+		if item.tx.TxType != pgns.TxTypeColdRecovery {
+			delete(s.pending, fqdn)
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Sequencer) currentLeafLocked(key [32]byte) (*pgns.PortalLeafRecord, error) {
@@ -204,11 +250,14 @@ func (s *Sequencer) currentLeafLocked(key [32]byte) (*pgns.PortalLeafRecord, err
 }
 
 func (s *Sequencer) allowUpdateLocked(fqdn string, now uint64) bool {
-	history := s.updateHistory[fqdn]
 	cutoff := uint64(0)
 	if now > updateRateWindowSec {
 		cutoff = now - updateRateWindowSec
 	}
+	if len(s.updateHistory) >= maxPendingTxs {
+		s.pruneUpdateHistoryLocked(cutoff)
+	}
+	history := s.updateHistory[fqdn]
 	kept := history[:0]
 	for _, ts := range history {
 		if ts > cutoff {
@@ -221,6 +270,22 @@ func (s *Sequencer) allowUpdateLocked(fqdn string, now uint64) bool {
 	}
 	s.updateHistory[fqdn] = append(kept, now)
 	return true
+}
+
+func (s *Sequencer) pruneUpdateHistoryLocked(cutoff uint64) {
+	for fqdn, history := range s.updateHistory {
+		kept := history[:0]
+		for _, ts := range history {
+			if ts > cutoff {
+				kept = append(kept, ts)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.updateHistory, fqdn)
+		} else {
+			s.updateHistory[fqdn] = kept
+		}
+	}
 }
 
 // SealEpoch bundles queued transactions (or emits a 0-tx heartbeat), gathers a k-of-m
@@ -258,7 +323,7 @@ func (s *Sequencer) prepareEpochPlan() (epochPlan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ts := uint64(max(0, s.nowFn().UTC().Unix()))
+	ts := uint64(max(0, time.Now().UTC().Unix()))
 	if s.hasEpoch && ts < s.lastTimestamp {
 		ts = s.lastTimestamp
 	}
@@ -415,11 +480,15 @@ func (s *Sequencer) hashReaderForSlice(hashes []tlog.Hash) tlog.HashReader {
 }
 
 func (s *Sequencer) collectWitnessQuorum(ctx context.Context, checkpointBody, batchWire []byte) ([]byte, error) {
+	var cosignSig string
+	if len(s.sequencerPriv) == ed25519.PrivateKeySize {
+		cosignSig = pgns.SignSequencerCosignRequest(s.sequencerPriv, batchWire)
+	}
 	results := make(chan string, len(s.witnessEndpoints))
 	var wg sync.WaitGroup
 	for _, endpoint := range s.witnessEndpoints {
 		wg.Go(func() {
-			line, err := s.postWitnessCosign(ctx, endpoint+"/v1/cosign", batchWire)
+			line, err := s.postWitnessCosign(ctx, endpoint+types.PathV1Cosign, batchWire, cosignSig)
 			if err == nil && line != "" {
 				results <- line
 			}
@@ -447,12 +516,15 @@ func (s *Sequencer) collectWitnessQuorum(ctx context.Context, checkpointBody, ba
 	return pgns.FormatSignedCheckpoint(checkpointBody, verified), nil
 }
 
-func (s *Sequencer) postWitnessCosign(ctx context.Context, targetURL string, body []byte) (string, error) {
+func (s *Sequencer) postWitnessCosign(ctx context.Context, targetURL string, body []byte, cosignSig string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	if cosignSig != "" {
+		req.Header.Set(types.HeaderPGNSSequencerSignature, cosignSig)
+	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return "", err
@@ -481,6 +553,12 @@ func (s *Sequencer) commitEpochPlan(plan epochPlan, batchWire, signedCheckpoint 
 	for _, fqdn := range plan.includedFQDNs {
 		delete(s.pending, fqdn)
 	}
+	cutoff := uint64(0)
+	if plan.timestamp > updateRateWindowSec {
+		cutoff = plan.timestamp - updateRateWindowSec
+	}
+	s.pruneUpdateHistoryLocked(cutoff)
+
 	s.logHashes = append(s.logHashes, plan.addedLogHashes...)
 	s.hasEpoch = true
 	s.nextEpoch = plan.epoch + 1
@@ -489,12 +567,15 @@ func (s *Sequencer) commitEpochPlan(plan epochPlan, batchWire, signedCheckpoint 
 	s.lastSMTRoot = plan.batch.NewSMTRoot
 	s.latestCheckpoint = signedCheckpoint
 	s.batches[plan.epoch] = batchWire
+	if plan.epoch >= maxRetainedBatches {
+		delete(s.batches, plan.epoch-maxRetainedBatches)
+	}
 	return nil
 }
 
 // Resolve builds a CDN-cacheable self-verifying ResolveBundle for canonical fqdn.
 func (s *Sequencer) Resolve(fqdn string) ([]byte, error) {
-	normFQDN := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(fqdn), "."))
+	normFQDN := types.NormalizeHostname(fqdn)
 	key := pgns.SMTKey(normFQDN)
 
 	s.mu.Lock()
@@ -546,12 +627,12 @@ func (s *Sequencer) Batch(epoch uint64) ([]byte, bool) {
 // Handler serves /v1/submit, /v1/resolve/<fqdn>, /checkpoint, /batch/<epoch>, and /tiles/...
 func (s *Sequencer) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/submit", s.handleSubmit)
-	mux.HandleFunc("GET /v1/resolve/{fqdn}", s.handleResolve)
-	mux.HandleFunc("GET /checkpoint", s.handleCheckpoint)
-	mux.HandleFunc("GET /batch/{epoch}", s.handleBatch)
-	mux.HandleFunc("GET /tiles/{path...}", s.handleTile)
-	mux.HandleFunc("GET /healthz", func(rw http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST "+types.PathV1Submit, s.handleSubmit)
+	mux.HandleFunc("GET "+types.PathV1ResolvePrefix+"{fqdn}", s.handleResolve)
+	mux.HandleFunc("GET "+types.PathPGNSCheckpoint, s.handleCheckpoint)
+	mux.HandleFunc("GET "+types.PathPGNSBatchPrefix+"{epoch}", s.handleBatch)
+	mux.HandleFunc("GET "+types.PathPGNSTilesPrefix+"{path...}", s.handleTile)
+	mux.HandleFunc("GET "+types.PathPGNSHealthz, func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = rw.Write([]byte("ok\n"))
 	})
@@ -632,9 +713,10 @@ func (s *Sequencer) handleTile(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	hasEpoch := s.hasEpoch
 	hashes := slices.Clone(s.logHashes)
 	s.mu.Unlock()
-	if !s.hasEpoch {
+	if !hasEpoch {
 		http.NotFound(rw, r)
 		return
 	}

@@ -355,7 +355,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 	}
 
 	self, descriptors := s.issueHandleRegisterDescriptors(challenge)
-	record, replaced, resp, err := s.registry.RegisterWithPGNS(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial(), pgnsLeaf)
+	record, replaced, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial(), pgnsLeaf)
 	if replaced != nil {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
 		s.deleteLeaseDNS(cleanupCtx, replaced)
