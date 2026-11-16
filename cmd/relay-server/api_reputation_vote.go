@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
-	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -107,17 +106,17 @@ func setVoterCookie(w http.ResponseWriter, r *http.Request, minted string) {
 	})
 }
 
-func publicIdentityLeases(public []types.Lease, server *portal.Server) []types.PolicyLease {
-	known := make(map[string]bool)
+func publicIdentityLeases(public []types.Lease, policyLeases []types.PolicyLease) []types.PolicyLease {
+	known := make(map[types.ServiceIdentityKey]bool)
 	for _, lease := range public {
-		known[types.NormalizeHostname(lease.CanonicalHostname)] = true
+		known[types.NewServiceIdentityKey(lease.Name, lease.Address)] = true
 	}
 	leases := make([]types.PolicyLease, 0)
-	for _, lease := range server.PolicyLeases() {
-		hostname := types.NormalizeHostname(lease.CanonicalHostname)
-		if known[hostname] && lease.IdentityKey != "" {
+	for _, lease := range policyLeases {
+		key := types.NewServiceIdentityKey(lease.Name, lease.Address)
+		if known[key] && lease.IdentityKey != "" {
 			leases = append(leases, lease)
-			delete(known, hostname)
+			delete(known, key)
 		}
 	}
 	return leases

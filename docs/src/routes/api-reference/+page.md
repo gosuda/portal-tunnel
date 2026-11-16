@@ -251,7 +251,6 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `expires_at`, `first_seen_at`, `last_seen_at` | `string` |
 | `hostname`, `canonical_hostname` | `string` |
 | `namespace` | `string`, optional; `local-tls-v1` selects the new canonical policy |
-| `legacy_canonical_hostname` | `string`, optional; separate compatibility origin |
 | `canonical_ready` | `boolean`, optional; Local TLS material availability, not reverse transport count |
 | `udp_enabled`, `tcp_enabled` | `boolean` |
 | `tcp_addr` | `string` |
@@ -260,7 +259,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 
 For `local-tls-v1`, only advertise the canonical as usable when
 `canonical_ready` is true and `ready` is positive. Otherwise use an available
-friendly or legacy URL as a separate origin. For legacy namespaces, `ready`
+friendly URL as a separate origin. For legacy namespaces, `ready`
 retains its existing meaning. The hostname fields identify routes even while
 their endpoints are unavailable.
 
@@ -374,25 +373,25 @@ falls back to relay-backed signing.
 Automatic and manual modes are mutually exclusive, require the native runtime,
 and reject raw TCP. The CLI/agent additionally reject UDP and relay cache with
 Local TLS. At the lease-protocol level any cache opt-in remains on the separate
-legacy canonical; the new canonical is never cache eligible. Manual mode requires
+friendly alias; the canonical is never cache eligible. Manual mode requires
 a namespace-capable relay. `sdk.RunHTTP` enables canonical HTTP/2 with an actual
 HTTP consumer; raw `Expose`/`Proxy` callers retain HTTP/1.1 and do not gain h2
 translation.
 
 The certificate must cover only the exact Local TLS canonical hostname assigned
-by a selected relay. Friendly and legacy URLs still use Keyless. A coverage
+by a selected relay. Friendly URLs still use Keyless. A coverage
 failure stops that relay's listener and appears in `Exposure.Relays()` with
 `RelayFailureTerminal` and an error wrapping `localtls.ErrLocalCertificate`;
 covered relays remain usable. Ordinary network failures remain retryable. Discovery applies its existing terminal-failure
 backoff policy and can select other relays.
 
 `Exposure.WaitReady` reports when a relay can route traffic. With automatic TLS
-and no require-local option, an existing legacy URL can be ready while the new
+and no require-local option, an granted alias can be ready while the new
 canonical `PublicURL` remains empty. With require-local, `WaitReady` requires a
 usable canonical certificate. If every selected relay has failed terminally or
 refuses the required issuance, it returns the current errors. Issuance policy
 refusals are also available in `RelayStatus.CertificateError`, without disabling
-live legacy URLs or an already valid canonical certificate. The exposure remains
+live aliases or an already valid canonical certificate. The exposure remains
 open for policy recovery or another compatible relay.
 
 Certificate installation and expiry update the same SDK status used by
@@ -403,7 +402,7 @@ For `local-tls-v1` public leases, `canonical_ready` reports usable local materia
 `local_tls_not_after` through authenticated lease renewal on certificate changes,
 and the relay withdraws `canonical_ready` at that expiry even without another
 renewal. This is an owner-reported availability hint, not certificate validation
-or identity proof. Friendly and legacy URLs remain separate compatibility origins.
+or identity proof. Friendly URLs remain separate compatibility origins.
 
 **Go source compatibility:** direct users of `portal/keyless.Client` must
 replace `RelayCertPool()` with `TenantCertPool()`. The returned snapshot trusts

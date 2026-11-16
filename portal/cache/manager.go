@@ -151,6 +151,9 @@ func (l leaseState) cacheExpiry() time.Time {
 	return until.Add(l.ttl)
 }
 
+// Register runs inside the registry's serialized alias grant. Detach the old
+// snapshot and admission even when the new holder does not opt into caching.
+// Upload commit, renewal, and deletion then see only the current lease ID.
 func (c *Manager) Register(lease Lease, req types.RegisterChallengeRequest) {
 	if c == nil {
 		return

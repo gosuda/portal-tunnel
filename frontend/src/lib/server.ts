@@ -66,10 +66,10 @@ export function leaseToServer(row: Lease): BaseServer {
   const hostname = row.hostname || "";
   const routeHostname = row.canonical_hostname || hostname;
   const canonicalAvailable =
-    row.namespace !== "local-tls-v1" || row.canonical_ready === true;
+    row.namespace === "local-tls-v1" && row.canonical_ready === true;
   const publicHostname =
     hostname ||
-    (canonicalAvailable ? routeHostname : row.legacy_canonical_hostname || "");
+    (canonicalAvailable ? routeHostname : "");
   const tcpAddr = row.tcp_addr?.trim() || "";
   const udpAddr = row.udp_addr?.trim() || "";
 

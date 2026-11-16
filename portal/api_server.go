@@ -62,6 +62,7 @@ func (e *apiError) Error() string { return e.msg }
 var (
 	errFeatureUnavailable       = &apiError{types.APIErrorCodeFeatureUnavailable, "feature unavailable", http.StatusServiceUnavailable}
 	errHostnameConflict         = &apiError{types.APIErrorCodeHostnameConflict, "hostname conflict", http.StatusConflict}
+	errUnnamedHTTPNeedsLocalTLS = &apiError{types.APIErrorCodeInvalidRequest, "unnamed HTTP services require Local TLS", http.StatusBadRequest}
 	errLeaseNotFound            = &apiError{types.APIErrorCodeLeaseNotFound, "lease not found", http.StatusNotFound}
 	errLeaseTTLExceeded         = &apiError{types.APIErrorCodeInvalidRequest, "lease TTL exceeds 10 minutes", http.StatusBadRequest}
 	errLeaseRejected            = &apiError{types.APIErrorCodeLeaseRejected, "lease is not approved for routing", http.StatusForbidden}
@@ -653,6 +654,10 @@ func (s *Server) HandleStaticCache(w http.ResponseWriter, req *http.Request) {
 	record, err := s.registry.admitLeaseByToken(req.Header.Get(types.HeaderAccessToken), false)
 	if err != nil {
 		writeAPIErrorResponse(w, err)
+		return
+	}
+	if record.Hostname == "" {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeFeatureUnavailable, "relay cache unavailable: no friendly alias granted")
 		return
 	}
 	generation := s.registry.cache.Generation(record.id)

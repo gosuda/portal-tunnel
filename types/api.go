@@ -87,14 +87,13 @@ type RegisterChallengeRequest struct {
 	Cache    bool `json:"cache,omitempty"`
 	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
 	// AllowCanonicalFallback permits registration to continue without the friendly alias.
-	AllowCanonicalFallback bool          `json:"allow_canonical_fallback,omitempty"`
-	Identity               Identity      `json:"identity"`
-	Metadata               LeaseMetadata `json:"metadata"`
-	Overlay                bool          `json:"overlay,omitempty"`
-	TTL                    int           `json:"ttl,omitempty"` // Non-positive values default to 120 seconds; maximum 600.
-	UDPEnabled             bool          `json:"udp_enabled,omitempty"`
-	TCPEnabled             bool          `json:"tcp_enabled,omitempty"`
-	StartedAt              time.Time     `json:"started_at,omitempty"`
+	Identity   Identity      `json:"identity"`
+	Metadata   LeaseMetadata `json:"metadata"`
+	Overlay    bool          `json:"overlay,omitempty"`
+	TTL        int           `json:"ttl,omitempty"` // Non-positive values default to 120 seconds; maximum 600.
+	UDPEnabled bool          `json:"udp_enabled,omitempty"`
+	TCPEnabled bool          `json:"tcp_enabled,omitempty"`
+	StartedAt  time.Time     `json:"started_at,omitempty"`
 }
 
 type RegisterChallengeResponse struct {
@@ -115,11 +114,10 @@ type ReverseEndpoint struct {
 }
 
 type RegisterResponse struct {
-	Namespace               string   `json:"namespace,omitempty"`
-	LegacyCanonicalHostname string   `json:"legacy_canonical_hostname,omitempty"`
-	Identity                Identity `json:"identity"`
-	Hostname                string   `json:"hostname"`
-	CanonicalHostname       string   `json:"canonical_hostname"`
+	Namespace         string   `json:"namespace,omitempty"`
+	Identity          Identity `json:"identity"`
+	Hostname          string   `json:"hostname"`
+	CanonicalHostname string   `json:"canonical_hostname"`
 	// AliasEpoch identifies this identity's uninterrupted ownership of Hostname.
 	// It is shared by replicas and changes after the alias is released.
 	AliasEpoch      string          `json:"alias_epoch,omitempty"`

@@ -282,7 +282,7 @@ func fetchBoundMarker(t *testing.T, publicURL string, conn net.Conn) {
 
 func checkTLSChannelBinding(t *testing.T, label, attack string) {
 	t.Helper()
-	h := newHarnessWithName(t, label, "127.0.0.1", attack)
+	h := newHarnessWithName(t, label, "127.0.0.1", attack, sdk.WithAutomaticTLS(t.TempDir(), true))
 	publicURL := h.waitForPublicURL()
 	parsed, err := url.Parse(publicURL)
 	if err != nil {
@@ -292,7 +292,17 @@ func checkTLSChannelBinding(t *testing.T, label, attack string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	conn, err := sdk.DialCanonicalTLS(ctx, h.sniAddr, parsed.Hostname(), &tls.Config{RootCAs: roots})
+	tlsConfig := &tls.Config{RootCAs: roots}
+	if attack != "" {
+		// The relay legitimately holds the alias certificate. Exercise that
+		// path so termination must be rejected by the exporter exchange.
+		alias, err := url.Parse(h.exposure.Relays()[0].AliasURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tlsConfig.ServerName = alias.Hostname()
+	}
+	conn, err := sdk.DialCanonicalTLS(ctx, h.sniAddr, parsed.Hostname(), tlsConfig)
 	if attack != "" {
 		assertSplitChannelBindingRefused(t, conn, err)
 		return

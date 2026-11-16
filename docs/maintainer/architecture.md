@@ -110,7 +110,7 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
 
 - `portal/namespace`: service-name validation and public hostname syntax shared
   by relay registration, routing, DNS publication, identity loading, and the SDK.
-  It owns alias, legacy canonical, and Local TLS hostname derivation, address
+  It owns alias, Local TLS hostname derivation, address
   extraction, and DNS-parent classification. Lease ownership remains in the
   registry; TLS, cache, and readiness lifecycles remain with their runtime owners.
   Wire capability identifiers and shared protocol constants remain in `types`.
@@ -383,7 +383,7 @@ cancellation or exposure closure closes and joins those local connections.
 ### Tenant TLS certificate ownership
 
 The negotiated `local-tls-v1` namespace fixes TLS policy by hostname. Friendly
-and legacy canonical URLs use the relay-backed Keyless engine. New exact
+aliases use the relay-backed Keyless engine. New exact
 `<service>.<address>.<root>` canonical URLs use a separate `portal/localtls`
 endpoint based on Go `crypto/tls`; they never use Keyless or relay static cache.
 Each endpoint retains atomic certificate rotation and in-flight handshake safety.
@@ -400,7 +400,7 @@ The existing lease renewal
 loop serializes certificate-change reports with token renewal. It reports the
 installed leaf's expiry to the relay, where `canonical_ready` expires independently
 of the reverse connection count. This is owner-reported availability, not proof
-of TLS identity. Public links use the separate friendly or legacy endpoint until
+of TLS identity. Public links use the separate friendly endpoint until
 canonical material is ready, without redirecting or downgrading the canonical.
 At lease startup, already usable manual or persisted material is reported
 immediately. Pending issuance waits for its certificate-change notification
