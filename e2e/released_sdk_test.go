@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,11 +11,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 // These are released modules, not local replacements or copies of wire structs.
 // Keep this list aligned with docs/maintainer/sdk-compatibility.md.
-func TestReleasedSDKCompatibility(t *testing.T) {
+func TestReleasedSDKRejectsRemovedProtocol(t *testing.T) {
 	for _, release := range []string{"v2.7.3", "v2.7.4"} {
 		t.Run(release, func(t *testing.T) {
 			t.Parallel()
@@ -22,7 +25,7 @@ func TestReleasedSDKCompatibility(t *testing.T) {
 			for _, name := range []string{"compat", ""} {
 				t.Run("name="+name, func(t *testing.T) {
 					t.Parallel()
-					testReleasedSDKLifecycle(t, binary, release, name)
+					testReleasedSDKRejection(t, binary, release, name)
 				})
 			}
 		})
@@ -63,95 +66,38 @@ func buildReleasedSDK(t *testing.T, release string) string {
 	return binary
 }
 
-func testReleasedSDKLifecycle(t *testing.T, binary, release, name string) {
+func testReleasedSDKRejection(t *testing.T, binary, release, name string) {
 	t.Helper()
-	service, target := listenOriginService(t, "127.0.0.1")
+	service, _ := listenOriginService(t, "127.0.0.1")
 	defer service.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	h := &harness{t: t, service: service, cancel: cancel}
-	h.server, h.sniAddr, h.sniPort, h.stateDir, _ = bootHarnessRelay(t, ctx, "127.0.0.1", "", h)
-	h.certificate = filepath.Join(h.stateDir, "fullchain.pem")
-	defer func() { stopRelay(t, h.server) }()
-	command := exec.CommandContext(ctx, binary, h.server.PortalURL(), target.Host, name)
+	server, _, _, _, _ := bootHarnessRelay(t, ctx, "127.0.0.1", "", h)
+	defer stopRelay(t, server)
+	command := exec.CommandContext(ctx, binary, server.PortalURL(), name)
 	command.Stderr = os.Stderr
-	input, err := command.StdinPipe()
+	output, err := command.Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("run pinned %s SDK: %v", release, err)
 	}
-	output, err := command.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
+	var result struct {
+		Release         string
+		ProtocolVersion string
+		Error           string
+		Terminal        bool
 	}
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode released SDK result: %v\n%s", err, output)
 	}
-	waited := false
-	defer func() {
-		_ = input.Close()
-		if !waited {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-		}
-	}()
-	var ready struct{ Release, PublicURL, AliasURL string }
-	if err := json.NewDecoder(output).Decode(&ready); err != nil {
-		t.Fatalf("released SDK readiness: %v", err)
+	if result.Release != release || result.ProtocolVersion != "10" {
+		t.Fatalf("unexpected released SDK: %+v", result)
 	}
-	if ready.Release != release || ready.PublicURL == "" || (name != "" && ready.AliasURL == "") || (name == "" && ready.AliasURL != "") {
-		t.Fatalf("released SDK returned unexpected endpoints: %+v", ready)
+	want := fmt.Sprintf("relay=%q client=%q", types.SDKVersion, result.ProtocolVersion)
+	if !result.Terminal || !strings.Contains(result.Error, "relay sdk protocol version mismatch: "+want) {
+		t.Fatalf("released SDK must reject the removed protocol during negotiation: %+v", result)
 	}
-	if got := h.get(ready.PublicURL); got != marker {
-		t.Fatalf("released SDK canonical response = %q", got)
-	}
-	if ready.AliasURL != "" && h.get(ready.AliasURL) != marker {
-		t.Fatal("released SDK friendly alias did not serve the origin")
-	}
-	awaitReleasedSDKRenewal(t, h)
-	shutdownRelayForRestart(t, h)
-	startRestartedRelay(t, h)
-	if !awaitExposureRouted(t, h, ready.PublicURL) {
-		t.Fatal("released SDK did not reconnect after relay restart")
-	}
-	if err := input.Close(); err != nil {
-		t.Fatal(err)
-	}
-	err = command.Wait()
-	waited = true
-	if err != nil {
-		t.Fatalf("released SDK close: %v", err)
-	}
-	if leases := h.server.PublicLeases(); len(leases) != 0 {
-		t.Fatalf("released SDK close left public leases: %+v", leases)
-	}
-	if _, ok := h.tryGet(ready.PublicURL); ok {
-		t.Fatal("closed released SDK still serves its origin")
-	}
-}
-
-func awaitReleasedSDKRenewal(t *testing.T, h *harness) {
-	t.Helper()
-	leases := h.server.PublicLeases()
-	if len(leases) != 1 {
-		t.Fatalf("released SDK public leases = %+v", leases)
-	}
-	initial := leases[0]
-	deadline := time.NewTimer(2 * time.Minute)
-	defer deadline.Stop()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-deadline.C:
-			t.Fatal("released SDK did not renew its normal lease")
-		case <-ticker.C:
-			current := h.server.PublicLeases()
-			if len(current) == 1 && current[0].ExpiresAt.After(initial.ExpiresAt) {
-				if current[0].CanonicalHostname != initial.CanonicalHostname || current[0].Namespace != "" {
-					t.Fatal("renewal changed the endpoint or opted it into Local TLS")
-				}
-				return
-			}
-		}
+	if leases := server.PublicLeases(); len(leases) != 0 {
+		t.Fatalf("incompatible released SDK registered public leases: %+v", leases)
 	}
 }

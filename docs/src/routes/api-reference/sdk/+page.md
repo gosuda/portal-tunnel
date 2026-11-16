@@ -48,7 +48,8 @@ as terminal for that relay.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `protocol_version` | `string` | SDK tunnel protocol version |
+| `protocol_version` | `string` | default SDK tunnel protocol, currently `11` |
+| `supported_protocol_versions` | `string[]` | optional authoritative protocol list, currently `["11"]`; absent or null falls back to the default, an empty list supports nothing |
 | `replicas` | `boolean` | `true` when opt-in concurrent HTTP leases are supported; absent means unsupported |
 | `release_version` | `string` | relay software release |
 | `namespaces` | `string[]` | optional; includes `local-tls-v1` when new canonical Local TLS is supported |
@@ -82,8 +83,8 @@ which are configured locally by the tunnel process.
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `identity` | `Identity` | yes | `name` and `address` |
-| `namespace` | `string` | no | `local-tls-v1` requests the new Local TLS canonical; omitted keeps legacy hostname policy. Unknown values are rejected |
-| `allow_canonical_fallback` | `boolean` | no | allow canonical-only registration when the friendly alias is unavailable; defaults to `false` for protocol-10 compatibility |
+| `protocol_version` | `string` | no | selected SDK protocol; omission uses the advertised default, unsupported values return HTTP 426 `protocol_incompatible` before a challenge is allocated |
+| `namespace` | `string` | no | `local-tls-v1` requests the Local TLS canonical; omission grants only a friendly alias. Unknown values are rejected |
 | `replica` | `boolean` | no | join concurrent HTTP leases for this identity; requires `replicas: true` from `/sdk/domain`; defaults to exclusive replacement |
 | `metadata` | `LeaseMetadata` | no | public lease metadata |
 | `overlay` | `boolean` | no | prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to `false` |
@@ -123,8 +124,8 @@ friendly alias. Canonical URLs are never cache eligible. Local TLS and alias cac
 |-------|------|-------|
 | `identity` | `Identity` | normalized lease identity |
 | `namespace` | `string` | optional; must match the negotiated request namespace |
-| `hostname` | `string` | friendly hostname; empty when a client that allows canonical fallback finds the friendly name owned by another identity |
-| `canonical_hostname` | `string` | relay-derived identity-bound hostname used by the SDK |
+| `hostname` | `string` | granted friendly hostname; may be empty for Local TLS or dedicated TCP/UDP registrations |
+| `canonical_hostname` | `string` | identity-bound Local TLS hostname; empty when no namespace is requested |
 | `alias_epoch` | `string` | optional alias ownership generation shared by replicas; omitted without a friendly alias or on older relays |
 | `expires_at` | `string` | lease expiry |
 | `access_token` | `string` | token for renew, unregister, signer access, and direct datagram backhaul |
@@ -143,8 +144,9 @@ belong to the tunnel; there is no Keyless or relay cache fallback.
 An absent namespace grants only a friendly alias. Negotiating `local-tls-v1`
 adds the independent canonical Local TLS endpoint. Old one-label canonical
 URLs and `legacy_canonical_hostname` / `LegacyURL` have been removed, without
-redirects. Clients that require those URLs must upgrade; older clients may
-still use a granted alias if they can operate without a canonical hostname.
+redirects. SDK v2.7.3 and v2.7.4 require the removed canonical field even when
+their caller wants only an alias. They are rejected by protocol negotiation and
+need a protocol-10 relay until upgraded. See [Upgrading](/deployment#upgrading).
 
 `RelayStatus.PublicURL` is the canonical URL with Local TLS, empty until its
 certificate is usable; otherwise it is the granted alias. `AliasURL` names the
@@ -366,6 +368,8 @@ the relay and renews normally.
 An empty `Approval` means that no refusal was reported. It never means approved.
 Show `Approval.Message()` to people: `waiting for relay approval` or
 `refused by relay`.
+
+The following behavior assumes a compatible SDK tunnel protocol.
 
 | SDK and relay | While waiting | After a revoke |
 |---------------|---------------|----------------|

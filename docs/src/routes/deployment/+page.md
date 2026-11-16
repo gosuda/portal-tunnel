@@ -250,13 +250,24 @@ subdomains must continue to reach their tunnel targets through the same public
 
 ## Upgrading
 
-Clients and relays perform an exact protocol version match. This release ships
-tunnel protocol version 10 while discovery stays at version 9, so tunnel
-handshake compatibility is decoupled from discovery compatibility: a relay and
-tunnel client must agree on the tunnel protocol version, and a mismatch is
-rejected (`relay sdk protocol version mismatch`). Upgrade relays and the tunnel
-clients that dial them together: a relay upgraded first rejects every older
-client until the clients catch up (`portal update`).
+The current source uses tunnel protocol 11 after removing legacy canonical
+URLs; discovery remains at version 9. New SDKs select a protocol from the
+relay's `supported_protocol_versions` list, falling back to exact equality with
+`protocol_version` if the list is absent. Feature capabilities are negotiated
+separately. Ordinary additive changes preserve supported protocols.
+
+SDK v2.7.3 and v2.7.4 require the removed canonical response field even when
+only a friendly alias is used. They fail their exact-version check against a
+protocol-11 relay. Keep a protocol-10 relay for those clients until the paired
+replacement SDK and relay artifacts are published and ready. The source's
+`v2.8.0` release label alone does not establish that a published artifact has
+protocol 11; verify and pin the actual artifact before rollout.
+
+Deploy a protocol-11 SDK and relay together. Named HTTP services can use their
+granted friendly alias; unnamed HTTP services need a name or explicit Local TLS
+with usable certificate material. Move traffic only after the replacement is
+ready, and drain the old relay before retiring it. Current SDK source also
+rejects protocol-10 relays; updating only one side is not a migration.
 
 For replacement within a compatible protocol version, see
 [Relay Replacement with External Infrastructure](/relay-replacement). It

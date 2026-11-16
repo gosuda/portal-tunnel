@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"time"
 
@@ -23,9 +22,9 @@ func main() {
 }
 
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	id, err := identity.Generate(os.Args[3])
+	id, err := identity.Generate(os.Args[2])
 	if err != nil {
 		return err
 	}
@@ -34,21 +33,33 @@ func run() error {
 		return err
 	}
 	defer exposure.Close()
-	go func() { _ = sdk.Proxy(ctx, exposure, os.Args[2]) }()
-	ready, err := exposure.WaitReady(ctx)
-	if err != nil {
-		return err
+	// These releases' WaitReady does not return terminal errors. Read their
+	// public status instead of turning an incompatibility into a timeout.
+	for {
+		for _, status := range exposure.Relays() {
+			if status.State != sdk.RelayReady && status.State != sdk.RelayFailed {
+				continue
+			}
+			var message string
+			if status.Err != nil {
+				message = status.Err.Error()
+			}
+			return json.NewEncoder(os.Stdout).Encode(struct {
+				Release         string
+				ProtocolVersion string
+				Error           string
+				Terminal        bool
+			}{
+				Release:         types.ReleaseVersion,
+				ProtocolVersion: types.SDKVersion,
+				Error:           message,
+				Terminal:        status.State == sdk.RelayFailed && status.Failure == sdk.RelayFailureTerminal,
+			})
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-exposure.Updates():
+		}
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(struct {
-		Release   string
-		PublicURL string
-		AliasURL  string
-	}{types.ReleaseVersion, ready[0].PublicURL, ready[0].AliasURL}); err != nil {
-		return err
-	}
-	// The parent closes stdin after checking renewal and relay restart recovery.
-	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
-		return err
-	}
-	return exposure.Close()
 }

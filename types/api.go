@@ -72,21 +72,20 @@ type RegisterRequest struct {
 }
 
 // LocalTLSNamespaceV1 is explicitly negotiated before issuing two-label tenant
-// hostnames. An absent namespace retains the legacy URL and TLS contract.
+// hostnames. An absent namespace uses only a granted friendly alias.
 const LocalTLSNamespaceV1 = "local-tls-v1"
 
 // UnnamedServiceLabel is reserved only in the new Local TLS namespace.
 const UnnamedServiceLabel = "default"
 
 type RegisterChallengeRequest struct {
-	// Omission preserves the shipped SDK contract identified by /sdk/domain.
+	// Omission selects the default SDK contract identified by /sdk/domain.
 	ProtocolVersion string `json:"protocol_version,omitempty"`
 	Namespace       string `json:"namespace,omitempty"`
 	// Replica joins concurrent HTTP leases of the same service identity.
 	Replica  bool `json:"replica,omitempty"`
 	Cache    bool `json:"cache,omitempty"`
 	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
-	// AllowCanonicalFallback permits registration to continue without the friendly alias.
 	Identity   Identity      `json:"identity"`
 	Metadata   LeaseMetadata `json:"metadata"`
 	Overlay    bool          `json:"overlay,omitempty"`

@@ -16,7 +16,7 @@ Public clients reach a Portal relay through its existing HTTPS/SNI ingress.
 Tunnel clients establish an outbound reverse backhaul to their selected public
 relay. Tenant TLS normally terminates at the tunnel client. Explicitly opted-in
 static caches terminate browser TLS at the selected relay and serve only the
-identity-bound canonical hostname; friendly aliases remain live-origin routes.
+granted friendly alias. The Local TLS canonical origin remains tunnel-owned.
 
 ### Package Boundaries
 
@@ -388,8 +388,9 @@ aliases use the relay-backed Keyless engine. New exact
 endpoint based on Go `crypto/tls`; they never use Keyless or relay static cache.
 Each endpoint retains atomic certificate rotation and in-flight handshake safety.
 The SDK dispatches by exact lease hostname and advertises canonical readiness
-only while usable local material exists. Legacy clients and relays retain their
-original URL and cache behavior through capability negotiation.
+only while usable local material exists. The compatibility matrix defines which
+SDK protocols can use this contract; namespace negotiation does not restore
+removed legacy canonical routes.
 
 The listener publishes certificate installation and expiry through the same
 status path as reverse transport changes. `Relays`, `Updates`, and `WaitReady`
