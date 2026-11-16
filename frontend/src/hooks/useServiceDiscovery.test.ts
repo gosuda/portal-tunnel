@@ -8,7 +8,9 @@ vi.mock("@/lib/apiClient", () => ({
   APIClientError: class extends Error {},
 }));
 const address = "0x1111111111111111111111111111111111111111";
-beforeEach(() => vi.mocked(apiClient.get).mockReset());
+beforeEach(() => {
+  vi.mocked(apiClient.get).mockReset();
+});
 
 describe("service discovery", () => {
   it("queries the current backend only after the relay selector is opened", async () => {
