@@ -1,4 +1,4 @@
-.PHONY: help install fmt vet lint lint-auto test test-unit test-e2e tidy all run build build-frontend build-docs build-tunnel build-wasm build-server build-server-bin clean check-env-example env-reference
+.PHONY: help install install-lint fmt vet lint lint-auto test test-unit test-go-unit test-e2e tidy all run build build-frontend build-docs build-tunnel build-wasm build-server build-server-bin clean check-env-example env-reference
 
 .DEFAULT_GOAL := help
 
@@ -30,8 +30,10 @@ help:
 	@echo "  make run               - Run relay server"
 	@echo "  make clean             - Remove build artifacts"
 
-install:
+install: install-lint
 	go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
+
+install-lint:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 fmt:
@@ -53,9 +55,11 @@ test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
 	cd frontend && npm test
 
-test-unit:
-	go test -v -coverprofile=coverage.out $(GO_UNIT_PACKAGES)
+test-unit: test-go-unit
 	cd frontend && npm test
+
+test-go-unit:
+	go test -v -coverprofile=coverage.out $(GO_UNIT_PACKAGES)
 
 test-e2e:
 	go test -v ./e2e/...
