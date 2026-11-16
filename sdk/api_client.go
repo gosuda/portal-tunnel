@@ -87,9 +87,9 @@ func (c *apiClient) initHTTPTransport(ctx context.Context) error {
 		return fmt.Errorf("check relay compatibility: %w", err)
 	}
 	protocolVersion := strings.TrimSpace(domainResp.ProtocolVersion)
-	if protocolVersion != types.SDKVersion {
+	if !domainResp.SupportsProtocol(types.SDKVersion) {
 		httpTransport.CloseIdleConnections()
-		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q client=%q", errRelayIncompatible, protocolVersion, types.SDKVersion)
+		return fmt.Errorf("%w: relay sdk protocol version mismatch: relay=%q supported=%q client=%q; upgrade the SDK or choose a relay supporting this protocol", errRelayIncompatible, protocolVersion, domainResp.SupportedProtocolVersions, types.SDKVersion)
 	}
 
 	c.mu.Lock()
@@ -157,8 +157,9 @@ func (c *apiClient) register(ctx context.Context, registerReq types.RegisterChal
 		return types.RegisterResponse{}, fmt.Errorf("%w: relay does not support HTTP replicas", errRelayIncompatible)
 	}
 	if registerReq.Namespace != "" && !supported {
-		registerReq.Namespace = ""
+		return types.RegisterResponse{}, fmt.Errorf("%w: relay does not support namespace %q; choose a relay advertising it or explicitly configure a supported TLS mode", errRelayIncompatible, registerReq.Namespace)
 	}
+	registerReq.ProtocolVersion = types.SDKVersion
 	resp, err := c.exchangeRegister(ctx, registerReq, reportedIP)
 	if err != nil {
 		return types.RegisterResponse{}, err

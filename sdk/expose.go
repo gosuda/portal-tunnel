@@ -237,9 +237,9 @@ func WithTLSCertificate(certFile, keyFile string) Option {
 
 // WithAutomaticTLS obtains and renews tenant certificates through the relay.
 // The tunnel generates and persists private keys in directory. New canonical
-// hostnames never fall back to Keyless. requireLocal additionally rejects old
-// relays without namespace support and waits for canonical readiness; false
-// allows a live legacy endpoint to satisfy WaitReady while issuance is pending.
+// hostnames never fall back to Keyless. A namespace-capable relay is required.
+// requireLocal waits for canonical readiness; false allows a live legacy
+// endpoint to satisfy WaitReady while issuance is pending on that relay.
 // This is local-key ownership, not independent authentication of the relay.
 func WithAutomaticTLS(directory string, requireLocal bool) Option {
 	return func(opts *options) {

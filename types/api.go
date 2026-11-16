@@ -3,6 +3,7 @@ package types
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -78,7 +79,9 @@ const LocalTLSNamespaceV1 = "local-tls-v1"
 const UnnamedServiceLabel = "default"
 
 type RegisterChallengeRequest struct {
-	Namespace string `json:"namespace,omitempty"`
+	// Omission preserves the shipped SDK contract identified by /sdk/domain.
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	Namespace       string `json:"namespace,omitempty"`
 	// Replica joins concurrent HTTP leases of the same service identity.
 	Replica  bool `json:"replica,omitempty"`
 	Cache    bool `json:"cache,omitempty"`
@@ -204,8 +207,11 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	Replicas   bool     `json:"replicas,omitempty"`
-	Namespaces []string `json:"namespaces,omitempty"`
+	// SupportedProtocolVersions is authoritative when present. Omission means
+	// that only ProtocolVersion is supported, as on older relays.
+	SupportedProtocolVersions []string `json:"supported_protocol_versions,omitzero"`
+	Replicas                  bool     `json:"replicas,omitempty"`
+	Namespaces                []string `json:"namespaces,omitempty"`
 	// TenantCertificateIssuance is independent of manual Local TLS support.
 	// Nil means that the relay predates issuance capability reporting.
 	TenantCertificateIssuance *bool              `json:"tenant_certificate_issuance,omitempty"`
@@ -213,6 +219,19 @@ type DomainResponse struct {
 	ProtocolVersion           string             `json:"protocol_version"`
 	ReleaseVersion            string             `json:"release_version"`
 	ENS                       ENSStatus          `json:"ens"`
+}
+
+// SupportsProtocol separates SDK wire compatibility from release and feature
+// reporting. A present empty list supports no protocols; it is not a fallback.
+func (d DomainResponse) SupportsProtocol(version string) bool {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return false
+	}
+	if d.SupportedProtocolVersions == nil {
+		return strings.TrimSpace(d.ProtocolVersion) == version
+	}
+	return slices.Contains(d.SupportedProtocolVersions, version)
 }
 
 type ENSStatus struct {

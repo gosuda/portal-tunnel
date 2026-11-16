@@ -8,6 +8,10 @@
 
 ## Relay Transport Architecture & Subsystems
 
+The [SDK compatibility policy](sdk-compatibility.md) owns the supported released
+SDK matrix, SDK protocol negotiation, and rollout constraints. Discovery protocol
+compatibility remains independent of SDK tunnel compatibility.
+
 Public clients reach a Portal relay through its existing HTTPS/SNI ingress.
 Tunnel clients establish an outbound reverse backhaul to their selected public
 relay. Tenant TLS normally terminates at the tunnel client. Explicitly opted-in

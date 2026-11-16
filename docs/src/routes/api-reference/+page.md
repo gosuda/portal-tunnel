@@ -133,6 +133,22 @@ health or block the existing local `/api/state` endpoint.
 
 ### SDK
 
+`GET /sdk/domain` keeps `protocol_version` as the default SDK tunnel contract
+for shipped clients with exact-version checks. The optional
+`supported_protocol_versions` array is authoritative for newer SDKs: an absent
+or null list falls back to exact equality; an empty list accepts no protocols.
+Feature support remains separate (`namespaces`, `replicas`, `cache`, and
+`tenant_certificate_issuance`). Additive fields do not change old defaults.
+
+New SDKs send their selected `protocol_version` in
+`POST /sdk/register/challenge`; omission retains the default contract.
+Unsupported explicit selections return HTTP 426 with `protocol_incompatible`
+and instructions to upgrade the SDK or choose a compatible relay. A requested
+Local TLS namespace requires explicit support and is never silently downgraded.
+The current relay reports default `10` and supported `["10"]`, preserving the
+mandatory registration fields and normal lifecycle of SDK v2.7.3 and v2.7.4.
+Discovery protocol versions and signed descriptors have separate contracts.
+
 | Method | Path | Auth | Body | Response |
 |--------|------|------|------|----------|
 | `GET` | `/sdk/domain` | None | none | `DomainResponse` |
