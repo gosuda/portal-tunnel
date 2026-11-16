@@ -39,6 +39,31 @@ func TestServiceLookupRejectsOverloadWithoutWaiting(t *testing.T) {
 	}
 }
 
+// INV: comment reads and directory lookups have separate admission, so a
+// saturated comment budget never refuses directory browsing (and vice versa).
+func TestCommentReadsDoNotConsumeDirectoryAdmission(t *testing.T) {
+	const self = "https://local.example"
+	lookup := NewServiceLookup(nil)
+	for range commentLookupLimit {
+		lookup.commentLookups <- struct{}{}
+	}
+	if _, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog", 0); !errors.Is(err, errServiceLookupBusy) {
+		t.Fatalf("overloaded comment read error = %v", err)
+	}
+	if _, err := lookup.Lookup(t.Context(), self, nil, "", nil); err != nil {
+		t.Fatalf("comment pressure refused directory lookup: %v", err)
+	}
+	for range commentLookupLimit {
+		<-lookup.commentLookups
+	}
+	for range serviceLookupLimit {
+		lookup.lookups <- struct{}{}
+	}
+	if _, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog", 0); err != nil {
+		t.Fatalf("directory pressure refused comment read: %v", err)
+	}
+}
+
 func TestServiceLookupBoundsObservationsAndResults(t *testing.T) {
 	now := time.Now().UTC()
 	set := NewRelaySet(nil)
@@ -185,13 +210,13 @@ func TestServiceLookupWaitsForSameRelayInFlight(t *testing.T) {
 		}
 	}))
 	first, second := make(chan serviceObservation, 1), make(chan serviceObservation, 1)
-	go func() { first <- lookup.observe(ctx, "https://relay.example") }()
+	go func() { first <- lookup.observe(ctx, "https://relay.example", lookup.slots) }()
 	select {
 	case <-entered:
 	case <-ctx.Done():
 		t.Fatal("directory request did not start")
 	}
-	go func() { second <- lookup.observe(ctx, "https://relay.example") }()
+	go func() { second <- lookup.observe(ctx, "https://relay.example", lookup.slots) }()
 	select {
 	case <-second:
 		t.Fatal("pending directory lookup was returned as a completed result")
@@ -227,7 +252,7 @@ func TestServiceLookupCanceledLeaderDoesNotNegativeCacheRelay(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	result := make(chan serviceObservation, 1)
-	go func() { result <- lookup.observe(ctx, "https://relay.example") }()
+	go func() { result <- lookup.observe(ctx, "https://relay.example", lookup.slots) }()
 	select {
 	case <-entered:
 	case <-time.After(serviceRelayTimeout):
@@ -237,7 +262,7 @@ func TestServiceLookupCanceledLeaderDoesNotNegativeCacheRelay(t *testing.T) {
 	if observation := <-result; !observation.failed {
 		t.Fatal("canceled lookup unexpectedly succeeded")
 	}
-	if observation := lookup.observe(t.Context(), "https://relay.example"); observation.failed || len(observation.leases) != 1 {
+	if observation := lookup.observe(t.Context(), "https://relay.example", lookup.slots); observation.failed || len(observation.leases) != 1 {
 		t.Fatalf("caller cancellation poisoned the next lookup: %+v", observation)
 	}
 }
@@ -251,7 +276,7 @@ func TestServiceLookupSlotWaitHonorsCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		result := make(chan serviceObservation, 1)
-		go func() { result <- lookup.observe(ctx, "https://relay.example") }()
+		go func() { result <- lookup.observe(ctx, "https://relay.example", lookup.slots) }()
 		synctest.Wait()
 		select {
 		case <-result:

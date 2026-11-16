@@ -17,6 +17,10 @@ import (
 )
 
 const (
+	// Comment reads have their own admission and outbound budget so comment
+	// traffic cannot take the service directory's capacity.
+	commentLookupLimit = 2
+	commentConcurrency = 2
 	commentSourceLimit = 20
 	commentPageSize    = 30
 	commentBodyLimit   = 1 << 20
@@ -33,8 +37,8 @@ type commentSource struct {
 // sources observed to host this exact identity. It neither stores nor writes them.
 func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string, offset int) (types.ServiceCommentsResponse, error) {
 	select {
-	case s.lookups <- struct{}{}:
-		defer func() { <-s.lookups }()
+	case s.commentLookups <- struct{}{}:
+		defer func() { <-s.commentLookups }()
 	default:
 		return types.ServiceCommentsResponse{}, errServiceLookupBusy
 	}
@@ -45,7 +49,7 @@ func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string
 		return response, nil
 	}
 	sources := make(map[string]commentSource)
-	lookup := s.lookup(ctx, self, nil, address, &name, sources)
+	lookup := s.lookup(ctx, self, nil, address, &name, s.commentSlots, sources)
 	response.RelaysSkipped = lookup.RelaysSkipped
 	type result struct {
 		relay   string
@@ -121,11 +125,11 @@ func (s *ServiceLookup) fetchServiceComments(ctx context.Context, relay, hostnam
 	target := utils.ResolveAPIURL(base, types.PathComments)
 	target.RawQuery = url.Values{"hostname": {hostname}}.Encode()
 	select {
-	case s.slots <- struct{}{}:
+	case s.commentSlots <- struct{}{}:
 	case <-ctx.Done():
 		return nil, false, ctx.Err()
 	}
-	defer func() { <-s.slots }()
+	defer func() { <-s.commentSlots }()
 	ctx, cancel := context.WithTimeout(ctx, serviceRelayTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)

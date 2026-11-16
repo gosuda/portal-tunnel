@@ -124,8 +124,9 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   independently of registration/auth budgets. Partial directory coverage offers
   a manual Check more relays action. Concurrent misses for one relay share
   pending work; a canceled caller does not record a failed remote observation.
-  All outbound work shares bounded slots and the Discovery public-address
-  transport. The local list remains independent of remote responses.
+  Directory and comment reads use the Discovery public-address transport with
+  separate admission and outbound slots, so comment traffic cannot make the
+  service directory unavailable. The local list remains independent of remote responses.
   Locations and optional reputation are relay reports, not ownership proof or
   unique voters. Comment threads use bounded, on-demand anonymous reads from
   sources that report the requested identity. IDs and times remain source

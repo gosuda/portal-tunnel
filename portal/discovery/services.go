@@ -54,18 +54,29 @@ type serviceLookupCall struct {
 // ServiceLookup owns bounded, request-driven public-directory observations.
 // It neither discovers new relays nor changes their routing/health policy.
 type ServiceLookup struct {
-	relays     *RelaySet
-	client     *http.Client
-	slots      chan struct{}
-	lookups    chan struct{}
-	mu         sync.Mutex
-	cache      map[string]serviceObservation
-	inflight   map[string]*serviceLookupCall
-	nextTarget int
+	relays         *RelaySet
+	client         *http.Client
+	slots          chan struct{}
+	lookups        chan struct{}
+	commentSlots   chan struct{}
+	commentLookups chan struct{}
+	mu             sync.Mutex
+	cache          map[string]serviceObservation
+	inflight       map[string]*serviceLookupCall
+	nextTarget     int
 }
 
 func NewServiceLookup(relays *RelaySet) *ServiceLookup {
-	return &ServiceLookup{relays: relays, client: newPublicRelayClient(), slots: make(chan struct{}, serviceConcurrency), lookups: make(chan struct{}, serviceLookupLimit), cache: make(map[string]serviceObservation), inflight: make(map[string]*serviceLookupCall)}
+	return &ServiceLookup{
+		relays:         relays,
+		client:         newPublicRelayClient(),
+		slots:          make(chan struct{}, serviceConcurrency),
+		lookups:        make(chan struct{}, serviceLookupLimit),
+		commentSlots:   make(chan struct{}, commentConcurrency),
+		commentLookups: make(chan struct{}, commentLookupLimit),
+		cache:          make(map[string]serviceObservation),
+		inflight:       make(map[string]*serviceLookupCall),
+	}
 }
 
 // serviceTargets keeps eligibility in Discovery rather than duplicating it at
@@ -102,10 +113,12 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 	default:
 		return types.ServiceDiscoveryResponse{}, errServiceLookupBusy
 	}
-	return s.lookup(ctx, self, local, address, name, nil), nil
+	return s.lookup(ctx, self, local, address, name, s.slots, nil), nil
 }
 
-func (s *ServiceLookup) lookup(ctx context.Context, self string, local []types.Lease, address string, name *string, commentSources map[string]commentSource) types.ServiceDiscoveryResponse {
+// slots is the outbound budget of the caller's admission class. Directory and
+// comment reads share snapshots and in-flight work, but never each other's slots.
+func (s *ServiceLookup) lookup(ctx context.Context, self string, local []types.Lease, address string, name *string, slots chan struct{}, commentSources map[string]commentSource) types.ServiceDiscoveryResponse {
 	ctx, cancel := context.WithTimeout(ctx, serviceLookupTimeout)
 	defer cancel()
 	response := types.ServiceDiscoveryResponse{Services: []types.DiscoveredService{}, RelaysChecked: 1}
@@ -131,7 +144,7 @@ func (s *ServiceLookup) lookup(ctx context.Context, self string, local []types.L
 	results := make(chan result, len(targets))
 	var workers sync.WaitGroup
 	for _, target := range targets {
-		workers.Go(func() { results <- result{target, s.observe(ctx, target)} })
+		workers.Go(func() { results <- result{target, s.observe(ctx, target, slots)} })
 	}
 	workers.Wait()
 	close(results)
@@ -220,7 +233,7 @@ func (s *ServiceLookup) lookup(ctx context.Context, self string, local []types.L
 	return response
 }
 
-func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObservation {
+func (s *ServiceLookup) observe(ctx context.Context, relay string, slots chan struct{}) serviceObservation {
 	var call *serviceLookupCall
 	for {
 		if ctx.Err() != nil {
@@ -254,11 +267,11 @@ func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObserv
 	// acquisition; waiting consumes only the caller's lookup deadline.
 	select {
 	case <-ctx.Done():
-	case s.slots <- struct{}{}:
+	case slots <- struct{}{}:
 		fetchCtx, cancel := context.WithTimeout(ctx, serviceRelayTimeout)
 		fetched, err := s.fetch(fetchCtx, relay)
 		cancel()
-		<-s.slots
+		<-slots
 		if ctx.Err() == nil {
 			observed := time.Now().UTC()
 			observation = serviceObservation{at: observed, until: observed.Add(serviceNegativeTTL), failed: true}
