@@ -149,7 +149,7 @@ func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) erro
 	}
 
 	hostname = types.NormalizeHostname(hostname)
-	if !m.cfg.ENSGaslessEnabled && !namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) && !namespace.IsAddressHostname(hostname, m.cfg.BaseDomain) {
+	if !m.cfg.ENSGaslessEnabled && !namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
 	if hostname == "" {
@@ -185,19 +185,14 @@ func (m *Manager) waitLeaseDNS(ctx context.Context, hostname string) error {
 }
 
 func (m *Manager) checkLeaseDNS(state *maintenanceLoopState, hostname string) error {
-	parent := namespace.AddressParent(hostname)
-	// Tracking may precede failed writes; pending operations are not proof
-	// that an address was published successfully.
-	for _, name := range []string{hostname, parent} {
-		if _, pending := state.pendingENS[name]; pending {
-			return errLeaseDNSPending
-		}
+	if _, pending := state.pendingENS[hostname]; pending {
+		return errLeaseDNSPending
 	}
 	tracked, err := m.trackedENSGaslessHostnames()
 	if err != nil {
 		return err
 	}
-	if !slices.Contains(tracked, hostname) || !slices.Contains(tracked, parent) {
+	if !slices.Contains(tracked, hostname) {
 		return errLeaseDNSPending
 	}
 	return nil
@@ -228,20 +223,10 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
 		}
-		if namespace.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
-			// An exact child suppresses wildcard answers for its address parent.
-			// Publish the parent before the child to keep legacy URLs working.
-			parent := namespace.AddressParent(command.hostname)
-			for _, name := range []string{parent, command.hostname} {
-				// Track before DNS writes so a partial update can be withdrawn.
-				if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string { return append(hostnames, name) }); err != nil {
-					return err
-				}
-				if err := m.ensureLeaseAddressRecords(ctx, name, publicIPs); err != nil {
-					return err
-				}
-			}
-		} else if err := m.ensureLeaseAddressRecords(ctx, command.hostname, publicIPs); err != nil {
+		if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string { return append(hostnames, command.hostname) }); err != nil {
+			return err
+		}
+		if err := m.ensureLeaseAddressRecords(ctx, command.hostname, publicIPs); err != nil {
 			return err
 		}
 	}
@@ -252,20 +237,6 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 }
 
 func (m *Manager) applyENSCommandRemove(ctx context.Context, command ensDNSCommand) error {
-	if namespace.IsAddressHostname(command.hostname, m.cfg.BaseDomain) {
-		tracked, err := m.trackedENSGaslessHostnames()
-		if err != nil {
-			return err
-		}
-		if !slices.Contains(tracked, command.hostname) {
-			return nil
-		}
-		for _, name := range tracked {
-			if strings.HasSuffix(name, "."+command.hostname) && namespace.IsLocalTLSHostname(name, m.cfg.BaseDomain) {
-				return fmt.Errorf("wait for canonical DNS removal before withdrawing %s", command.hostname)
-			}
-		}
-	}
 	if err := m.dns.DeleteTXTRecords(ctx, command.hostname, gaslessENSTXTPrefix); err != nil {
 		return err
 	}
@@ -317,19 +288,8 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 
 func (m *Manager) withdrawTrackedENSHosts(ctx context.Context, cleanupErr error) error {
 	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
-		// Withdraw address parents last. A failed child withdrawal must
-		// leave its parent tracked and resolving across another restart.
-		slices.SortStableFunc(hostnames, func(a, b string) int {
-			return strings.Count(b, ".") - strings.Count(a, ".")
-		})
 		remaining := hostnames[:0]
 		for _, hostname := range hostnames {
-			if namespace.IsAddressHostname(hostname, m.cfg.BaseDomain) && slices.ContainsFunc(remaining, func(name string) bool {
-				return strings.HasSuffix(name, "."+hostname)
-			}) {
-				remaining = append(remaining, hostname)
-				continue
-			}
 			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
 				remaining = append(remaining, hostname)
 				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
@@ -350,23 +310,9 @@ func (m *Manager) syncTrackedENSGaslessHostAddressRecords(ctx context.Context, p
 	if err != nil {
 		return err
 	}
-	// Retry parent updates first, including after a partially completed command.
-	slices.SortStableFunc(hostnames, func(a, b string) int {
-		return strings.Count(a, ".") - strings.Count(b, ".")
-	})
 	var syncErr error
-	failedParents := make(map[string]bool)
 	for _, hostname := range hostnames {
-		if namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
-			parent := namespace.AddressParent(hostname)
-			if failedParents[parent] {
-				continue
-			}
-		}
 		if err := m.dns.EnsureAddressRecord(ctx, hostname, publicIP); err != nil {
-			if namespace.IsAddressHostname(hostname, m.cfg.BaseDomain) {
-				failedParents[hostname] = true
-			}
 			syncErr = errors.Join(syncErr, fmt.Errorf("ensure ens gasless address record for %s: %w", hostname, err))
 		}
 	}

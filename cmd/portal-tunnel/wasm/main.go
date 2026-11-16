@@ -3,7 +3,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -101,12 +100,12 @@ func awaitStartBrowserConnectorReady(ctx context.Context, c *browserConnector, e
 		c.clear(exposure)
 		return nil, err
 	}
-	if len(ready) == 0 || cmp.Or(ready[0].PublicURL, ready[0].LegacyURL) == "" {
+	if len(ready) == 0 || ready[0].PublicURL == "" {
 		c.clear(exposure)
 		return nil, errRelayDidNotReturnPublicURL
 	}
 	return map[string]any{
-		"publicURL": cmp.Or(ready[0].PublicURL, ready[0].LegacyURL),
+		"publicURL": ready[0].PublicURL,
 		"aliasURL":  ready[0].AliasURL,
 	}, nil
 }
