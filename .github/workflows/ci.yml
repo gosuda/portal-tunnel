@@ -24,6 +24,10 @@ jobs:
       pull-requests: read
     outputs:
       backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
+      go: >-
+        ${{ github.event_name == 'workflow_dispatch' ||
+        steps.filter.outputs.backend == 'true' ||
+        steps.filter.outputs.appauth == 'true' }}
       frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
     steps:
       - name: Checkout code
@@ -44,6 +48,9 @@ jobs:
               - '!docs/**'
               - '!extensions/**'
               - '!*.md'
+            # Shared JSON fixtures are also inputs to sdk/appauth's Go tests.
+            appauth:
+              - 'frontend/src/lib/*.json'
             frontend:
               - 'frontend/**'
               - 'Makefile'
@@ -62,11 +69,11 @@ jobs:
         run: test "$CHANGE_DETECTION_RESULT" = success
 
       - name: Checkout code
-        if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true'
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.frontend == 'true'
         uses: actions/checkout@v7
 
       - name: Set up Go
-        if: needs.changes.outputs.backend == 'true'
+        if: needs.changes.outputs.go == 'true'
         id: go
         uses: actions/setup-go@v7
         with:
@@ -74,13 +81,13 @@ jobs:
           cache: true
 
       - name: Check Go module consistency
-        if: needs.changes.outputs.backend == 'true'
+        if: needs.changes.outputs.go == 'true'
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
       - name: Cache CI linter
-        if: needs.changes.outputs.backend == 'true'
+        if: needs.changes.outputs.go == 'true'
         id: cache-tools
         uses: actions/cache@v5
         with:
@@ -88,11 +95,11 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-lint-${{ hashFiles('Makefile') }}
 
       - name: Install CI linter
-        if: needs.changes.outputs.backend == 'true' && steps.cache-tools.outputs.cache-hit != 'true'
+        if: needs.changes.outputs.go == 'true' && steps.cache-tools.outputs.cache-hit != 'true'
         run: make install-lint
 
       - name: Run Go checks
-        if: needs.changes.outputs.backend == 'true'
+        if: needs.changes.outputs.go == 'true'
         run: |
           make vet
           make lint
