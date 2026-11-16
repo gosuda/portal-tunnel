@@ -136,10 +136,11 @@ func bootLocalhostRelay(t *testing.T, ctx context.Context) (string, int) {
 	port := harnessPort(t, "localhost")
 	sniAddr := net.JoinHostPort("localhost", strconv.Itoa(port))
 	relay, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:     "https://" + sniAddr,
-		StateDir:      t.TempDir(),
-		SNIListenAddr: sniAddr,
-		SNIPort:       port,
+		TenantCertificates: true,
+		PortalURL:          "https://" + sniAddr,
+		StateDir:           t.TempDir(),
+		SNIListenAddr:      sniAddr,
+		SNIPort:            port,
 	})
 	if err != nil {
 		t.Fatalf("create relay: %v", err)
@@ -366,10 +367,13 @@ func awaitHeldLease(t *testing.T, ctx context.Context, runtime *tunnel.Runtime) 
 func startHeldTunnel(t *testing.T, ctx context.Context, sniAddr, upstreamURL, identityPath string) (sdk.RelayStatus, func(), types.Identity) {
 	t.Helper()
 	runtime, err := tunnel.Start(ctx, tunnel.Spec{
-		Identity:  tunnel.IdentitySpec{Name: "held", Path: identityPath},
-		Relays:    tunnel.RelaySpec{URLs: []string{"https://" + sniAddr}},
-		Transport: tunnel.TransportSpec{Target: strings.TrimPrefix(upstreamURL, "http://")},
-		HTTP:      &tunnel.HTTPConfig{Auth: &appauth.Config{Provider: appauth.ProviderCredential}},
+		TLSAuto:         true,
+		TLSStateDir:     identityPath + ".tls",
+		TLSRequireLocal: true,
+		Identity:        tunnel.IdentitySpec{Name: "held", Path: identityPath},
+		Relays:          tunnel.RelaySpec{URLs: []string{"https://" + sniAddr}},
+		Transport:       tunnel.TransportSpec{Target: strings.TrimPrefix(upstreamURL, "http://")},
+		HTTP:            &tunnel.HTTPConfig{Auth: &appauth.Config{Provider: appauth.ProviderCredential}},
 	})
 	if err != nil {
 		t.Fatal(err)

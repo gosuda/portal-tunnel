@@ -96,8 +96,7 @@ which are configured locally by the tunnel process.
 
 Cache opt-in is incompatible with raw TCP/UDP leases.
 For `local-tls-v1`, protocol-level cache opt-in still names only the separate
-legacy canonical. The new canonical never becomes cache eligible. The CLI/agent
-reject combining Local TLS modes with relay cache entirely.
+friendly alias. Canonical URLs are never cache eligible. Local TLS and alias caching can be combined.
 
 `RegisterChallengeResponse`:
 
@@ -124,7 +123,6 @@ reject combining Local TLS modes with relay cache entirely.
 |-------|------|-------|
 | `identity` | `Identity` | normalized lease identity |
 | `namespace` | `string` | optional; must match the negotiated request namespace |
-| `legacy_canonical_hostname` | `string` | separate one-label compatibility hostname when `namespace` is `local-tls-v1` |
 | `hostname` | `string` | friendly hostname; empty when a client that allows canonical fallback finds the friendly name owned by another identity |
 | `canonical_hostname` | `string` | relay-derived identity-bound hostname used by the SDK |
 | `alias_epoch` | `string` | optional alias ownership generation shared by replicas; omitted without a friendly alias or on older relays |
@@ -142,27 +140,19 @@ peers must negotiate `local-tls-v1` before using
 on acquiring a friendly alias. Its exact-host certificate and TLS endpoint
 belong to the tunnel; there is no Keyless or relay cache fallback.
 
-An absent namespace keeps legacy one-label canonical derivation: `<address>`,
-`<name>-<address>` for names up to 22 characters, or
-`<name-hash>--<address>` for longer names, under the relay root. Local TLS
-clients keep this route in `legacy_canonical_hostname`; old clients and relays
-continue using legacy URLs. Hostname depth is relative to the configured root.
+An absent namespace grants only a friendly alias. Negotiating `local-tls-v1`
+adds the independent canonical Local TLS endpoint. Old one-label canonical
+URLs and `legacy_canonical_hostname` / `LegacyURL` have been removed, without
+redirects. Clients that require those URLs must upgrade; older clients may
+still use a granted alias if they can operate without a canonical hostname.
 
-`RelayStatus.PublicURL` is the canonical URL, empty for a negotiated Local TLS
-endpoint without usable local material. `LegacyURL` is its separate compatibility
-origin. `AliasURL` is the granted friendly hostname, empty for unnamed services
-or an alias collision. A connecting status retracts readiness even if endpoint
-fields are retained; only nonempty URLs on a ready status are usable.
-Certificate expiry withdraws
-`PublicURL` through the same status/event path while the other origins can stay
-ready. Prefer `AliasURL` for friendly sharing, then an available `PublicURL` or
-`LegacyURL` as an explicit origin choice. Never infer aliases by stripping labels.
+`RelayStatus.PublicURL` is the canonical URL with Local TLS, empty until its
+certificate is usable; otherwise it is the granted alias. `AliasURL` names the
+alias separately. An alias collision may leave a Local TLS exposure with only
+its canonical URL. Alias-only registrations cannot fall back to a canonical.
 
-The current SDK permits canonical-only registration when an alias is occupied;
-the new namespace permits this independently of `allow_canonical_fallback`.
-Legacy protocol clients that omit that capability receive `hostname_conflict`
-instead. No automatic redirects, cookie migration, or legacy URL removal date
-are introduced. Relay caching remains limited to eligible legacy origins.
+Relay static caching requires an explicitly opted-in, currently granted alias.
+It can coexist with canonical Local TLS, which never serves relay snapshots.
 
 `ReverseEndpoint`:
 

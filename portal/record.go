@@ -12,32 +12,30 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/cache"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
-	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 type leaseRecord struct {
 	types.Identity
-	id                      string
-	ExpiresAt               time.Time
-	FirstSeenAt             time.Time
-	LastSeenAt              time.Time
-	sourceAddr              netip.Addr
-	registerSource          netip.Addr
-	ReportedIP              string
-	Hostname                string
-	AliasEpoch              string
-	Namespace               string
-	LegacyCanonicalHostname string
-	CanonicalHostname       string
-	localTLSNotAfter        time.Time
-	Metadata                types.LeaseMetadata
-	Overlay                 bool
-	replica                 bool
-	lastSelected            uint64
-	pinnedChain             []byte
-	verifiedChain           []byte
+	id                string
+	ExpiresAt         time.Time
+	FirstSeenAt       time.Time
+	LastSeenAt        time.Time
+	sourceAddr        netip.Addr
+	registerSource    netip.Addr
+	ReportedIP        string
+	Hostname          string
+	AliasEpoch        string
+	Namespace         string
+	CanonicalHostname string
+	localTLSNotAfter  time.Time
+	Metadata          types.LeaseMetadata
+	Overlay           bool
+	replica           bool
+	lastSelected      uint64
+	pinnedChain       []byte
+	verifiedChain     []byte
 
 	registerChallenge *identity.RegisterChallenge
 
@@ -54,24 +52,20 @@ type leaseRecord struct {
 }
 
 func (r *leaseRecord) cacheLeaseLocked() cache.Lease {
-	hostname := r.CanonicalHostname
-	if r.Namespace == types.LocalTLSNamespaceV1 {
-		hostname = r.LegacyCanonicalHostname
-	}
-	return cache.Lease{ID: r.id, Owner: r.ServiceKey(), Hostname: hostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
+	return cache.Lease{ID: r.id, Owner: r.ServiceKey(), Hostname: r.Hostname, ExpiresAt: r.ExpiresAt, LastSeenAt: r.LastSeenAt}
 }
 
 func (r *leaseRecord) isPublicEntry() bool {
-	return r != nil && r.CanonicalHostname != ""
+	return r != nil && (r.CanonicalHostname != "" || r.Hostname != "" || r.tcpPort > 0 || r.datagram != nil)
 }
 
 func (r *leaseRecord) hostnames() []string {
 	if !r.isPublicEntry() {
 		return nil
 	}
-	hostnames := []string{r.CanonicalHostname}
-	if r.LegacyCanonicalHostname != "" {
-		hostnames = append(hostnames, r.LegacyCanonicalHostname)
+	var hostnames []string
+	if r.CanonicalHostname != "" {
+		hostnames = append(hostnames, r.CanonicalHostname)
 	}
 	if r.Hostname != "" {
 		hostnames = append(hostnames, r.Hostname)
@@ -235,22 +229,10 @@ func (s *Server) syncLeaseDNS(ctx context.Context, record *leaseRecord) error {
 	return record.syncENSGaslessDNS(ctx, s.acmeManager)
 }
 
-// dnsAddressParent is shared by Local TLS services using the same wallet.
-// It is not a routed hostname unless an unnamed lease owns it.
-func (r *leaseRecord) dnsAddressParent() string {
-	if r == nil || r.Namespace != types.LocalTLSNamespaceV1 {
-		return ""
-	}
-	return namespace.AddressParent(r.CanonicalHostname)
-}
-
 func (s *Server) isDNSHostnameOwnedLocked(hostname string, now time.Time) bool {
 	for _, current := range s.registry.records {
 		if current == nil || current.isExpired(now) {
 			continue
-		}
-		if current.dnsAddressParent() == hostname {
-			return true
 		}
 		for _, currentHostname := range current.hostnames() {
 			if currentHostname == hostname {
@@ -271,9 +253,6 @@ func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
 	now := time.Now()
 
 	hostnames := record.hostnames()
-	if parent := record.dnsAddressParent(); parent != "" && parent != record.LegacyCanonicalHostname {
-		hostnames = append(hostnames, parent)
-	}
 	for _, hostname := range hostnames {
 		if s.isDNSHostnameOwnedLocked(hostname, now) {
 			continue

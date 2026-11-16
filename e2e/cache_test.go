@@ -223,32 +223,6 @@ func awaitCachePopulated(ctx context.Context, t *testing.T, client *http.Client,
 	}
 }
 
-func assertFriendlyHostnameBypassed(t *testing.T, client *http.Client, publicURL string, relay *portal.Server) {
-	t.Helper()
-	leases := relay.PublicLeases()
-	if len(leases) != 1 || leases[0].Hostname == "" {
-		t.Fatalf("friendly lease unavailable: %+v", leases)
-	}
-	friendlyURL, err := url.Parse(publicURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if port := friendlyURL.Port(); port != "" {
-		friendlyURL.Host = net.JoinHostPort(leases[0].Hostname, port)
-	} else {
-		friendlyURL.Host = leases[0].Hostname
-	}
-	response, err := client.Get(friendlyURL.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.Copy(io.Discard, response.Body)
-	response.Body.Close()
-	if response.Header.Get("X-Origin") != "true" || response.Header.Get("ETag") != "" {
-		t.Fatalf("friendly hostname used relay cache: %v", response.Header)
-	}
-}
-
 func assertCacheRangeHit(t *testing.T, ctx context.Context, client *http.Client, publicURL string, originCalls *atomic.Int32) {
 	t.Helper()
 	before := originCalls.Load()
@@ -293,9 +267,8 @@ func assertUncacheableFallsThrough(t *testing.T, ctx context.Context, client *ht
 	}
 }
 
-func assertCacheSemantics(t *testing.T, ctx context.Context, client *http.Client, publicURL string, relay *portal.Server, originCalls *atomic.Int32) {
+func assertCacheSemantics(t *testing.T, ctx context.Context, client *http.Client, publicURL string, originCalls *atomic.Int32) {
 	t.Helper()
-	assertFriendlyHostnameBypassed(t, client, publicURL, relay)
 	assertCacheRangeHit(t, ctx, client, publicURL, originCalls)
 	assertSpoofedHostMisdirected(t, ctx, client, publicURL)
 	assertUncacheableFallsThrough(t, ctx, client, publicURL)
@@ -411,13 +384,13 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-	publicURL := ready[0].PublicURL
+	publicURL := ready[0].AliasURL
 	awaitCachePopulated(readyCtx, t, client, publicURL)
-	assertCacheSemantics(t, ctx, client, publicURL, relay, &originCalls)
+	assertCacheSemantics(t, ctx, client, publicURL, &originCalls)
 	assertOfflineCacheExpiry(t, client, publicURL, exposure, offlineTTL)
 }
 
-func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
+func TestNamespaceCanonicalNeverUsesAliasCache(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -429,7 +402,7 @@ func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	exposure, ready := namespaceService(t, h, id, "live origin", sdk.WithAutomaticTLS(t.TempDir(), true), sdk.WithStaticRelayCache(writeCacheSite(t), time.Minute))
-	if ready.LegacyURL == "" || ready.LegacyURL == ready.PublicURL {
+	if ready.AliasURL == "" || ready.AliasURL == ready.PublicURL {
 		t.Fatalf("cache migration URLs=%+v", ready)
 	}
 	client, transport, ok := tenantTLSClient(h.sniAddr, h.certificate)
@@ -440,12 +413,12 @@ func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
 	defer transport.CloseIdleConnections()
 	deadline, stop := context.WithTimeout(ctx, 15*time.Second)
 	defer stop()
-	awaitCachePopulated(deadline, t, client, ready.LegacyURL)
+	awaitCachePopulated(deadline, t, client, ready.AliasURL)
 	namespaceResponse(t, h, ready.PublicURL, "live origin", true)
 	parsed, _ := url.Parse(ready.PublicURL)
 	// Even when the relay terminates TLS for a legacy snapshot, a forged HTTP
 	// authority must not make that snapshot available under a canonical name.
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, ready.LegacyURL, nil)
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, ready.AliasURL, nil)
 	request.Host = parsed.Host
 	response, err := client.Do(request)
 	if err != nil {
@@ -458,7 +431,7 @@ func TestNamespaceCanonicalNeverUsesLegacyCache(t *testing.T) {
 	if err := exposure.Close(); err != nil {
 		t.Fatal(err)
 	}
-	assertOfflineCacheAvailable(t, client, ready.LegacyURL)
+	assertOfflineCacheAvailable(t, client, ready.AliasURL)
 	transport.CloseIdleConnections()
 	response, err = client.Get(ready.PublicURL)
 	if err == nil {

@@ -598,34 +598,27 @@ func TestPortPoolRollbackReturnsPortWithoutReservation(t *testing.T) {
 	}
 }
 
-func TestLeaseHostnameConflictRollsBackRawPorts(t *testing.T) {
+func TestRawLeaseRegistersWithoutAliasWhenNameIsTaken(t *testing.T) {
 	registry := newTestRegistry(t, true, true)
 	request := types.RegisterChallengeRequest{
-		Identity:   newTestLeaseIdentity(t, "conflict"),
+		Identity:   newTestLeaseIdentity(t, "shared"),
 		UDPEnabled: true,
 		TCPEnabled: true,
 	}
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
+	_, _, first, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	checkHostnameConflictFreesPorts(t, registry, request)
-	request.Identity = newTestLeaseIdentity(t, "accepted")
-	if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); err != nil {
-		t.Fatalf("rejected identities exhausted raw ports: %v", err)
+	request.Identity = newTestLeaseIdentity(t, "shared")
+	_, _, second, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatalf("raw lease depended on alias availability: %v", err)
 	}
-}
-
-func checkHostnameConflictFreesPorts(t *testing.T, registry *leaseRegistry, request types.RegisterChallengeRequest) {
-	t.Helper()
-	for i := range 3 {
-		request.Identity = newTestLeaseIdentity(t, "conflict")
-		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errHostnameConflict) {
-			t.Fatalf("rejected registration %d error = %v, want hostname conflict", i, err)
-		}
-		if len(registry.udpPorts.available) != 1 || len(registry.tcpPorts.available) != 1 ||
-			len(registry.udpPorts.reserved) != 0 || len(registry.tcpPorts.reserved) != 0 {
-			t.Fatalf("rejected registration %d retained ports: UDP=%+v TCP=%+v", i, registry.udpPorts, registry.tcpPorts)
-		}
+	if first.Hostname != "shared.example.com" || second.Hostname != "" {
+		t.Fatalf("aliases = (%q, %q), want first holder only", first.Hostname, second.Hostname)
+	}
+	if first.UDPAddr == second.UDPAddr || first.TCPAddr == second.TCPAddr {
+		t.Fatalf("raw endpoints are shared: first=%s/%s second=%s/%s", first.UDPAddr, first.TCPAddr, second.UDPAddr, second.TCPAddr)
 	}
 }
 
@@ -781,7 +774,7 @@ func TestPortPoolReusesPortAfterReservationExpires(t *testing.T) {
 func TestLeasePortsStayWithServiceIdentityAcrossReconnect(t *testing.T) {
 	registry := newTestRegistry(t, true, true)
 	firstIdentity := newTestLeaseIdentity(t, "shared")
-	request := types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: firstIdentity, UDPEnabled: true, TCPEnabled: true}
+	request := types.RegisterChallengeRequest{Identity: firstIdentity, UDPEnabled: true, TCPEnabled: true}
 	firstRecord, first := registerFirstStickyLease(t, registry, request)
 	rejectStickyPortsOtherOwner(t, registry, request, first)
 	reconnectStickyLeaseKeepsPorts(t, registry, request, first)
@@ -963,11 +956,11 @@ func checkLifecycleRegistration(t *testing.T, registry *leaseRegistry, resp type
 	if len(leases) != 1 || leases[0].Hostname != "demo.example.com" || leases[0].CanonicalHostname != resp.CanonicalHostname || leases[0].Address != resp.Identity.Address {
 		t.Fatalf("PublicLeases() = %+v, want the registered demo lease", leases)
 	}
-	if resp.Hostname != "demo.example.com" || resp.CanonicalHostname == "" {
-		t.Fatalf("RegisterResponse hostnames = (%q, %q), want friendly and canonical hostnames", resp.Hostname, resp.CanonicalHostname)
+	if resp.Hostname != "demo.example.com" || resp.CanonicalHostname != "" {
+		t.Fatalf("RegisterResponse hostnames = (%q, %q), want only the friendly alias", resp.Hostname, resp.CanonicalHostname)
 	}
-	if _, ok := registry.Lookup(resp.CanonicalHostname); !ok {
-		t.Fatal("Lookup(canonical hostname) = false, want registered lease")
+	if _, ok := registry.Lookup(resp.Hostname); !ok {
+		t.Fatal("Lookup(friendly alias) = false, want registered lease")
 	}
 }
 
@@ -1126,11 +1119,51 @@ func TestLeaseRegistryUnnamedHostnameContract(t *testing.T) {
 	checkUnnamedListing(t, registry, leasedIdentity, expectedCanonical)
 }
 
+func TestUnnamedHTTPRegistrationRequiresLocalTLS(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		request types.RegisterChallengeRequest
+		allowed bool
+	}{
+		{name: "HTTP"},
+		{name: "cached HTTP", request: types.RegisterChallengeRequest{Cache: true}},
+		{name: "overlay HTTP", request: types.RegisterChallengeRequest{Overlay: true}},
+		{name: "HTTP replica", request: types.RegisterChallengeRequest{Replica: true}},
+		{name: "Local TLS", request: types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1}, allowed: true},
+		{name: "raw UDP", request: types.RegisterChallengeRequest{UDPEnabled: true}, allowed: true},
+		{name: "raw TCP", request: types.RegisterChallengeRequest{TCPEnabled: true}, allowed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := newTestRegistry(t, true, true)
+			request := test.request
+			request.Identity = newTestLeaseIdentity(t, "")
+			record, _, response, err := registry.Register(request, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+			if !test.allowed {
+				var apiErr *apiError
+				if !errors.Is(err, errUnnamedHTTPNeedsLocalTLS) || !errors.As(err, &apiErr) || apiErr.code != types.APIErrorCodeInvalidRequest || apiErr.status != http.StatusBadRequest {
+					t.Fatalf("Register() = %v, want invalid-request rejection for unnamed HTTP", err)
+				}
+				if record != nil || response.AccessToken != "" {
+					t.Fatal("rejected unnamed HTTP registration returned a lease or token")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Register() = %v, want unnamed Local TLS or raw transport accepted", err)
+			}
+			if response.CanonicalHostname == "" && response.UDPAddr == "" && response.TCPAddr == "" {
+				t.Fatal("accepted unnamed service has no endpoint")
+			}
+		})
+	}
+}
+
 func registerUnnamedLease(t *testing.T, registry *leaseRegistry) (types.Identity, types.RegisterResponse) {
 	t.Helper()
 	leasedIdentity := newTestLeaseIdentity(t, "")
 	_, _, resp, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: leasedIdentity,
+		Identity: leasedIdentity, Namespace: types.LocalTLSNamespaceV1,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -1140,9 +1173,9 @@ func registerUnnamedLease(t *testing.T, registry *leaseRegistry) (types.Identity
 
 func checkUnnamedHostnames(t *testing.T, leasedIdentity types.Identity, resp types.RegisterResponse) string {
 	t.Helper()
-	expectedCanonical, err := namespace.LegacyHostname("", leasedIdentity.Address, "example.com")
+	expectedCanonical, err := namespace.LocalTLSHostname("", leasedIdentity.Address, "example.com")
 	if err != nil {
-		t.Fatalf("LegacyHostname error = %v", err)
+		t.Fatalf("LocalTLSHostname error = %v", err)
 	}
 	if resp.Hostname != "" {
 		t.Fatalf("RegisterResponse hostname = %q, want empty friendly hostname for unnamed service", resp.Hostname)
@@ -1175,13 +1208,13 @@ func TestLeaseRegistryUnnamedReplacementAndNamedCoexistence(t *testing.T) {
 func replaceUnnamedLease(t *testing.T, registry *leaseRegistry, unnamedIdentity types.Identity) (*leaseRecord, types.RegisterResponse) {
 	t.Helper()
 	_, _, firstUnnamedResp, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: unnamedIdentity,
+		Identity: unnamedIdentity, Namespace: types.LocalTLSNamespaceV1,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("first unnamed Register() error = %v", err)
 	}
 	secondUnnamedRecord, _, secondUnnamedResp, err := registry.Register(types.RegisterChallengeRequest{
-		Identity: unnamedIdentity,
+		Identity: unnamedIdentity, Namespace: types.LocalTLSNamespaceV1,
 	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("second unnamed Register() error = %v", err)
@@ -1205,8 +1238,8 @@ func checkNamedCoexistence(t *testing.T, registry *leaseRegistry, unnamedIdentit
 	if err != nil {
 		t.Fatalf("named Register() error = %v", err)
 	}
-	if namedResp.CanonicalHostname == secondResp.CanonicalHostname {
-		t.Fatalf("named and unnamed services got the same canonical hostname %q", namedResp.CanonicalHostname)
+	if namedResp.CanonicalHostname != "" || namedResp.Hostname != "myapp.example.com" {
+		t.Fatalf("named alias-only registration = %+v", namedResp)
 	}
 	leases := registry.PublicLeases(time.Now())
 	if len(leases) != 2 {
@@ -1216,7 +1249,7 @@ func checkNamedCoexistence(t *testing.T, registry *leaseRegistry, unnamedIdentit
 	if !ok || unnamedLookup != secondRecord {
 		t.Fatalf("Lookup(unnamed) = (%+v, %v), want secondUnnamedRecord", unnamedLookup, ok)
 	}
-	namedLookup, ok := registry.Lookup(namedResp.CanonicalHostname)
+	namedLookup, ok := registry.Lookup(namedResp.Hostname)
 	if !ok || namedLookup.Name != "myapp" {
 		t.Fatalf("Lookup(named) = (%+v, %v), want myapp lease", namedLookup, ok)
 	}
@@ -1241,8 +1274,8 @@ func registerInstancePair(t *testing.T, registry *leaseRegistry, leaseIdentity t
 	if err != nil {
 		t.Fatalf("second Register() error = %v", err)
 	}
-	if firstResponse.CanonicalHostname != secondResponse.CanonicalHostname {
-		t.Fatalf("canonical hostname changed across reconnect: first=%q second=%q", firstResponse.CanonicalHostname, secondResponse.CanonicalHostname)
+	if firstResponse.Hostname == "" || firstResponse.Hostname != secondResponse.Hostname {
+		t.Fatalf("friendly alias changed across reconnect: first=%q second=%q", firstResponse.Hostname, secondResponse.Hostname)
 	}
 	return firstResponse, secondResponse, second
 }
@@ -1322,15 +1355,13 @@ func TestLeaseRegistryAllowsCanonicalFallbackForSameName(t *testing.T) {
 func registerCanonicalFallbackPair(t *testing.T, registry *leaseRegistry, firstIdentity types.Identity, secondIdentity types.Identity) (types.RegisterResponse, types.RegisterResponse) {
 	t.Helper()
 	_, _, first, err := registry.Register(types.RegisterChallengeRequest{
-		AllowCanonicalFallback: true,
-		Identity:               firstIdentity,
+		Identity: firstIdentity, Namespace: types.LocalTLSNamespaceV1,
 	}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(conflict first) error = %v", err)
 	}
 	_, _, second, err := registry.Register(types.RegisterChallengeRequest{
-		AllowCanonicalFallback: true,
-		Identity:               secondIdentity,
+		Identity: secondIdentity, Namespace: types.LocalTLSNamespaceV1,
 	}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(conflict second) error = %v", err)
@@ -1358,7 +1389,7 @@ func reconnectSecondFallbackLease(t *testing.T, registry *leaseRegistry, secondI
 	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstAccessToken}); err != nil {
 		t.Fatalf("Unregister(first) error = %v", err)
 	}
-	_, _, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: secondIdentity}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, secondReconnect, err := registry.Register(types.RegisterChallengeRequest{Identity: secondIdentity, Namespace: types.LocalTLSNamespaceV1}, netip.MustParseAddr("203.0.113.11"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(second reconnect) error = %v", err)
 	}
@@ -1369,7 +1400,7 @@ func reconnectSecondFallbackLease(t *testing.T, registry *leaseRegistry, secondI
 
 func reconnectFirstFallbackLease(t *testing.T, registry *leaseRegistry, firstIdentity types.Identity, first types.RegisterResponse) {
 	t.Helper()
-	_, _, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{AllowCanonicalFallback: true, Identity: firstIdentity}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	_, _, firstReconnect, err := registry.Register(types.RegisterChallengeRequest{Identity: firstIdentity, Namespace: types.LocalTLSNamespaceV1}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatalf("Register(first reconnect) error = %v", err)
 	}
@@ -1459,7 +1490,7 @@ func TestRenewAsksOnlyLeasesLeftBehindByTheRelayCertificateToRegisterAgain(t *te
 				t.Fatalf("Register() error = %v", err)
 			}
 			renewErr := renewLeftBehindLease(t, registry, types.RenewRequest{AccessToken: registered.AccessToken, TTL: 600, RepinsChain: test.repins}, test.current)
-			record := lookupLeftBehindLease(t, registry, registered.CanonicalHostname)
+			record := lookupLeftBehindLease(t, registry, registered.Hostname)
 			if test.wantRenewed {
 				checkRenewedLeftBehindLease(t, registered, record, renewErr)
 				return
@@ -2105,61 +2136,61 @@ func TestPublicTenantCertificateRequiresExplicitApproval(t *testing.T) {
 	}
 }
 
-func TestNegotiatedNamespaceSeparatesServicesAndLegacyCache(t *testing.T) {
+func TestNamespaceSeparatesCanonicalAndAliasCache(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
 	var err error
 	registry.cache, err = cache.New(cache.Config{Enabled: true, MaxBytes: 1024, MaxTTL: time.Hour}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	register := func(id types.Identity, namespaceID string) (*leaseRecord, types.RegisterResponse) {
+	owner := newTestLeaseIdentity(t, "blog")
+	register := func(id types.Identity, ns string) (*leaseRecord, types.RegisterResponse) {
 		t.Helper()
-		record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: id, Namespace: namespaceID, Cache: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		record, _, resp, err := registry.Register(types.RegisterChallengeRequest{Identity: id, Namespace: ns, Cache: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return record, response
+		return record, resp
 	}
-	owner := newTestLeaseIdentity(t, "blog")
-	legacy, old := register(owner, "")
-	if old.Namespace != "" || old.LegacyCanonicalHostname != "" {
-		t.Fatal("legacy client negotiated implicitly")
+	aliasOnly, old := register(owner, "")
+	if old.CanonicalHostname != "" || old.Hostname != "blog.example.com" {
+		t.Fatalf("alias-only metadata: %+v", old)
 	}
-	if _, err := registry.tenantCertificateNames(legacy); err == nil {
-		t.Fatal("legacy lease authorized local TLS issuance")
+	if _, err := registry.tenantCertificateNames(aliasOnly); err == nil {
+		t.Fatal("alias-only lease authorized local TLS issuance")
 	}
 	first, current := register(owner, types.LocalTLSNamespaceV1)
-	if current.LegacyCanonicalHostname != old.CanonicalHostname || current.CanonicalHostname == old.CanonicalHostname {
-		t.Fatal("legacy URL lost or canonical unchanged")
+	if current.Hostname != old.Hostname || current.CanonicalHostname == "" {
+		t.Fatal("canonical registration lost its alias")
 	}
-	if first.cacheLeaseLocked().Hostname != old.CanonicalHostname || !registry.cache.Eligible(first.id) {
-		t.Fatal("legacy cache migration changed hostname or opt-in")
+	if first.cacheLeaseLocked().Hostname != current.Hostname || !registry.cache.Eligible(first.id) {
+		t.Fatal("cache is not bound to the alias")
+	}
+	for _, name := range []string{"blog-" + strings.TrimPrefix(owner.Address, "0x") + ".example.com", strings.TrimPrefix(owner.Address, "0x") + ".example.com"} {
+		if _, ok := registry.Lookup(strings.ToLower(name)); ok {
+			t.Fatalf("removed canonical route survives: %s", name)
+		}
 	}
 	sibling := owner
 	sibling.Name = "api"
 	second, other := register(sibling, types.LocalTLSNamespaceV1)
-	if first.id == second.id || current.CanonicalHostname == other.CanonicalHostname {
-		t.Fatal("sibling services collided")
-	}
 	for _, pair := range []struct {
 		host   string
 		record *leaseRecord
-	}{{current.CanonicalHostname, first}, {current.LegacyCanonicalHostname, first}, {other.CanonicalHostname, second}} {
-		got, ok := registry.Lookup(pair.host)
-		if !ok || got != pair.record {
-			t.Fatalf("wrong routing for %q", pair.host)
+	}{{current.CanonicalHostname, first}, {current.Hostname, first}, {other.CanonicalHostname, second}} {
+		if got, ok := registry.Lookup(pair.host); !ok || got != pair.record {
+			t.Fatalf("incorrect route for %s", pair.host)
 		}
 	}
-	stranger := newTestLeaseIdentity(t, "blog")
-	_, occupied := register(stranger, types.LocalTLSNamespaceV1)
+	_, occupied := register(newTestLeaseIdentity(t, "blog"), types.LocalTLSNamespaceV1)
 	if occupied.Hostname != "" || occupied.CanonicalHostname == current.CanonicalHostname {
-		t.Fatal("canonical depended on friendly alias")
+		t.Fatal("canonical depends on alias ownership")
 	}
-	server := &Server{registry: registry}
 	response := httptest.NewRecorder()
+	server := &Server{registry: registry}
 	server.serveCachedSite(response, httptest.NewRequest(http.MethodGet, "https://"+current.CanonicalHostname, nil), current.CanonicalHostname)
 	if response.Code != http.StatusMisdirectedRequest {
-		t.Fatalf("canonical cache response %d", response.Code)
+		t.Fatalf("canonical cache response: %d", response.Code)
 	}
 }
 

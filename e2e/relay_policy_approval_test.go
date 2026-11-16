@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -337,7 +338,7 @@ func checkManualLeaseNeedsApproval(t *testing.T) {
 	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
 	exposure, leaseIdentity, pending := exposeUnapprovedManualLease(t, ctx, base, client)
 	tenantClient := relayTenantClient(t, client, base)
-	publicURL := "https://" + pending.CanonicalHostname + ":" + base.Port()
+	publicURL := "https://" + net.JoinHostPort(pending.Hostname, base.Port())
 	assertUnapprovedLeaseBlocked(t, ctx, exposure, tenantClient, publicURL)
 	approveManualLease(t, ctx, client, base, exposure, leaseIdentity)
 	assertApprovedTenantServed(t, tenantClient, publicURL)

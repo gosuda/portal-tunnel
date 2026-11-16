@@ -41,13 +41,25 @@ HTTP/1.1. Raw decrypted stream consumers do not gain HTTP/2 merely from ALPN.
 Neither the friendly Keyless path nor relay-cache/control-plane ALPN changes.
 ## Opt-in Static Cache
 
+Cache publication is bound to the currently owned friendly alias. A new owner
+detaches the old snapshot and invalidates old upload admission during the
+serialized alias grant, before serving the new owner. Delayed uploads, renewals,
+deletes, and old-owner policy changes cannot restore or remove the new owner's
+content. Retention does not reserve an alias. An empty new snapshot never falls
+back to a previous owner's files.
+
+Cached alias TLS terminates on the relay and exposes the files to it; it does
+not provide the live tunnel's native channel-binding guarantees. Reassigning
+an alias keeps the same browser origin: relay invalidation does not clear
+cookies, storage, service workers, or browser caches.
+
 `portal expose --serve ./dist --cache` explicitly permits selected relays to
 store the site's files and terminate browser TLS. Cached connections therefore
 expose HTTP headers and content to the serving relay. If that connection falls
 back to the live origin, it still trusts the relay; browser-to-origin end-to-end
 TLS is not restored on an already terminated connection.
 
-Only eligible legacy identity-bound hostnames are cacheable. New canonical
+Only currently granted friendly aliases are cacheable. New canonical
 `<service>.<address>.<relay-root>` URLs never use relay static cache, retained
 snapshots, or fallback: their TLS endpoint stays in the tunnel. Friendly hostnames
 are reusable, first-come aliases, so they remain live-origin routes and do not
@@ -237,7 +249,7 @@ connection is ready. Attempts run serially. Lease termination cancels and joins
 the loop before a replacement lease starts. Socket I/O shares the overall probe
 timeout and is closed on cancellation.
 
-With Local TLS enabled, the probe targets the legacy URL using its Keyless TLS
+With Local TLS enabled, the probe targets the alias using its Keyless TLS
 configuration, including while the canonical certificate is unavailable. The
 legacy and alias endpoints use relay-owned certificate material; the canonical
 hostname uses the tunnel's independent local certificate. This probe samples the
