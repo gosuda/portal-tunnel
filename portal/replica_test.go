@@ -27,7 +27,7 @@ func TestReplicaLeaseLifecycleIsIndependent(t *testing.T) {
 	identity := newTestLeaseIdentity(t, "replicas")
 	first, firstResponse := registerHTTPReplica(t, registry, identity)
 	second, secondResponse := registerHTTPReplica(t, registry, identity)
-	if first.id == second.id || firstResponse.CanonicalHostname != secondResponse.CanonicalHostname {
+	if first.id == second.id || firstResponse.Hostname == "" || firstResponse.Hostname != secondResponse.Hostname {
 		t.Fatal("replicas must have independent leases at the same hostname")
 	}
 	for _, response := range []types.RegisterResponse{firstResponse, secondResponse} {
@@ -78,7 +78,10 @@ func TestAliasEpochFollowsOwnershipRatherThanLeases(t *testing.T) {
 		t.Fatal("replacing a live lease changed uninterrupted ownership")
 	}
 	other := newTestLeaseIdentity(t, owner.Name)
-	_, _, fallback, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errHostnameConflict) {
+		t.Fatalf("alias-only collision = %v, want hostname conflict", err)
+	}
+	_, _, fallback, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true, Namespace: types.LocalTLSNamespaceV1}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

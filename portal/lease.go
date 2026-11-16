@@ -938,6 +938,9 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	if err != nil {
 		return nil, "", err
 	}
+	if publicHostname == "" && canonicalHostname == "" && !req.UDPEnabled && !req.TCPEnabled {
+		return nil, "", errUnnamedHTTPNeedsLocalTLS
+	}
 	udpEnabled, _ := r.udpPolicy()
 	tcpPortEnabled, _ := r.tcpPortPolicy()
 	if req.UDPEnabled && !udpEnabled {

@@ -92,16 +92,16 @@ func TestNamespaceReplacementDNSOwnership(t *testing.T) {
 	if !retained {
 		t.Fatal("same-namespace replacement would delete live DNS")
 	}
-	legacy, replaced := register("")
+	aliasOnly, replaced := register("")
 	if replaced != replacement {
 		t.Fatal("downgrade lost retired canonical DNS owner")
 	}
 	registry.mu.RLock()
 	stale := server.isDNSHostnameOwnedLocked(replaced.CanonicalHostname, time.Now())
-	retained = server.isDNSHostnameOwnedLocked(legacy.CanonicalHostname, time.Now())
+	retained = server.isDNSHostnameOwnedLocked(aliasOnly.Hostname, time.Now())
 	registry.mu.RUnlock()
-	if stale || !retained {
-		t.Fatal("downgrade did not isolate retired DNS from legacy live DNS")
+	if stale || !retained || aliasOnly.CanonicalHostname != "" {
+		t.Fatal("alias-only replacement did not isolate retired canonical DNS from the live alias")
 	}
 	// A newer concurrent registration reclaims the hostname before cleanup.
 	newest, _ := register(types.LocalTLSNamespaceV1)
