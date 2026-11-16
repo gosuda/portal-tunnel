@@ -3,7 +3,7 @@ import {
   resolveLeasePayment,
   resolveLeaseThumbnail,
 } from "@/lib/metadata";
-import type { DiscoveredService, Lease, ReputationSummary, ServiceLocation } from "@/types/api";
+import type { DiscoveredService, Lease, ObservedReputation, ReputationSummary, ServiceLocation } from "@/types/api";
 
 export interface BaseServer {
   id: string;
@@ -26,38 +26,58 @@ export interface BaseServer {
   paymentEnabled?: boolean;
   paymentLabel?: string;
   reputation?: ReputationSummary;
+  observedLocalReputation?: ObservedReputation;
 }
 
-// Identity results share one card per service. A local card retains its URL;
-// remote-only cards require an explicit location choice.
-export function mergeDiscoveredServices(local: BaseServer[], services: DiscoveredService[], address: string): BaseServer[] {
-  const selected = local.filter((server) => server.address?.toLowerCase() === address.toLowerCase());
-  const byName = new Map(selected.map((server) => [server.serviceName ?? "", server]));
-  for (const service of services) {
-    if (service.address.toLowerCase() !== address.toLowerCase()) continue;
-    const existing = byName.get(service.name);
-    if (existing) {
-      byName.set(service.name, { ...existing, locations: service.locations });
-    } else {
-      const metadata = parseLeaseMetadata(service.metadata);
-      byName.set(service.name, {
-        id: `service:${service.name}:${service.address.toLowerCase()}`,
-        serviceName: service.name,
-        name: service.name || "(unnamed)",
-        address: service.address,
-        description: metadata.description,
-        tags: metadata.tags,
-        owner: metadata.owner,
-        thumbnail: "",
-        online: service.locations.some((location) => location.reported_ready),
-        dns: "",
-        link: "",
-        remoteOnly: true,
-        locations: service.locations,
-      });
-    }
+// The directory groups observations by name and owner. Prefer local card data
+// when available so its link, thumbnail, community actions, and status stay intact.
+export function mergeDiscoveredServices(
+  local: BaseServer[],
+  services: DiscoveredService[],
+  address = "",
+): BaseServer[] {
+  const wantedAddress = address.trim().toLowerCase();
+  const matchesAddress = (candidate?: string) =>
+    !wantedAddress || candidate?.trim().toLowerCase() === wantedAddress;
+  const identityKey = (name: string | undefined, owner: string) =>
+    `${(name ?? "").trim().toLowerCase()}:${owner.trim().toLowerCase()}`;
+  const byIdentity = new Map<string, BaseServer>();
+  for (const server of local) {
+    if (!matchesAddress(server.address)) continue;
+    const key = server.address
+      ? identityKey(server.serviceName, server.address)
+      : `local:${server.id}`;
+    if (!byIdentity.has(key)) byIdentity.set(key, server);
   }
-  return [...byName.values()];
+  for (const service of services) {
+    if (!matchesAddress(service.address)) continue;
+    const key = identityKey(service.name, service.address);
+    const existing = byIdentity.get(key);
+    if (existing) {
+      byIdentity.set(key, { ...existing, locations: service.locations });
+      continue;
+    }
+    // A local-only snapshot is not a substitute for the live local card list.
+    const locations = service.locations.filter((location) => !location.current_relay);
+    if (!locations.length) continue;
+    const metadata = parseLeaseMetadata(service.metadata);
+    byIdentity.set(key, {
+      id: `service:${key}`,
+      serviceName: service.name,
+      name: service.name || "(unnamed)",
+      address: service.address,
+      description: metadata.description,
+      tags: metadata.tags,
+      owner: metadata.owner,
+      thumbnail: "",
+      online: locations.some((location) => location.reported_ready),
+      dns: "",
+      link: "",
+      remoteOnly: true,
+      locations,
+    });
+  }
+  return [...byIdentity.values()];
 }
 
 export function leaseToServer(row: Lease): BaseServer {

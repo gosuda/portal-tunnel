@@ -4,14 +4,16 @@ import * as Dialog from "@radix-ui/react-dialog";
 import clsx from "clsx";
 import { MessageSquare, RefreshCw, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { BaseServer } from "@/lib/server";
+import type { useFederatedComments } from "@/hooks/useFederatedComments";
 import type { useServerComments } from "@/hooks/useServerComments";
-import type { AppComment, ReputationVote, ReputationVoteAction } from "@/types/api";
+import type { AppComment, FederatedComment, ReputationVote, ReputationVoteAction } from "@/types/api";
 import { COMMENT_MAX_LENGTH } from "@/types/api";
 import { isHiddenByVotes } from "@/utils/reputation";
 
 type ServerCommentsPanelProps = ReturnType<typeof useServerComments> & {
   server: BaseServer;
   onClose: () => void;
+  federation: ReturnType<typeof useFederatedComments>;
   onVoteApp?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
 };
 
@@ -61,6 +63,7 @@ function CommentItem({ comment, busy, onRemove, onVote }: {
     <>
       <div className="flex items-center gap-2 text-xs">
         <span className="font-semibold text-foreground/90">Guest</span>
+        <span className="text-muted-foreground">This relay</span>
         <time dateTime={comment.created_at} className="text-muted-foreground">
           {new Date(comment.created_at).toLocaleString()}
         </time>
@@ -171,41 +174,100 @@ function AppVoteSection({ reputation, isVoting, error, onVote }: {
   );
 }
 
-function CommentsBody({ loading, comments, error, busy, onRemove, onVoteComment }: {
+function relayDirectoryURL(origin: string, address: string): string | undefined {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return;
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set("identity", address);
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function RemoteCommentItem({ comment, address }: {
+  comment: FederatedComment;
+  address: string;
+}): JSX.Element {
+  const directory = relayDirectoryURL(comment.relay_url, address);
+  const created = new Date(comment.created_at);
+  return (
+    <li>
+      <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+        <span className="font-semibold text-foreground/90">Remote relay:</span>
+        {directory
+          ? <a href={directory} target="_blank" rel="noopener noreferrer" className="wrap-anywhere underline" aria-label={`Open comments on ${comment.relay_url}`}>{comment.relay_url}</a>
+          : <span className="wrap-anywhere">{comment.relay_url}</span>}
+        {Number.isFinite(created.getTime())
+          ? <time dateTime={comment.created_at}>{created.toLocaleString()}</time>
+          : <span>Time not reported</span>}
+      </div>
+      {comment.deleted
+        ? <p className="mt-1.5 text-sm italic text-muted-foreground">Deleted at its origin.</p>
+        : <p className="mt-1.5 whitespace-pre-wrap wrap-anywhere text-sm leading-6 text-foreground/90">{comment.text}</p>}
+    </li>
+  );
+}
+
+function CommentsBody({ server, loading, comments, error, busy, onRemove, onVoteComment, federation }: {
+  server: BaseServer;
   loading: boolean;
   comments: AppComment[];
   error: string;
   busy: boolean;
   onRemove: (id: string) => void | Promise<void>;
   onVoteComment: (id: string, vote: ReputationVoteAction) => void | Promise<void>;
+  federation: ReturnType<typeof useFederatedComments>;
 }): JSX.Element {
+  const local = server.remoteOnly ? [] : comments;
+  const remote = federation.response?.comments ?? [];
+  const address = server.address ?? "";
+  const entries = [
+    ...local.map((comment) => ({ key: JSON.stringify(["", comment.id]), timestamp: comment.created_at, local: comment })),
+    ...remote.map((comment) => ({ key: JSON.stringify([comment.relay_url, comment.id]), timestamp: comment.created_at, remote: comment })),
+  ].sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0) || a.key.localeCompare(b.key));
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-5" aria-busy={loading}>
-      {loading ? (
-        <p role="status" className="py-10 text-center text-sm text-muted-foreground">
-          Loading comments...
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5" aria-busy={loading || federation.loading}>
+      {loading && <p role="status" className="text-sm text-muted-foreground">Loading comments from this relay…</p>}
+      {federation.loading && <p role="status" className="text-sm text-muted-foreground">Checking other relay comments…</p>}
+      {federation.error && <p role="status" className="text-sm text-muted-foreground">{federation.error}</p>}
+      {federation.response && (
+        <p className="text-xs text-muted-foreground">
+          {federation.response.relays_checked} other relays checked; {federation.response.relays_skipped} unavailable or skipped.
+          {federation.response.partial ? " Partial coverage." : ""}
         </p>
-      ) : comments.length === 0 && !error ? (
+      )}
+      {(server.remoteOnly || remote.length > 0) && (
+        <p className="text-xs text-muted-foreground">
+          Remote comments are read-only here. Times are reported by their originating relays. Refresh to recheck this snapshot. To post or manage a remote comment, open its source relay.
+        </p>
+      )}
+      {entries.length > 0 ? (
+        <ol className="space-y-6">
+          {entries.map((entry) => "local" in entry
+            ? <CommentItem key={entry.key} comment={entry.local} busy={busy} onRemove={onRemove} onVote={onVoteComment} />
+            : <RemoteCommentItem key={entry.key} comment={entry.remote} address={address} />)}
+        </ol>
+      ) : !loading && !federation.loading && !error && !federation.error && (
         <div className="py-12 text-center">
           <MessageSquare className="mx-auto mb-3 size-8 text-muted-foreground" />
-          <p className="text-sm font-semibold">Start the conversation</p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Share feedback or ask a question about this app.
-          </p>
+          <p className="text-sm font-semibold">{server.remoteOnly ? "No comments observed" : "Start the conversation"}</p>
+          {!server.remoteOnly && <p className="mt-2 text-xs text-muted-foreground">Share feedback or ask a question about this app.</p>}
         </div>
-      ) : (
-        <ol className="space-y-6">
-          {comments.map((comment) => (
-            <CommentItem
-              key={comment.id}
-              comment={comment}
-              busy={busy}
-              onRemove={onRemove}
-              onVote={onVoteComment}
-            />
-          ))}
-        </ol>
       )}
+      {!federation.loading && federation.loadMore && (
+        <button type="button" className="rounded-md bg-secondary px-3 py-1.5 text-sm" onClick={federation.loadMore}>Load more remote comments</button>
+      )}
+      {server.remoteOnly && server.locations?.length ? (
+        <div className="space-y-1 border-t border-border pt-3">
+          {server.locations.map((location) => {
+            const directory = relayDirectoryURL(location.relay_url, address);
+            return directory && <a key={location.relay_url} className="block wrap-anywhere text-sm text-primary underline" href={directory} target="_blank" rel="noopener noreferrer">Visit relay: {location.relay_url}</a>;
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -268,6 +330,7 @@ export function ServerCommentsPanel({
   submit,
   remove,
   voteComment,
+  federation,
   onVoteApp,
 }: ServerCommentsPanelProps): JSX.Element {
   const busy = loading || pending !== null || votingCommentId !== null;
@@ -304,14 +367,14 @@ export function ServerCommentsPanel({
             <div className="flex items-center justify-between gap-3">
               <Dialog.Title className="flex items-center gap-2 text-lg font-bold">
                 <MessageSquare className="size-5" />
-                Comments <span className="text-sm font-normal text-muted-foreground">{loading ? "" : comments.length}</span>
+                Comments <span className="text-sm font-normal text-muted-foreground">{loading || federation.loading ? "" : (server.remoteOnly ? 0 : comments.length) + (federation.response?.comments.length ?? 0)}</span>
               </Dialog.Title>
               <div className="flex gap-1">
                 <button
                   type="button"
                   aria-label="Refresh comments"
-                  disabled={busy}
-                  onClick={() => void refresh()}
+                  disabled={busy || federation.loading}
+                  onClick={() => { void refresh(); federation.refresh(); }}
                   className="flex size-9 items-center justify-center rounded-full hover:bg-secondary disabled:opacity-40"
                 >
                   <RefreshCw className="size-4" />
@@ -329,7 +392,7 @@ export function ServerCommentsPanel({
             </Dialog.Description>
           </div>
 
-          {server.reputation && onVoteApp && (
+          {!server.remoteOnly && server.reputation && onVoteApp && (
             <AppVoteSection
               reputation={server.reputation}
               isVoting={isAppVoting}
@@ -339,6 +402,8 @@ export function ServerCommentsPanel({
           )}
 
           <CommentsBody
+            server={server}
+            federation={federation}
             loading={loading}
             comments={comments}
             error={error}
@@ -347,14 +412,14 @@ export function ServerCommentsPanel({
             onVoteComment={voteComment}
           />
 
-          <CommentComposer
+          {!server.remoteOnly && <CommentComposer
             draft={draft}
             pending={pending}
             busy={busy}
             error={error}
             onDraftChange={setDraft}
             onPost={() => void submit()}
-          />
+          />}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -2,16 +2,46 @@ import type { JSX } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import type { BaseServer } from "@/lib/server";
-import type { ServiceDiscoveryResponse } from "@/types/api";
+import type { ObservedReputation, ServiceDiscoveryResponse } from "@/types/api";
 
-export function ServiceRelaysPanel({ server, response, loading, error, onClose }: {
+function acceptedCounts(reputation?: ObservedReputation): ObservedReputation | undefined {
+  if (!reputation || ![reputation.up, reputation.down].every((count) =>
+    Number.isSafeInteger(count) && count >= 0 && count <= 0xffffffff)) {
+    return undefined;
+  }
+  return reputation;
+}
+
+function countsLabel(reputation: ObservedReputation): string {
+  return `${reputation.up.toLocaleString()} up · ${reputation.down.toLocaleString()} down`;
+}
+
+export function ServiceRelaysPanel({ server, response, loading, error, localReputation, onClose }: {
   server: BaseServer;
   response?: ServiceDiscoveryResponse;
   loading: boolean;
   error?: string;
+  localReputation?: ObservedReputation;
   onClose: () => void;
 }): JSX.Element {
-  const locations = response?.services.find((service) => service.name === (server.serviceName ?? "") && service.address.toLowerCase() === server.address?.toLowerCase())?.locations;
+  const locations = server.locations?.length ? server.locations
+    : response?.services.find((service) => service.name === (server.serviceName ?? "") && service.address.toLowerCase() === server.address?.toLowerCase())?.locations;
+  const ownCounts = acceptedCounts(localReputation);
+  const sources = (locations ?? []).map((location) => ({
+    location,
+    counts: location.current_relay ? ownCounts : acceptedCounts(location.reputation),
+  }));
+  const showSeparateLocal = !server.remoteOnly && !sources.some(({ location }) => location.current_relay);
+  const reports = sources.map(({ counts }) => counts);
+  if (showSeparateLocal) reports.push(ownCounts);
+  const totals = { up: 0, down: 0, count: 0 };
+  for (const report of reports) {
+    if (!report) continue;
+    totals.up += report.up;
+    totals.down += report.down;
+    totals.count++;
+  }
+
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
@@ -25,12 +55,19 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
           {server.link && <a className="mt-4 block break-all text-sm text-primary underline" href={server.link} target="_blank" rel="noopener noreferrer">Open current relay: {server.link}</a>}
           {loading && <p role="status" className="mt-5 text-sm">Checking known relays…</p>}
           {error && <p role="alert" className="mt-5 text-sm">{error}</p>}
+          <section aria-label="Observed reputation" className="mt-4 space-y-1 rounded-md border border-border p-3 text-sm">
+            <h3 className="font-medium">Observed reputation</h3>
+            <p>{totals.count ? `${countsLabel(totals)} across ${totals.count} of ${reports.length} shown relays` : "No reputation counts were observed."}</p>
+            <p className="text-xs text-muted-foreground">These are relay-reported counts, not unique voters or a global score. Votes on different relays may be counted more than once.</p>
+            {showSeparateLocal && <p className="text-xs">This relay: {ownCounts ? countsLabel(ownCounts) : "reputation not reported"}</p>}
+          </section>
           {response && <>
             <p className="mt-4 text-xs text-muted-foreground">{response.relays_checked} directories observed; {response.relays_skipped} unavailable or skipped. {response.partial ? "Partial lookup. " : ""}Other relay locations may exist.</p>
             <ul className="mt-4 space-y-4">
-              {locations?.map((location) => <li key={location.relay_url} className="space-y-1 border-t border-border pt-3 text-sm">
+              {sources.map(({ location, counts }) => <li key={location.relay_url} className="space-y-1 border-t border-border pt-3 text-sm">
                 <p className="break-all font-medium">{location.relay_url}{location.current_relay ? " · Current relay" : ""}</p>
                 <p className="text-xs text-muted-foreground">Relay-reported · {location.reported_ready ? "Reported ready" : "Not reported ready"} · Observed {new Date(location.observed_at).toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">Reputation: {counts ? countsLabel(counts) : "not reported"}</p>
                 <p className="text-xs text-muted-foreground">Observation expires {new Date(location.expires_at).toLocaleString()}</p>
                 {location.url ? <a className="block break-all text-primary underline" href={location.url} target="_blank" rel="noopener noreferrer">{location.url}</a> : <p className="text-xs text-muted-foreground">No available HTTP URL reported.</p>}
               </li>)}
