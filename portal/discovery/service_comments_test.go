@@ -99,11 +99,11 @@ func TestFederatedCommentsPreserveOriginsAndPartialFailures(t *testing.T) {
 		t.Fatalf("bounded sample lost rows: %d", len(sample.Comments))
 	}
 
-	// A source set change between calls yields a new complete sample: the
-	// removed source is absent and no row of the others is repeated.
-	failed := "https://failed.example"
-	delete(lookup.cache, failed)
-	relaySet.relays[failed] = relayState{Descriptor: types.RelayDescriptor{APIHTTPSAddr: failed, ExpiresAt: now.Add(time.Minute)}, Trust: relayVerified, LastSeenAt: now, Banned: true}
+	// Remove a source that contributed rows to the previous sample. The next
+	// sample must drop those rows and keep each remaining row only once.
+	removed := "https://b.example"
+	delete(lookup.cache, removed)
+	relaySet.relays[removed] = relayState{Descriptor: types.RelayDescriptor{APIHTTPSAddr: removed, ExpiresAt: now.Add(time.Minute)}, Trust: relayVerified, LastSeenAt: now, Banned: true}
 	shrunk, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog")
 	if err != nil {
 		t.Fatal(err)
@@ -111,12 +111,12 @@ func TestFederatedCommentsPreserveOriginsAndPartialFailures(t *testing.T) {
 	seen := make(map[string]bool)
 	for _, row := range shrunk.Comments {
 		key := row.RelayURL + "\x00" + row.ID
-		if seen[key] || row.RelayURL == failed {
+		if seen[key] || row.RelayURL == removed {
 			t.Fatalf("sample repeated a row or kept a removed source: %+v", row)
 		}
 		seen[key] = true
 	}
-	if len(shrunk.Comments) != 2*commentSourceLimit || shrunk.RelaysChecked != 2 {
+	if len(shrunk.Comments) != commentSourceLimit || shrunk.RelaysChecked != 1 {
 		t.Fatalf("source removal changed the remaining sample: %+v", shrunk)
 	}
 }
