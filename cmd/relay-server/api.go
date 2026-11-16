@@ -149,7 +149,7 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	}
 	utils.WriteAPIData(w, http.StatusOK, publicStateResponse{
 		PublicStateResponse: types.PublicStateResponse{Leases: leases},
-		Reputation:          api.reputation.Summaries(api.reputation.ViewerHashFor(voterCookieID), publicIdentityLeases(leases, api.server)),
+		Reputation:          api.reputation.Summaries(api.reputation.ViewerHashFor(voterCookieID), publicIdentityLeases(leases, api.server.PolicyLeases())),
 	})
 }
 

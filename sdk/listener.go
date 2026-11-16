@@ -1229,7 +1229,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		}
 	}
 	if l.certificateMonitor != nil {
-		pending.certificateObserver, err = certmonitor.StartCertificateObserver(resp.CanonicalHostname, *l.certificateMonitor)
+		pending.certificateObserver, err = certmonitor.StartCertificateObserver(pending.hostname, *l.certificateMonitor)
 		if err != nil {
 			return err
 		}
