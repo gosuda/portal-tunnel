@@ -22,7 +22,6 @@ const (
 	commentLookupLimit = 2
 	commentConcurrency = 2
 	commentSourceLimit = 20
-	commentPageSize    = 30
 	commentBodyLimit   = 1 << 20
 	commentDecodeLimit = 100
 	commentIDLimit     = 128
@@ -33,9 +32,12 @@ type commentSource struct {
 	expiresAt time.Time
 }
 
-// Comments fetches anonymous public comments only from currently eligible
-// sources observed to host this exact identity. It neither stores nor writes them.
-func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string, offset int) (types.ServiceCommentsResponse, error) {
+// Comments fetches one bounded sample of anonymous public comments from
+// currently eligible sources observed to host this exact identity. Each call is
+// a complete, independent observation; there is no cross-request pagination, so
+// source or comment changes between calls cannot duplicate or skip rows. It
+// neither stores nor writes comments.
+func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string) (types.ServiceCommentsResponse, error) {
 	select {
 	case s.commentLookups <- struct{}{}:
 		defer func() { <-s.commentLookups }()
@@ -45,7 +47,7 @@ func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string
 	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
 	defer cancel()
 	response := types.ServiceCommentsResponse{Comments: []types.ObservedServiceComment{}}
-	if address == "" || offset < 0 || offset >= types.ServiceCommentMaxOffset {
+	if address == "" {
 		return response, nil
 	}
 	sources := make(map[string]commentSource)
@@ -103,13 +105,10 @@ func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string
 		merged = append(merged, item.rows...)
 	}
 	response.Partial = response.Partial || lookup.Partial || response.RelaysSkipped > 0
+	// At most serviceRelayLimit*commentSourceLimit rows.
 	sortServiceComments(merged)
-	if offset < len(merged) {
-		end := min(offset+commentPageSize, len(merged))
-		response.Comments = merged[offset:end]
-		if end < len(merged) && end < types.ServiceCommentMaxOffset {
-			response.NextOffset = &end
-		}
+	if merged != nil {
+		response.Comments = merged
 	}
 	return response, nil
 }

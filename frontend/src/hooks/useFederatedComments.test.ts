@@ -43,21 +43,23 @@ describe("federated comments", () => {
     expect(apiClient.get).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves same IDs from distinct origins, refreshes removals, and keeps partial state", async () => {
+  it("replaces the whole sample on refresh, keeping same IDs from distinct origins", async () => {
     vi.mocked(apiClient.get)
-      .mockResolvedValueOnce({ ...report, partial: true, next_offset: 1, comments: [row] })
-      .mockResolvedValueOnce({ ...report, comments: [{ ...row, relay_url: "https://relay-b.example" }] })
+      .mockResolvedValueOnce({ ...report, partial: true, comments: [row, { ...row, relay_url: "https://relay-b.example" }] })
       .mockResolvedValueOnce({ ...report, comments: [{ ...row, text: "", deleted: true }] });
     const { result } = renderHook(() => useFederatedComments(remoteOnly));
     await act(async () => {});
-    await act(async () => { result.current.loadMore?.(); });
     expect(result.current.response?.comments.map((comment) => comment.relay_url)).toEqual([
       "https://relay-a.example", "https://relay-b.example",
     ]);
     expect(result.current.response?.partial).toBe(true);
+    expect("loadMore" in result.current).toBe(false);
 
+    // A changed source set must not leave rows of the previous sample behind.
     await act(async () => { result.current.refresh(); });
     expect(result.current.response?.comments.map(({ relay_url, deleted }) => [relay_url, deleted]))
       .toEqual([["https://relay-a.example", true]]);
+    expect(result.current.response?.partial).toBe(false);
+    expect(vi.mocked(apiClient.get).mock.calls.every(([path]) => !String(path).includes("offset"))).toBe(true);
   });
 });

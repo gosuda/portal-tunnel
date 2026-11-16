@@ -2,7 +2,6 @@ package portal
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
@@ -69,16 +68,8 @@ func (s *Server) HandleServiceComments(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var offset int
-	if query.Has("offset") {
-		offset, err = strconv.Atoi(query.Get("offset"))
-		if err != nil || offset < 0 || offset >= types.ServiceCommentMaxOffset {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid comment offset")
-			return
-		}
-	}
 	w.Header().Set("Cache-Control", "no-store")
-	response, err := s.services.Comments(r.Context(), s.PortalURL(), address, name, offset)
+	response, err := s.services.Comments(r.Context(), s.PortalURL(), address, name)
 	if err != nil {
 		w.Header().Set("Retry-After", "1")
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeRateLimited, err.Error())

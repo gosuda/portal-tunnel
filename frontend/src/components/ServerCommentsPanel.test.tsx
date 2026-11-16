@@ -24,7 +24,7 @@ function props(): ComponentProps<typeof ServerCommentsPanel> {
     submit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
     voteComment: vi.fn(async () => {}),
-    federation: { loading: false, refresh: vi.fn(), error: undefined, response: undefined, loadMore: undefined },
+    federation: { loading: false, refresh: vi.fn(), error: undefined, response: undefined },
   };
 }
 

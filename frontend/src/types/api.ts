@@ -220,7 +220,6 @@ export interface FederatedCommentsResponse {
   relays_checked: number;
   relays_skipped: number;
   partial: boolean;
-  next_offset?: number;
 }
 
 export interface VoteCommentRequest {

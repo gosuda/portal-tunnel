@@ -47,7 +47,7 @@ func TestCommentReadsDoNotConsumeDirectoryAdmission(t *testing.T) {
 	for range commentLookupLimit {
 		lookup.commentLookups <- struct{}{}
 	}
-	if _, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog", 0); !errors.Is(err, errServiceLookupBusy) {
+	if _, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog"); !errors.Is(err, errServiceLookupBusy) {
 		t.Fatalf("overloaded comment read error = %v", err)
 	}
 	if _, err := lookup.Lookup(t.Context(), self, nil, "", nil); err != nil {
@@ -59,7 +59,7 @@ func TestCommentReadsDoNotConsumeDirectoryAdmission(t *testing.T) {
 	for range serviceLookupLimit {
 		lookup.lookups <- struct{}{}
 	}
-	if _, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog", 0); err != nil {
+	if _, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog"); err != nil {
 		t.Fatalf("directory pressure refused comment read: %v", err)
 	}
 }

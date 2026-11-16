@@ -7,53 +7,34 @@ import type { FederatedCommentsResponse } from "@/types/api";
 // Leave enough time for the backend to return partial results at its deadline.
 const COMMENTS_REQUEST_TIMEOUT_MS = 9_000;
 
-type PendingPage = { key?: string; offset: number };
-type LoadedPage = {
+type LoadedSample = {
   key: string;
-  request: PendingPage;
+  generation: number;
   response?: FederatedCommentsResponse;
   error?: string;
 };
 
 // Called only by the open comments panel; only the current relay fans out.
+// Each load is one complete bounded sample that replaces the previous one, so
+// deleted or removed comments do not linger and no rows are appended twice.
 export function useFederatedComments(server: BaseServer) {
   const address = server.address?.trim() ?? "";
   const valid = /^0x[0-9a-f]{40}$/i.test(address);
   const key = new URLSearchParams({ address, name: server.serviceName ?? "" }).toString();
-  const [request, setRequest] = useState<PendingPage>({ offset: 0 });
-  const [page, setPage] = useState<LoadedPage>();
-  const offset = request.key === key ? request.offset : 0;
+  const [generation, setGeneration] = useState(0);
+  const [sample, setSample] = useState<LoadedSample>();
 
   useEffect(() => {
     if (!valid) return;
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), COMMENTS_REQUEST_TIMEOUT_MS);
-    const query = offset ? `${key}&offset=${offset}` : key;
     let cancelled = false;
-    void apiClient.get<FederatedCommentsResponse>(`${RELAY_API_PATHS.public.federatedComments}?${query}`, controller.signal)
+    void apiClient.get<FederatedCommentsResponse>(`${RELAY_API_PATHS.public.federatedComments}?${key}`, controller.signal)
       .then((response) => {
-        if (cancelled) return;
-        setPage((previous) => {
-          if (!offset || previous?.key !== key || !previous.response) {
-            return { key, request, response };
-          }
-          const comments = new Map([...previous.response.comments, ...response.comments]
-            .map((comment) => [JSON.stringify([comment.relay_url, comment.id]), comment]));
-          return {
-            key,
-            request,
-            response: { ...response, partial: previous.response.partial || response.partial, comments: [...comments.values()] },
-          };
-        });
+        if (!cancelled) setSample({ key, generation, response });
       })
       .catch(() => {
-        if (cancelled) return;
-        setPage((previous) => ({
-          key,
-          request,
-          response: offset && previous?.key === key ? previous.response : undefined,
-          error: "Other relay comments could not be checked.",
-        }));
+        if (!cancelled) setSample({ key, generation, error: "Other relay comments could not be checked." });
       })
       .finally(() => window.clearTimeout(timeout));
     return () => {
@@ -61,20 +42,14 @@ export function useFederatedComments(server: BaseServer) {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [key, offset, request, valid]);
+  }, [key, generation, valid]);
 
-  const current = page?.key === key ? page : undefined;
-  const loading = valid && current?.request !== request;
-  // A fresh page replaces observations so deleted/removed comments do not
-  // linger after refresh. Existing pages stay visible on a load-more failure.
-  const response = loading && !offset ? undefined : current?.response;
-  const next = response?.next_offset;
+  const current = sample?.key === key && sample.generation === generation ? sample : undefined;
+  const loading = valid && !current;
   return {
-    response,
+    response: current?.response,
     loading,
-    error: loading ? undefined : current?.error,
-    refresh: () => { if (valid) setRequest({ key, offset: 0 }); },
-    loadMore: Number.isSafeInteger(next) && next !== undefined && (next > offset || (next === offset && Boolean(current?.error)))
-      ? () => setRequest({ key, offset: next }) : undefined,
+    error: current?.error,
+    refresh: () => { if (valid) setGeneration((value) => value + 1); },
   };
 }

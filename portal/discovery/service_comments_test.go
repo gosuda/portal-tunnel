@@ -77,7 +77,7 @@ func TestFederatedCommentsPreserveOriginsAndPartialFailures(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), ContentLength: int64(len(body))}, nil
 	})
 
-	result, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog", 0)
+	result, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,20 +89,35 @@ func TestFederatedCommentsPreserveOriginsAndPartialFailures(t *testing.T) {
 		t.Fatalf("comment IDs or provenance were collapsed: %+v", result.Comments)
 	}
 
+	// One call returns the complete bounded sample; no continuation exists.
 	count = commentSourceLimit
-	page, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog", 0)
+	sample, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Comments) != commentPageSize || page.NextOffset == nil || *page.NextOffset != commentPageSize {
-		t.Fatalf("invalid first-page size or continuation: %d rows; next=%v", len(page.Comments), page.NextOffset)
+	if len(sample.Comments) != 2*commentSourceLimit {
+		t.Fatalf("bounded sample lost rows: %d", len(sample.Comments))
 	}
-	next, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog", *page.NextOffset)
+
+	// A source set change between calls yields a new complete sample: the
+	// removed source is absent and no row of the others is repeated.
+	failed := "https://failed.example"
+	delete(lookup.cache, failed)
+	relaySet.relays[failed] = relayState{Descriptor: types.RelayDescriptor{APIHTTPSAddr: failed, ExpiresAt: now.Add(time.Minute)}, Trust: relayVerified, LastSeenAt: now, Banned: true}
+	shrunk, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(next.Comments) != 2*commentSourceLimit-commentPageSize || next.NextOffset != nil {
-		t.Fatalf("invalid second-page size or continuation: %d rows; next=%v", len(next.Comments), next.NextOffset)
+	seen := make(map[string]bool)
+	for _, row := range shrunk.Comments {
+		key := row.RelayURL + "\x00" + row.ID
+		if seen[key] || row.RelayURL == failed {
+			t.Fatalf("sample repeated a row or kept a removed source: %+v", row)
+		}
+		seen[key] = true
+	}
+	if len(shrunk.Comments) != 2*commentSourceLimit || shrunk.RelaysChecked != 2 {
+		t.Fatalf("source removal changed the remaining sample: %+v", shrunk)
 	}
 }
 

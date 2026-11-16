@@ -257,9 +257,6 @@ function CommentsBody({ server, loading, comments, error, busy, onRemove, onVote
           {!server.remoteOnly && <p className="mt-2 text-xs text-muted-foreground">Share feedback or ask a question about this app.</p>}
         </div>
       )}
-      {!federation.loading && federation.loadMore && (
-        <button type="button" className="rounded-md bg-secondary px-3 py-1.5 text-sm" onClick={federation.loadMore}>Load more remote comments</button>
-      )}
       {server.remoteOnly && server.locations?.length ? (
         <div className="space-y-1 border-t border-border pt-3">
           {server.locations.map((location) => {

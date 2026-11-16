@@ -213,13 +213,12 @@ Casper facilitator.
 
 `GET /api/services/comments?address=0x...&name=...` reads public comments for
 one service identity. It observes at most eight eligible relays with fresh
-locations. It returns up to 30 rows per page, at most 20 sampled rows per
-source, and an optional `next_offset` for the next bounded page. A page is
-a live observation, not a stable global snapshot. Each row contains
+locations and returns one bounded sample of at most 20 recent rows per source,
+newest first. There is no pagination; each request is a new live observation,
+not a stable global snapshot. Each row contains
 `relay_url`, `id`, `text`, `created_at` and optional `deleted`. Treat IDs
 and timestamps as source claims. Partial coverage is explicit; the endpoint
 does not accept writes or forward visitor credentials.
-
 
 ## Shared Types
 

@@ -2,9 +2,6 @@ package types
 
 import "time"
 
-// ServiceCommentMaxOffset bounds each page sequence, independent of relay size.
-const ServiceCommentMaxOffset = 160
-
 // ObservedServiceComment is read-only public text from an independent relay.
 // The timestamp and ID are claims of that source, not global identifiers.
 type ObservedServiceComment struct {
@@ -17,7 +14,6 @@ type ObservedServiceComment struct {
 
 type ServiceCommentsResponse struct {
 	Comments      []ObservedServiceComment `json:"comments"`
-	NextOffset    *int                     `json:"next_offset,omitempty"`
 	RelaysChecked int                      `json:"relays_checked"`
 	RelaysSkipped int                      `json:"relays_skipped"`
 	Partial       bool                     `json:"partial"`
