@@ -118,6 +118,7 @@ func registerRelayHandlerPolicyRoutes(mux *http.ServeMux, api *RelayAPI) {
 	mux.HandleFunc(types.PathPolicy, api.servePolicy)
 	mux.HandleFunc(types.PathPolicyPrefix, api.servePolicy)
 	mux.HandleFunc(types.PathState, api.servePublicState)
+	mux.HandleFunc(types.PathServices, api.server.HandleServices)
 	mux.HandleFunc(pathReputationVote, api.serveVote)
 	mux.HandleFunc(types.PathComments, api.serveComments)
 	mux.HandleFunc(types.PathCommentsVote, api.serveVote)

@@ -40,18 +40,10 @@ func NewRefresher(relaySet *RelaySet) *Refresher {
 		utils.WithHTTPTimeout(defaultRequestTimeout),
 		utils.WithHTTPCheckRedirect(rejectDiscoveryRedirect),
 	)
-	publicTransport := client.Transport.(*http.Transport).Clone()
-	publicTransport.Proxy = nil
-	publicTransport.DialContext = dialPublicRelay
-
 	return &Refresher{
-		relaySet:   relaySet,
-		httpClient: client,
-		publicHTTPClient: &http.Client{
-			Transport:     publicTransport,
-			CheckRedirect: rejectDiscoveryRedirect,
-			Timeout:       defaultRequestTimeout,
-		},
+		relaySet:         relaySet,
+		httpClient:       client,
+		publicHTTPClient: newPublicRelayClient(),
 	}
 }
 

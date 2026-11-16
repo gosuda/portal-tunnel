@@ -60,6 +60,32 @@ export interface PublicStateResponse {
   reputation?: ReputationSummary[];
 }
 
+export interface ServiceLocation {
+  relay_url: string;
+  url?: string;
+  canonical_url?: string;
+  alias_url?: string;
+  current_relay: boolean;
+  reported_ready: boolean;
+  observed_at: string;
+  expires_at: string;
+  verification: "relay-reported";
+}
+
+export interface DiscoveredService {
+  name: string;
+  address: string;
+  metadata: LeaseMetadata;
+  locations: ServiceLocation[];
+}
+
+export interface ServiceDiscoveryResponse {
+  services: DiscoveredService[];
+  partial: boolean;
+  relays_checked: number;
+  relays_skipped: number;
+}
+
 export interface PolicyPortSettings {
   enabled: boolean;
   max_leases: number;

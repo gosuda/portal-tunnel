@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Lease } from "@/types/api";
-import { leaseToServer } from "./server";
+import type { DiscoveredService, Lease } from "@/types/api";
+import { leaseToServer, mergeDiscoveredServices } from "./server";
 
 const lease: Lease = {
   address: "0x0123456789012345678901234567890123456789",
@@ -46,5 +46,25 @@ describe("leaseToServer", () => {
     });
     expect(unavailable.link).toBe("");
     expect(unavailable.online).toBe(false);
+  });
+});
+
+describe("identity discovery cards", () => {
+  it("keeps the local URL and one card per service without merging different owners", () => {
+    const local = leaseToServer({ ...lease, name: "blog" });
+    const location = { relay_url: "https://remote.example", url: "https://blog.remote.example/", current_relay: false, reported_ready: true, observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z", verification: "relay-reported" as const };
+    const services: DiscoveredService[] = [
+      { name: "blog", address: lease.address, metadata: {}, locations: [location] },
+      { name: "api", address: lease.address, metadata: { description: "An API", tags: ["tools"] }, locations: [{ ...location, url: "https://api.remote.example/" }] },
+      { name: "blog", address: "0x2222222222222222222222222222222222222222", metadata: {}, locations: [location] },
+    ];
+    const cards = mergeDiscoveredServices([local], services, lease.address);
+    expect(cards).toHaveLength(2);
+    expect(cards.find((card) => card.serviceName === "blog")?.link).toBe(local.link);
+    const remote = cards.find((card) => card.serviceName === "api");
+    expect(remote?.link).toBe("");
+    expect(remote?.remoteOnly).toBe(true);
+    expect(remote?.description).toBe("An API");
+    expect(remote?.tags).toEqual(["tools"]);
   });
 });

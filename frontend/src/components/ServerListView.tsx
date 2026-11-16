@@ -230,18 +230,20 @@ function ResultsHeader({ title, status, hiddenCount, showHidden, onToggleHidden 
   );
 }
 
-function ServerGrid({ servers, browseView, onOpenComments, onVote }: {
+function ServerGrid({ servers, browseView, onOpenComments, onVote, onOpenRelays, relayCounts }: {
   servers: BaseServer[];
   browseView: BrowseView;
   onOpenComments: (server: BaseServer) => void;
   onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
+  onOpenRelays?: (server: BaseServer) => void;
+  relayCounts?: Record<string, number>;
 }): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const renderedServerIds = servers.map((server) => server.id).join("\n");
   useEffect(() => watchCardReveal(gridRef.current), [renderedServerIds, browseView]);
   return (
     <div ref={gridRef} className="grid grid-cols-1 gap-x-4 gap-y-10 min-[600px]:grid-cols-2 min-[1150px]:grid-cols-3 min-[1600px]:grid-cols-4 min-[2000px]:grid-cols-5">
-      {servers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} onVote={onVote} /></LiveAppCard>)}
+      {servers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={server.remoteOnly ? undefined : onOpenComments} onVote={server.remoteOnly ? undefined : onVote} onOpenRelays={onOpenRelays} relayCount={relayCounts?.[server.id]} /></LiveAppCard>)}
     </div>
   );
 }
@@ -261,6 +263,9 @@ function EmptyResults({ browseView, title, body }: {
 }
 
 interface ServerListViewProps {
+  identityFilter?: ReactNode;
+  onOpenRelays?: (server: BaseServer) => void;
+  relayCounts?: Record<string, number>;
   browseView: BrowseView;
   sidebarOpen: boolean;
   onSidebarOpenChange: (open: boolean) => void;
@@ -285,6 +290,9 @@ interface ServerListViewProps {
 }
 
 export function ServerListView({
+  identityFilter,
+  onOpenRelays,
+  relayCounts,
   browseView,
   sidebarOpen,
   onSidebarOpenChange,
@@ -360,6 +368,7 @@ export function ServerListView({
               onClearTags={onClearTags}
               onToggleTag={handleTagToggle}
             />
+            {identityFilter}
             <div className="px-4 lg:px-8">
               <ResultsHeader
                 title={appListTitle(browseView, searchQuery, sortBy)}
@@ -369,7 +378,7 @@ export function ServerListView({
                 onToggleHidden={() => onShowHiddenChange(!showHidden)}
               />
               {filteredServers.length > 0 ? (
-                <ServerGrid servers={filteredServers} browseView={browseView} onOpenComments={onOpenComments} onVote={onVote} />
+                <ServerGrid servers={filteredServers} browseView={browseView} onOpenComments={onOpenComments} onVote={onVote} onOpenRelays={onOpenRelays} relayCounts={relayCounts} />
               ) : (
                 <EmptyResults browseView={browseView} title={emptyMessage.title} body={emptyMessage.body} />
               )}

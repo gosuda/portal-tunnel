@@ -1,5 +1,6 @@
 import { useState, type JSX, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { ROUTE_PATHS } from "@/lib/apiPaths";
 import clsx from "clsx";
 import {
   BadgeDollarSign,
@@ -210,7 +211,7 @@ function CoverPanel({ server, effectiveThumbnail, action, showPaymentBadge, effe
           <span className="truncate">{effectivePaymentLabel}</span>
         </span>
       )}
-      {server.online && !isTransportService && (
+      {server.online && !isTransportService && !server.remoteOnly && (
         <span className="absolute bottom-2.5 right-2.5 inline-flex items-center gap-1.5 rounded bg-black/80 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-400 backdrop-blur-xs">
           <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
           LIVE
@@ -311,6 +312,8 @@ interface ServerCardProps {
   navigable?: boolean;
   onOpenComments?: (server: BaseServer) => void;
   onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
+  onOpenRelays?: (server: BaseServer) => void;
+  relayCount?: number;
 }
 
 export function ServerCard({
@@ -320,6 +323,8 @@ export function ServerCard({
   navigable = true,
   onOpenComments,
   onVote,
+  onOpenRelays,
+  relayCount,
 }: ServerCardProps): JSX.Element {
   const {
     id: serverId, name, description, tags, thumbnail,
@@ -335,8 +340,9 @@ export function ServerCard({
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
   const endpoints = buildEndpoints(tcpAddr, udpAddr);
   const isTransportService = endpoints.length > 0;
-  const isNavigable = navigable && !isTransportService;
+  const isNavigable = navigable && !isTransportService && !server.remoteOnly;
   const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation));
+  const observedRelayCount = relayCount ?? server.locations?.length;
 
   const copyEndpoint = (protocol: string, address: string) =>
     copy(address, protocol);
@@ -366,6 +372,17 @@ export function ServerCard({
       <article className="relative w-full min-w-0">
         <CoverPanel server={server} effectiveThumbnail={effectiveThumbnail} action={action} showPaymentBadge={showPaymentBadge} effectivePaymentLabel={effectivePaymentLabel} isTransportService={isTransportService} hasDetails={hasDetails} description={description} tags={tags} endpoints={endpoints} copiedProtocol={copiedProtocol} onCopyEndpoint={copyEndpoint} onThumbnailError={handleThumbnailError} />
         <TitleRow server={server} name={name} showActions={showActions} isNavigable={isNavigable} isVoting={isVoting} onVote={onVote} onOpenComments={onOpenComments} onSelectVote={handleSelectVote} />
+        {server.address && onOpenRelays && (
+          <div className="relative z-30 mt-2 flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
+            <Link className="min-w-0 truncate hover:text-primary" title={server.address} to={`${ROUTE_PATHS.home}?${new URLSearchParams({ identity: server.address })}`}>
+              by {server.address.slice(0, 6)}…{server.address.slice(-4)}
+            </Link>
+            <button type="button" aria-haspopup="dialog" title="Observed relay locations" className="shrink-0 rounded-md bg-secondary px-2 py-1 hover:text-primary" onClick={() => onOpenRelays(server)}>
+              {observedRelayCount !== undefined ? `${observedRelayCount} relay${observedRelayCount === 1 ? "" : "s"}` : "Relays"}
+            </button>
+          </div>
+        )}
+        {server.remoteOnly && <p className="mt-2 text-xs text-muted-foreground">Relay-reported · Choose a relay to open</p>}
         {children && (
           <div className="pointer-events-auto relative z-30 mt-3 border-t border-border pt-3">
             {children}
