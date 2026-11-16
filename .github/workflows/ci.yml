@@ -187,6 +187,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
+        id: go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -196,5 +197,5 @@ jobs:
         run: go test -count=1 -timeout=10m ./e2e -run '^TestPortalExposeStdinLifetime$'
 
       - name: Test protected agent state and identities
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.go.outcome == 'success' }}
         run: go test -count=1 ./utils ./portal/identity ./cmd/portal-tunnel/agent
