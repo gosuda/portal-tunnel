@@ -92,16 +92,16 @@ func TestNamespaceReplacementDNSOwnership(t *testing.T) {
 	if !retained {
 		t.Fatal("same-namespace replacement would delete live DNS")
 	}
-	legacy, replaced := register("")
+	aliasOnly, replaced := register("")
 	if replaced != replacement {
 		t.Fatal("downgrade lost retired canonical DNS owner")
 	}
 	registry.mu.RLock()
 	stale := server.isDNSHostnameOwnedLocked(replaced.CanonicalHostname, time.Now())
-	retained = server.isDNSHostnameOwnedLocked(legacy.CanonicalHostname, time.Now())
+	retained = server.isDNSHostnameOwnedLocked(aliasOnly.Hostname, time.Now())
 	registry.mu.RUnlock()
-	if stale || !retained {
-		t.Fatal("downgrade did not isolate retired DNS from legacy live DNS")
+	if stale || !retained || aliasOnly.CanonicalHostname != "" {
+		t.Fatal("alias-only replacement did not isolate retired canonical DNS from the live alias")
 	}
 	// A newer concurrent registration reclaims the hostname before cleanup.
 	newest, _ := register(types.LocalTLSNamespaceV1)
@@ -110,39 +110,5 @@ func TestNamespaceReplacementDNSOwnership(t *testing.T) {
 	registry.mu.RUnlock()
 	if !retained || newest.CanonicalHostname != replaced.CanonicalHostname {
 		t.Fatal("late cleanup could delete a reclaimed canonical hostname")
-	}
-}
-
-func TestNamespaceDNSParentHasSiblingAndLegacyOwners(t *testing.T) {
-	registry := newTestRegistry(t, false, false)
-	owner := newTestLeaseIdentity(t, "blog")
-	register := func(name, namespace string) *leaseRecord {
-		t.Helper()
-		owner.Name = name
-		record, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: owner, Namespace: namespace}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return record
-	}
-	named := register("blog", types.LocalTLSNamespaceV1)
-	unnamed := register("", types.LocalTLSNamespaceV1)
-	parent := named.dnsAddressParent()
-	if parent == "" || parent != unnamed.LegacyCanonicalHostname {
-		t.Fatalf("named and unnamed services do not share the legacy address: %q", parent)
-	}
-	server := &Server{registry: registry}
-	owned := func(hostname string) bool {
-		registry.mu.RLock()
-		defer registry.mu.RUnlock()
-		return server.isDNSHostnameOwnedLocked(hostname, time.Now())
-	}
-	register("", "")
-	if owned(unnamed.CanonicalHostname) || !owned(parent) {
-		t.Fatal("unnamed downgrade must withdraw its canonical child but preserve legacy address")
-	}
-	register("blog", "")
-	if !owned(parent) {
-		t.Fatal("last canonical child withdrawal must preserve the live legacy address")
 	}
 }

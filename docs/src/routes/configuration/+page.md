@@ -10,7 +10,7 @@ description: Complete reference for all Portal environment variables, CLI flags,
 Capability is enabled by default in the relay binary. Exposures are eligible
 only with `portal expose --serve ./dist --cache`. Cached responses terminate
 TLS at the selected relay and lose browser-to-origin end-to-end encryption.
-Only eligible legacy identity-bound hostnames use the cache. New canonical
+Only currently granted friendly aliases use the cache. New canonical
 `<service>.<address>.<relay-root>` hostnames are never relay cached, and friendly aliases always
 use the live origin.
 
@@ -726,7 +726,7 @@ For a task-oriented walkthrough, see [Portal Agent](/portal-agent).
 All TLS file, state-directory, and monitor-baseline paths above resolve relative
 to `config.toml`. Automatic and manual Local TLS select the negotiated
 `<service>.<address>.<relay-root>` namespace. Canonical handshakes require usable
-local material; friendly and legacy URLs retain their separate Keyless policy.
+local material; friendly URLs retain their separate Keyless policy.
 Local TLS cannot be combined with raw TCP or UDP in the agent HTTP path.
 Monitoring cannot be combined with raw TCP; the agent does not support relay cache.
 
@@ -755,7 +755,7 @@ Explicit names do not rewrite the shared identity file. Automatic mode requires
 relay operator [issuance admission](#public-tenant-issuance-admission); it
 persists and reuses each hostname's key across restart and renewal. Protect and
 back up this state. Deleting it loses the leaf key and can require a new CA order.
-Without `tls_require_local`, older relays may still provide legacy URLs.
+Without `tls_require_local`, older relays may still provide friendly aliases.
 Canonical certificate failure never changes that hostname to Keyless.
 
 For manual mode, set `tls_cert` and `tls_key` instead of `tls_auto` and

@@ -106,7 +106,7 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
 
 - `portal/namespace`: service-name validation and public hostname syntax shared
   by relay registration, routing, DNS publication, identity loading, and the SDK.
-  It owns alias, legacy canonical, and Local TLS hostname derivation, address
+  It owns alias, Local TLS hostname derivation, address
   extraction, and DNS-parent classification. Lease ownership remains in the
   registry; TLS, cache, and readiness lifecycles remain with their runtime owners.
   Wire capability identifiers and shared protocol constants remain in `types`.
@@ -115,6 +115,24 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   owns the observer lifecycle and passes copied public certificate installation
   events. This package owns polling, baselines, and durable evidence without
   controlling TLS readiness, certificate issuance, or relay selection.
+
+- `portal/discovery.ServiceLookup`: request-driven public-directory observations
+  for address and service-identity queries. `RelaySet` remains the owner of
+  eligible relay targets; the lookup owns a bounded short-lived cache and
+  outbound request slots using the Discovery public-address transport. It admits
+  at most eight concurrent lookups without queueing; excess requests receive
+  HTTP 503 with Retry-After, independently of registration/auth budgets. It reads
+  completed snapshots across eligible relays and rotates its bounded refresh
+  window between requests. Concurrent misses for one relay wait for its pending
+  observation; slot acquisition waits outside the cache lock within the caller's
+  deadline, and canceled callers do not create negative relay observations. Sources
+  are public `/api/state` snapshots; lookup never expands the discovery graph or changes
+  relay health on directory failure. The frontend filters identity results into
+  the existing app list and queries alternate origins only when a visitor opens
+  a card's relay selector. Partial results expose a manual Check more relays
+  action that reuses the rotating window and cache. The selector opens HTTP
+  URLs only; TCP/UDP endpoint selection is not provided. Relay claims remain
+  explicitly unverified.
 
 - `portal/keyless`: the Keyless TLS feature boundary. It owns tenant TLS termination
   via the `keyless_tls` t13server and keyless remote signing — certificate chains
@@ -361,7 +379,7 @@ cancellation or exposure closure closes and joins those local connections.
 ### Tenant TLS certificate ownership
 
 The negotiated `local-tls-v1` namespace fixes TLS policy by hostname. Friendly
-and legacy canonical URLs use the relay-backed Keyless engine. New exact
+aliases use the relay-backed Keyless engine. New exact
 `<service>.<address>.<root>` canonical URLs use a separate `portal/localtls`
 endpoint based on Go `crypto/tls`; they never use Keyless or relay static cache.
 Each endpoint retains atomic certificate rotation and in-flight handshake safety.
@@ -378,7 +396,7 @@ The existing lease renewal
 loop serializes certificate-change reports with token renewal. It reports the
 installed leaf's expiry to the relay, where `canonical_ready` expires independently
 of the reverse connection count. This is owner-reported availability, not proof
-of TLS identity. Public links use the separate friendly or legacy endpoint until
+of TLS identity. Public links use the separate friendly endpoint until
 canonical material is ready, without redirecting or downgrading the canonical.
 At lease startup, already usable manual or persisted material is reported
 immediately. Pending issuance waits for its certificate-change notification

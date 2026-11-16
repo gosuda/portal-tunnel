@@ -40,7 +40,7 @@ func TestHTTPReplicasShareURLAndSurviveOneClientStopping(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		exposure, err := sdk.Expose(t.Context(), serviceIdentity, []string{relayURL}, sdk.WithReplicas(), sdk.WithMITMProtection(true))
+		exposure, err := sdk.Expose(t.Context(), serviceIdentity, []string{relayURL}, sdk.WithReplicas(), sdk.WithMITMProtection(true), sdk.WithAutomaticTLS(t.TempDir(), true))
 		if err != nil {
 			t.Fatal(err)
 		}

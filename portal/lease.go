@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -850,25 +851,24 @@ func (r *leaseRegistry) deleteRecord(i int) {
 
 func (r *leaseRegistry) publicLease(record *leaseRecord, now time.Time) types.Lease {
 	lease := types.Lease{
-		Namespace:               record.Namespace,
-		LegacyCanonicalHostname: record.LegacyCanonicalHostname,
-		Name:                    record.Name,
-		Address:                 record.Address,
-		ExpiresAt:               record.ExpiresAt,
-		FirstSeenAt:             record.FirstSeenAt,
-		LastSeenAt:              record.LastSeenAt,
-		Hostname:                record.Hostname,
-		CanonicalHostname:       record.CanonicalHostname,
-		CanonicalReady:          record.Namespace == types.LocalTLSNamespaceV1 && now.Before(record.localTLSNotAfter) && now.Before(record.ExpiresAt),
-		UDPEnabled:              record.datagram != nil,
-		TCPEnabled:              record.tcpPort > 0,
-		Metadata:                record.Metadata.Copy(),
+		Namespace:         record.Namespace,
+		Name:              record.Name,
+		Address:           record.Address,
+		ExpiresAt:         record.ExpiresAt,
+		FirstSeenAt:       record.FirstSeenAt,
+		LastSeenAt:        record.LastSeenAt,
+		Hostname:          record.Hostname,
+		CanonicalHostname: record.CanonicalHostname,
+		CanonicalReady:    record.Namespace == types.LocalTLSNamespaceV1 && now.Before(record.localTLSNotAfter) && now.Before(record.ExpiresAt),
+		UDPEnabled:        record.datagram != nil,
+		TCPEnabled:        record.tcpPort > 0,
+		Metadata:          record.Metadata.Copy(),
 	}
 	if record.tcpPort > 0 {
-		lease.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort)
+		lease.TCPAddr = net.JoinHostPort(r.rootHostname, strconv.Itoa(record.tcpPort))
 	}
 	if record.datagram != nil {
-		lease.UDPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.datagram.UDPPort())
+		lease.UDPAddr = net.JoinHostPort(r.rootHostname, strconv.Itoa(record.datagram.UDPPort()))
 	}
 	if record.reverse != nil {
 		lease.Ready = record.reverse.ReadyCount()
@@ -1061,15 +1061,13 @@ func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, n
 			return "", "", err
 		}
 	}
-	hostname := namespace.LegacyHostname
-	switch namespaceID {
-	case "":
-	case types.LocalTLSNamespaceV1:
-		hostname = namespace.LocalTLSHostname
-	default:
+	if namespaceID == "" {
+		return publicHostname, "", nil
+	}
+	if namespaceID != types.LocalTLSNamespaceV1 {
 		return "", "", fmt.Errorf("unsupported namespace %q", namespaceID)
 	}
-	canonicalHostname, err := hostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
+	canonicalHostname, err := namespace.LocalTLSHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
 	if err != nil {
 		return "", "", err
 	}
@@ -1100,7 +1098,7 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	if err != nil {
 		return nil, "", err
 	}
-	var publicHostname, canonicalHostname, legacyCanonicalHostname string
+	var publicHostname, canonicalHostname string
 	if pgnsLeaf != nil {
 		if err := validatePGNSLeaseRequest(req); err != nil {
 			return nil, "", err
@@ -1111,12 +1109,9 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 		if err != nil {
 			return nil, "", err
 		}
-		if req.Namespace == types.LocalTLSNamespaceV1 {
-			legacyCanonicalHostname, err = namespace.LegacyHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
-			if err != nil {
-				return nil, "", err
-			}
-		}
+	}
+	if publicHostname == "" && canonicalHostname == "" && !req.UDPEnabled && !req.TCPEnabled {
+		return nil, "", errUnnamedHTTPNeedsLocalTLS
 	}
 	udpEnabled, _ := r.udpPolicy()
 	tcpPortEnabled, _ := r.tcpPortPolicy()
@@ -1134,22 +1129,21 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	expiresAt := claims.Expiry.Time().UTC()
 	issuedAt := claims.IssuedAt.Time().UTC()
 	record := &leaseRecord{
-		Identity:                leaseIdentity,
-		Namespace:               req.Namespace,
-		id:                      leaseID,
-		Hostname:                publicHostname,
-		CanonicalHostname:       canonicalHostname,
-		LegacyCanonicalHostname: legacyCanonicalHostname,
-		Metadata:                req.Metadata.Copy(),
-		Overlay:                 req.Overlay,
-		replica:                 req.Replica,
-		ExpiresAt:               expiresAt,
-		FirstSeenAt:             clampRegisterStartedAt(req.StartedAt, issuedAt),
-		LastSeenAt:              issuedAt,
-		sourceAddr:              sourceAddr,
-		registerSource:          sourceAddr,
-		ReportedIP:              utils.SanitizeReportedIP(reportedIP),
-		reverse:                 transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
+		Identity:          leaseIdentity,
+		Namespace:         req.Namespace,
+		id:                leaseID,
+		Hostname:          publicHostname,
+		CanonicalHostname: canonicalHostname,
+		Metadata:          req.Metadata.Copy(),
+		Overlay:           req.Overlay,
+		replica:           req.Replica,
+		ExpiresAt:         expiresAt,
+		FirstSeenAt:       clampRegisterStartedAt(req.StartedAt, issuedAt),
+		LastSeenAt:        issuedAt,
+		sourceAddr:        sourceAddr,
+		registerSource:    sourceAddr,
+		ReportedIP:        utils.SanitizeReportedIP(reportedIP),
+		reverse:           transport.NewReversePool(defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
 	if pgnsLeaf != nil {
 		record.pgnsFQDN = pgnsLeaf.FQDN
@@ -1211,9 +1205,6 @@ func (r *leaseRegistry) checkRegisterCapacityLocked(record *leaseRecord, now tim
 // identity. A replica also shares their alias and may not join an exclusive
 // lease; the alias epoch survives while this identity keeps the alias.
 func (r *leaseRegistry) joinRegisterReplicasLocked(record *leaseRecord, identityKey types.ServiceIdentityKey, req types.RegisterChallengeRequest, now time.Time) error {
-	if req.Replica && r.cache.Has(record.cacheLeaseLocked().Hostname) {
-		return errReplicaConflict
-	}
 	replicas := 0
 	for _, existing := range r.records {
 		if existing == nil || existing.reverse == nil || existing.isExpired(now) {
@@ -1264,11 +1255,14 @@ func (r *leaseRegistry) checkRegisterHostnameLocked(record *leaseRecord, identit
 		if existing.ServiceKey() == identityKey {
 			continue
 		}
-		if existing.CanonicalHostname == record.CanonicalHostname {
+		if record.CanonicalHostname != "" && existing.CanonicalHostname == record.CanonicalHostname {
 			return errHostnameConflict
 		}
 		if existing.Hostname != "" && existing.Hostname == record.Hostname {
-			if !req.AllowCanonicalFallback && req.Namespace != types.LocalTLSNamespaceV1 {
+			// Raw endpoints use <root>:<port> and Local TLS has its own canonical
+			// hostname, so only alias-only HTTP leases need the alias.
+			aliasOnlyHTTP := req.Namespace != types.LocalTLSNamespaceV1 && !req.UDPEnabled && !req.TCPEnabled
+			if aliasOnlyHTTP {
 				return errHostnameConflict
 			}
 			record.Hostname = ""
@@ -1498,23 +1492,22 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 	}
 
 	resp := types.RegisterResponse{
-		Identity:                record.Identity,
-		Namespace:               record.Namespace,
-		LegacyCanonicalHostname: record.LegacyCanonicalHostname,
-		Hostname:                record.Hostname,
-		AliasEpoch:              record.AliasEpoch,
-		CanonicalHostname:       record.CanonicalHostname,
-		ExpiresAt:               record.ExpiresAt,
-		AccessToken:             accessToken,
-		ReverseEndpoint:         reverseEndpoint,
-		UDPEnabled:              record.datagram != nil,
-		TCPEnabled:              record.tcpPort > 0,
+		Identity:          record.Identity,
+		Namespace:         record.Namespace,
+		Hostname:          record.Hostname,
+		AliasEpoch:        record.AliasEpoch,
+		CanonicalHostname: record.CanonicalHostname,
+		ExpiresAt:         record.ExpiresAt,
+		AccessToken:       accessToken,
+		ReverseEndpoint:   reverseEndpoint,
+		UDPEnabled:        record.datagram != nil,
+		TCPEnabled:        record.tcpPort > 0,
 	}
 	if record.datagram != nil {
-		resp.UDPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.datagram.UDPPort())
+		resp.UDPAddr = net.JoinHostPort(r.rootHostname, strconv.Itoa(record.datagram.UDPPort()))
 	}
 	if record.tcpPort > 0 {
-		resp.TCPAddr = fmt.Sprintf("%s:%d", record.CanonicalHostname, record.tcpPort)
+		resp.TCPAddr = net.JoinHostPort(r.rootHostname, strconv.Itoa(record.tcpPort))
 	}
 	return record, replaced, resp, nil
 }

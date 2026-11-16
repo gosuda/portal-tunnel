@@ -461,7 +461,7 @@ func newChannelBindingListener(t *testing.T, seed, hostname string) *listener {
 
 func canonicalTestHostname(t *testing.T, address string) string {
 	t.Helper()
-	hostname, err := namespace.LegacyHostname("myapp", address, "relay.example")
+	hostname, err := namespace.LocalTLSHostname("myapp", address, "relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}

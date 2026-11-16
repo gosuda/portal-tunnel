@@ -118,6 +118,7 @@ func registerRelayHandlerPolicyRoutes(mux *http.ServeMux, api *RelayAPI) {
 	mux.HandleFunc(types.PathPolicy, api.servePolicy)
 	mux.HandleFunc(types.PathPolicyPrefix, api.servePolicy)
 	mux.HandleFunc(types.PathState, api.servePublicState)
+	mux.HandleFunc(types.PathServices, api.server.HandleServices)
 	mux.HandleFunc(pathReputationVote, api.serveVote)
 	mux.HandleFunc(types.PathComments, api.serveComments)
 	mux.HandleFunc(types.PathCommentsVote, api.serveVote)
@@ -149,7 +150,7 @@ func (api *RelayAPI) servePublicState(w http.ResponseWriter, r *http.Request) {
 	}
 	utils.WriteAPIData(w, http.StatusOK, publicStateResponse{
 		PublicStateResponse: types.PublicStateResponse{Leases: leases},
-		Reputation:          api.reputation.Summaries(api.reputation.ViewerHashFor(voterCookieID), publicIdentityLeases(leases, api.server)),
+		Reputation:          api.reputation.Summaries(api.reputation.ViewerHashFor(voterCookieID), publicIdentityLeases(leases, api.server.PolicyLeases())),
 	})
 }
 

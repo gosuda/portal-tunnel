@@ -28,7 +28,6 @@ var (
 	errTLSRequireLocalWithoutMode              = errors.New("tls_require_local requires tls_auto or local certificate files")
 	errTLSCertificatePairRequired              = errors.New("tls_cert and tls_key must be configured together")
 	errLocalTLSWithRawTCP                      = errors.New("local TLS certificates cannot be combined with raw TCP")
-	errLocalTLSWithRelayCache                  = errors.New("local TLS certificates cannot be combined with relay cache")
 	errPGNSWithRelayCache                      = errors.New("PGNS cannot be combined with relay cache")
 	errCertificateMonitorModeUnsupported       = errors.New("TLS certificate monitoring cannot be combined with relay cache or raw TCP")
 	errTunnelTargetIsRequired                  = errors.New("tunnel target is required")
@@ -268,9 +267,6 @@ func (spec Spec) Validate() error {
 		if spec.Transport.TCP {
 			return errLocalTLSWithRawTCP
 		}
-		if spec.HTTP != nil && spec.HTTP.Cache != nil {
-			return errLocalTLSWithRelayCache
-		}
 	}
 	if err := validatePGNS(spec); err != nil {
 		return err
@@ -459,7 +455,10 @@ func Start(ctx context.Context, spec Spec) (*Runtime, error) {
 func (runtime *Runtime) publicHosts() []appauth.PublicHost {
 	var hosts []appauth.PublicHost
 	for _, relay := range runtime.Exposure.Relays() {
-		hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL}, appauth.PublicHost{URL: relay.LegacyURL}, appauth.PublicHost{URL: relay.AliasURL, Epoch: relay.AliasEpoch, Since: relay.AliasSince})
+		if relay.PublicURL != relay.AliasURL {
+			hosts = append(hosts, appauth.PublicHost{URL: relay.PublicURL})
+		}
+		hosts = append(hosts, appauth.PublicHost{URL: relay.AliasURL, Epoch: relay.AliasEpoch, Since: relay.AliasSince})
 	}
 	return hosts
 }

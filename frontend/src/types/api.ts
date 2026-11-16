@@ -27,7 +27,6 @@ export interface LeaseMetadata {
 
 export interface Lease {
   namespace?: string;
-  legacy_canonical_hostname?: string;
   canonical_ready?: boolean;
   name?: string;
   address: string;
@@ -58,6 +57,32 @@ export interface PolicyLease extends Lease {
 export interface PublicStateResponse {
   leases?: Lease[];
   reputation?: ReputationSummary[];
+}
+
+export interface ServiceLocation {
+  relay_url: string;
+  url?: string;
+  canonical_url?: string;
+  alias_url?: string;
+  current_relay: boolean;
+  reported_ready: boolean;
+  observed_at: string;
+  expires_at: string;
+  verification: "relay-reported";
+}
+
+export interface DiscoveredService {
+  name: string;
+  address: string;
+  metadata: LeaseMetadata;
+  locations: ServiceLocation[];
+}
+
+export interface ServiceDiscoveryResponse {
+  services: DiscoveredService[];
+  partial: boolean;
+  relays_checked: number;
+  relays_skipped: number;
 }
 
 export interface PolicyPortSettings {

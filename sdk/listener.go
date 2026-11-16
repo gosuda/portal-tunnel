@@ -91,7 +91,6 @@ type listenerStatus struct {
 	certificateErr error
 	err            error
 	publicURL      string
-	legacyURL      string
 	aliasURL       string
 	aliasEpoch     string
 	udpAddr        string
@@ -340,7 +339,7 @@ func (l *listener) reportAvailable() {
 		return
 	}
 	state := RelayConnecting
-	if l.readySessions.Load() > 0 && lease.hostname != "" {
+	if l.readySessions.Load() > 0 && (lease.hostname != "" || lease.hasRawEndpoint()) {
 		state = RelayReady
 	}
 	if state == RelayConnecting && lease.approval != "" {
@@ -354,7 +353,6 @@ func (l *listener) reportAvailable() {
 	l.report(listenerStatus{
 		state:      state,
 		publicURL:  l.leaseURL(lease.hostname),
-		legacyURL:  l.leaseURL(lease.legacyHostname),
 		aliasURL:   l.aliasURLForLease(lease),
 		aliasEpoch: lease.aliasEpoch,
 		udpAddr:    udpAddr,
@@ -458,7 +456,7 @@ drainLoop:
 		l.datagram.Close("listener closed")
 	}
 	var unregisterErr error
-	if lease != nil && lease.hostname != "" && l.identity.Key() != "" && lease.accessToken != "" {
+	if lease != nil && l.identity.Key() != "" && lease.accessToken != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		unregisterErr = l.api.unregister(ctx, lease.accessToken)
 		cancel()
@@ -475,9 +473,8 @@ drainLoop:
 }
 
 type listenerSnapshot struct {
-	hostname       string
-	legacyHostname string
-	pgnsFQDN       string
+	hostname string
+	pgnsFQDN string
 
 	aliasHostname       string
 	aliasEpoch          string
@@ -645,6 +642,11 @@ func relayAuthority(relayURL *url.URL, hostname string) string {
 }
 
 func (l *listener) runStaticCache(ctx context.Context) {
+	lease, registered := l.leaseSnapshot()
+	if !registered || lease.aliasHostname == "" {
+		log.Warn().Str("relay_url", l.api.relayURL.String()).Msg("relay cache unavailable: no friendly alias granted")
+		return
+	}
 	limits, available := l.api.cacheLimits()
 	if !available {
 		log.Info().Str("relay_url", l.api.relayURL.String()).Msg("relay cache unavailable; serving through the origin tunnel")
@@ -671,7 +673,7 @@ func (l *listener) runStaticCache(ctx context.Context) {
 
 func (l *listener) runLease(ctx context.Context) error {
 	lease, ok := l.leaseSnapshot()
-	if !ok || lease.hostname == "" {
+	if !ok || (lease.hostname == "" && !lease.hasRawEndpoint()) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -1186,15 +1188,14 @@ func (l *listener) refreshTenantChain(ctx context.Context, tenantTLS tenantTLSCl
 
 func (l *listener) registerAndConfigure(ctx context.Context) error {
 	registerReq := types.RegisterChallengeRequest{
-		Replica:                l.replica,
-		AllowCanonicalFallback: true,
-		Identity:               l.identity,
-		Metadata:               l.metadataSnapshot(),
-		Overlay:                l.overlay,
-		TTL:                    int(defaultLeaseTTL / time.Second),
-		UDPEnabled:             l.udpEnabled,
-		TCPEnabled:             l.tcpEnabled,
-		StartedAt:              l.startedAt,
+		Replica:    l.replica,
+		Identity:   l.identity,
+		Metadata:   l.metadataSnapshot(),
+		Overlay:    l.overlay,
+		TTL:        int(defaultLeaseTTL / time.Second),
+		UDPEnabled: l.udpEnabled,
+		TCPEnabled: l.tcpEnabled,
+		StartedAt:  l.startedAt,
 	}
 	if l.tlsStateDir != "" || l.tlsCertFile != "" || l.pgnsFQDN != "" {
 		registerReq.Namespace = types.LocalTLSNamespaceV1
@@ -1205,16 +1206,15 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		return err
 	}
 	pending := &listenerSnapshot{
-		hostname:       resp.CanonicalHostname,
-		legacyHostname: resp.LegacyCanonicalHostname,
-		pgnsFQDN:       l.pgnsFQDN,
-		aliasHostname:  resp.Hostname,
-		aliasEpoch:     resp.AliasEpoch,
-		udpAddr:        resp.UDPAddr,
-		tcpAddr:        resp.TCPAddr,
-		accessToken:    resp.AccessToken,
-		reverse:        resp.ReverseEndpoint,
-		expiresAt:      resp.ExpiresAt,
+		hostname:      cmp.Or(resp.CanonicalHostname, resp.Hostname),
+		pgnsFQDN:      l.pgnsFQDN,
+		aliasHostname: resp.Hostname,
+		aliasEpoch:    resp.AliasEpoch,
+		udpAddr:       resp.UDPAddr,
+		tcpAddr:       resp.TCPAddr,
+		accessToken:   resp.AccessToken,
+		reverse:       resp.ReverseEndpoint,
+		expiresAt:     resp.ExpiresAt,
 	}
 	// Registration owns these resources until the snapshot is installed. The
 	// same cleanup handles setup failures and a canceled installation we reclaim.
@@ -1244,7 +1244,7 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		}
 	}
 	if l.certificateMonitor != nil {
-		pending.certificateObserver, err = certmonitor.StartCertificateObserver(resp.CanonicalHostname, *l.certificateMonitor)
+		pending.certificateObserver, err = certmonitor.StartCertificateObserver(pending.hostname, *l.certificateMonitor)
 		if err != nil {
 			return err
 		}
@@ -1282,56 +1282,40 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 }
 
 func (l *listener) dialRegistrationTLS(ctx context.Context, resp types.RegisterResponse, observer *certmonitor.CertificateObserver) (tenantTLSClient, error) {
-	isPGNS := l.pgnsFQDN != "" || (resp.Namespace == types.LocalTLSNamespaceV1 && resp.LegacyCanonicalHostname == "")
-	var legacy *keyless.Client
-	var legacyHostname string
-	if !isPGNS {
-		legacyHostname = resp.CanonicalHostname
-		if resp.Namespace == types.LocalTLSNamespaceV1 {
-			legacyHostname = resp.LegacyCanonicalHostname
-		}
-		client, err := keyless.NewClient(ctx, keyless.ClientConfig{
-			RelayURL:    l.api.relayURL.String(),
-			Hostname:    legacyHostname,
-			AccessToken: resp.AccessToken,
-		})
+	var alias *keyless.Client
+	if resp.Hostname != "" {
+		var err error
+		alias, err = keyless.NewClient(ctx, keyless.ClientConfig{RelayURL: l.api.relayURL.String(), Hostname: resp.Hostname, AccessToken: resp.AccessToken})
 		if err != nil {
 			return nil, err
 		}
-		legacy = client
 	}
 	if resp.Namespace != types.LocalTLSNamespaceV1 {
-		return legacy, nil
+		if alias == nil && (l.udpEnabled || l.tcpEnabled) {
+			return keyless.NewClient(ctx, keyless.ClientConfig{RelayURL: l.api.relayURL.String(), Hostname: l.api.relayURL.Hostname(), AccessToken: resp.AccessToken})
+		}
+		if alias == nil {
+			return nil, fmt.Errorf("%w: no friendly alias granted; configure Local TLS for an identity-bound URL", errRelayIncompatible)
+		}
+		return alias, nil
 	}
 	l.api.mu.RLock()
-	issuanceDisabled := l.api.issuanceDisabled || isPGNS
+	issuanceDisabled := l.api.issuanceDisabled || l.pgnsFQDN != ""
 	l.api.mu.RUnlock()
 	local, err := localtls.NewClient(ctx, localtls.ClientConfig{
-		RelayURL:              l.api.relayURL.String(),
-		Hostname:              resp.CanonicalHostname,
-		AccessToken:           resp.AccessToken,
-		CertificateDir:        l.tlsStateDir,
-		IssuanceDisabled:      issuanceDisabled,
-		CertFile:              l.tlsCertFile,
-		KeyFile:               l.tlsKeyFile,
-		InstalledCertificates: observer.Events(),
+		RelayURL: l.api.relayURL.String(), Hostname: resp.CanonicalHostname, AccessToken: resp.AccessToken,
+		CertificateDir: l.tlsStateDir, IssuanceDisabled: issuanceDisabled, CertFile: l.tlsCertFile, KeyFile: l.tlsKeyFile, InstalledCertificates: observer.Events(),
 	})
 	if err != nil {
-		if legacy != nil {
-			_ = legacy.Close()
+		if alias != nil {
+			_ = alias.Close()
 		}
 		return nil, err
 	}
 	if l.http2Enabled.Load() {
 		local.SetNextProtos([]string{"h2", "http/1.1"})
 	}
-	return &namespaceTLS{
-		local:          local,
-		legacy:         legacy,
-		hostname:       resp.CanonicalHostname,
-		legacyHostname: legacyHostname,
-		aliasHostname:  resp.Hostname,
-	}, nil
+	return &namespaceTLS{local: local, alias: alias, hostname: resp.CanonicalHostname, aliasHostname: resp.Hostname}, nil
 }
 
 func (l *listener) waitRetry(ctx context.Context, operation string, err error, retries, reverseSessionSlot int) bool {
@@ -1534,7 +1518,7 @@ func (l *listener) refreshReverseEndpointAfterFailure(ctx context.Context, faile
 
 var errTLSNameOutsideLease = errors.New("TLS server name is outside this service lease")
 
-// tenantTLSClient is the lease lifecycle shared by the legacy Keyless engine
+// tenantTLSClient is the lease lifecycle shared by the alias Keyless engine
 // and the independently owned canonical Local TLS endpoint.
 type tenantTLSClient interface {
 	TerminateConn(context.Context, net.Conn, []byte) (net.Conn, error)
@@ -1546,11 +1530,10 @@ type tenantTLSClient interface {
 }
 
 type namespaceTLS struct {
-	local          *localtls.Client
-	legacy         *keyless.Client
-	hostname       string
-	legacyHostname string
-	aliasHostname  string
+	local         *localtls.Client
+	alias         *keyless.Client
+	hostname      string
+	aliasHostname string
 }
 
 func (c *namespaceTLS) TerminateConn(ctx context.Context, conn net.Conn, binding []byte) (net.Conn, error) {
@@ -1563,36 +1546,36 @@ func (c *namespaceTLS) TerminateConn(ctx context.Context, conn net.Conn, binding
 	if hostname == c.hostname {
 		return c.local.TerminateConn(ctx, buffered, binding)
 	}
-	matchesLegacy := hostname != "" && (hostname == c.legacyHostname || hostname == c.aliasHostname)
-	if c.legacy == nil || !matchesLegacy {
+	if hostname == "" || hostname != c.aliasHostname || c.alias == nil {
 		_ = buffered.Close()
 		return nil, errTLSNameOutsideLease
 	}
-	return c.legacy.TerminateConn(ctx, buffered, binding)
+	return c.alias.TerminateConn(ctx, buffered, binding)
 }
 
 func (c *namespaceTLS) TenantTLSConfig() *tls.Config   { return c.local.TenantTLSConfig() }
 func (c *namespaceTLS) TenantCertPool() *x509.CertPool { return c.local.TenantCertPool() }
 func (c *namespaceTLS) SetAccessToken(token string) {
-	if c.legacy != nil {
-		c.legacy.SetAccessToken(token)
+	if c.alias != nil {
+		c.alias.SetAccessToken(token)
 	}
 	c.local.SetAccessToken(token)
 }
 func (c *namespaceTLS) RefreshChain(ctx context.Context) (bool, error) {
 	var a bool
 	var aerr error
-	if c.legacy != nil {
-		a, aerr = c.legacy.RefreshChain(ctx)
+	if c.alias != nil {
+		a, aerr = c.alias.RefreshChain(ctx)
 	}
 	b, berr := c.local.RefreshChain(ctx)
 	return a || b, errors.Join(aerr, berr)
 }
 func (c *namespaceTLS) Close() error {
-	if c.legacy != nil {
-		return errors.Join(c.local.Close(), c.legacy.Close())
+	var err error
+	if c.alias != nil {
+		err = c.alias.Close()
 	}
-	return c.local.Close()
+	return errors.Join(c.local.Close(), err)
 }
 
 // enableHTTP2 is called by the HTTP consumer, never by the raw stream API.

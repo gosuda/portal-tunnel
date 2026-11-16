@@ -310,6 +310,7 @@ type Server struct {
 	quicBackhaulDone chan struct{}
 
 	relaySet *discovery.RelaySet
+	services *discovery.ServiceLookup
 	registry *leaseRegistry
 	overlay  *overlay.Runtime
 }
@@ -486,6 +487,7 @@ func completeNewServer(cfg ServerConfig, registry *leaseRegistry, relayIdentity 
 		authority: relayAuthority,
 		registry:  registry,
 		relaySet:  relaySet,
+		services:  discovery.NewServiceLookup(relaySet),
 	}
 	if err := attachOverlay(server, resolved, relayAuthority); err != nil {
 		return nil, err

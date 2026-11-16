@@ -199,7 +199,7 @@ func TestLeaseRegistryPGNSAdmissionAndWatermarks(t *testing.T) {
 	}
 	t.Cleanup(record.Close)
 
-	if resp.Namespace != types.LocalTLSNamespaceV1 || resp.CanonicalHostname != appFQDN || resp.LegacyCanonicalHostname != "" {
+	if resp.Namespace != types.LocalTLSNamespaceV1 || resp.CanonicalHostname != appFQDN || resp.Hostname != "" {
 		t.Fatalf("unexpected RegisterResponse: %+v", resp)
 	}
 	if registry.cache.Has(appFQDN) {

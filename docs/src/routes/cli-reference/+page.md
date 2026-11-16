@@ -201,17 +201,13 @@ key is unchanged.
 
 | Endpoint | Hostname | TLS and cache policy |
 |---|---|---|
-| Friendly alias, if available | `<name>.<relay-root>` | Keyless, HTTP/1.1, live origin only |
-| Negotiated Local TLS canonical | `<service>.<40-lowercase-hex-address>.<relay-root>` | Tunnel-owned exact certificate, HTTP/1.1 and HTTP/2, never relay cached |
-| Legacy canonical | `<address>.<relay-root>`, `<name>-<address>.<relay-root>`, or `<name-hash>--<address>.<relay-root>` | Existing Keyless and eligible opt-in cache behavior |
+| Friendly alias, if granted | `<name>.<relay-root>` | Live Keyless; explicit opt-in relay static cache |
+| Local TLS canonical | `<service>.<40-lowercase-hex-address>.<relay-root>` | Exact tunnel-owned certificate; never relay cached |
 
-Local TLS uses `default` for an unnamed service; an explicitly named `default`
-is rejected only in that namespace. Its service label can use all 63 octets.
-Legacy names longer than 22 characters use a 21-character name hash to fit the
-address into one label. Canonical-shaped service labels are rejected in both
-modes. Depth is relative to the configured relay root, which may contain
-multiple labels. A friendly alias collision does not prevent canonical service
-registration.
+Local TLS uses reserved `default` for an unnamed service. A canonical URL does
+not depend on receiving an alias. Old one-label canonical URLs are removed;
+there are no redirects. Unnamed HTTP services need Local TLS. Clients requiring
+the removed URLs must upgrade; alias-capable older clients retain live aliases.
 
 ### Tunnel-owned Local TLS
 
@@ -223,15 +219,15 @@ portal expose 3000 --name blog --identity-path identity.json \
 Automatic issuance needs a relay with tenant issuance enabled and, for public
 CA orders, explicit approval for this service plus shared durable issuance
 budget state. See [relay configuration](/configuration#public-tenant-issuance-admission).
-Without `--tls-require-local`, an older relay may still provide legacy URLs, and
-a compatible relay's legacy URL can become ready while canonical issuance is
+Without `--tls-require-local`, an older relay may still provide a friendly alias, and
+a compatible relay's alias can become ready while canonical issuance is
 pending. The new canonical hostname itself never falls back to Keyless.
 
 Certificate/key bundles persist per hostname in `--tls-state-dir`, defaulting
 to the identity file path plus `.tls`. With `--identity-json`, supply this
 directory explicitly. Renewals reuse the stored leaf key. Issuance failure
 keeps a still-valid certificate; expiry withdraws canonical readiness and
-rejects new canonical TLS handshakes. Friendly and legacy endpoints stay separate.
+rejects new canonical TLS handshakes. Friendly endpoints stay separate.
 
 For manual material, replace `--tls-auto` with `--tls-cert chain.pem --tls-key
 key.pem`. Files must form a currently valid pair with exactly the assigned
@@ -243,15 +239,14 @@ pair. Manual mode does not obtain or automatically renew certificates.
 
 Moving to a new canonical is an explicit origin migration: update links,
 callbacks, allowed origins, cookies, and browser storage as appropriate.
-There is no automatic redirect. The separate legacy URLs remain supported
-with no removal date currently specified. Local key ownership does not remove
+There is no automatic redirect. Legacy canonical URLs have been removed without redirects. Local key ownership does not remove
 the relay's DNS issuance authority or give ordinary browser JavaScript native
 exporter verification; see the [security model](/security-model#local-tls-service-namespace).
 
 ### Constraints
 
 - Automatic and manual Local TLS cannot be combined, and neither can be used
-  with raw TCP, UDP, or relay static cache in the CLI/agent HTTP path.
+  with raw TCP or UDP in the CLI/agent HTTP path.
 - `--tls-state-dir` requires `--tls-auto`. `--tls-require-local` requires
   `--tls-auto` or a complete manual certificate/key pair; manual mode already
   rejects legacy-only relays.
@@ -585,7 +580,7 @@ portal expose --serve ./dist --cache --cache-ttl 1h \
 The selected relay must advertise cache support and admit the snapshot.
 Otherwise the live origin tunnel remains in use. A cached connection trusts
 the relay with the files and HTTP traffic, even if it falls back to the live
-origin. Only the identity-bound canonical hostname is cached; the friendly
+origin. Only the granted friendly alias is cached; the canonical
 hostname continues to require a live origin. The requested TTL is an upper request subject to relay policy, not a
 hosting guarantee; cached files may be evicted or lost on relay restart.
 See [cache configuration](/configuration#static-relay-cache) and

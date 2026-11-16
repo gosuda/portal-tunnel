@@ -15,60 +15,123 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Verify
+  changes:
+    name: Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
+      go: >-
+        ${{ github.event_name == 'workflow_dispatch' ||
+        steps.filter.outputs.backend == 'true' ||
+        steps.filter.outputs.appauth == 'true' }}
+      frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
     steps:
       - name: Checkout code
+        if: github.event_name == 'push'
+        uses: actions/checkout@v7
+
+      - name: Detect changed inputs
+        if: github.event_name != 'workflow_dispatch'
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            # Keep unknown paths and embedded runtime assets in backend checks.
+            backend:
+              - '**'
+              - '!frontend/**'
+              - '!docs/**'
+              - '!extensions/**'
+              - '!*.md'
+            # Shared JSON fixtures are also inputs to sdk/appauth's Go tests.
+            appauth:
+              - 'frontend/src/lib/*.json'
+            frontend:
+              - 'frontend/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+
+  verify:
+    name: Verify
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require successful change detection
+        env:
+          CHANGE_DETECTION_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGE_DETECTION_RESULT" = success
+
+      - name: Checkout code
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.frontend == 'true'
         uses: actions/checkout@v7
 
       - name: Set up Go
+        if: needs.changes.outputs.go == 'true'
+        id: go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
+      - name: Check Go module consistency
+        if: needs.changes.outputs.go == 'true'
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Cache CI linter
+        if: needs.changes.outputs.go == 'true'
+        id: cache-tools
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin/golangci-lint
+          key: ${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-lint-${{ hashFiles('Makefile') }}
+
+      - name: Install CI linter
+        if: needs.changes.outputs.go == 'true' && steps.cache-tools.outputs.cache-hit != 'true'
+        run: make install-lint
+
+      - name: Run Go checks
+        if: needs.changes.outputs.go == 'true'
+        run: |
+          make vet
+          make lint
+          make test-go-unit
+
       - name: Set up Node.js
+        if: needs.changes.outputs.frontend == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Check Go module consistency
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-
-      - name: Cache CI tools
-        id: cache-tools
-        uses: actions/cache@v4
-        with:
-          path: ~/go/bin
-          key: ${{ runner.os }}-go-tools-${{ hashFiles('go.mod', 'Makefile') }}
-
-      - name: Install CI tools
-        if: steps.cache-tools.outputs.cache-hit != 'true'
-        run: make install
-
       - name: Install frontend dependencies
+        if: needs.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: npm ci
 
-      - name: Run Make checks
-        run: |
-          make vet
-          make lint
-          make test-unit
       - name: Run frontend checks
+        if: needs.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: |
+          npm test
           npm run lint
           npm run build
 
   e2e:
     name: E2E Tests
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -82,12 +145,16 @@ jobs:
       - name: Compile browser tunnel WASM
         run: make build-wasm
 
+      # The full Linux suite includes TestPortalExposeStdinLifetime.
       - name: Run E2E tests
         run: make test-e2e
 
   tunnel-image:
     name: Build Tunnel Image
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -107,16 +174,20 @@ jobs:
 
   expose-stdin-lifetime:
     name: Expose stdin lifetime (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
       - name: Set up Go
+        id: go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -125,18 +196,6 @@ jobs:
       - name: Test application-owned expose lifetime
         run: go test -count=1 -timeout=10m ./e2e -run '^TestPortalExposeStdinLifetime$'
 
-  windows-acl:
-    name: Windows agent ACL regression
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
       - name: Test protected agent state and identities
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.go.outcome == 'success' }}
         run: go test -count=1 ./utils ./portal/identity ./cmd/portal-tunnel/agent

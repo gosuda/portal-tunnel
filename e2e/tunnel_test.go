@@ -60,7 +60,7 @@ func assertCanonicalTunnel(t *testing.T, h *harness, publicURL string) {
 func TestCanonicalTunnel(t *testing.T) {
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		t.Run(host, func(t *testing.T) {
-			h := newHarnessWithName(t, "e2e", host, "")
+			h := newHarnessWithName(t, "e2e", host, "", sdk.WithAutomaticTLS(t.TempDir(), true))
 			assertCanonicalTunnel(t, h, h.waitForPublicURL())
 		})
 	}
@@ -97,7 +97,7 @@ func assertUnnamedCanonicalTunnel(t *testing.T, h *harness, publicURL string) {
 func TestUnnamedCanonicalTunnel(t *testing.T) {
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		t.Run(host, func(t *testing.T) {
-			h := newHarnessWithName(t, "", host, "")
+			h := newHarnessWithName(t, "", host, "", sdk.WithAutomaticTLS(t.TempDir(), true))
 			assertUnnamedCanonicalTunnel(t, h, h.waitForPublicURL())
 		})
 	}
@@ -109,7 +109,7 @@ func exposeSecondIdentity(t *testing.T, ctx context.Context, sniAddr string) ([]
 	if err != nil {
 		t.Fatal(err)
 	}
-	exposure, err := sdk.Expose(ctx, other, []string{"https://" + sniAddr})
+	exposure, err := sdk.Expose(ctx, other, []string{"https://" + sniAddr}, sdk.WithAutomaticTLS(t.TempDir(), true))
 	if err != nil {
 		t.Fatalf("expose second identity: %v", err)
 	}
@@ -121,7 +121,7 @@ func exposeSecondIdentity(t *testing.T, ctx context.Context, sniAddr string) ([]
 }
 
 func TestAliasURLOnlyForAliasOwner(t *testing.T) {
-	h := newHarnessWithName(t, "e2e", "127.0.0.1", "")
+	h := newHarnessWithName(t, "e2e", "127.0.0.1", "", sdk.WithAutomaticTLS(t.TempDir(), true))
 	h.waitForPublicURL()
 	owner := h.exposure.Relays()
 	if len(owner) != 1 || owner[0].AliasURL == "" {

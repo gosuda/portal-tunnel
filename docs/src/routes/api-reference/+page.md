@@ -76,6 +76,7 @@ configured admin token.
 | `GET`/`HEAD` | `/llms.txt` | None | relay and tunnel connection guide |
 | `GET` | `/api/healthz` | None | `{ "status": "ok" }` |
 | `GET` | `/api/state` | None | `PublicStateResponse` |
+| `GET` | `/api/services?address=0x...&name=...` | None | `ServiceDiscoveryResponse` |
 | `POST` | `/api/reputation/vote` | None | reputation summary |
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |
 | `GET`/`HEAD` | `/api/install/bin/{slug}` | None | install binary or redirect |
@@ -86,6 +87,49 @@ The response includes vote counts and the caller's `viewer_vote`.
 
 Detailed contracts: [SDK API](/api-reference/sdk) and
 [Admin and Policy API](/api-reference/admin).
+
+### Public service locations
+
+`GET /api/services` requires a valid EVM `address`. Optional `name` filters one
+normalized service identity; `name=` selects the unnamed service. Without
+`name`, each distinct service name for that address is returned separately.
+
+The response contains `services` (`name`, `address`, descriptive `metadata`,
+`locations`), `partial`, `relays_checked`, and `relays_skipped`. Each location
+contains `relay_url`, optional preferred `url`, `alias_url`, `canonical_url`,
+`current_relay`, `reported_ready`, `observed_at`, `expires_at`, and
+`verification: "relay-reported"`. Readiness is a relay claim, not a live probe.
+Unavailable canonical certificates do not produce canonical links. A service
+without an available HTTP URL can still have a location (for example raw TCP).
+
+Results are observed public services, never an exhaustive address inventory or
+cryptographic proof of ownership. Remote metadata is relay-reported; remote
+thumbnails are omitted. Hidden, expired, malformed, and ineligible entries are
+excluded. Remote visibility changes can take up to the observation TTL to appear.
+
+Lookup reads the local directory directly, reuses valid eligible relay snapshots,
+and refreshes a rotating window of at most eight known, verified, eligible public
+HTTPS relays per request. It does not expand the relay graph. Repeated requests
+advance through the eligible set rather than always selecting its first entries;
+this is shared observation coverage, not exhaustive pagination for one search.
+There are at most four outbound requests across all service lookups, a two-second
+per-relay deadline starting after slot acquisition and five-second lookup deadline
+including queue waits, a 1 MiB decoded response
+limit, 1,000 leases per remote response, and 100 returned service identities.
+Overflow, failed requests, and expired lookup deadlines produce partial results.
+Busy request slots wait within the caller's deadline. Concurrent requests for one
+relay share its in-flight lookup; pending work is never returned as a cached
+failure. Caller cancellation is not negative-cached as a remote failure.
+Observations are cached per relay for 30 seconds, failures for 10 seconds, with
+at most 32 cache entries. Expired observations are not served on failure;
+current eligibility is reapplied before returning cached locations. Requests
+use the Discovery public-IP dialer, disable proxies, and reject redirects.
+
+This endpoint is additive: `/discovery`, its protocol version, and signed relay
+descriptors are unchanged. Older relays can contribute public `/api/state`
+entries through validated friendly aliases; legacy one-label canonical URLs
+are not promoted to links. A failed remote directory does not change Discovery
+health or block the existing local `/api/state` endpoint.
 
 ### SDK
 
@@ -191,7 +235,6 @@ Timestamps are JSON-encoded Go `time.Time` values.
 | `expires_at`, `first_seen_at`, `last_seen_at` | `string` |
 | `hostname`, `canonical_hostname` | `string` |
 | `namespace` | `string`, optional; `local-tls-v1` selects the new canonical policy |
-| `legacy_canonical_hostname` | `string`, optional; separate compatibility origin |
 | `canonical_ready` | `boolean`, optional; Local TLS material availability, not reverse transport count |
 | `udp_enabled`, `tcp_enabled` | `boolean` |
 | `tcp_addr` | `string` |
@@ -200,7 +243,7 @@ Timestamps are JSON-encoded Go `time.Time` values.
 
 For `local-tls-v1`, only advertise the canonical as usable when
 `canonical_ready` is true and `ready` is positive. Otherwise use an available
-friendly or legacy URL as a separate origin. For legacy namespaces, `ready`
+friendly URL as a separate origin. For legacy namespaces, `ready`
 retains its existing meaning. The hostname fields identify routes even while
 their endpoints are unavailable.
 
@@ -314,25 +357,25 @@ falls back to relay-backed signing.
 Automatic and manual modes are mutually exclusive, require the native runtime,
 and reject raw TCP. The CLI/agent additionally reject UDP and relay cache with
 Local TLS. At the lease-protocol level any cache opt-in remains on the separate
-legacy canonical; the new canonical is never cache eligible. Manual mode requires
+friendly alias; the canonical is never cache eligible. Manual mode requires
 a namespace-capable relay. `sdk.RunHTTP` enables canonical HTTP/2 with an actual
 HTTP consumer; raw `Expose`/`Proxy` callers retain HTTP/1.1 and do not gain h2
 translation.
 
 The certificate must cover only the exact Local TLS canonical hostname assigned
-by a selected relay. Friendly and legacy URLs still use Keyless. A coverage
+by a selected relay. Friendly URLs still use Keyless. A coverage
 failure stops that relay's listener and appears in `Exposure.Relays()` with
 `RelayFailureTerminal` and an error wrapping `localtls.ErrLocalCertificate`;
 covered relays remain usable. Ordinary network failures remain retryable. Discovery applies its existing terminal-failure
 backoff policy and can select other relays.
 
 `Exposure.WaitReady` reports when a relay can route traffic. With automatic TLS
-and no require-local option, an existing legacy URL can be ready while the new
+and no require-local option, an granted alias can be ready while the new
 canonical `PublicURL` remains empty. With require-local, `WaitReady` requires a
 usable canonical certificate. If every selected relay has failed terminally or
 refuses the required issuance, it returns the current errors. Issuance policy
 refusals are also available in `RelayStatus.CertificateError`, without disabling
-live legacy URLs or an already valid canonical certificate. The exposure remains
+live aliases or an already valid canonical certificate. The exposure remains
 open for policy recovery or another compatible relay.
 
 Certificate installation and expiry update the same SDK status used by
@@ -343,7 +386,7 @@ For `local-tls-v1` public leases, `canonical_ready` reports usable local materia
 `local_tls_not_after` through authenticated lease renewal on certificate changes,
 and the relay withdraws `canonical_ready` at that expiry even without another
 renewal. This is an owner-reported availability hint, not certificate validation
-or identity proof. Friendly and legacy URLs remain separate compatibility origins.
+or identity proof. Friendly URLs remain separate compatibility origins.
 
 **Go source compatibility:** direct users of `portal/keyless.Client` must
 replace `RelayCertPool()` with `TenantCertPool()`. The returned snapshot trusts

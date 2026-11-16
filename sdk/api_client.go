@@ -21,7 +21,6 @@ import (
 var (
 	errRelayDidNotReturnAccessToken              = errors.New("relay did not return access token")
 	errRelayReturnedMismatchedLeaseIdentity      = errors.New("relay returned mismatched lease identity")
-	errRelayDidNotReturnCanonicalHostname        = errors.New("relay did not return canonical hostname")
 	errRelayDidNotReturnRenewedAccess            = errors.New("relay did not return renewed access token")
 	errRelayReturnedIncompleteReverseEndpoint    = errors.New("relay returned incomplete reverse endpoint")
 	errRelayReturnedInvalidReverseEndpointURL    = errors.New("relay returned invalid reverse endpoint URL")
@@ -261,34 +260,28 @@ func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registe
 	}
 	resp.Hostname = types.NormalizeHostname(resp.Hostname)
 	resp.CanonicalHostname = types.NormalizeHostname(resp.CanonicalHostname)
-	resp.LegacyCanonicalHostname = types.NormalizeHostname(resp.LegacyCanonicalHostname)
 	if resp.Namespace != registerReq.Namespace {
 		_ = c.unregister(context.Background(), resp.AccessToken)
 		return types.RegisterResponse{}, fmt.Errorf("%w: unexpected hostname namespace", errRelayIncompatible)
 	}
-	if resp.CanonicalHostname == "" {
-		_ = c.unregister(context.Background(), resp.AccessToken)
-		return types.RegisterResponse{}, errRelayDidNotReturnCanonicalHostname
-	}
-	aliasCanonical := resp.CanonicalHostname
 	if resp.Namespace == types.LocalTLSNamespaceV1 {
 		if c.pgnsFQDN != "" {
-			if resp.CanonicalHostname != c.pgnsFQDN || resp.LegacyCanonicalHostname != "" {
+			if resp.CanonicalHostname != c.pgnsFQDN {
 				_ = c.unregister(context.Background(), resp.AccessToken)
 				return types.RegisterResponse{}, fmt.Errorf("%w: invalid pgns canonical namespace", errRelayIncompatible)
 			}
-			aliasCanonical = ""
 		} else {
-			aliasCanonical = resp.LegacyCanonicalHostname
-			_, root, ok := strings.Cut(aliasCanonical, ".")
-			expected, err := namespace.LocalTLSHostname(registerReq.Identity.Name, registerReq.Identity.Address, root)
-			if !ok || err != nil || expected != resp.CanonicalHostname {
+			expected, err := namespace.LocalTLSHostname(registerReq.Identity.Name, registerReq.Identity.Address, c.relayURL.Hostname())
+			if err != nil || resp.CanonicalHostname != expected {
 				_ = c.unregister(context.Background(), resp.AccessToken)
 				return types.RegisterResponse{}, fmt.Errorf("%w: invalid canonical namespace", errRelayIncompatible)
 			}
 		}
+	} else {
+		// Older relays may return a removed canonical format. Only their alias is usable.
+		resp.CanonicalHostname = ""
 	}
-	if aliasCanonical == "" || !namespace.MatchesAlias(resp.Hostname, registerReq.Identity.Name, aliasCanonical) {
+	if c.pgnsFQDN != "" || !namespace.MatchesAlias(resp.Hostname, registerReq.Identity.Name, c.relayURL.Hostname()) {
 		resp.Hostname = ""
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)

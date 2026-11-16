@@ -6,6 +6,7 @@ const (
 	PathAPIPrefix      = "/api"
 	PathHealthz        = PathAPIPrefix + "/healthz"
 	PathState          = PathAPIPrefix + "/state"
+	PathServices       = PathAPIPrefix + "/services"
 	PathComments       = PathAPIPrefix + "/comments"
 	PathCommentsVote   = PathComments + "/vote"
 	PathCommentsDelete = PathComments + "/delete"

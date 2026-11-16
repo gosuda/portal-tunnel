@@ -135,14 +135,18 @@ func (m *mitmManager) probePassthrough(ctx context.Context, pgnsOnly bool) (mitm
 	}
 	isPGNS := lease.pgnsFQDN != "" || pgnsOnly
 	if endpoint, ok := lease.tenantTLS.(*namespaceTLS); ok {
-		// Probe the relay-owned certificate path even before local issuance is
-		// ready. For PGNS leases (legacy == nil), probe the local PGNS FQDN directly.
-		if !isPGNS && endpoint.legacy != nil {
-			lease.hostname = lease.legacyHostname
-			lease.tenantTLS = endpoint.legacy
+		cachedAlias := l.cache != nil
+		if !isPGNS && endpoint.alias != nil && !cachedAlias {
+			// Probe the relay-owned certificate path even before local issuance is
+			// ready. The canonical hostname uses independent local TLS material.
+			lease.hostname = lease.aliasHostname
+			lease.tenantTLS = endpoint.alias
+		} else if !endpoint.local.Ready() {
+			// A cached alias is relay-terminated by consent, so only the
+			// canonical passthrough path is probed, once its certificate exists.
+			return mitmProbeReport{}, errListenerHostnameIsUnavailable
 		} else {
 			lease.tenantTLS = endpoint.local
-			isPGNS = isPGNS || endpoint.legacy == nil
 		}
 	}
 	if lease.hostname == "" {
@@ -150,9 +154,6 @@ func (m *mitmManager) probePassthrough(ctx context.Context, pgnsOnly bool) (mitm
 	}
 
 	publicURL := l.leaseURL(lease.hostname)
-	if !isPGNS {
-		publicURL = l.publicURLForLease(lease)
-	}
 	if publicURL == "" {
 		return mitmProbeReport{}, errListenerIsNotRegistered
 	}
@@ -181,7 +182,7 @@ func (m *mitmManager) probePassthrough(ctx context.Context, pgnsOnly bool) (mitm
 		if err := tlsConn.HandshakeContext(probeCtx); err != nil {
 			return report, fmt.Errorf("mitm probe tls handshake: %w", err)
 		}
-		err := VerifyTLSChannelBinding(probeCtx, tlsConn, lease.hostname)
+		err := verifyTLSChannelBinding(probeCtx, tlsConn, lease.hostname, l.identity.Address)
 		if errors.Is(err, errTLSChannelBindingExporterMismatchRelay) {
 			report.Detected = true
 			report.Reason = types.MITMProbeReasonExporterMismatch
@@ -371,7 +372,11 @@ func (m *mitmManager) completeProbe(nonce mitmProbeNonce, actual []byte) {
 }
 
 func (m *mitmManager) run(ctx context.Context, ready <-chan struct{}) {
-	if m.listener.cache != nil || runtime.GOOS == "js" {
+	l := m.listener
+	// Relay caching permits relay TLS termination of the alias. A Local TLS
+	// canonical endpoint stays passthrough, so it is still probed.
+	cacheWithoutCanonical := l.cache != nil && l.tlsStateDir == "" && l.tlsCertFile == ""
+	if cacheWithoutCanonical || l.udpEnabled || l.tcpEnabled || runtime.GOOS == "js" {
 		return
 	}
 	select {
@@ -496,21 +501,25 @@ func (m *mitmManager) reportProbeDetection(l *listener, report mitmProbeReport) 
 // it when it returns, so a deadline set earlier does not survive; set it again
 // afterwards.
 func VerifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname string) error {
+	expected, err := namespace.CanonicalAddress(hostname)
+	if err != nil {
+		return err
+	}
+	return verifyTLSChannelBinding(ctx, conn, hostname, expected)
+}
+
+// Self-probes know the expected owner independently of a reassignable alias.
+func verifyTLSChannelBinding(ctx context.Context, conn net.Conn, hostname, expected string) error {
 	if conn == nil {
 		return errTLSConnectionIsRequired
-	}
-	expectedAddr, err := namespace.CanonicalAddress(hostname)
-	if err != nil {
-		_ = conn.Close()
-		return err
 	}
 	return verifyChannelBinding(ctx, conn, hostname, func(compressedPubKey [33]byte) error {
 		recoveredAddr, err := identity.AddressFromCompressedPublicKeyHex(hex.EncodeToString(compressedPubKey[:]))
 		if err != nil {
 			return fmt.Errorf("resolve channel binding signer address: %w", err)
 		}
-		if !strings.EqualFold(recoveredAddr, expectedAddr) {
-			return fmt.Errorf("tls channel binding signer %s does not match canonical hostname identity %s", recoveredAddr, expectedAddr)
+		if !strings.EqualFold(recoveredAddr, expected) {
+			return fmt.Errorf("tls channel binding signer %s does not match canonical hostname identity %s", recoveredAddr, expected)
 		}
 		return nil
 	})
@@ -736,7 +745,7 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
 			if sni := types.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
 				pgnsMatch := lease.pgnsFQDN != "" && sni == lease.pgnsFQDN
-				if sni != lease.hostname && sni != lease.legacyHostname && !pgnsMatch {
+				if sni != lease.hostname && sni != lease.aliasHostname && !pgnsMatch {
 					_ = conn.Close()
 					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
 				}
