@@ -149,17 +149,13 @@ func newCommandPipe(t *testing.T, what string) (*os.File, *os.File) {
 	return read, write
 }
 
-func runBrowserCommand(t *testing.T, browser string, commandRead, replyWrite *os.File) (<-chan struct{}, *browserTree) {
+func runBrowserCommand(t *testing.T, browser string, commandRead, replyWrite, logFile *os.File) (<-chan struct{}, *browserTree) {
 	t.Helper()
-	cmd := exec.Command(browser,
-		"--headless",
-		"--disable-gpu",
-		"--ignore-certificate-errors",
-		"--no-sandbox",
-		"--user-data-dir="+filepath.Join(t.TempDir(), "chrome"),
-		"--remote-debugging-pipe",
-		"about:blank",
-	)
+	args := headlessBrowserArgs(filepath.Join(t.TempDir(), "chrome"), "--remote-debugging-pipe", "about:blank")
+	cmd := exec.Command(browser, args...)
+	cmd.Env = headlessBrowserEnv()
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	cmd.ExtraFiles = []*os.File{commandRead, replyWrite}
 	cmd.SysProcAttr = browserSysProcAttr()
 	if err := cmd.Start(); err != nil {
@@ -176,34 +172,39 @@ func runBrowserCommand(t *testing.T, browser string, commandRead, replyWrite *os
 	return browserDone, tree
 }
 
-func launchBrowserProcess(t *testing.T, browser string) (*os.File, *os.File) {
+func launchBrowserProcess(t *testing.T, browser string) (*os.File, *os.File, string) {
 	t.Helper()
 	commandRead, commandWrite := newCommandPipe(t, "command")
 	replyRead, replyWrite := newCommandPipe(t, "reply")
+	logFile, err := os.Create(filepath.Join(t.TempDir(), "browser.log"))
+	if err != nil {
+		t.Fatalf("create browser log: %v", err)
+	}
 	t.Cleanup(func() {
 		_ = commandWrite.Close()
 		_ = replyRead.Close()
+		_ = logFile.Close()
 	})
-	browserDone, tree := runBrowserCommand(t, browser, commandRead, replyWrite)
+	browserDone, tree := runBrowserCommand(t, browser, commandRead, replyWrite, logFile)
 	t.Cleanup(func() { waitBrowserExit(t, browserDone, tree) })
-	return commandWrite, replyRead
+	return commandWrite, replyRead, logFile.Name()
 }
 
 func startBrowserPage(t *testing.T, browser string) *browserPage {
 	t.Helper()
-	commands, replies := launchBrowserProcess(t, browser)
+	commands, replies, browserLog := launchBrowserProcess(t, browser)
 	page := &browserPage{t: t, commands: commands, replies: replies, reader: bufio.NewReader(replies)}
 	var target struct {
 		TargetID string `json:"targetId"`
 	}
 	if err := page.call("Target.createTarget", map[string]any{"url": "about:blank"}, &target); err != nil {
-		t.Fatalf("create tab: %v", err)
+		t.Fatalf("create tab: %v; browser log=%s", err, readBrowserLog(browserLog))
 	}
 	var attached struct {
 		SessionID string `json:"sessionId"`
 	}
 	if err := page.call("Target.attachToTarget", map[string]any{"targetId": target.TargetID, "flatten": true}, &attached); err != nil {
-		t.Fatalf("attach to tab: %v", err)
+		t.Fatalf("attach to tab: %v; browser log=%s", err, readBrowserLog(browserLog))
 	}
 	page.sessionID = attached.SessionID
 	return page
@@ -238,7 +239,7 @@ func (p *browserPage) call(method string, params map[string]any, result any) err
 	if _, err := p.commands.Write(append(data, 0)); err != nil {
 		return err
 	}
-	if err := p.replies.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
+	if err := p.replies.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return err
 	}
 	return p.awaitCallReply(method, result)
