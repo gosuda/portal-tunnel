@@ -3,7 +3,7 @@ import {
   resolveLeasePayment,
   resolveLeaseThumbnail,
 } from "@/lib/metadata";
-import type { Lease, ReputationSummary } from "@/types/api";
+import type { DiscoveredService, Lease, ReputationSummary, ServiceLocation } from "@/types/api";
 
 export interface BaseServer {
   id: string;
@@ -16,6 +16,9 @@ export interface BaseServer {
   dns: string;
   link: string;
   address?: string;
+  serviceName?: string;
+  locations?: ServiceLocation[];
+  remoteOnly?: boolean;
   tcpAddr?: string;
   udpAddr?: string;
   lastUpdated?: string;
@@ -23,6 +26,38 @@ export interface BaseServer {
   paymentEnabled?: boolean;
   paymentLabel?: string;
   reputation?: ReputationSummary;
+}
+
+// Identity results share one card per service. A local card retains its URL;
+// remote-only cards require an explicit location choice.
+export function mergeDiscoveredServices(local: BaseServer[], services: DiscoveredService[], address: string): BaseServer[] {
+  const selected = local.filter((server) => server.address?.toLowerCase() === address.toLowerCase());
+  const byName = new Map(selected.map((server) => [server.serviceName ?? "", server]));
+  for (const service of services) {
+    if (service.address.toLowerCase() !== address.toLowerCase()) continue;
+    const existing = byName.get(service.name);
+    if (existing) {
+      byName.set(service.name, { ...existing, locations: service.locations });
+    } else {
+      const metadata = parseLeaseMetadata(service.metadata);
+      byName.set(service.name, {
+        id: `service:${service.name}:${service.address.toLowerCase()}`,
+        serviceName: service.name,
+        name: service.name || "(unnamed)",
+        address: service.address,
+        description: metadata.description,
+        tags: metadata.tags,
+        owner: metadata.owner,
+        thumbnail: "",
+        online: service.locations.some((location) => location.reported_ready),
+        dns: "",
+        link: "",
+        remoteOnly: true,
+        locations: service.locations,
+      });
+    }
+  }
+  return [...byName.values()];
 }
 
 export function leaseToServer(row: Lease): BaseServer {
@@ -51,6 +86,7 @@ export function leaseToServer(row: Lease): BaseServer {
     dns: publicHostname,
     link: !tcpAddr && !udpAddr && publicHostname ? `https://${publicHostname}/` : "",
     address: row.address,
+    serviceName: row.name || "",
     tcpAddr: tcpAddr || undefined,
     udpAddr: udpAddr || undefined,
     lastUpdated: row.last_seen_at || undefined,

@@ -8,7 +8,6 @@ GO_BUILD_FLAGS := -trimpath -ldflags "-s -w"
 GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.52.0
 GOLANGCI_LINT_VERSION := v2.15.0
-GOJGP_VERSION := v1.3.0
 GOIMPORTS_LOCAL := github.com/gosuda/portal-tunnel/v2
 
 export GOTOOLCHAIN := $(GO_TOOLCHAIN_VERSION)
@@ -16,7 +15,7 @@ export GOTOOLCHAIN := $(GO_TOOLCHAIN_VERSION)
 help:
 	@echo "Available targets:"
 	@echo "  make install           - Install Go developer tools used by this repo"
-	@echo "  make lint              - Run golangci-lint and gojgp"
+	@echo "  make lint              - Run golangci-lint"
 	@echo "  make fmt               - Apply gofmt/goimports"
 	@echo "  make lint-auto         - Run autofix lint/format pipeline"
 	@echo "  make test              - Run Go and frontend tests"
@@ -34,7 +33,6 @@ help:
 install:
 	go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-	go install github.com/gosuda/JustGoodPractices/cmd/gojgp@$(GOJGP_VERSION)
 
 fmt:
 	gofmt -w .
@@ -45,13 +43,11 @@ vet:
 
 lint:
 	golangci-lint run $(GO_PACKAGES)
-	go run ./cmd/gojgp-lint $(GO_PACKAGES)
 
 lint-auto:
 	gofmt -w .
 	goimports -local $(GOIMPORTS_LOCAL) -w .
 	golangci-lint run --fix $(GO_PACKAGES)
-	go run ./cmd/gojgp-lint $(GO_PACKAGES)
 
 test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)

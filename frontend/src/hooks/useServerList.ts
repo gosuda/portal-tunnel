@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import type { BrowseView } from "@/types/filters";
 import { useList, type UseListReturn } from "@/hooks/useList";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { leaseToServer, type BaseServer } from "@/lib/server";
+import { leaseToServer, mergeDiscoveredServices, type BaseServer } from "@/lib/server";
+import { useServiceDiscovery } from "@/hooks/useServiceDiscovery";
 import { apiClient } from "@/lib/apiClient";
 import { isHiddenByVotes } from "@/utils/reputation";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
@@ -254,7 +255,7 @@ function selectVisibleServers(servers: BaseServer[], showHidden: boolean): BaseS
   );
 }
 
-export function useServerList(): UseListReturn<BaseServer> & { commentServer: BaseServer | null; toggleComments: (server: BaseServer) => void; closeComments: () => void; browseView: BrowseView; favorites: number; showHidden: boolean; setShowHidden: (value: boolean) => void; hiddenCount: number; sidebarOpen: boolean; setSidebarOpen: (value: boolean) => void; filteredServers: BaseServer[]; handleBrowseViewChange: (view: BrowseView) => void; leases: Lease[] | null; onVote: (hostname: string, vote: ReputationVoteAction) => Promise<void> } {
+export function useServerList(identityAddress = ""): UseListReturn<BaseServer> & { identityDiscovery: ReturnType<typeof useServiceDiscovery>; commentServer: BaseServer | null; toggleComments: (server: BaseServer) => void; closeComments: () => void; browseView: BrowseView; favorites: number; showHidden: boolean; setShowHidden: (value: boolean) => void; hiddenCount: number; sidebarOpen: boolean; setSidebarOpen: (value: boolean) => void; filteredServers: BaseServer[]; handleBrowseViewChange: (view: BrowseView) => void; leases: Lease[] | null; onVote: (hostname: string, vote: ReputationVoteAction) => Promise<void> } {
   const [commentServerId, setCommentServerId] = useState<string | null>(null);
   const [browseView, setBrowseView] = useState<BrowseView>("home");
   const [showHidden, setShowHidden] = useState(false);
@@ -277,9 +278,13 @@ export function useServerList(): UseListReturn<BaseServer> & { commentServer: Ba
   };
 
 
+  const identityDiscovery = useServiceDiscovery(identityAddress);
   const servers: BaseServer[] = useMemo(
-    () => attachReputation(publicState.leases, summaries),
-    [publicState.leases, summaries]
+    () => {
+      const local = attachReputation(publicState.leases, summaries);
+      return identityAddress ? mergeDiscoveredServices(local, identityDiscovery.response?.services ?? [], identityAddress) : local;
+    },
+    [publicState.leases, summaries, identityAddress, identityDiscovery.response]
   );
 
   const hiddenCount = countHidden(servers);
@@ -292,6 +297,7 @@ export function useServerList(): UseListReturn<BaseServer> & { commentServer: Ba
 
   return {
     ...list,
+    identityDiscovery,
     commentServer: servers.find((server) => server.id === commentServerId) ?? null,
     toggleComments: (server: BaseServer) =>
       setCommentServerId((current) => (current === server.id ? null : server.id)),
