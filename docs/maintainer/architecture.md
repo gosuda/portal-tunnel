@@ -120,7 +120,11 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   for address and service-identity queries. `RelaySet` remains the owner of
   eligible relay targets; the lookup owns a bounded short-lived cache and
   outbound request slots using the Discovery public-address transport. It reads
-  only public `/api/state`, never expands the discovery graph, and never changes
+  completed snapshots across eligible relays and rotates its bounded refresh
+  window between requests. Concurrent misses for one relay wait for its pending
+  observation; slot acquisition waits outside the cache lock within the caller's
+  deadline, and canceled callers do not create negative relay observations. Sources
+  are public `/api/state` snapshots; lookup never expands the discovery graph or changes
   relay health on directory failure. The frontend filters identity results into
   the existing app list and queries alternate origins only when a visitor opens
   a card's relay selector. Relay claims remain explicitly unverified.

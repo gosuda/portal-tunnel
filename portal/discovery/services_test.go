@@ -3,12 +3,18 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const serviceTestAddress = "0x1111111111111111111111111111111111111111"
@@ -28,9 +34,201 @@ func TestServiceLookupBoundsObservationsAndResults(t *testing.T) {
 		local = append(local, types.Lease{Name: name, Address: serviceTestAddress, Hostname: name + ".local.example", ExpiresAt: now.Add(time.Minute)})
 	}
 	result := lookup.Lookup(t.Context(), "https://local.example", local, serviceTestAddress, nil)
-	if !result.Partial || result.RelaysChecked != serviceRelayLimit+1 || result.RelaysSkipped != 3 || len(result.Services) != serviceResultLimit {
+	if !result.Partial || result.RelaysChecked != serviceRelayLimit+4 || result.RelaysSkipped != 0 || len(result.Services) != serviceResultLimit {
 		t.Fatalf("lookup did not report its bounds: %+v", result)
 	}
+}
+
+// Real HTTPS exercises directory fetching at its owner. Only the fixture's
+// destination/trust is substituted; production public-IP policy has separate
+// tests in public_relay_test.go. No production injection seam is introduced.
+func serviceLookupHTTPSFixture(t *testing.T, handler http.Handler) *ServiceLookup {
+	t.Helper()
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	transport.TLSClientConfig.ServerName = server.Certificate().DNSNames[0]
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	lookup := NewServiceLookup(NewRelaySet(nil))
+	lookup.client = &http.Client{Transport: transport, CheckRedirect: rejectDiscoveryRedirect}
+	return lookup
+}
+
+func serveLookupDirectory(w http.ResponseWriter, r *http.Request) {
+	utils.WriteAPIData(w, http.StatusOK, types.PublicStateResponse{Leases: []types.Lease{{
+		Name: "blog", Address: serviceTestAddress, Hostname: "blog." + r.Host,
+		ExpiresAt: time.Now().Add(time.Minute), Ready: 1,
+	}}})
+}
+
+func TestServiceLookupColdCacheObservesEightHealthyRelays(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), serviceLookupTimeout)
+	defer cancel()
+	gate, release := context.WithCancel(ctx)
+	defer release()
+	entered := make(chan struct{}, serviceRelayLimit)
+	var calls, active, peak atomic.Int32
+	lookup := serviceLookupHTTPSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		current := active.Add(1)
+		defer active.Add(-1)
+		for previous := peak.Load(); current > previous; previous = peak.Load() {
+			if peak.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		entered <- struct{}{}
+		select {
+		case <-gate.Done():
+			serveLookupDirectory(w, r)
+		case <-r.Context().Done():
+		}
+	}))
+	now := time.Now().UTC()
+	for i := range serviceRelayLimit {
+		relay := fmt.Sprintf("https://relay-%02d.example", i)
+		lookup.relays.relays[relay] = relayState{Descriptor: types.RelayDescriptor{APIHTTPSAddr: relay, ExpiresAt: now.Add(time.Minute)}, Trust: relayVerified, LastSeenAt: now}
+	}
+	result := make(chan types.ServiceDiscoveryResponse, 1)
+	go func() { result <- lookup.Lookup(ctx, "https://local.example", nil, serviceTestAddress, nil) }()
+	for range serviceConcurrency {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("first wave did not reach the directories")
+		}
+	}
+	release()
+	select {
+	case response := <-result:
+		if response.Partial || response.RelaysChecked != 9 || len(response.Services) != 1 || len(response.Services[0].Locations) != 8 {
+			t.Fatalf("healthy cold-cache relays were omitted: %+v", response)
+		}
+	case <-ctx.Done():
+		t.Fatal("cold lookup did not finish")
+	}
+	if calls.Load() != 8 || peak.Load() > serviceConcurrency {
+		t.Fatalf("directory requests=%d concurrent=%d", calls.Load(), peak.Load())
+	}
+}
+
+func TestServiceLookupRotatesAndRetainsObservedLocations(t *testing.T) {
+	lookup := serviceLookupHTTPSFixture(t, http.HandlerFunc(serveLookupDirectory))
+	now := time.Now().UTC()
+	for i := range serviceRelayLimit + 3 {
+		relay := fmt.Sprintf("https://relay-%02d.example", i)
+		lookup.relays.relays[relay] = relayState{Descriptor: types.RelayDescriptor{APIHTTPSAddr: relay, ExpiresAt: now.Add(time.Minute)}, Trust: relayVerified, LastSeenAt: now}
+	}
+	first := lookup.Lookup(t.Context(), "https://local.example", nil, serviceTestAddress, nil)
+	if !first.Partial || first.RelaysChecked != 9 || first.RelaysSkipped != 3 {
+		t.Fatalf("first refresh window: %+v", first)
+	}
+	second := lookup.Lookup(t.Context(), "https://local.example", nil, serviceTestAddress, nil)
+	if second.Partial || second.RelaysChecked != 12 || second.RelaysSkipped != 0 || len(second.Services) != 1 || len(second.Services[0].Locations) != 11 {
+		t.Fatalf("later relays or prior cached locations were lost: %+v", second)
+	}
+}
+
+func TestServiceLookupWaitsForSameRelayInFlight(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), serviceLookupTimeout)
+	defer cancel()
+	gate, release := context.WithCancel(ctx)
+	defer release()
+	entered := make(chan struct{}, 2)
+	var calls atomic.Int32
+	lookup := serviceLookupHTTPSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		entered <- struct{}{}
+		select {
+		case <-gate.Done():
+			serveLookupDirectory(w, r)
+		case <-r.Context().Done():
+		}
+	}))
+	first, second := make(chan serviceObservation, 1), make(chan serviceObservation, 1)
+	go func() { first <- lookup.observe(ctx, "https://relay.example") }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("directory request did not start")
+	}
+	go func() { second <- lookup.observe(ctx, "https://relay.example") }()
+	select {
+	case <-second:
+		t.Fatal("pending directory lookup was returned as a completed result")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	for _, result := range []chan serviceObservation{first, second} {
+		select {
+		case observation := <-result:
+			if observation.failed || len(observation.leases) != 1 {
+				t.Fatalf("shared observation=%+v", observation)
+			}
+		case <-ctx.Done():
+			t.Fatal("shared lookup did not finish")
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("same relay fetched %d times", calls.Load())
+	}
+}
+
+func TestServiceLookupCanceledLeaderDoesNotNegativeCacheRelay(t *testing.T) {
+	var calls atomic.Int32
+	entered := make(chan struct{}, 1)
+	lookup := serviceLookupHTTPSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			entered <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		serveLookupDirectory(w, r)
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan serviceObservation, 1)
+	go func() { result <- lookup.observe(ctx, "https://relay.example") }()
+	select {
+	case <-entered:
+	case <-time.After(serviceRelayTimeout):
+		t.Fatal("directory request did not start")
+	}
+	cancel()
+	if observation := <-result; !observation.failed {
+		t.Fatal("canceled lookup unexpectedly succeeded")
+	}
+	if observation := lookup.observe(t.Context(), "https://relay.example"); observation.failed || len(observation.leases) != 1 {
+		t.Fatalf("caller cancellation poisoned the next lookup: %+v", observation)
+	}
+}
+
+func TestServiceLookupSlotWaitHonorsCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		lookup := NewServiceLookup(nil)
+		for range serviceConcurrency {
+			lookup.slots <- struct{}{}
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		result := make(chan serviceObservation, 1)
+		go func() { result <- lookup.observe(ctx, "https://relay.example") }()
+		synctest.Wait()
+		select {
+		case <-result:
+			t.Fatal("full slots failed instead of waiting")
+		default:
+		}
+		cancel()
+		synctest.Wait()
+		if observation := <-result; !observation.failed {
+			t.Fatal("canceled queue wait succeeded")
+		}
+	})
 }
 
 func TestServiceLookupGroupsIdentityAndRelayLocations(t *testing.T) {

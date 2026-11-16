@@ -107,12 +107,19 @@ cryptographic proof of ownership. Remote metadata is relay-reported; remote
 thumbnails are omitted. Hidden, expired, malformed, and ineligible entries are
 excluded. Remote visibility changes can take up to the observation TTL to appear.
 
-Lookup reads the local directory directly and observes at most eight known,
-verified, eligible public HTTPS relays. It does not expand the relay graph.
+Lookup reads the local directory directly, reuses valid eligible relay snapshots,
+and refreshes a rotating window of at most eight known, verified, eligible public
+HTTPS relays per request. It does not expand the relay graph. Repeated requests
+advance through the eligible set rather than always selecting its first entries;
+this is shared observation coverage, not exhaustive pagination for one search.
 There are at most four outbound requests across all service lookups, a two-second
-per-relay deadline and five-second lookup deadline, a 1 MiB decoded response
+per-relay deadline starting after slot acquisition and five-second lookup deadline
+including queue waits, a 1 MiB decoded response
 limit, 1,000 leases per remote response, and 100 returned service identities.
-Overflow, failed requests, and busy request slots produce partial results.
+Overflow, failed requests, and expired lookup deadlines produce partial results.
+Busy request slots wait within the caller's deadline. Concurrent requests for one
+relay share its in-flight lookup; pending work is never returned as a cached
+failure. Caller cancellation is not negative-cached as a remote failure.
 Observations are cached per relay for 30 seconds, failures for 10 seconds, with
 at most 32 cache entries. Expired observations are not served on failure;
 current eligibility is reapplied before returning cached locations. Requests

@@ -38,18 +38,25 @@ type serviceObservation struct {
 	failed bool
 }
 
+type serviceLookupCall struct {
+	done        chan struct{}
+	observation serviceObservation
+}
+
 // ServiceLookup owns bounded, request-driven public-directory observations.
 // It neither discovers new relays nor changes their routing/health policy.
 type ServiceLookup struct {
-	relays *RelaySet
-	client *http.Client
-	slots  chan struct{}
-	mu     sync.Mutex
-	cache  map[string]serviceObservation
+	relays     *RelaySet
+	client     *http.Client
+	slots      chan struct{}
+	mu         sync.Mutex
+	cache      map[string]serviceObservation
+	inflight   map[string]*serviceLookupCall
+	nextTarget int
 }
 
 func NewServiceLookup(relays *RelaySet) *ServiceLookup {
-	return &ServiceLookup{relays: relays, client: newPublicRelayClient(), slots: make(chan struct{}, serviceConcurrency), cache: make(map[string]serviceObservation)}
+	return &ServiceLookup{relays: relays, client: newPublicRelayClient(), slots: make(chan struct{}, serviceConcurrency), cache: make(map[string]serviceObservation), inflight: make(map[string]*serviceLookupCall)}
 }
 
 // serviceTargets keeps eligibility in Discovery rather than duplicating it at
@@ -81,9 +88,17 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 	now := time.Now().UTC()
 	observations := map[string]serviceObservation{self: {leases: local, at: now, until: now.Add(serviceCacheTTL)}}
 	targets := slices.DeleteFunc(s.relays.serviceTargets(now), func(target string) bool { return target == self })
-	if len(targets) > serviceRelayLimit {
-		response.RelaysSkipped = len(targets) - serviceRelayLimit
-		targets = targets[:serviceRelayLimit]
+	if len(targets) > 0 {
+		s.mu.Lock()
+		start := s.nextTarget % len(targets)
+		count := min(len(targets), serviceRelayLimit)
+		selected := make([]string, count)
+		for i := range selected {
+			selected[i] = targets[(start+i)%len(targets)]
+		}
+		s.nextTarget = (start + count) % len(targets)
+		s.mu.Unlock()
+		targets = selected
 	}
 	type result struct {
 		relay       string
@@ -97,15 +112,23 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 	workers.Wait()
 	close(results)
 	now = time.Now().UTC()
-	eligible := s.relays.serviceTargets(now)
+	eligible := slices.DeleteFunc(s.relays.serviceTargets(now), func(target string) bool { return target == self })
+	// Keep valid cached locations outside this request's rotating refresh window.
+	s.mu.Lock()
+	for _, relay := range eligible {
+		if cached, ok := s.cache[relay]; ok && !cached.failed && cached.until.After(now) {
+			observations[relay] = cached
+		}
+	}
+	s.mu.Unlock()
 	for result := range results {
 		if result.observation.failed || !result.observation.until.After(now) || !slices.Contains(eligible, result.relay) {
-			response.RelaysSkipped++
 			continue
 		}
-		response.RelaysChecked++
 		observations[result.relay] = result.observation
 	}
+	response.RelaysChecked = len(observations)
+	response.RelaysSkipped = len(eligible) - (len(observations) - 1)
 	indices := make(map[types.ServiceIdentityKey]int)
 	relayURLs := make([]string, 0, len(observations))
 	for relay := range observations {
@@ -156,46 +179,71 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 }
 
 func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObservation {
-	now := time.Now().UTC()
-	s.mu.Lock()
-	if cached, ok := s.cache[relay]; ok && cached.until.After(now) {
-		s.mu.Unlock()
-		return cached
-	}
-	select {
-	case s.slots <- struct{}{}:
-	default:
-		s.mu.Unlock()
-		return serviceObservation{failed: true}
-	}
-	// A short negative entry coalesces concurrent misses without waiting on an
-	// unrelated visitor's request or adding another background lifecycle.
-	if len(s.cache) >= serviceCacheLimit {
-		var oldest string
-		for key, entry := range s.cache {
-			if oldest == "" || entry.until.Before(s.cache[oldest].until) {
-				oldest = key
+	for {
+		if ctx.Err() != nil {
+			return serviceObservation{failed: true}
+		}
+		s.mu.Lock()
+		if cached, ok := s.cache[relay]; ok && cached.until.After(time.Now()) {
+			s.mu.Unlock()
+			return cached
+		}
+		if call, pending := s.inflight[relay]; pending {
+			s.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return serviceObservation{failed: true}
+			case <-call.done:
+				if !call.observation.at.IsZero() {
+					return call.observation
+				}
+				continue
 			}
 		}
-		delete(s.cache, oldest)
+		call := &serviceLookupCall{done: make(chan struct{})}
+		s.inflight[relay] = call
+		s.mu.Unlock()
+
+		observation := serviceObservation{failed: true}
+		// Queue outside the cache lock. The remote timeout starts after slot
+		// acquisition; waiting consumes only the caller's lookup deadline.
+		select {
+		case <-ctx.Done():
+		case s.slots <- struct{}{}:
+			fetchCtx, cancel := context.WithTimeout(ctx, serviceRelayTimeout)
+			leases, err := s.fetch(fetchCtx, relay)
+			cancel()
+			<-s.slots
+			if ctx.Err() == nil {
+				observed := time.Now().UTC()
+				observation = serviceObservation{at: observed, until: observed.Add(serviceNegativeTTL), failed: true}
+				if err == nil {
+					observation = serviceObservation{leases: leases, at: observed, until: observed.Add(serviceCacheTTL)}
+				}
+			}
+		}
+
+		s.mu.Lock()
+		// A canceled caller or queue wait is not a remote failure. Waiters can
+		// retry a canceled leader's work within their own remaining deadline.
+		if !observation.at.IsZero() {
+			if _, exists := s.cache[relay]; !exists && len(s.cache) >= serviceCacheLimit {
+				var oldest string
+				for key, entry := range s.cache {
+					if oldest == "" || entry.until.Before(s.cache[oldest].until) {
+						oldest = key
+					}
+				}
+				delete(s.cache, oldest)
+			}
+			s.cache[relay] = observation
+		}
+		delete(s.inflight, relay)
+		call.observation = observation
+		close(call.done)
+		s.mu.Unlock()
+		return observation
 	}
-	s.cache[relay] = serviceObservation{at: now, until: now.Add(serviceNegativeTTL), failed: true}
-	s.mu.Unlock()
-	defer func() { <-s.slots }()
-	ctx, cancel := context.WithTimeout(ctx, serviceRelayTimeout)
-	defer cancel()
-	leases, err := s.fetch(ctx, relay)
-	observed := time.Now().UTC()
-	observation := serviceObservation{at: observed, until: observed.Add(serviceNegativeTTL), failed: true}
-	if err == nil {
-		observation = serviceObservation{leases: leases, at: observed, until: observed.Add(serviceCacheTTL)}
-	}
-	s.mu.Lock()
-	if _, retained := s.cache[relay]; retained {
-		s.cache[relay] = observation
-	}
-	s.mu.Unlock()
-	return observation
 }
 
 func (s *ServiceLookup) fetch(ctx context.Context, relay string) ([]types.Lease, error) {
