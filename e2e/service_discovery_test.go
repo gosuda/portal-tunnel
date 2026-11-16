@@ -53,7 +53,7 @@ func TestServiceDiscoveryListsPublicServicesOfOneAddress(t *testing.T) {
 		}
 	}
 	client := relayControlClient(t, stateDir)
-	for _, query := range []string{"", "?address=invalid", "?address=" + url.QueryEscape(owner.Address) + "&name=invalid.name"} {
+	for _, query := range []string{"", "?address=invalid", "?address=" + url.QueryEscape(owner.Address) + "&name=" + url.QueryEscape("!!!")} {
 		invalid, err := client.Get(base + types.PathServices + query)
 		if err != nil {
 			t.Fatal(err)
