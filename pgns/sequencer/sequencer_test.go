@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -214,5 +215,74 @@ func TestSequencerLifecycleQuorumRateLimitAndTiles(t *testing.T) {
 		if i == maxUpdatesPerMinute && r.StatusCode != http.StatusTooManyRequests {
 			t.Fatalf("7th distinct update status=%d, want 429", r.StatusCode)
 		}
+	}
+}
+
+// INV: local .app reservations must not block the same service label under .id.
+func TestReservedAppAliasAdmission(t *testing.T) {
+	const zone = "portal.example"
+	seq := &Sequencer{
+		zone:    zone,
+		smt:     pgns.NewSparseMerkleTree(),
+		pending: make(map[string]pendingTx),
+	}
+	owner := testKey("sequencer-reserved-app-owner")
+	ownerPub := pub33(owner)
+	tag, err := pgns.DeriveIDTag(ownerPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := uint64(time.Now().UTC().Unix())
+	leaf := pgns.PortalLeafRecord{
+		Version:       pgns.LeafVersion,
+		Flags:         pgns.FlagHTTP2,
+		Seq:           1,
+		IssuedAt:      now,
+		ExpiresAt:     now + 3600,
+		OwnerPubKey:   ownerPub,
+		TLSSPKISHA256: sha256.Sum256([]byte("reserved-app-test-spki")),
+		Endpoints: []pgns.Endpoint{{
+			RelayID:  [20]byte{1},
+			IPv4:     [4]byte{93, 184, 216, 34},
+			Port:     443,
+			Priority: 10,
+		}},
+	}
+	for _, alias := range []string{"auth", "gosuda", "login"} {
+		leaf.FQDN = alias + ".app." + zone
+		for _, txType := range []uint8{pgns.TxTypeCreate, pgns.TxTypeReclaim} {
+			tx := pgns.LeafTx{TxType: txType, Leaf: leaf}
+			if err := tx.SignOwner(owner); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := tx.MarshalCanonical()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := seq.SubmitTx(raw); !errors.Is(err, ErrReservedAppAlias) {
+				t.Fatalf("submit %s (type %d): got %v, want reserved .app alias", leaf.FQDN, txType, err)
+			}
+		}
+	}
+
+	leaf.FQDN = "login." + tag + ".id." + zone
+	canonical, err := leaf.MarshalCanonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := pgns.LeafTx{
+		TxType:   pgns.TxTypeCreate,
+		Leaf:     leaf,
+		PoWNonce: pgns.MinePoW(pgns.TxTypeCreate, canonical, pgns.PoWDifficultyID),
+	}
+	if err := tx.SignOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := tx.MarshalCanonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seq.SubmitTx(raw); err != nil {
+		t.Fatalf("submit %s: %v", leaf.FQDN, err)
 	}
 }

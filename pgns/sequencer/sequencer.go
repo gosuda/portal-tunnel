@@ -38,6 +38,8 @@ const (
 )
 
 var (
+	// ErrReservedAppAlias marks a new or reclaimed alias denied by local admission policy.
+	ErrReservedAppAlias = errors.New("sequencer: reserved .app alias")
 	// ErrRateLimited marks excessive TxTypeUpdate submissions or a full mempool.
 	ErrRateLimited = errors.New("sequencer: rate limit exceeded")
 	// ErrQuorumFailed marks an epoch sealing attempt that gathered fewer than k witness cosignatures.
@@ -165,6 +167,14 @@ func (s *Sequencer) SubmitTx(rawTx []byte) error {
 	tx, err := pgns.UnmarshalLeafTx(rawTx)
 	if err != nil {
 		return err
+	}
+	// This is local admission policy, not a PGNS transition or witness rule.
+	// Keep existing owners' Update and ColdRecovery paths unchanged.
+	if tx.TxType == pgns.TxTypeCreate || tx.TxType == pgns.TxTypeReclaim {
+		switch tx.Leaf.FQDN {
+		case "auth.app." + s.zone, "gosuda.app." + s.zone, "login.app." + s.zone:
+			return fmt.Errorf("%w: %s", ErrReservedAppAlias, tx.Leaf.FQDN)
+		}
 	}
 	nowSec := uint64(max(0, time.Now().UTC().Unix()))
 
