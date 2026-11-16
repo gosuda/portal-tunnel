@@ -384,8 +384,8 @@ func observedServiceReputation(relay string, lease types.Lease, id types.Identit
 	return tallies[publicServiceCanonicalHostname(relay, lease, id)]
 }
 
-// Called only after serviceLocation validated the lease and source. Legacy
-// canonical hostnames are usable as backend identity keys, not as public links.
+// Called only after serviceLocation validated the lease and source. Identity-bound
+// canonical hostnames remain backend keys when a lease omits its namespace.
 func publicServiceCanonicalHostname(relay string, lease types.Lease, id types.Identity) string {
 	if lease.Namespace == types.LocalTLSNamespaceV1 {
 		return lease.CanonicalHostname
@@ -394,7 +394,7 @@ func publicServiceCanonicalHostname(relay string, lease types.Lease, id types.Id
 	if err != nil {
 		return ""
 	}
-	expected, err := namespace.LegacyHostname(id.Name, id.Address, base.Hostname())
+	expected, err := namespace.LocalTLSHostname(id.Name, id.Address, base.Hostname())
 	if err != nil || expected != lease.CanonicalHostname {
 		return ""
 	}

@@ -133,9 +133,6 @@ func relayDashboardURL(relay agent.AgentRelayStatus) string {
 }
 
 func relayDashboardEndpoint(relay agent.AgentRelayStatus) string {
-	if relay.State == sdk.RelayReady {
-		return cmp.Or(relay.AliasURL, relay.PublicURL, relay.LegacyURL)
-	}
 	return cmp.Or(relay.AliasURL, relay.PublicURL)
 }
 

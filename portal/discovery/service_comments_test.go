@@ -35,7 +35,7 @@ func TestFederatedCommentsPreserveOriginsAndPartialFailures(t *testing.T) {
 		if label == "different" {
 			owner = "0x2222222222222222222222222222222222222222"
 		}
-		hostname, err := namespace.LegacyHostname("blog", owner, root)
+		hostname, err := namespace.LocalTLSHostname("blog", owner, root)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +48,7 @@ func TestFederatedCommentsPreserveOriginsAndPartialFailures(t *testing.T) {
 	count := 1
 	lookup.client.Transport = commentRoundTrip(func(r *http.Request) (*http.Response, error) {
 		root := r.URL.Hostname()
-		expected, err := namespace.LegacyHostname("blog", serviceTestAddress, root)
+		expected, err := namespace.LocalTLSHostname("blog", serviceTestAddress, root)
 		if err != nil {
 			return nil, err
 		}

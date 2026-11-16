@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +17,6 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const browserSmokePage = `<!doctype html>
@@ -179,7 +179,7 @@ func launchSmokeBrowser(t *testing.T, ctx context.Context, browser, pageURL stri
 	return browserDone, browserErr
 }
 
-func awaitBrowserReady(t *testing.T, ctx context.Context, result chan browserSmokeResult, browserDone <-chan struct{}, browserErr *error, browserLog string) browserSmokeResult {
+func awaitBrowserResult(t *testing.T, ctx context.Context, result chan browserSmokeResult, browserDone <-chan struct{}, browserErr *error, browserLog string) browserSmokeResult {
 	t.Helper()
 	var ready browserSmokeResult
 	waitBrowser := browserDone
@@ -197,41 +197,24 @@ waitReady:
 			t.Fatalf("browser connector did not become ready: %v; browser log=%s", ctx.Err(), readBrowserLog(browserLog))
 		}
 	}
-	if ready.err != nil {
-		t.Fatal(ready.err)
-	}
-	if ready.publicURL == "" {
-		t.Fatal("browser connector returned an empty public URL")
-	}
-	if strings.Contains(ready.publicURL, "undefined") {
-		t.Fatalf("browser connector public URL = %q contains 'undefined'", ready.publicURL)
-	}
 	return ready
 }
 
-func assertSmokeLeaseRegistered(t *testing.T, relay *portal.Server, name string, ready browserSmokeResult) []types.Lease {
+func assertSmokeLeaseRegistered(t *testing.T, relay *portal.Server, ready browserSmokeResult) {
 	t.Helper()
 	leases := relay.PublicLeases()
 	if len(leases) != 1 {
 		t.Fatalf("relay public leases = %d, want 1", len(leases))
 	}
-	if name == "" && leases[0].Hostname != "" {
-		t.Fatalf("lease hostname = %q, want empty for unnamed browser lease", leases[0].Hostname)
-	}
-	if name != "" && leases[0].Hostname == "" {
+	if leases[0].Hostname == "" {
 		t.Fatal("named browser lease did not receive an alias")
 	}
-	if !strings.Contains(ready.publicURL, leases[0].CanonicalHostname) {
-		t.Fatalf("browser connector public URL = %q, want canonical hostname %q", ready.publicURL, leases[0].CanonicalHostname)
+	if leases[0].CanonicalHostname != "" {
+		t.Fatalf("browser lease unexpectedly has a Local TLS canonical: %+v", leases[0])
 	}
-	return leases
-}
-
-func assertSmokeAlias(t *testing.T, publicURL, aliasURL, canonical, hostname string) {
-	t.Helper()
-	wantAlias := strings.Replace(publicURL, canonical, hostname, 1)
-	if aliasURL != wantAlias {
-		t.Fatalf("connector alias URL = %q, want %q", aliasURL, wantAlias)
+	public, err := url.Parse(ready.publicURL)
+	if err != nil || public.Hostname() != leases[0].Hostname {
+		t.Fatalf("browser connector public URL = %q, want alias hostname %q", ready.publicURL, leases[0].Hostname)
 	}
 }
 
@@ -264,24 +247,28 @@ func testPackagedBrowserWASM(t *testing.T, name string) {
 	t.Cleanup(func() { _ = logFile.Close() })
 	browserDone, browserErr := launchSmokeBrowser(t, ctx, browser, relayURL+"/browser-smoke?name="+name, logFile)
 
-	ready := awaitBrowserReady(t, ctx, result, browserDone, browserErr, logFile.Name())
-	leases := assertSmokeLeaseRegistered(t, relay, name, ready)
+	ready := awaitBrowserResult(t, ctx, result, browserDone, browserErr, logFile.Name())
+	if name == "" {
+		if ready.err == nil || !strings.Contains(ready.err.Error(), "unnamed HTTP services require Local TLS") {
+			t.Fatalf("unnamed browser result = %+v, want Local TLS requirement", ready)
+		}
+		if leases := relay.PublicLeases(); len(leases) != 0 {
+			t.Fatalf("rejected browser lease was published: %+v", leases)
+		}
+		return
+	}
+	if ready.err != nil {
+		t.Fatal(ready.err)
+	}
+	assertSmokeLeaseRegistered(t, relay, ready)
+	if ready.aliasURL != ready.publicURL {
+		t.Fatalf("browser URLs differ without Local TLS: %+v", ready)
+	}
 
 	sniAddr := "127.0.0.1:" + strconv.Itoa(port)
 	certificate := filepath.Join(stateDir, "fullchain.pem")
 	body, ok := tenantGet(sniAddr, certificate, ready.publicURL)
 	if !ok || body != "portal-browser-smoke-ok" {
 		t.Fatalf("browser tunnel response = %q, ok=%v, want packaged handler response", body, ok)
-	}
-	if name == "" {
-		if ready.aliasURL != "" {
-			t.Fatalf("unnamed connector alias URL = %q, want empty", ready.aliasURL)
-		}
-		return
-	}
-	assertSmokeAlias(t, ready.publicURL, ready.aliasURL, leases[0].CanonicalHostname, leases[0].Hostname)
-	body, ok = tenantGet(sniAddr, certificate, ready.aliasURL)
-	if !ok || body != "portal-browser-smoke-ok" {
-		t.Fatalf("browser alias response = %q, ok=%v, want packaged handler response", body, ok)
 	}
 }

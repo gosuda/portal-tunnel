@@ -247,11 +247,11 @@ func TestAutomaticTenantCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	optional, optionalStatus := namespaceService(t, h, id, marker, sdk.WithAutomaticTLS(t.TempDir(), false))
-	if optionalStatus.PublicURL != "" || optionalStatus.LegacyURL == "" || optionalStatus.AliasURL == "" ||
+	if optionalStatus.PublicURL != "" || optionalStatus.AliasURL == "" ||
 		!optionalStatus.Active() || !errors.Is(optionalStatus.CertificateError, &types.APIRequestError{Code: types.APIErrorCodeTenantIssuanceDisabled}) {
 		t.Fatalf("optional automatic TLS readiness = %+v", optionalStatus)
 	}
-	if len(optional.ActiveRelays()) != 1 || h.get(optionalStatus.AliasURL) != marker || h.get(optionalStatus.LegacyURL) != marker {
+	if len(optional.ActiveRelays()) != 1 || h.get(optionalStatus.AliasURL) != marker {
 		t.Fatal("optional automatic TLS did not preserve active legacy routes")
 	}
 

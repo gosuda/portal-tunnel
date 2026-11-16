@@ -305,7 +305,7 @@ func TestServiceLookupGroupsIdentityAndRelayLocations(t *testing.T) {
 	remoteBlog := first
 	remoteBlog.Hostname = "blog.remote.example"
 	var err error
-	remoteBlog.CanonicalHostname, err = namespace.LegacyHostname(remoteBlog.Name, remoteBlog.Address, "remote.example")
+	remoteBlog.CanonicalHostname, err = namespace.LocalTLSHostname(remoteBlog.Name, remoteBlog.Address, "remote.example")
 	if err != nil {
 		t.Fatal(err)
 	}

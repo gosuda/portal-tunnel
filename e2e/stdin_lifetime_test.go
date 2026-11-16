@@ -256,6 +256,7 @@ func newStdinLifetimeProcess(t *testing.T, bin, relayURL string, flags ...string
 		writer.Close()
 	})
 	args := []string{bin, "expose", "--log-format=json", "--discovery=false",
+		"--name", "stdin-lifetime",
 		"--relays", relayURL, "--identity-path", filepath.Join(t.TempDir(), "identity.json"),
 		"--http-route", "/=" + service.URL}
 	return &stdinLifetimeProcess{args: append(args, flags...), inputReader: reader, stdin: writer}

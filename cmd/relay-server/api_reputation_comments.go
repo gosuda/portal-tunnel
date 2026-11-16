@@ -159,7 +159,7 @@ func (api *RelayAPI) publicIdentityFor(hostname string) string {
 	if hostname == "" {
 		return ""
 	}
-	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server) {
+	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server.PolicyLeases()) {
 		if types.NormalizeHostname(lease.Hostname) == hostname || types.NormalizeHostname(lease.CanonicalHostname) == hostname {
 			return lease.IdentityKey
 		}

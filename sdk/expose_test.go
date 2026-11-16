@@ -516,15 +516,15 @@ func TestCanonicalWithdrawalUpdatesSnapshotsAndWaiters(t *testing.T) {
 	})}
 	e := &Exposure{
 		relayListeners: map[string]*listener{relay: owner},
-		statuses:       map[string]RelayStatus{relay: {RelayURL: relay, State: RelayReady, PublicURL: "https://service.address.relay.example", LegacyURL: legacy}},
+		statuses:       map[string]RelayStatus{relay: {RelayURL: relay, State: RelayReady, PublicURL: "https://service.address.relay.example", AliasURL: legacy}},
 		done:           make(chan struct{}),
 		updates:        make(chan RelayStatus, 1),
 		stateChanged:   make(chan struct{}),
 	}
 	changed := e.stateChanged
-	e.applyRelayStatus(relay, listenerStatus{state: RelayReady, legacyURL: legacy}, owner)
+	e.applyRelayStatus(relay, listenerStatus{state: RelayReady, aliasURL: legacy}, owner)
 	status := e.Relays()[0]
-	if status.PublicURL != "" || status.State != RelayReady || status.LegacyURL != legacy {
+	if status.PublicURL != "" || status.State != RelayReady || status.AliasURL != legacy {
 		t.Fatalf("unavailable canonical status: %+v", status)
 	}
 	ready, _, err := e.readyRelays(func(status RelayStatus) bool { return status.State == RelayReady && status.PublicURL != "" }, true)
@@ -547,9 +547,9 @@ func TestCanonicalWithdrawalUpdatesSnapshotsAndWaiters(t *testing.T) {
 	// A report constructed while material was usable may arrive after the
 	// withdrawal. It must not restore a URL against unavailable local material.
 	e.applyRelayStatus(relay, listenerStatus{
-		state: RelayReady, legacyURL: legacy, publicURL: "https://service.address.relay.example",
+		state: RelayReady, aliasURL: legacy, publicURL: "https://service.address.relay.example",
 	}, owner)
-	if status := e.Relays()[0]; status.PublicURL != "" || status.LegacyURL != legacy {
+	if status := e.Relays()[0]; status.PublicURL != "" || status.AliasURL != legacy {
 		t.Fatalf("late ready report restored the canonical: %+v", status)
 	}
 	ready, _, err = e.readyRelays(func(status RelayStatus) bool { return status.State == RelayReady && status.PublicURL != "" }, true)

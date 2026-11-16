@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -234,6 +235,58 @@ func TestCacheGenerationFencesDelayedAdmission(t *testing.T) {
 	c.Handle(response, testRequest(t, http.MethodPut, "old"), lease.ID, generation)
 	if response.Code != http.StatusForbidden || c.Has(lease.Hostname) {
 		t.Fatal("request admitted before revocation published afterward")
+	}
+}
+
+func TestAliasReassignmentFencesPreviousOwner(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			c := testManager(t, 128)
+			old := testLease(c, "site")
+			oldGeneration := c.Generation(old.ID)
+			published := httptest.NewRecorder()
+			c.Handle(published, testRequest(t, http.MethodPut, "old"), old.ID, oldGeneration)
+			if published.Code != http.StatusOK {
+				t.Fatal(published.Body.String())
+			}
+			resume, codes := startGatedCacheRequest(t, c, old, http.MethodPut)
+			next := old
+			next.ID = "replacement"
+			next.Owner = types.NewServiceIdentityKey("site", "0x2")
+			c.Register(next, types.RegisterChallengeRequest{Cache: enabled})
+			if c.Has(old.Hostname) || c.Eligible(old.ID) {
+				t.Fatal("alias still exposes the former owner's cache")
+			}
+			close(resume)
+			if code := <-codes; code != http.StatusForbidden {
+				t.Fatalf("old upload committed after reassignment: %d", code)
+			}
+			if c.Has(old.Hostname) {
+				t.Fatal("old in-flight upload restored the detached snapshot")
+			}
+			if !enabled {
+				return
+			}
+			fresh := httptest.NewRecorder()
+			c.Handle(fresh, testRequest(t, http.MethodPut, "new"), next.ID, c.Generation(next.ID))
+			if fresh.Code != http.StatusOK {
+				t.Fatal(fresh.Body.String())
+			}
+			for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+				response := httptest.NewRecorder()
+				c.Handle(response, testRequest(t, method, "stale"), old.ID, oldGeneration)
+				if response.Code != http.StatusForbidden {
+					t.Fatalf("old %s accepted: %d", method, response.Code)
+				}
+			}
+			c.Renew(old)
+			c.Detach(old)
+			c.DetachOwner(old.Owner)
+			served := httptest.NewRecorder()
+			if !c.Serve(served, httptest.NewRequest(http.MethodGet, "https://"+next.Hostname, nil), next.Hostname) || served.Body.String() != "new" {
+				t.Fatalf("delayed previous-owner operation damaged replacement: %q", served.Body.String())
+			}
+		})
 	}
 }
 
