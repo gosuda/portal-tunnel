@@ -31,6 +31,11 @@ const (
 	serviceNegativeTTL   = 10 * time.Second
 )
 
+var (
+	errServiceDirectoryResponseRejected = errors.New("service directory response rejected")
+	errServiceDirectoryResponseTooLarge = errors.New("service directory response too large")
+)
+
 type serviceObservation struct {
 	leases []types.Lease
 	at     time.Time
@@ -68,7 +73,9 @@ func (s *RelaySet) serviceTargets(now time.Time) []string {
 	states := s.currentRelayStates(now)
 	var targets []string
 	for _, state := range states {
-		if state.Banned || state.Dead || state.Trust != relayVerified || !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now) || state.suppressActiveUntil.After(now) {
+		unavailable := state.Banned || state.Dead || state.Trust != relayVerified
+		missingDescriptor := !state.hasObservedDescriptor() || !state.Descriptor.ExpiresAt.After(now)
+		if unavailable || missingDescriptor || state.suppressActiveUntil.After(now) {
 			continue
 		}
 		if requirePublicRelayURL(state.Descriptor.APIHTTPSAddr) == nil {
@@ -142,7 +149,8 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 	for _, relay := range relayURLs {
 		observation := observations[relay]
 		for _, lease := range observation.leases {
-			if lease.Metadata.Hide || lease.Metadata.Validate() != nil || !lease.ExpiresAt.After(now) {
+			invalidMetadata := lease.Metadata.Hide || lease.Metadata.Validate() != nil
+			if invalidMetadata || !lease.ExpiresAt.After(now) {
 				continue
 			}
 			id, err := identity.NormalizeIdentity(types.Identity{Name: lease.Name, Address: lease.Address})
@@ -179,6 +187,7 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 }
 
 func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObservation {
+	var call *serviceLookupCall
 	for {
 		if ctx.Err() != nil {
 			return serviceObservation{failed: true}
@@ -188,62 +197,65 @@ func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObserv
 			s.mu.Unlock()
 			return cached
 		}
-		if call, pending := s.inflight[relay]; pending {
+		pendingCall, pending := s.inflight[relay]
+		if !pending {
+			call = &serviceLookupCall{done: make(chan struct{})}
+			s.inflight[relay] = call
 			s.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return serviceObservation{failed: true}
-			case <-call.done:
-				if !call.observation.at.IsZero() {
-					return call.observation
-				}
-				continue
-			}
+			break
 		}
-		call := &serviceLookupCall{done: make(chan struct{})}
-		s.inflight[relay] = call
 		s.mu.Unlock()
-
-		observation := serviceObservation{failed: true}
-		// Queue outside the cache lock. The remote timeout starts after slot
-		// acquisition; waiting consumes only the caller's lookup deadline.
 		select {
 		case <-ctx.Done():
-		case s.slots <- struct{}{}:
-			fetchCtx, cancel := context.WithTimeout(ctx, serviceRelayTimeout)
-			leases, err := s.fetch(fetchCtx, relay)
-			cancel()
-			<-s.slots
-			if ctx.Err() == nil {
-				observed := time.Now().UTC()
-				observation = serviceObservation{at: observed, until: observed.Add(serviceNegativeTTL), failed: true}
-				if err == nil {
-					observation = serviceObservation{leases: leases, at: observed, until: observed.Add(serviceCacheTTL)}
-				}
+			return serviceObservation{failed: true}
+		case <-pendingCall.done:
+			if !pendingCall.observation.at.IsZero() {
+				return pendingCall.observation
 			}
 		}
-
-		s.mu.Lock()
-		// A canceled caller or queue wait is not a remote failure. Waiters can
-		// retry a canceled leader's work within their own remaining deadline.
-		if !observation.at.IsZero() {
-			if _, exists := s.cache[relay]; !exists && len(s.cache) >= serviceCacheLimit {
-				var oldest string
-				for key, entry := range s.cache {
-					if oldest == "" || entry.until.Before(s.cache[oldest].until) {
-						oldest = key
-					}
-				}
-				delete(s.cache, oldest)
-			}
-			s.cache[relay] = observation
-		}
-		delete(s.inflight, relay)
-		call.observation = observation
-		close(call.done)
-		s.mu.Unlock()
-		return observation
 	}
+
+	observation := serviceObservation{failed: true}
+	// Queue outside the cache lock. The remote timeout starts after slot
+	// acquisition; waiting consumes only the caller's lookup deadline.
+	select {
+	case <-ctx.Done():
+	case s.slots <- struct{}{}:
+		fetchCtx, cancel := context.WithTimeout(ctx, serviceRelayTimeout)
+		leases, err := s.fetch(fetchCtx, relay)
+		cancel()
+		<-s.slots
+		if ctx.Err() == nil {
+			observed := time.Now().UTC()
+			observation = serviceObservation{at: observed, until: observed.Add(serviceNegativeTTL), failed: true}
+			if err == nil {
+				observation = serviceObservation{leases: leases, at: observed, until: observed.Add(serviceCacheTTL)}
+			}
+		}
+	}
+
+	s.mu.Lock()
+	// A canceled caller or queue wait is not a remote failure. Waiters can
+	// retry a canceled leader's work within their own remaining deadline.
+	cacheable := !observation.at.IsZero()
+	_, exists := s.cache[relay]
+	if cacheable && !exists && len(s.cache) >= serviceCacheLimit {
+		var oldest string
+		for key, entry := range s.cache {
+			if oldest == "" || entry.until.Before(s.cache[oldest].until) {
+				oldest = key
+			}
+		}
+		delete(s.cache, oldest)
+	}
+	if cacheable {
+		s.cache[relay] = observation
+	}
+	delete(s.inflight, relay)
+	call.observation = observation
+	close(call.done)
+	s.mu.Unlock()
+	return observation
 }
 
 func (s *ServiceLookup) fetch(ctx context.Context, relay string) ([]types.Lease, error) {
@@ -264,21 +276,21 @@ func (s *ServiceLookup) fetch(ctx context.Context, relay string) ([]types.Lease,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || resp.ContentLength > serviceResponseBytes {
-		return nil, errors.New("service directory response rejected")
+		return nil, errServiceDirectoryResponseRejected
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, serviceResponseBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(body) > serviceResponseBytes {
-		return nil, errors.New("service directory response too large")
+		return nil, errServiceDirectoryResponseTooLarge
 	}
 	var envelope types.APIEnvelope[types.PublicStateResponse]
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, err
 	}
 	if !envelope.OK || len(envelope.Data.Leases) > serviceLeaseLimit {
-		return nil, errors.New("service directory response rejected")
+		return nil, errServiceDirectoryResponseRejected
 	}
 	return slices.DeleteFunc(envelope.Data.Leases, func(lease types.Lease) bool { return lease.Metadata.Hide }), nil
 }
