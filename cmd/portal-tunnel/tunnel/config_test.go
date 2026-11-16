@@ -360,7 +360,7 @@ func TestLocalTLSCertificateConfiguration(t *testing.T) {
 		{"certificate only", Config{TargetAddr: "3000", TLSCert: "cert.pem"}, true},
 		{"key only", Config{TargetAddr: "3000", TLSKey: "key.pem"}, true},
 		{"raw TCP", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TCPEnabled: true}, true},
-		{"relay cache", Config{Serve: "site", TLSCert: "cert.pem", TLSKey: "key.pem", Cache: &CacheConfig{}}, true},
+		{"relay cache", Config{Serve: "site", TLSCert: "cert.pem", TLSKey: "key.pem", Cache: &CacheConfig{}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := tc.config.Spec()
@@ -401,7 +401,7 @@ func TestAutomaticTLSConfiguration(t *testing.T) {
 		{"manual policy", Config{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem", TLSRequireLocal: true}, "", false},
 		{"manual automatic conflict", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TLSCert: "cert.pem", TLSKey: "key.pem"}, "", true},
 		{"raw TCP", Config{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs", TCPEnabled: true}, "", true},
-		{"cache", Config{Serve: "site", TLSAuto: true, TLSStateDir: "certs", Cache: &CacheConfig{}}, "", true},
+		{"cache", Config{Serve: "site", TLSAuto: true, TLSStateDir: "certs", Cache: &CacheConfig{}}, "certs", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := tc.config.Spec()
