@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal"
-	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 const browserSmokePage = `<!doctype html>
