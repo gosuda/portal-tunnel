@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -20,6 +21,20 @@ var (
 	errDiscoveredRelayMustHavePublicHTTPS = errors.New("discovered relay must have a public HTTPS URL")
 	errDiscoveryRedirectsAreNotAllowed    = errors.New("discovery redirects are not allowed")
 )
+
+// Public observations never use proxies, private destinations, or redirects.
+func newPublicRelayClient() *http.Client {
+	client := utils.NewHTTPClient(
+		utils.WithHTTPTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}),
+		utils.WithoutHTTP2(),
+		utils.WithHTTPTimeout(defaultRequestTimeout),
+		utils.WithHTTPCheckRedirect(rejectDiscoveryRedirect),
+	)
+	transport := client.Transport.(*http.Transport)
+	transport.Proxy = nil
+	transport.DialContext = dialPublicRelay
+	return client
+}
 
 func requirePublicRelayURL(raw string) error {
 	u, err := url.Parse(raw)

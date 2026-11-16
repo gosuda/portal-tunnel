@@ -116,6 +116,15 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   events. This package owns polling, baselines, and durable evidence without
   controlling TLS readiness, certificate issuance, or relay selection.
 
+- `portal/discovery.ServiceLookup`: request-driven public-directory observations
+  for address and service-identity queries. `RelaySet` remains the owner of
+  eligible relay targets; the lookup owns a bounded short-lived cache and
+  outbound request slots using the Discovery public-address transport. It reads
+  only public `/api/state`, never expands the discovery graph, and never changes
+  relay health on directory failure. The frontend filters identity results into
+  the existing app list and queries alternate origins only when a visitor opens
+  a card's relay selector. Relay claims remain explicitly unverified.
+
 - `portal/keyless`: the Keyless TLS feature boundary. It owns tenant TLS termination
   via the `keyless_tls` t13server and keyless remote signing — certificate chains
   are pinned from the relay, each handshake signs transcript-bound through the

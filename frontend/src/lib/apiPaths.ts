@@ -5,6 +5,7 @@ export const AUTH_SAML_METADATA_PATH = "/_portal/auth/saml/metadata";
 export const RELAY_API_PATHS = {
   public: {
     state: "/api/state",
+    services: "/api/services",
     comments: "/api/comments",
     commentsVote: "/api/comments/vote",
     commentsDelete: "/api/comments/delete",

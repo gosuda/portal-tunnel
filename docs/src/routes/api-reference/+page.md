@@ -76,6 +76,7 @@ configured admin token.
 | `GET`/`HEAD` | `/llms.txt` | None | relay and tunnel connection guide |
 | `GET` | `/api/healthz` | None | `{ "status": "ok" }` |
 | `GET` | `/api/state` | None | `PublicStateResponse` |
+| `GET` | `/api/services?address=0x...&name=...` | None | `ServiceDiscoveryResponse` |
 | `POST` | `/api/reputation/vote` | None | reputation summary |
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |
 | `GET`/`HEAD` | `/api/install/bin/{slug}` | None | install binary or redirect |
@@ -86,6 +87,42 @@ The response includes vote counts and the caller's `viewer_vote`.
 
 Detailed contracts: [SDK API](/api-reference/sdk) and
 [Admin and Policy API](/api-reference/admin).
+
+### Public service locations
+
+`GET /api/services` requires a valid EVM `address`. Optional `name` filters one
+normalized service identity; `name=` selects the unnamed service. Without
+`name`, each distinct service name for that address is returned separately.
+
+The response contains `services` (`name`, `address`, descriptive `metadata`,
+`locations`), `partial`, `relays_checked`, and `relays_skipped`. Each location
+contains `relay_url`, optional preferred `url`, `alias_url`, `canonical_url`,
+`current_relay`, `reported_ready`, `observed_at`, `expires_at`, and
+`verification: "relay-reported"`. Readiness is a relay claim, not a live probe.
+Unavailable canonical certificates do not produce canonical links. A service
+without an available HTTP URL can still have a location (for example raw TCP).
+
+Results are observed public services, never an exhaustive address inventory or
+cryptographic proof of ownership. Remote metadata is relay-reported; remote
+thumbnails are omitted. Hidden, expired, malformed, and ineligible entries are
+excluded. Remote visibility changes can take up to the observation TTL to appear.
+
+Lookup reads the local directory directly and observes at most eight known,
+verified, eligible public HTTPS relays. It does not expand the relay graph.
+There are at most four outbound requests across all service lookups, a two-second
+per-relay deadline and five-second lookup deadline, a 1 MiB decoded response
+limit, 1,000 leases per remote response, and 100 returned service identities.
+Overflow, failed requests, and busy request slots produce partial results.
+Observations are cached per relay for 30 seconds, failures for 10 seconds, with
+at most 32 cache entries. Expired observations are not served on failure;
+current eligibility is reapplied before returning cached locations. Requests
+use the Discovery public-IP dialer, disable proxies, and reject redirects.
+
+This endpoint is additive: `/discovery`, its protocol version, and signed relay
+descriptors are unchanged. Older relays can contribute public `/api/state`
+entries through validated friendly aliases; legacy one-label canonical URLs
+are not promoted to links. A failed remote directory does not change Discovery
+health or block the existing local `/api/state` endpoint.
 
 ### SDK
 

@@ -1,7 +1,8 @@
 import type { JSX } from "react";
 import { SsgoiTransition } from "@ssgoi/react";
 import { useEffect } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { ROUTE_PATHS } from "@/lib/apiPaths";
 import { AlertTriangle, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { BaseServer } from "@/lib/server";
@@ -107,6 +108,11 @@ export function ServerDetail(): JSX.Element {
               Open anyway
             </Button>
           </div>
+          {server.address && (
+            <Link className="text-sm text-primary underline" to={`${ROUTE_PATHS.home}?${new URLSearchParams({ identity: server.address })}`}>
+              Public services by {server.address}
+            </Link>
+          )}
         </div>
       </div>
     </SsgoiTransition>
