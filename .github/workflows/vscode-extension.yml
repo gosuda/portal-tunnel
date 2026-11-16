@@ -40,8 +40,12 @@ jobs:
         with:
           node-version: 22
 
-      - name: Enable pinned pnpm
-        run: corepack enable
+      - name: Set up pinned pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: extensions/vscode/package.json
+          cache: true
+          cache_dependency_path: extensions/vscode/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -98,8 +102,12 @@ jobs:
         with:
           node-version: 22
 
-      - name: Enable pinned pnpm
-        run: corepack enable
+      - name: Set up pinned pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: extensions/vscode/package.json
+          cache: true
+          cache_dependency_path: extensions/vscode/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
