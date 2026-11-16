@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -701,10 +702,10 @@ func (r *leaseRegistry) publicLease(record *leaseRecord, now time.Time) types.Le
 		Metadata:          record.Metadata.Copy(),
 	}
 	if record.tcpPort > 0 {
-		lease.TCPAddr = fmt.Sprintf("%s:%d", r.rootHostname, record.tcpPort)
+		lease.TCPAddr = net.JoinHostPort(r.rootHostname, strconv.Itoa(record.tcpPort))
 	}
 	if record.datagram != nil {
-		lease.UDPAddr = fmt.Sprintf("%s:%d", r.rootHostname, record.datagram.UDPPort())
+		lease.UDPAddr = net.JoinHostPort(r.rootHostname, strconv.Itoa(record.datagram.UDPPort()))
 	}
 	if record.reverse != nil {
 		lease.Ready = record.reverse.ReadyCount()
@@ -1210,10 +1211,10 @@ func (r *leaseRegistry) Register(req types.RegisterChallengeRequest, sourceAddr 
 		TCPEnabled:        record.tcpPort > 0,
 	}
 	if record.datagram != nil {
-		resp.UDPAddr = fmt.Sprintf("%s:%d", r.rootHostname, record.datagram.UDPPort())
+		resp.UDPAddr = net.JoinHostPort(r.rootHostname, strconv.Itoa(record.datagram.UDPPort()))
 	}
 	if record.tcpPort > 0 {
-		resp.TCPAddr = fmt.Sprintf("%s:%d", r.rootHostname, record.tcpPort)
+		resp.TCPAddr = net.JoinHostPort(r.rootHostname, strconv.Itoa(record.tcpPort))
 	}
 	return record, replaced, resp, nil
 }
@@ -1326,14 +1327,14 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 		return types.RenewResponse{}, reverseEndpointInput{}, &apiError{types.APIErrorCodeInternal, err.Error(), http.StatusInternalServerError}
 	}
 	return types.RenewResponse{
-		ExpiresAt:   expiresAt,
-		AccessToken: nextAccessToken,
-	}, reverseEndpointInput{
-		leaseIdentity: recordIdentity,
-		leaseID:       leaseID,
-		expiresAt:     expiresAt,
-		useOverlay:    useOverlay,
-	}, nil
+			ExpiresAt:   expiresAt,
+			AccessToken: nextAccessToken,
+		}, reverseEndpointInput{
+			leaseIdentity: recordIdentity,
+			leaseID:       leaseID,
+			expiresAt:     expiresAt,
+			useOverlay:    useOverlay,
+		}, nil
 }
 
 func (r *leaseRegistry) stalePinLocked(record *leaseRecord, current *acme.TLSMaterial) bool {

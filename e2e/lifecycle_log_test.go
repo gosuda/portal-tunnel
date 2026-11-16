@@ -35,7 +35,7 @@ func exposeCommandPipes(t *testing.T, cmd *exec.Cmd) (io.Reader, io.Reader) {
 
 func launchJSONExpose(t *testing.T, portalBin, relayURL, identityPath, targetHost string) chan map[string]any {
 	t.Helper()
-	cmd := exec.Command(portalBin, "expose", "--log-format", "json",
+	cmd := exec.Command(portalBin, "expose", "--log-format", "json", "--name", "lifecycle",
 		"--relays", relayURL, "--discovery=false",
 		"--identity-path", identityPath, targetHost)
 	stdout, stderr := exposeCommandPipes(t, cmd)
@@ -65,10 +65,10 @@ func assertExposeReady(t *testing.T, records <-chan map[string]any, relayURL str
 	}
 	publicURL, _ := ready["public_url"].(string)
 	if publicURL == "" {
-		t.Fatalf("ready record = %v, want the tenant-ready canonical public_url", ready)
+		t.Fatalf("ready record = %v, want the tenant-ready public_url", ready)
 	}
-	if alias, hasAlias := ready["alias_url"]; hasAlias && alias != "" {
-		t.Fatalf("ready record = %v, want no alias for an address-only identity", ready)
+	if ready["alias_url"] != publicURL {
+		t.Fatalf("ready record = %v, want the granted alias as public_url", ready)
 	}
 	return publicURL
 }

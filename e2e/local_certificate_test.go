@@ -119,7 +119,7 @@ func TestLocalTenantCertificateWrongHostnameFailsReady(t *testing.T) {
 func TestLocalCertificateExpiryWithdrawsCanonical(t *testing.T) {
 	h := newHarness(t)
 	h.waitForPublicURL()
-	id, err := identity.Generate("")
+	id, err := identity.Generate("expiry")
 	if err != nil {
 		t.Fatal(err)
 	}

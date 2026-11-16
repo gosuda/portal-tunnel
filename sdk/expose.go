@@ -1245,7 +1245,7 @@ func mergeRelayStatusFieldsLocked(previous RelayStatus, update listenerStatus, r
 }
 
 func (e *Exposure) announceRelayStatusChange(previous, status RelayStatus) {
-	publicURL := cmp.Or(status.PublicURL, status.AliasURL)
+	publicURL := cmp.Or(status.PublicURL, status.AliasURL, status.TCPAddr, status.UDPAddr)
 	advertised := (previous.State != RelayReady || previous.PublicURL != status.PublicURL) && status.State == RelayReady && publicURL != ""
 	if advertised {
 		message := "service ready at " + publicURL

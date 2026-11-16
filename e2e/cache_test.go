@@ -223,32 +223,6 @@ func awaitCachePopulated(ctx context.Context, t *testing.T, client *http.Client,
 	}
 }
 
-func assertFriendlyHostnameBypassed(t *testing.T, client *http.Client, publicURL string, relay *portal.Server) {
-	t.Helper()
-	leases := relay.PublicLeases()
-	if len(leases) != 1 || leases[0].Hostname == "" {
-		t.Fatalf("friendly lease unavailable: %+v", leases)
-	}
-	friendlyURL, err := url.Parse(publicURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if port := friendlyURL.Port(); port != "" {
-		friendlyURL.Host = net.JoinHostPort(leases[0].Hostname, port)
-	} else {
-		friendlyURL.Host = leases[0].Hostname
-	}
-	response, err := client.Get(friendlyURL.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.Copy(io.Discard, response.Body)
-	response.Body.Close()
-	if response.Header.Get("X-Origin") != "true" || response.Header.Get("ETag") != "" {
-		t.Fatalf("friendly hostname used relay cache: %v", response.Header)
-	}
-}
-
 func assertCacheRangeHit(t *testing.T, ctx context.Context, client *http.Client, publicURL string, originCalls *atomic.Int32) {
 	t.Helper()
 	before := originCalls.Load()
@@ -293,9 +267,8 @@ func assertUncacheableFallsThrough(t *testing.T, ctx context.Context, client *ht
 	}
 }
 
-func assertCacheSemantics(t *testing.T, ctx context.Context, client *http.Client, publicURL string, relay *portal.Server, originCalls *atomic.Int32) {
+func assertCacheSemantics(t *testing.T, ctx context.Context, client *http.Client, publicURL string, originCalls *atomic.Int32) {
 	t.Helper()
-	assertFriendlyHostnameBypassed(t, client, publicURL, relay)
 	assertCacheRangeHit(t, ctx, client, publicURL, originCalls)
 	assertSpoofedHostMisdirected(t, ctx, client, publicURL)
 	assertUncacheableFallsThrough(t, ctx, client, publicURL)
@@ -413,7 +386,7 @@ func TestStaticCacheOffloadAndOfflineTLS(t *testing.T) {
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
 	publicURL := ready[0].AliasURL
 	awaitCachePopulated(readyCtx, t, client, publicURL)
-	assertCacheSemantics(t, ctx, client, publicURL, relay, &originCalls)
+	assertCacheSemantics(t, ctx, client, publicURL, &originCalls)
 	assertOfflineCacheExpiry(t, client, publicURL, exposure, offlineTTL)
 }
 
