@@ -81,8 +81,10 @@ type browserSmokeResult struct {
 }
 
 func TestPackagedBrowserWASM(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"", "browser-preview"} {
 		t.Run(cmp.Or(name, "unnamed"), func(t *testing.T) {
+			t.Parallel()
 			testPackagedBrowserWASM(t, name)
 		})
 	}

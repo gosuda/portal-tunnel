@@ -383,6 +383,7 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 		{"a saved policy without a mode keeps the flag", `{}`, "manual", "manual"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			checkSavedApprovalMode(t, tc.saved, tc.flag, tc.want)
 		})
 	}
