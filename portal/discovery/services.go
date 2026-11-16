@@ -154,7 +154,10 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 				continue
 			}
 			id, err := identity.NormalizeIdentity(types.Identity{Name: lease.Name, Address: lease.Address})
-			if err != nil || !strings.EqualFold(id.Address, address) || (name != nil && id.Name != *name) {
+			if err != nil || !strings.EqualFold(id.Address, address) {
+				continue
+			}
+			if name != nil && id.Name != *name {
 				continue
 			}
 			location, valid := serviceLocation(relay, lease, id, observation.at, observation.until)
