@@ -16,7 +16,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
-func TestServiceDiscoveryListsPublicServicesOfOneAddress(t *testing.T) {
+func TestServiceDiscoveryListsNetworkAndIdentityPublicServices(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -29,6 +29,7 @@ func TestServiceDiscoveryListsPublicServicesOfOneAddress(t *testing.T) {
 	}
 	api := http.NewServeMux()
 	api.HandleFunc(types.PathServices, server.HandleServices)
+	api.HandleFunc(types.PathServiceComments, server.HandleServiceComments)
 	if err := server.Start(ctx, relayHandler(server, api)); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func TestServiceDiscoveryListsPublicServicesOfOneAddress(t *testing.T) {
 		}
 	}
 	client := relayControlClient(t, stateDir)
-	for _, query := range []string{"", "?address=invalid", "?address=" + url.QueryEscape(owner.Address) + "&name=" + url.QueryEscape("!!!")} {
+	for _, query := range []string{"?name=blog", "?address=", "?address=invalid", "?address=" + url.QueryEscape(owner.Address) + "&name=" + url.QueryEscape("!!!")} {
 		invalid, err := client.Get(base + types.PathServices + query)
 		if err != nil {
 			t.Fatal(err)
@@ -63,24 +64,51 @@ func TestServiceDiscoveryListsPublicServicesOfOneAddress(t *testing.T) {
 			t.Fatalf("invalid lookup %q status=%d", query, invalid.StatusCode)
 		}
 	}
-	response, err := client.Get(base + types.PathServices + "?address=" + url.QueryEscape(owner.Address))
+	for _, query := range []string{"", "?address=" + url.QueryEscape(owner.Address)} {
+		response, err := client.Get(base + types.PathServices + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result types.APIEnvelope[types.ServiceDiscoveryResponse]
+		err = json.NewDecoder(response.Body).Decode(&result)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK || !result.OK || result.Data.Partial || len(result.Data.Services) != 2 {
+			t.Fatalf("public lookup %q: status=%d result=%+v", query, response.StatusCode, result)
+		}
+		if result.Data.Services[0].Name != "api" || result.Data.Services[1].Name != "blog" {
+			t.Fatalf("services=%+v", result.Data.Services)
+		}
+		for _, service := range result.Data.Services {
+			if len(service.Locations) != 1 || !service.Locations[0].CurrentRelay || service.Locations[0].Verification != "relay-reported" {
+				t.Fatalf("locations=%+v", service.Locations)
+			}
+		}
+	}
+
+	commentURL := base + types.PathServiceComments + "?address=" + url.QueryEscape(owner.Address) + "&name=blog"
+	response, err := client.Get(commentURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
-	var result types.APIEnvelope[types.ServiceDiscoveryResponse]
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+	var comments types.APIEnvelope[types.ServiceCommentsResponse]
+	err = json.NewDecoder(response.Body).Decode(&comments)
+	response.Body.Close()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK || !result.OK || result.Data.Partial || len(result.Data.Services) != 2 {
-		t.Fatalf("public lookup: status=%d result=%+v", response.StatusCode, result)
+	if response.StatusCode != http.StatusOK || !comments.OK || comments.Data.Partial || len(comments.Data.Comments) != 0 {
+		t.Fatalf("service with no remotes returned unexpected federation data: status=%d result=%+v", response.StatusCode, comments)
 	}
-	if result.Data.Services[0].Name != "api" || result.Data.Services[1].Name != "blog" {
-		t.Fatalf("services=%+v", result.Data.Services)
+
+	post, err := client.Post(commentURL, "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, service := range result.Data.Services {
-		if len(service.Locations) != 1 || !service.Locations[0].CurrentRelay || service.Locations[0].Verification != "relay-reported" {
-			t.Fatalf("locations=%+v", service.Locations)
-		}
+	post.Body.Close()
+	if post.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("remote comment write refusal status=%d", post.StatusCode)
 	}
 }

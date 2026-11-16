@@ -76,7 +76,8 @@ configured admin token.
 | `GET`/`HEAD` | `/llms.txt` | None | relay and tunnel connection guide |
 | `GET` | `/api/healthz` | None | `{ "status": "ok" }` |
 | `GET` | `/api/state` | None | `PublicStateResponse` |
-| `GET` | `/api/services?address=0x...&name=...` | None | `ServiceDiscoveryResponse` |
+| `GET` | `/api/services` | None | `ServiceDiscoveryResponse`, optional identity filter |
+| `GET` | `/api/services/comments?address=0x...&name=...` | None | Bounded, read-only remote comments |
 | `POST` | `/api/reputation/vote` | None | reputation summary |
 | `GET`/`HEAD` | `/api/install.sh`, `/api/install.ps1` | None | install script |
 | `GET`/`HEAD` | `/api/install/bin/{slug}` | None | install binary or redirect |
@@ -90,15 +91,18 @@ Detailed contracts: [SDK API](/api-reference/sdk) and
 
 ### Public service locations
 
-`GET /api/services` requires a valid EVM `address`. Optional `name` filters one
-normalized service identity; `name=` selects the unnamed service. Without
-`name`, each distinct service name for that address is returned separately.
+`GET /api/services` without query parameters browses observed public services.
+An optional EVM `address` limits results to one owner. With an address, optional
+`name` filters one normalized service identity; `name=` selects the unnamed
+service. Results group by both normalized name and address.
 
 The response contains `services` (`name`, `address`, descriptive `metadata`,
 `locations`), `partial`, `relays_checked`, and `relays_skipped`. Each location
 contains `relay_url`, optional preferred `url`, `alias_url`, `canonical_url`,
 `current_relay`, `reported_ready`, `observed_at`, `expires_at`, and
-`verification: "relay-reported"`. Readiness is a relay claim, not a live probe.
+`verification: "relay-reported"`. A remote location may include
+`reputation: {up, down}`; absence is unknown, not zero. Repeated voters across
+relays are not deduplicated. Readiness is a relay claim, not a live probe.
 Unavailable canonical certificates do not produce canonical links. A service
 without an available HTTP URL can still have a location (for example raw TCP).
 
@@ -204,6 +208,18 @@ Casper facilitator.
 | `GET` | `/discovery` | None | `DiscoveryResponse` |
 | `POST` | `/discovery/announce` | Signed descriptor | `DiscoveryAnnounceResponse` |
 | `POST` | `/v1/sign` | Lease token header | keyless signer response |
+
+### Observed remote comments
+
+`GET /api/services/comments?address=0x...&name=...` reads public comments for
+one service identity. It observes at most eight eligible relays with fresh
+locations. It returns up to 30 rows per page, at most 20 sampled rows per
+source, and an optional `next_offset` for the next bounded page. A page is
+a live observation, not a stable global snapshot. Each row contains
+`relay_url`, `id`, `text`, `created_at` and optional `deleted`. Treat IDs
+and timestamps as source claims. Partial coverage is explicit; the endpoint
+does not accept writes or forward visitor credentials.
+
 
 ## Shared Types
 

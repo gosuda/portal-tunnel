@@ -6,6 +6,7 @@ export const RELAY_API_PATHS = {
   public: {
     state: "/api/state",
     services: "/api/services",
+    federatedComments: "/api/services/comments",
     comments: "/api/comments",
     commentsVote: "/api/comments/vote",
     commentsDelete: "/api/comments/delete",

@@ -5,6 +5,7 @@ import { useServerList } from "@/hooks/useServerList";
 import { ServerListView } from "@/components/ServerListView";
 import { ServerCommentsPanel } from "@/components/ServerCommentsPanel";
 import { useServerComments } from "@/hooks/useServerComments";
+import { useFederatedComments } from "@/hooks/useFederatedComments";
 import type { BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useServiceDiscovery } from "@/hooks/useServiceDiscovery";
@@ -14,9 +15,8 @@ export function ServerList(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const identityAddress = params.get("identity")?.trim() ?? "";
   const [identityOpen, setIdentityOpen] = useState(false);
-  const [relayServer, setRelayServer] = useState<BaseServer | null>(null);
-  const [relaysOpen, setRelaysOpen] = useState(false);
-  const relayDiscovery = useServiceDiscovery(relayServer?.address ?? "", relayServer?.serviceName ?? "", relaysOpen);
+  const [networkScope, setNetworkScope] = useState(true);
+  const [relayServerId, setRelayServerId] = useState<string | null>(null);
   const {
     commentServer,
     toggleComments,
@@ -41,15 +41,30 @@ export function ServerList(): JSX.Element {
     onVote,
     leases,
     identityDiscovery,
-  } = useServerList(identityAddress);
-  const relayCount = relayDiscovery.response?.services.find((service) => service.name === (relayServer?.serviceName ?? "") && service.address.toLowerCase() === relayServer?.address?.toLowerCase())?.locations.length;
+  } = useServerList(identityAddress, networkScope);
+  const relayServer = filteredServers.find((server) => server.id === relayServerId);
+  const hasCatalogLocations = Boolean(relayServer?.locations?.length);
+  const relayDiscovery = useServiceDiscovery(
+    relayServer?.address ?? "",
+    relayServer?.serviceName ?? "",
+    Boolean(relayServer) && !hasCatalogLocations,
+    true,
+  );
+  const relayPanel = hasCatalogLocations
+    ? { response: identityDiscovery.response, loading: false }
+    : relayDiscovery;
 
   return (
     <SsgoiTransition id="/">
       <ServerListView
-        onOpenRelays={(server) => { setRelayServer(server); setRelaysOpen(true); }}
-        relayCounts={relayServer && relayCount !== undefined ? { [relayServer.id]: relayCount } : undefined}
+        onOpenRelays={(server) => setRelayServerId(server.id)}
         identityFilter={<div className="space-y-3 px-4 pb-3 lg:px-8">
+          {browseView === "home" && (
+            <div role="group" aria-label="Service directory scope" className="flex flex-wrap gap-2">
+              <button type="button" aria-pressed={networkScope} onClick={() => setNetworkScope(true)} className={`portal-category ${networkScope ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>All services (network)</button>
+              <button type="button" aria-pressed={!networkScope} onClick={() => setNetworkScope(false)} className={`portal-category ${!networkScope ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>This relay</button>
+            </div>
+          )}
           <button type="button" aria-expanded={identityOpen || Boolean(identityAddress)} onClick={() => setIdentityOpen(!identityOpen)} className={`portal-category ${identityAddress ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>Identity{identityAddress ? " · Filtered" : ""}</button>
           {(identityOpen || identityAddress) && <form className="flex flex-wrap gap-2" onSubmit={(event) => {
             event.preventDefault();
@@ -62,9 +77,9 @@ export function ServerList(): JSX.Element {
             <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground">Apply</button>
             <button type="button" className="rounded-lg bg-secondary px-4 py-2 text-sm" onClick={() => { const next = new URLSearchParams(params); next.delete("identity"); setParams(next); setIdentityOpen(false); }}>Clear identity</button>
           </form>}
-          {identityAddress && <p className="text-xs text-muted-foreground">Observed public services for this address. Remote locations are relay-reported and have not been independently verified. Other services may exist.</p>}
+          {networkScope && browseView === "home" && <p className="text-xs text-muted-foreground">Only services observed on eligible relays are shown. Remote locations are relay-reported, not independently verified, and may expire.</p>}
           {identityAddress && !/^0x[0-9a-f]{40}$/i.test(identityAddress) && <p role="alert" className="text-sm">Enter a 0x-prefixed address with 40 hexadecimal characters.</p>}
-          {identityDiscovery.loading && <p role="status" className="text-xs text-muted-foreground">Checking known relay directories…</p>}
+          {identityDiscovery.loading && <p role="status" className="text-xs text-muted-foreground">Checking known relay directories… The local directory is available independently.</p>}
           {identityDiscovery.error && <p role="alert" className="text-xs text-muted-foreground">{identityDiscovery.error}</p>}
           {(identityDiscovery.response?.partial || identityDiscovery.error) && <button type="button" disabled={identityDiscovery.loading} onClick={identityDiscovery.checkMore} className="rounded-lg bg-secondary px-4 py-2 text-sm disabled:opacity-50">Check more relays</button>}
           {identityDiscovery.response && <p className="text-xs text-muted-foreground">{identityDiscovery.response.relays_checked} directories observed; {identityDiscovery.response.relays_skipped} unavailable or skipped.{identityDiscovery.response.partial ? " Partial lookup." : ""}</p>}
@@ -90,7 +105,7 @@ export function ServerList(): JSX.Element {
         onOpenComments={toggleComments}
         onVote={onVote}
       />
-      {relaysOpen && relayServer && <ServiceRelaysPanel server={relayServer} {...relayDiscovery} onCheckMore={relayDiscovery.checkMore} onClose={() => setRelaysOpen(false)} />}
+      {relayServer && <ServiceRelaysPanel server={relayServer} {...relayPanel} onCheckMore={hasCatalogLocations ? identityDiscovery.checkMore : relayDiscovery.checkMore} localReputation={leases === null ? undefined : relayServer.observedLocalReputation} onClose={() => setRelayServerId(null)} />}
       {commentServer && (
         <CommentsThread
           key={commentServer.id}
@@ -112,12 +127,14 @@ function CommentsThread({
   onClose: () => void;
   onVoteApp?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
 }) {
-  const comments = useServerComments(server);
+  const comments = useServerComments(server, !server.remoteOnly);
+  const federation = useFederatedComments(server);
   return (
     <ServerCommentsPanel
       server={server}
       onClose={onClose}
-      onVoteApp={onVoteApp}
+      onVoteApp={server.remoteOnly ? undefined : onVoteApp}
+      federation={federation}
       {...comments}
     />
   );

@@ -58,6 +58,11 @@ describe("identity discovery cards", () => {
       { name: "api", address: lease.address, metadata: { description: "An API", tags: ["tools"] }, locations: [{ ...location, url: "https://api.remote.example/" }] },
       { name: "blog", address: "0x2222222222222222222222222222222222222222", metadata: {}, locations: [location] },
     ];
+    const allCards = mergeDiscoveredServices([local], services);
+    expect(allCards).toHaveLength(3);
+    expect(allCards.filter((card) => card.serviceName === "blog")).toHaveLength(2);
+    expect(allCards.find((card) => card.id === local.id)?.locations).toEqual([location]);
+
     const cards = mergeDiscoveredServices([local], services, lease.address);
     expect(cards).toHaveLength(2);
     expect(cards.find((card) => card.serviceName === "blog")?.link).toBe(local.link);

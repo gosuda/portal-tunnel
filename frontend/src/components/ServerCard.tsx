@@ -78,12 +78,12 @@ function CommentsTrigger({ server, onOpenComments }: {
         event.stopPropagation();
         onOpenComments(server);
       }}
-      aria-label="Comments"
-      title={`Comments: ${server.reputation?.comments ?? 0}`}
+      aria-label={server.remoteOnly ? "View network comments" : "Comments"}
+      title={server.remoteOnly ? "View relay-reported comments" : `Comments: ${server.reputation?.comments ?? 0}`}
       className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
     >
       <MessageSquare className="size-3.5 shrink-0" />
-      <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
+      <span className="tabular-nums">{server.remoteOnly ? "Comments" : server.reputation?.comments ?? 0}</span>
     </button>
   );
 }
@@ -378,7 +378,7 @@ export function ServerCard({
               by {server.address.slice(0, 6)}…{server.address.slice(-4)}
             </Link>
             <button type="button" aria-haspopup="dialog" title="Observed relay locations" className="shrink-0 rounded-md bg-secondary px-2 py-1 hover:text-primary" onClick={() => onOpenRelays(server)}>
-              {observedRelayCount !== undefined ? `${observedRelayCount} relay${observedRelayCount === 1 ? "" : "s"}` : "Relays"}
+              {observedRelayCount !== undefined ? `Available via ${observedRelayCount} relay${observedRelayCount === 1 ? "" : "s"}` : "Relays"}
             </button>
           </div>
         )}

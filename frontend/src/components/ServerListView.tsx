@@ -243,7 +243,7 @@ function ServerGrid({ servers, browseView, onOpenComments, onVote, onOpenRelays,
   useEffect(() => watchCardReveal(gridRef.current), [renderedServerIds, browseView]);
   return (
     <div ref={gridRef} className="grid grid-cols-1 gap-x-4 gap-y-10 min-[600px]:grid-cols-2 min-[1150px]:grid-cols-3 min-[1600px]:grid-cols-4 min-[2000px]:grid-cols-5">
-      {servers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={server.remoteOnly ? undefined : onOpenComments} onVote={server.remoteOnly ? undefined : onVote} onOpenRelays={onOpenRelays} relayCount={relayCounts?.[server.id]} /></LiveAppCard>)}
+      {servers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} onVote={server.remoteOnly ? undefined : onVote} onOpenRelays={onOpenRelays} relayCount={relayCounts?.[server.id]} /></LiveAppCard>)}
     </div>
   );
 }
