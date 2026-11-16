@@ -66,6 +66,7 @@ export function ServerList(): JSX.Element {
           {identityAddress && !/^0x[0-9a-f]{40}$/i.test(identityAddress) && <p role="alert" className="text-sm">Enter a 0x-prefixed address with 40 hexadecimal characters.</p>}
           {identityDiscovery.loading && <p role="status" className="text-xs text-muted-foreground">Checking known relay directories…</p>}
           {identityDiscovery.error && <p role="alert" className="text-xs text-muted-foreground">{identityDiscovery.error}</p>}
+          {(identityDiscovery.response?.partial || identityDiscovery.error) && <button type="button" disabled={identityDiscovery.loading} onClick={identityDiscovery.checkMore} className="rounded-lg bg-secondary px-4 py-2 text-sm disabled:opacity-50">Check more relays</button>}
           {identityDiscovery.response && <p className="text-xs text-muted-foreground">{identityDiscovery.response.relays_checked} directories observed; {identityDiscovery.response.relays_skipped} unavailable or skipped.{identityDiscovery.response.partial ? " Partial lookup." : ""}</p>}
         </div>}
         browseView={browseView}
@@ -89,7 +90,7 @@ export function ServerList(): JSX.Element {
         onOpenComments={toggleComments}
         onVote={onVote}
       />
-      {relaysOpen && relayServer && <ServiceRelaysPanel server={relayServer} {...relayDiscovery} onClose={() => setRelaysOpen(false)} />}
+      {relaysOpen && relayServer && <ServiceRelaysPanel server={relayServer} {...relayDiscovery} onCheckMore={relayDiscovery.checkMore} onClose={() => setRelaysOpen(false)} />}
       {commentServer && (
         <CommentsThread
           key={commentServer.id}

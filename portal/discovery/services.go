@@ -21,6 +21,7 @@ import (
 const (
 	serviceRelayLimit    = 8
 	serviceConcurrency   = 4
+	serviceLookupLimit   = 8
 	serviceCacheLimit    = 32
 	serviceResultLimit   = 100
 	serviceLeaseLimit    = 1000
@@ -32,6 +33,7 @@ const (
 )
 
 var (
+	errServiceLookupBusy                = errors.New("service directory is busy; try again shortly")
 	errServiceDirectoryResponseRejected = errors.New("service directory response rejected")
 	errServiceDirectoryResponseTooLarge = errors.New("service directory response too large")
 )
@@ -54,6 +56,7 @@ type ServiceLookup struct {
 	relays     *RelaySet
 	client     *http.Client
 	slots      chan struct{}
+	lookups    chan struct{}
 	mu         sync.Mutex
 	cache      map[string]serviceObservation
 	inflight   map[string]*serviceLookupCall
@@ -61,7 +64,7 @@ type ServiceLookup struct {
 }
 
 func NewServiceLookup(relays *RelaySet) *ServiceLookup {
-	return &ServiceLookup{relays: relays, client: newPublicRelayClient(), slots: make(chan struct{}, serviceConcurrency), cache: make(map[string]serviceObservation), inflight: make(map[string]*serviceLookupCall)}
+	return &ServiceLookup{relays: relays, client: newPublicRelayClient(), slots: make(chan struct{}, serviceConcurrency), lookups: make(chan struct{}, serviceLookupLimit), cache: make(map[string]serviceObservation), inflight: make(map[string]*serviceLookupCall)}
 }
 
 // serviceTargets keeps eligibility in Discovery rather than duplicating it at
@@ -88,7 +91,15 @@ func (s *RelaySet) serviceTargets(now time.Time) []string {
 
 // Lookup filters the same relay observations by address and optional service
 // name. Local entries are read directly and never depend on remote success.
-func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.Lease, address string, name *string) types.ServiceDiscoveryResponse {
+func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.Lease, address string, name *string) (types.ServiceDiscoveryResponse, error) {
+	// Bound waiters as well as outbound requests. Admission never queues and
+	// does not consume the registration/authentication pre-auth budget.
+	select {
+	case s.lookups <- struct{}{}:
+		defer func() { <-s.lookups }()
+	default:
+		return types.ServiceDiscoveryResponse{}, errServiceLookupBusy
+	}
 	ctx, cancel := context.WithTimeout(ctx, serviceLookupTimeout)
 	defer cancel()
 	response := types.ServiceDiscoveryResponse{Services: []types.DiscoveredService{}, RelaysChecked: 1}
@@ -186,7 +197,7 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 	}
 	slices.SortFunc(response.Services, func(a, b types.DiscoveredService) int { return strings.Compare(a.Name, b.Name) })
 	response.Partial = response.Partial || response.RelaysSkipped > 0
-	return response
+	return response, nil
 }
 
 func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObservation {

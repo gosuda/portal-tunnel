@@ -32,5 +32,11 @@ func (s *Server) HandleServices(w http.ResponseWriter, r *http.Request) {
 		name = &value
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	utils.WriteAPIData(w, http.StatusOK, s.services.Lookup(r.Context(), s.PortalURL(), s.PublicLeases(), address, name))
+	response, err := s.services.Lookup(r.Context(), s.PortalURL(), s.PublicLeases(), address, name)
+	if err != nil {
+		w.Header().Set("Retry-After", "1")
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeRateLimited, err.Error())
+		return
+	}
+	utils.WriteAPIData(w, http.StatusOK, response)
 }
