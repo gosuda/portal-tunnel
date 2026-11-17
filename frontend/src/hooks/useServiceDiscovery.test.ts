@@ -77,9 +77,12 @@ describe("service discovery", () => {
     const { result, rerender } = renderHook(({ owner }) => useServiceDiscovery(owner), { initialProps: { owner: address } });
     await act(async () => {});
     expect(result.current.response).toBeDefined();
-    vi.mocked(apiClient.get).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(apiClient.get).mockRejectedValueOnce(new Error("lookup failed"));
     rerender({ owner: "0x2222222222222222222222222222222222222222" });
     expect(result.current.response).toBeUndefined();
     expect(result.current.loading).toBe(true);
+    await act(async () => {});
+    expect(result.current.response).toBeUndefined();
+    expect(result.current.error).toContain("local directory is still available");
   });
 });
