@@ -21,7 +21,7 @@
   },
   "type": "module",
   "dependencies": {
-    "mermaid": "^12.3.0",
+    "mermaid": "^11.16.1",
     "mode-watcher": "^1.1.0",
     "runed": "^0.37.1"
   }
