@@ -5,7 +5,7 @@ import type { BaseServer } from "@/lib/server";
 import type { FederatedCommentsResponse } from "@/types/api";
 
 // Leave enough time for the backend to return partial results at its deadline.
-const COMMENTS_REQUEST_TIMEOUT_MS = 9_000;
+const COMMENTS_REQUEST_TIMEOUT_MS = 24_000;
 
 type LoadedSample = {
   key: string;

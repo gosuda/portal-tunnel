@@ -130,7 +130,10 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   Locations and optional reputation are relay reports, not ownership proof or
   unique voters. Comment threads use bounded, on-demand anonymous reads from
   sources that report the requested identity. IDs and times remain source
-  specific, and failures or truncation yield partial coverage. Votes, posting
+  specific, and failures or truncation yield partial coverage. The 22-second
+  comment deadline reserves directory lookup time and outbound waves for both
+  admitted reads through their two shared slots; each source still has a
+  two-second fetch timeout. Votes, posting
   and deletion stay at the source relay; federation does not forward cookies
   or replicate comments.
 

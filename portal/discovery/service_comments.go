@@ -25,6 +25,11 @@ const (
 	commentBodyLimit   = 1 << 20
 	commentDecodeLimit = 100
 	commentIDLimit     = 128
+	// Reserve directory lookup time plus every outbound wave of all admitted
+	// comment reads. Queueing shares this deadline; each fetch still has its
+	// own serviceRelayTimeout after acquiring a slot.
+	commentLookupTimeout = serviceLookupTimeout +
+		((serviceRelayLimit*commentLookupLimit+commentConcurrency-1)/commentConcurrency)*serviceRelayTimeout + time.Second
 )
 
 type commentSource struct {
@@ -44,7 +49,7 @@ func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string
 	default:
 		return types.ServiceCommentsResponse{}, errServiceLookupBusy
 	}
-	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, commentLookupTimeout)
 	defer cancel()
 	response := types.ServiceCommentsResponse{Comments: []types.ObservedServiceComment{}}
 	if address == "" {

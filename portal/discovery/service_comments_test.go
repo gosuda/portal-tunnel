@@ -7,12 +7,96 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
+
+// Every healthy source in the bounded sample remains observable even when
+// directory discovery and other admitted reads consume the shared slots.
+func TestFederatedCommentsIncludeEightSlowSources(t *testing.T) {
+	for _, cold := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cold=%v", cold), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				now := time.Now().UTC()
+				lookup := NewServiceLookup(NewRelaySet(nil))
+				for i := range serviceRelayLimit {
+					root := fmt.Sprintf("relay-%02d.example", i)
+					relay := "https://" + root
+					lookup.relays.relays[relay] = relayState{
+						Descriptor: types.RelayDescriptor{APIHTTPSAddr: relay, ExpiresAt: now.Add(time.Minute)},
+						Trust:      relayVerified, LastSeenAt: now,
+					}
+					if !cold {
+						hostname, err := namespace.LocalTLSHostname("blog", serviceTestAddress, root)
+						if err != nil {
+							t.Fatal(err)
+						}
+						lookup.cache[relay] = serviceObservation{
+							leases: []types.Lease{{Name: "blog", Address: serviceTestAddress,
+								Hostname: "blog." + root, CanonicalHostname: hostname, ExpiresAt: now.Add(time.Minute)}},
+							at: now, until: now.Add(serviceCacheTTL),
+						}
+					}
+				}
+				lookup.client.Transport = commentRoundTrip(func(r *http.Request) (*http.Response, error) {
+					var payload any
+					delay := 1800 * time.Millisecond
+					switch r.URL.Path {
+					case types.PathState:
+						delay = 500 * time.Millisecond
+						hostname, err := namespace.LocalTLSHostname("blog", serviceTestAddress, r.URL.Hostname())
+						if err != nil {
+							return nil, err
+						}
+						payload = types.PublicStateResponse{Leases: []types.Lease{{Name: "blog", Address: serviceTestAddress,
+							Hostname: "blog." + r.URL.Hostname(), CanonicalHostname: hostname, ExpiresAt: now.Add(time.Minute)}}}
+					case types.PathComments:
+						payload = types.ServiceCommentsResponse{Comments: []types.ObservedServiceComment{{
+							ID: "comment", Text: "slow source", CreatedAt: now,
+						}}}
+					default:
+						return nil, fmt.Errorf("unexpected source path: %s", r.URL.Path)
+					}
+					timer := time.NewTimer(delay)
+					defer timer.Stop()
+					select {
+					case <-r.Context().Done():
+						return nil, r.Context().Err()
+					case <-timer.C:
+					}
+					body, err := json.Marshal(types.APIEnvelope[any]{OK: true, Data: payload})
+					if err != nil {
+						return nil, err
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), ContentLength: int64(len(body))}, nil
+				})
+				var workers sync.WaitGroup
+				for range commentLookupLimit {
+					workers.Go(func() {
+						response, err := lookup.Comments(t.Context(), "https://local.example", serviceTestAddress, "blog")
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						origins := make(map[string]bool)
+						for _, row := range response.Comments {
+							origins[row.RelayURL] = true
+						}
+						if response.Partial || response.RelaysChecked != serviceRelayLimit || len(origins) != serviceRelayLimit {
+							t.Errorf("healthy sources lost from bounded sample: %+v", response)
+						}
+					})
+				}
+				workers.Wait()
+			})
+		})
+	}
+}
 
 type commentRoundTrip func(*http.Request) (*http.Response, error)
 

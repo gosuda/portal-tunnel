@@ -219,6 +219,8 @@ not a stable global snapshot. Each row contains
 `relay_url`, `id`, `text`, `created_at` and optional `deleted`. Treat IDs
 and timestamps as source claims. Partial coverage is explicit; the endpoint
 does not accept writes or forward visitor credentials.
+The overall deadline is 22 seconds, including directory discovery and slot
+waits; each remote fetch has a two-second timeout after acquiring a slot.
 
 ## Shared Types
 
