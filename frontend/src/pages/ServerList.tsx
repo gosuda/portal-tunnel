@@ -49,7 +49,7 @@ export function ServerList(): JSX.Element {
     if (identityParam && !searchQuery) {
       handleSearchChange(identityParam);
     }
-  }, [identityParam]);
+  }, [identityParam, handleSearchChange, searchQuery]);
 
   const onSearchChange = (value: string) => {
     const trimmed = value.trim();
