@@ -1,3 +1,5 @@
+	import { resolve } from '$app/paths';
+
 export interface NavItem {
 	title: string;
 	href: string;
@@ -18,15 +20,12 @@ export function flattenNavigation(): FlatNavItem[] {
 	return navigation.flatMap((s) => s.items.map((item) => ({ ...item, section: s.title })));
 }
 
-export function getPrevNext(
-	pathname: string,
-	basePath: string
-): { prev: FlatNavItem | null; next: FlatNavItem | null } {
+export function getPrevNext(pathname: string): { prev: FlatNavItem | null; next: FlatNavItem | null } {
 	const items = flattenNavigation();
-	const index = items.findIndex(
-		(item) =>
-			pathname === `${basePath}${item.href}/` || pathname === `${basePath}${item.href}`
-	);
+	const index = items.findIndex((item) => {
+		const target = resolve(item.href);
+		return pathname === `${target}/` || pathname === target;
+	});
 	if (index === -1) return { prev: null, next: null };
 	return {
 		prev: index > 0 ? items[index - 1] : null,
@@ -87,10 +86,9 @@ export const referencesNavigation: NavSection[] = [
 
 export const navigation: NavSection[] = [...guidesNavigation, ...referencesNavigation];
 
-const referenceHrefs = new Set(
-	referencesNavigation.flatMap((s) => s.items.map((i) => i.href))
-);
-
-export function isReferencePage(pathname: string, basePath: string): boolean {
-	return referenceHrefs.has(pathname.replace(basePath, '').replace(/\/$/, ''));
+export function isReferencePage(pathname: string): boolean {
+	const normalized = pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname;
+	return referencesNavigation.some((section) =>
+		section.items.some((item) => resolve(item.href) === normalized)
+	);
 }

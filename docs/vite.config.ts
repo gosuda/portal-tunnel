@@ -34,7 +34,8 @@ export default defineConfig({
 				strict: true
 			}),
 			paths: {
-				base
+				base,
+				relative: false
 			},
 			prerender: {
 				handleMissingId: 'warn'

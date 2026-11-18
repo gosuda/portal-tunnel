@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { useIntersectionObserver } from 'runed';
 
 	interface TocItem {
@@ -13,7 +13,7 @@
 	let headingElements = $state<HTMLElement[]>([]);
 
 	$effect(() => {
-		$page.url.pathname;
+		page.url.pathname;
 
 		requestAnimationFrame(() => {
 			const article = document.querySelector('article');

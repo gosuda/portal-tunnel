@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
+	import { resolve, asset } from '$app/paths';
 	import { tick } from 'svelte';
 
 	let { open = $bindable(false) }: { open: boolean } = $props();
@@ -34,7 +34,7 @@
 	async function initPagefind() {
 		if (pagefind) return;
 		try {
-			const path = `${base}/pagefind/pagefind.js`;
+			const path = asset('pagefind/pagefind.js');
 			pagefind = await import(/* @vite-ignore */ path);
 		} catch {
 			searchUnavailable = true;
@@ -97,7 +97,7 @@
 
 	function navigate(url: string) {
 		const path = url.replace(/\.html$/, '').replace(/index$/, '');
-		goto(`${base}${path}`);
+		goto(resolve(path));
 		close();
 	}
 
@@ -203,7 +203,7 @@
 									{@const flatIdx = flatResults.indexOf(sub.url)}
 									{@const subPath = sub.url.replace(/\.html$/, '').replace(/index$/, '')}
 									<a
-										href="{base}{subPath}"
+										href={resolve(subPath)}
 										class="block px-4 py-2.5 no-underline transition-colors {flatIdx === activeIndex
 											? 'bg-primary/10'
 											: 'hover:bg-secondary/60'}"

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import type { FlatNavItem } from '#lib/nav';
 
 	interface Props {
@@ -14,7 +14,7 @@
 	<nav class="not-prose mt-12 grid grid-cols-1 gap-4 {prev && next ? 'sm:grid-cols-2' : ''}" aria-label="Page navigation">
 		{#if prev}
 			<a
-				href="{base}{prev.href}"
+				href={resolve(prev.href)}
 				class="group flex items-center gap-4 rounded-lg border border-border/70 px-5 py-5 transition-colors hover:border-primary/40"
 			>
 				<svg
@@ -40,7 +40,7 @@
 
 		{#if next}
 			<a
-				href="{base}{next.href}"
+				href={resolve(next.href)}
 				class="group flex items-center justify-end gap-4 rounded-lg border border-border/70 px-5 py-5 text-right transition-colors hover:border-primary/40"
 			>
 				<div class="min-w-0">

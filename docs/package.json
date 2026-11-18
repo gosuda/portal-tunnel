@@ -2,6 +2,10 @@
   "name": "portal-docs",
   "version": "0.0.1",
   "private": true,
+  "imports": {
+    "#lib": "./src/lib",
+    "#lib/*": "./src/lib/*"
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && npx pagefind --site build && cp -r build/pagefind static/",
