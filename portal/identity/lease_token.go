@@ -38,7 +38,9 @@ type es256kOpaqueSigner struct {
 }
 
 func (s *es256kOpaqueSigner) Public() *jose.JSONWebKey {
-	return &jose.JSONWebKey{}
+	// go-jose does not represent secp256k1 JWKs. Verification uses the
+	// authority's public key through es256kOpaqueVerifier, without an embedded JWK.
+	return nil
 }
 
 func (s *es256kOpaqueSigner) Algs() []jose.SignatureAlgorithm {
