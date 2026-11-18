@@ -52,7 +52,7 @@ describe("identity discovery cards", () => {
     const location = { relay_url: "https://remote.example", url: "https://blog.remote.example/", current_relay: false, reported_ready: true, observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z", verification: "relay-reported" as const };
     const services: DiscoveredService[] = [
       { name: "blog", address: lease.address, metadata: {}, locations: [location] },
-      { name: "api", address: lease.address, metadata: { description: "An API", tags: ["tools"] }, locations: [{ ...location, url: "https://api.remote.example/" }] },
+      { name: "api", address: lease.address, metadata: { description: "An API", tags: ["tools"] }, locations: [{ ...location, url: "https://api.remote.example/", reputation: { up: 7, down: 2 } }] },
       { name: "blog", address: "0x2222222222222222222222222222222222222222", metadata: {}, locations: [location] },
     ];
     const allCards = mergeDiscoveredServices([local], services);
@@ -68,5 +68,8 @@ describe("identity discovery cards", () => {
     expect(remote?.remoteOnly).toBe(true);
     expect(remote?.description).toBe("An API");
     expect(remote?.tags).toEqual(["tools"]);
+    expect(remote?.reputation?.up).toBe(7);
+    expect(remote?.reputation?.down).toBe(2);
+    expect(remote?.reputation?.total).toBe(5);
   });
 });

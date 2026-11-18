@@ -61,6 +61,16 @@ export function mergeDiscoveredServices(
     const locations = service.locations.filter((location) => !location.current_relay);
     if (!locations.length) continue;
     const metadata = parseLeaseMetadata(service.metadata);
+    const totals = locations.reduce(
+      (acc, loc) => {
+        if (loc.reputation) {
+          acc.up += loc.reputation.up;
+          acc.down += loc.reputation.down;
+        }
+        return acc;
+      },
+      { up: 0, down: 0 }
+    );
     byIdentity.set(key, {
       id: `service:${key}`,
       serviceName: service.name,
@@ -75,6 +85,14 @@ export function mergeDiscoveredServices(
       link: "",
       remoteOnly: true,
       locations,
+      reputation: {
+        hostname: `service:${key}`,
+        up: totals.up,
+        down: totals.down,
+        total: totals.up - totals.down,
+        viewer_vote: "",
+        comments: 0,
+      },
     });
   }
   return [...byIdentity.values()];

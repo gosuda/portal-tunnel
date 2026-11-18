@@ -43,10 +43,11 @@ describe("relay selection", () => {
     expect(remote.getAttribute("rel")).toContain("noreferrer");
   });
 
-  it("displays both current and remote relays with badges", () => {
+  it("displays both current and remote relays with badges and reputation", () => {
     const locations = [
-      { ...observation, relay_url: "https://local.example", current_relay: true },
-      { ...observation, relay_url: "https://remote2.example", url: "https://blog.remote2.example/" },
+      { ...observation, relay_url: "https://local.example", url: "https://blog.local.example/", current_relay: true, reputation: { up: 5, down: 1 } },
+      { ...observation, relay_url: "https://remote2.example", url: "https://blog.remote2.example/", reputation: { up: 10, down: 2 } },
+      { ...observation, relay_url: "https://remote3.example", url: "", reputation: { up: 0, down: 0 } },
     ];
     render(<ServiceRelaysPanel
       server={{ ...server, locations }}
@@ -55,9 +56,13 @@ describe("relay selection", () => {
       onClose={vi.fn()}
     />);
 
-    expect(screen.getByText("local.example")).toBeDefined();
+    expect(screen.getByText("blog.local.example")).toBeDefined();
     expect(screen.getByText("Current")).toBeDefined();
+    expect(screen.getByText("+5/-1")).toBeDefined();
     expect(screen.getByText("blog.remote2.example")).toBeDefined();
+    expect(screen.getByText("+10/-2")).toBeDefined();
+    expect(screen.getByText("remote3.example")).toBeDefined();
+    expect(screen.getByText("Unavailable")).toBeDefined();
   });
 
   it("shows empty state when no relays exist for remote-only server with no locations", () => {

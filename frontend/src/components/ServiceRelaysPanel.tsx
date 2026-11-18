@@ -4,7 +4,7 @@ import { ExternalLink, X } from "lucide-react";
 import type { BaseServer } from "@/lib/server";
 import type { ObservedReputation, ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
 
-export function ServiceRelaysPanel({ server, response, loading, error, onCheckMore, onClose }: {
+export function ServiceRelaysPanel({ server, response, loading, error, localReputation, onCheckMore, onClose }: {
   server: BaseServer;
   response?: ServiceDiscoveryResponse;
   loading: boolean;
@@ -55,15 +55,46 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
 
           <div className="mt-4 space-y-2">
             {resolvedLocations.map((loc) => {
-              const targetUrl = loc.url || loc.relay_url;
-              const displayText = (loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
+              const rep = loc.current_relay
+                ? (localReputation || (server.reputation ? { up: server.reputation.up, down: server.reputation.down } : undefined))
+                : loc.reputation;
+              const repText = rep && (rep.up > 0 || rep.down > 0) ? `+${rep.up}/-${rep.down}` : null;
+
+              if (loc.url) {
+                const displayText = loc.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+                return (
+                  <a
+                    key={loc.relay_url}
+                    href={loc.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm font-medium transition-colors hover:bg-secondary hover:text-primary"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="truncate font-mono">{displayText}</span>
+                      {loc.current_relay && (
+                        <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                          Current
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {repText && (
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {repText}
+                        </span>
+                      )}
+                      <ExternalLink className="size-4 text-muted-foreground" />
+                    </div>
+                  </a>
+                );
+              }
+
+              const displayText = loc.relay_url.replace(/^https?:\/\//, "").replace(/\/$/, "");
               return (
-                <a
+                <div
                   key={loc.relay_url}
-                  href={targetUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm font-medium transition-colors hover:bg-secondary hover:text-primary"
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-secondary/30 p-3 text-sm font-medium text-muted-foreground"
                 >
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate font-mono">{displayText}</span>
@@ -73,8 +104,15 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
                       </span>
                     )}
                   </div>
-                  <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
-                </a>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {repText && (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {repText}
+                      </span>
+                    )}
+                    <span className="text-xs text-muted-foreground">Unavailable</span>
+                  </div>
+                </div>
               );
             })}
 

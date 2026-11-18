@@ -223,3 +223,63 @@ func TestObservedCommentsLimitAndPreserveDeletion(t *testing.T) {
 		t.Fatalf("inconsistent bounded public observations: %+v", comments)
 	}
 }
+
+func TestFederatedCommentsDiscoveredForAliasOnlyService(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now().UTC()
+		relaySet := NewRelaySet(nil)
+		lookup := NewServiceLookup(relaySet)
+		self := "https://self.example"
+		remote := "https://remote.example"
+
+		relaySet.relays[remote] = relayState{
+			Descriptor: types.RelayDescriptor{APIHTTPSAddr: remote, ExpiresAt: now.Add(time.Minute)},
+			Trust:      relayVerified,
+			LastSeenAt: now,
+		}
+
+		lookup.cache[remote] = serviceObservation{
+			leases: []types.Lease{{
+				Name:              "blog",
+				Address:           serviceTestAddress,
+				Hostname:          "blog.remote.example",
+				CanonicalHostname: "",
+				ExpiresAt:         now.Add(time.Minute),
+			}},
+			at:    now,
+			until: now.Add(serviceCacheTTL),
+		}
+
+		calledWithHost := ""
+		lookup.client.Transport = commentRoundTrip(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == types.PathComments {
+				calledWithHost = r.URL.Query().Get("hostname")
+				payload := types.ServiceCommentsResponse{
+					Comments: []types.ObservedServiceComment{{
+						ID:        "c1",
+						Text:      "alias comment",
+						CreatedAt: now,
+					}},
+				}
+				data, _ := json.Marshal(types.APIEnvelope[any]{Data: payload, OK: true})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(data))),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
+			}
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+		})
+
+		resp, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calledWithHost != "blog.remote.example" {
+			t.Fatalf("expected comments lookup with host blog.remote.example, got: %q", calledWithHost)
+		}
+		if len(resp.Comments) != 1 || resp.Comments[0].Text != "alias comment" {
+			t.Fatalf("expected alias comment returned, got: %+v", resp.Comments)
+		}
+	})
+}

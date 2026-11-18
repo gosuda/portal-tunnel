@@ -384,8 +384,9 @@ func observedServiceReputation(relay string, lease types.Lease, id types.Identit
 	return tallies[publicServiceCanonicalHostname(relay, lease, id)]
 }
 
-// Called only after serviceLocation validated the lease and source. Identity-bound
-// canonical hostnames remain backend keys when a lease omits its namespace.
+// Called only after serviceLocation validated the lease and source. Returns the
+// verified canonical hostname if present, or the verified alias hostname for
+// alias-only services, ensuring federated comments can be discovered.
 func publicServiceCanonicalHostname(relay string, lease types.Lease, id types.Identity) string {
 	if lease.Namespace == types.LocalTLSNamespaceV1 {
 		return lease.CanonicalHostname
@@ -394,11 +395,19 @@ func publicServiceCanonicalHostname(relay string, lease types.Lease, id types.Id
 	if err != nil {
 		return ""
 	}
-	expected, err := namespace.LocalTLSHostname(id.Name, id.Address, base.Hostname())
-	if err != nil || expected != lease.CanonicalHostname {
-		return ""
+	if lease.CanonicalHostname != "" {
+		expected, err := namespace.LocalTLSHostname(id.Name, id.Address, base.Hostname())
+		if err == nil && expected == lease.CanonicalHostname {
+			return expected
+		}
 	}
-	return expected
+	if lease.Hostname != "" {
+		expected, err := namespace.AliasHostname(id.Name, base.Hostname())
+		if err == nil && expected == lease.Hostname {
+			return expected
+		}
+	}
+	return ""
 }
 
 func serviceLocation(relay string, lease types.Lease, id types.Identity, observed, until time.Time) (types.ServiceLocation, bool) {
