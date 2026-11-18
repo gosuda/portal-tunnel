@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { base } from '$app/paths';
-	import type { FlatNavItem } from '$lib/nav';
+	import type { FlatNavItem } from '#lib/nav';
 
 	interface Props {
 		prev: FlatNavItem | null;

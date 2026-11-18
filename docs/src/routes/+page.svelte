@@ -1,7 +1,7 @@
 <script lang="ts">
-	import HeroSection from '$lib/components/landing/HeroSection.svelte';
-	import TunnelCommandForm from '$lib/components/landing/TunnelCommandForm.svelte';
-	import CoreFeaturesGrid from '$lib/components/landing/CoreFeaturesGrid.svelte';
+	import HeroSection from '#lib/components/landing/HeroSection.svelte';
+	import TunnelCommandForm from '#lib/components/landing/TunnelCommandForm.svelte';
+	import CoreFeaturesGrid from '#lib/components/landing/CoreFeaturesGrid.svelte';
 </script>
 
 <svelte:head>

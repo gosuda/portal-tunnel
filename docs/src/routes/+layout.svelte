@@ -2,15 +2,15 @@
 	import { base } from '$app/paths';
 	import { page } from '$app/stores';
 	import { ModeWatcher } from 'mode-watcher';
-	import Sidebar from '$lib/components/Sidebar.svelte';
-	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
-	import MobileNav from '$lib/components/MobileNav.svelte';
-	import TableOfContents from '$lib/components/TableOfContents.svelte';
-	import PrevNextNav from '$lib/components/PrevNextNav.svelte';
-	import { getPrevNext, guidesNavigation, referencesNavigation, isReferencePage } from '$lib/nav';
-	import SearchButton from '$lib/components/SearchButton.svelte';
-	import SearchModal from '$lib/components/SearchModal.svelte';
-	import { copyCode } from '$lib/actions/copy-code';
+	import Sidebar from '#lib/components/Sidebar.svelte';
+	import ThemeToggle from '#lib/components/ThemeToggle.svelte';
+	import MobileNav from '#lib/components/MobileNav.svelte';
+	import TableOfContents from '#lib/components/TableOfContents.svelte';
+	import PrevNextNav from '#lib/components/PrevNextNav.svelte';
+	import { getPrevNext, guidesNavigation, referencesNavigation, isReferencePage } from '#lib/nav';
+	import SearchButton from '#lib/components/SearchButton.svelte';
+	import SearchModal from '#lib/components/SearchModal.svelte';
+	import { copyCode } from '#lib/actions/copy-code';
 	import { useEventListener } from 'runed';
 	import '../app.css';
 

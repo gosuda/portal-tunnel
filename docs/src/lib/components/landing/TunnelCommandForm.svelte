@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { buildTunnelCommand, type TunnelCommandOS } from '$lib/tunnel-command';
-	import { classifyShareInput, type ShareKind } from '$lib/share-link';
+	import { buildTunnelCommand, type TunnelCommandOS } from '#lib/tunnel-command';
+	import { classifyShareInput, type ShareKind } from '#lib/share-link';
 
 	const SHARE_KIND_LABEL: Record<ShareKind, string> = { url: 'URL', file: 'File', port: 'Port' };
 	const SHARE_PLACEHOLDER = 'file:///Users/me/site/index.html or 3000';

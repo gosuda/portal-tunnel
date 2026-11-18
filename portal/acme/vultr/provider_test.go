@@ -66,6 +66,7 @@ func (f *ensureRecordVultrFake) listEnsureRecordVultr(w http.ResponseWriter) {
 	for _, rec := range f.records {
 		listed = append(listed, rec)
 	}
+	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{"records": listed}); err != nil {
 		f.t.Error(err)
 	}
@@ -150,6 +151,7 @@ func TestFindZoneMatchesParentCandidate(t *testing.T) {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"domains": []map[string]any{{"domain": "example.com"}},
 			"meta":    map[string]any{"total": 1},

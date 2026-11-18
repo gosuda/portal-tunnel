@@ -5,7 +5,7 @@ priority: P1
 ---
 
 <script>
-import Mermaid from '$lib/components/Mermaid.svelte'
+import Mermaid from '#lib/components/Mermaid.svelte'
 
 const overviewDiagram = `flowchart TD
     CB[Client Browser]

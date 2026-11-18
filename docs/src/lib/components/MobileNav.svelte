@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Sidebar from './Sidebar.svelte';
-	import type { NavSection } from '$lib/nav';
+	import type { NavSection } from '#lib/nav';
 
 	let { open = $bindable(false), sections }: { open: boolean; sections: NavSection[] } = $props();
 

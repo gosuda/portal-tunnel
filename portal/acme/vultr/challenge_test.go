@@ -37,6 +37,7 @@ func testChallengeLifecycle(t *testing.T, mode string) {
 		case http.MethodGet:
 			mu.Lock()
 			defer mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"records": records, "meta": map[string]any{"total": len(records)}})
 		case http.MethodPost:
 			var req govultr.DomainRecordCreateReq
@@ -55,6 +56,7 @@ func testChallengeLifecycle(t *testing.T, mode string) {
 				<-r.Context().Done()
 				return
 			}
+			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"record": rec})
 		case http.MethodDelete:
 			id := strings.TrimPrefix(r.URL.Path, "/v2/domains/example.com/records/")
@@ -150,6 +152,7 @@ func TestFindZonePrefersChildOnLaterPageOverCachedParent(t *testing.T) {
 		if r.URL.Query().Get("cursor") == next {
 			name, next = "acme.example.com", ""
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"domains": []map[string]any{{"domain": name}},
 			"meta":    map[string]any{"total": 2, "links": map[string]any{"next": next}},

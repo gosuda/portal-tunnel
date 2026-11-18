@@ -47,7 +47,7 @@ func accountTestCA(t *testing.T, required bool) *httptest.Server {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			outer, err := jose.ParseSigned(string(data), []jose.SignatureAlgorithm{jose.ES256})
+			outer, err := jose.ParseSignedJSON(string(data), []jose.SignatureAlgorithm{jose.ES256})
 			if err != nil || len(outer.Signatures) != 1 || outer.Signatures[0].Protected.JSONWebKey == nil {
 				t.Errorf("invalid ACME account JWS: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
@@ -62,7 +62,7 @@ func accountTestCA(t *testing.T, required bool) *httptest.Server {
 				return
 			}
 			if required || len(account.ExternalAccountBinding) != 0 {
-				binding, err := jose.ParseSigned(string(account.ExternalAccountBinding), []jose.SignatureAlgorithm{jose.HS256})
+				binding, err := jose.ParseSignedJSON(string(account.ExternalAccountBinding), []jose.SignatureAlgorithm{jose.HS256})
 				valid := false
 				if err == nil && len(binding.Signatures) == 1 {
 					boundKey, verifyErr := binding.Verify([]byte("test-only-eab-secret-for-account-binding!"))

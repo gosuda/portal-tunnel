@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { base } from '$app/paths';
-	import type { NavSection } from '$lib/nav';
+	import type { NavSection } from '#lib/nav';
 
 	let { sections }: { sections: NavSection[] } = $props();
 
