@@ -56,13 +56,17 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
       } catch (error) {
         if (cancelled) return;
         const unsupported = error instanceof APIClientError && error.status === 404;
-        setState({
+        const now = Date.now();
+        setState((previous) => ({
           key,
           request,
+          response: previous?.key === key && previous.response
+            ? pruneExpiredLocations(previous.response, now).response
+            : undefined,
           error: unsupported
             ? "This relay does not support service discovery. The local directory is still available."
             : "Other relay locations could not be checked. The local directory is still available.",
-        });
+        }));
       } finally {
         window.clearTimeout(deadline);
         if (refresh && !cancelled) timer = window.setTimeout(() => void load(), REFRESH_MS);
@@ -79,15 +83,17 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
   // Keep expiry independent of fetching and scope changes. A new HTTP response
   // can still contain cached locations with only a few seconds left to live.
   useEffect(() => {
-    const snapshot = state?.response;
-    if (!snapshot) return;
+    if (!state?.response) return;
+    const { key: snapshotKey, response: snapshot } = state;
     const now = Date.now();
     const { response, nextExpiry } = pruneExpiredLocations(snapshot, now);
     if (snapshot === response && !Number.isFinite(nextExpiry)) return;
     const timer = window.setTimeout(() => {
-      const next = pruneExpiredLocations(snapshot, Date.now()).response;
-      setState((current) => current && current === state
-        ? { ...current, response: next }
+      const now = Date.now();
+      // A same-key failure may have updated the error while keeping this
+      // snapshot. Prune the latest response without undoing that error.
+      setState((current) => current?.key === snapshotKey && current.response
+        ? { ...current, response: pruneExpiredLocations(current.response, now).response }
         : current);
     }, snapshot === response ? nextExpiry - now : 0);
     return () => window.clearTimeout(timer);
