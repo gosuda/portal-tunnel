@@ -16,7 +16,7 @@ portal expose 3000 --relays %s --discovery=false
 On Windows PowerShell:
 
 ~~~powershell
-irm %s/api/install.ps1 | iex
+irm %s/api/install.ps1 | iex;
 portal expose 3000 --relays %s --discovery=false
 ~~~
 
