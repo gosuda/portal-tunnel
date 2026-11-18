@@ -21,7 +21,7 @@ curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/inst
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue';
-irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
+irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex;
 ```
 
 ### From A Relay

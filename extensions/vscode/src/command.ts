@@ -90,12 +90,12 @@ export function buildCommand(
 
   if (target === "windows") {
     return [
-      `$ProgressPreference = 'SilentlyContinue';`,
+      `$ProgressPreference = 'SilentlyContinue'`,
       `irm ${formatToken(tunnelInstallerURL, target)} | iex`,
       `$PortalBin = Join-Path $env:LOCALAPPDATA 'portal\\bin\\portal.exe'`,
       `if (-not (Test-Path $PortalBin)) { throw 'Portal install failed: portal.exe not found.' }`,
       `& $PortalBin ${exposeCommand}`,
-    ].join("\n");
+    ].join(";\n");
   }
 
   return [

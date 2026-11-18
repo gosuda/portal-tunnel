@@ -1,11 +1,12 @@
 package installer
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
 
-func TestRelayScript_NormalizesCRLFInShellScript(t *testing.T) {
+func TestRelayScriptShell(t *testing.T) {
 	script, filename, contentType, err := RelayScript("https://relay.example.com", false)
 	if err != nil {
 		t.Fatalf("RelayScript failed: %v", err)
@@ -24,15 +25,27 @@ func TestRelayScript_NormalizesCRLFInShellScript(t *testing.T) {
 	}
 }
 
-func TestRelayShellScript_StripCRLF(t *testing.T) {
-	input := "#!/usr/bin/env sh\r\nset -eu\r\necho hello\r\n"
-	result := relayShellScript("https://test.com", input)
-	if strings.Contains(result, "\r") {
-		t.Errorf("expected result to have no \\r, got: %q", result)
-	}
-	expectedPrefix := "#!/usr/bin/env sh\nBASE_URL='https://test.com'\n"
-	if !strings.HasPrefix(result, expectedPrefix) {
-		t.Errorf("expected prefix %q, got %q", expectedPrefix, result[:len(expectedPrefix)])
+func TestRelayShellScriptLineEndings(t *testing.T) {
+	const script = "#!/usr/bin/env sh\nset -eu\necho hello\n"
+	const expected = "#!/usr/bin/env sh\n" +
+		"BASE_URL='https://relay.example.com'\n" +
+		"RELAY_URL='https://relay.example.com'\n" +
+		"BIN_PATH_PREFIX='api/install/bin'\n" +
+		"set -eu\necho hello\n"
+	for _, tc := range []struct {
+		name, newline string
+	}{
+		{"LF", "\n"},
+		{"CRLF", "\r\n"},
+		{"CR", "\r"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.ReplaceAll(script, "\n", tc.newline)
+			result := relayShellScript("https://relay.example.com", input)
+			if result != expected {
+				t.Errorf("normalized script = %q, want %q", result, expected)
+			}
+		})
 	}
 }
 
@@ -54,7 +67,7 @@ func TestRelayScript_PowerShell(t *testing.T) {
 
 func TestRelayScript_EmptyPortalURL(t *testing.T) {
 	_, _, _, err := RelayScript("   ", false)
-	if err != errPortalURLIsRequired {
+	if !errors.Is(err, errPortalURLIsRequired) {
 		t.Errorf("expected errPortalURLIsRequired, got %v", err)
 	}
 }
