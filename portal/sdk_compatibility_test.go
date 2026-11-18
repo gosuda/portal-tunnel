@@ -11,7 +11,7 @@ import (
 
 func TestRegisterChallengeProtocolSelection(t *testing.T) {
 	registry := newTestRegistry(t, false, false)
-	for _, version := range []string{"", types.SDKVersion, "10", "unsupported"} {
+	for _, version := range []string{"", types.SDKVersion, "9", "11", "unsupported"} {
 		request := types.RegisterChallengeRequest{
 			ProtocolVersion: version,
 			Identity:        newTestLeaseIdentity(t, "compat"),

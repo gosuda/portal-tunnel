@@ -145,10 +145,10 @@ New SDKs send their selected `protocol_version` in
 Unsupported explicit selections return HTTP 426 with `protocol_incompatible`
 and instructions to upgrade the SDK or choose a compatible relay. A requested
 Local TLS namespace requires explicit support and is never silently downgraded.
-The current relay reports default `11` and supported `["11"]` after removing
-legacy canonical URLs. SDK v2.7.3 and v2.7.4 require the withdrawn protocol-10
-contract and reject this relay during negotiation. Keep a compatible relay for
-those clients until both SDK and relay can be upgraded; see
+The current relay reports default `10` and supported `["10"]`, preserving
+main's protocol negotiation behavior. SDK v2.7.3 and v2.7.4 pass the version
+check but require the removed canonical response field during registration.
+Their registration limitation remains; see
 [the rollout instructions](/deployment#upgrading).
 Discovery protocol versions and signed descriptors have separate contracts.
 

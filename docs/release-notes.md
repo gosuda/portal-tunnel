@@ -3,11 +3,11 @@
 Only friendly aliases and negotiated Local TLS canonical URLs remain. Old
 `<address>.<root>`, `<name>-<address>.<root>`, and `<hash>--<address>.<root>`
 canonical URLs, `legacy_canonical_hostname`, and `LegacyURL` are removed with
-no redirects. The tunnel protocol is now `11`; discovery remains `9`.
+no redirects. The tunnel protocol remains `10`; discovery remains `9`.
 SDK v2.7.3 and v2.7.4 require the removed canonical field even when callers use
-only an alias, so they are rejected during negotiation. Keep protocol-10 relays
-until replacement SDK and relay artifacts are published and deployed together.
-The source release label alone does not pin a published protocol-11 SDK. See
+only an alias. They pass protocol negotiation but cannot complete registration
+with the current response contract. Keeping protocol 10 preserves main's
+version negotiation behavior; it does not repair this existing limitation. See
 [the compatibility matrix and rollout](maintainer/sdk-compatibility.md).
 Unnamed HTTP services require Local TLS. Dedicated raw TCP/UDP addresses use
 the relay control hostname.

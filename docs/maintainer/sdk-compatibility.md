@@ -4,50 +4,42 @@ A relay update preserves its supported SDK contracts, including required fields,
 omitted-field defaults, endpoint selection, authentication, renewal, reverse
 connections, reconnect after relay restart, and unregister. A release number is
 informational; it is neither a tunnel protocol nor a feature flag. Additive
-updates preserve these contracts. A breaking change requires the explicit
-exception and rollout process below.
+updates preserve these contracts. A breaking change must identify affected
+SDK releases and document their migration.
 
 ## Current compatibility matrix
 
+The relay retains tunnel protocol `10`, matching main. Protocol-list negotiation
+is additive and keeps SDKs that require the existing version from being refused
+solely because of a new protocol label.
+
 | SDK source or release | Tunnel protocol | Current relay behavior |
 | --- | --- | --- |
-| `v2.7.3` | `10` | Rejected during protocol negotiation; requires a compatible protocol-10 relay or an SDK upgrade |
+| `v2.7.3` | `10` | Passes version negotiation; registration requires the removed nonempty `canonical_hostname` and remains incompatible |
 | `v2.7.4` | `10` | Same as `v2.7.3` |
-| Current SDK source | `11` | Named friendly aliases; identity-bound canonical URLs require explicit `local-tls-v1`; replicas and cache require their own advertised capabilities |
+| Current SDK source | `10` | Named friendly aliases; identity-bound canonical URLs require explicit `local-tls-v1`; replicas and cache require their own advertised capabilities |
 
-Protocol 10 was withdrawn after the legacy canonical URL removal in #790.
-Those released SDKs require a nonempty legacy `canonical_hostname`, including
-when the caller wants only a friendly alias. The current relay cannot honor
-that contract. Advertising protocol 10 would allow negotiation to succeed and
-then fail during registration, so the relay reports protocol 11 instead.
+The legacy canonical removal in #790 changed registration-response behavior
+while retaining protocol 10. This existing limitation remains. Keeping the
+protocol label does not establish lifecycle compatibility for every SDK that
+reports 10. Released v2.7.3 and v2.7.4 require a nonempty canonical field even
+when their caller intends to use only an alias.
 
-The source manifest carries release label `v2.8.0`, but this matrix does not yet
-pin a released protocol-11 SDK. A release label alone does not establish that a
-published artifact implements this contract. Publish and pin the replacement
-SDK before rolling the new relay out to clients that use released modules.
-Do not assume an existing tag or `@latest` contains the current protocol change.
-
-`TestReleasedSDKRejectsRemovedProtocol` builds a small program against each
-listed released module in a temporary module with `GOWORK=off` and no local
-`replace`. For named and unnamed exposures, it observes the released SDK's
-public relay status, checks the terminal protocol-mismatch error, and verifies
-that the relay has no public lease. Those releases' `WaitReady` does not return
-terminal errors, so the test reads their `Relays` and `Updates` APIs. Current
-SDK lifecycle, renewal, restart, TLS, cache, and replica behavior remains covered
-by the existing owner tests and E2Es.
-
-Adding a supported release means pinning its actual module and lifecycle
-coverage. The matrix is an explicit list, not a promise to support every `v2`
-release or every SDK claiming a protocol identifier.
+The source manifest carries release label `v2.8.0`. Pin the actual SDK module
+or binary used in a deployment; a release label alone does not establish its
+registration behavior. Current-source lifecycle behavior is covered by the
+existing registration, renewal, restart, TLS, cache, and replica tests and E2Es.
+Adding a supported release requires real lifecycle coverage against that pinned
+module. The matrix does not promise support for every historical `v2` SDK.
 
 ## Negotiation and additive changes
 
 `GET /sdk/domain` reports:
 
-- `protocol_version`: the default tunnel contract, currently `11`. Shipped
-  protocol-10 SDKs use exact equality and reject this relay before registration.
+- `protocol_version`: the default tunnel contract, currently `10`. Shipped
+  protocol-10 SDKs use exact equality and pass this version check.
 - `supported_protocol_versions`: an optional, authoritative list for newer
-  SDKs. The current relay advertises `["11"]`. If absent or null, newer SDKs use
+  SDKs. The current relay advertises `["10"]`. If absent or null, newer SDKs use
   exact equality with `protocol_version`. A present empty list supports nothing.
   An explicit list excludes protocols not in it even if they equal the default.
 - `namespaces`, `replicas`, `cache`, and `tenant_certificate_issuance`: separate,
@@ -58,9 +50,9 @@ New SDKs select their implemented protocol by membership, then include it as
 `protocol_version` in the registration challenge request. The relay validates
 that selection before allocating a challenge. Unsupported selections return
 HTTP 426, `protocol_incompatible`, and an upgrade/compatible-relay instruction.
-Omitting the selection uses the advertised default contract; it does not select
-the withdrawn protocol-10 behavior. Adding another list entry requires an
-implemented and tested wire contract, not just a changed report.
+Omitting the selection uses the advertised default protocol 10. Adding another
+list entry requires an implemented and tested wire contract, not just a changed
+report.
 
 New optional fields must preserve the current meanings when omitted:
 
@@ -86,31 +78,24 @@ Keep one registration/lease implementation. Add version-specific handling only
 when a supported wire contract requires it. Additive capabilities do not require
 a tunnel protocol bump. Incompatible semantics do.
 
-## Canonical removal exception and rollout
+## Deployment compatibility
 
-The current exception is the protocol-10 withdrawal for #790/#772. The current
-relay retains friendly aliases and the Local TLS canonical origin, and removes
-legacy one-label canonical routes. Keeping an alias route cannot preserve old
-SDK validation, and a supported-version list cannot change shipped SDK code.
+Protocol 10 and discovery 9 remain unchanged from main. A relay upgrade keeps
+working protocol-10 deployments eligible at version negotiation. Feature
+capabilities and registration-response requirements still determine which
+SDK and relay combinations can complete their lifecycle.
 
-Before deployment:
+For SDK v2.7.3/v2.7.4 deployments, retain a relay that provides their required
+canonical response and routing behavior until the clients can be upgraded.
+Named HTTP services can use a granted friendly alias with the current SDK;
+unnamed HTTP services need explicit Local TLS and usable certificate material.
+Move traffic after replacement clients have registered and are ready, then
+drain old connections before retiring the previous relay.
 
-1. Keep protocol-10 relays available for clients that still use `v2.7.3` or
-   `v2.7.4`. Do not redirect those clients to a protocol-11 relay.
-2. Publish and pin replacement SDK and relay artifacts that both implement
-   protocol 11. Current-source SDKs also reject protocol-10 relays, so roll the
-   paired components out together on the replacement infrastructure.
-3. Move named HTTP clients to their granted friendly alias or explicit Local
-   TLS hostname. Give unnamed HTTP clients a service name or configure Local
-   TLS with the required certificate material or issuance approval.
-4. Move traffic after the replacement client has registered and is ready. Keep
-   the old relay until its remaining clients and active connections are drained.
-
-Do not restore deleted canonical routes, fabricate canonical response values
-for a different origin, or relax tenant certificate isolation to make an old
-SDK pass validation. Future removals must update this matrix, the release
-protocol, migration instructions, and released-SDK coverage together. Ordinary
-future updates default to compatibility with the supported matrix.
+Future compatibility claims must cover required fields, omitted-field defaults,
+authentication, endpoint selection, renewal, reconnect, and unregister. Keep
+protocol-list negotiation distinct from feature capabilities. Any deliberate
+break must identify affected SDK releases and provide an explicit migration.
 
 ## Independent trust boundaries
 
