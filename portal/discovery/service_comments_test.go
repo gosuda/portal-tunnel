@@ -224,62 +224,55 @@ func TestObservedCommentsLimitAndPreserveDeletion(t *testing.T) {
 	}
 }
 
-func TestFederatedCommentsDiscoveredForAliasOnlyService(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		now := time.Now().UTC()
-		relaySet := NewRelaySet(nil)
-		lookup := NewServiceLookup(relaySet)
-		self := "https://self.example"
-		remote := "https://remote.example"
-
-		relaySet.relays[remote] = relayState{
-			Descriptor: types.RelayDescriptor{APIHTTPSAddr: remote, ExpiresAt: now.Add(time.Minute)},
-			Trust:      relayVerified,
-			LastSeenAt: now,
-		}
-
-		lookup.cache[remote] = serviceObservation{
-			leases: []types.Lease{{
-				Name:              "blog",
-				Address:           serviceTestAddress,
-				Hostname:          "blog.remote.example",
-				CanonicalHostname: "",
-				ExpiresAt:         now.Add(time.Minute),
-			}},
-			at:    now,
-			until: now.Add(serviceCacheTTL),
-		}
-
-		calledWithHost := ""
-		lookup.client.Transport = commentRoundTrip(func(r *http.Request) (*http.Response, error) {
-			if r.URL.Path == types.PathComments {
-				calledWithHost = r.URL.Query().Get("hostname")
-				payload := types.ServiceCommentsResponse{
-					Comments: []types.ObservedServiceComment{{
-						ID:        "c1",
-						Text:      "alias comment",
-						CreatedAt: now,
-					}},
+// The requested identity stays fixed while the origin's alias changes owner.
+// Only a response-bound identity or an identity-bound legacy host can prove
+// which service's comments were read; cached directory ownership cannot.
+func TestServiceCommentsRequireResponseIdentityForAliases(t *testing.T) {
+	const relay = "https://remote.example"
+	const otherOwner = "0x2222222222222222222222222222222222222222"
+	canonical, err := namespace.LocalTLSHostname("blog", serviceTestAddress, "remote.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unnamed, err := namespace.LocalTLSHostname("", serviceTestAddress, "remote.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		host      string
+		requested string
+		identity  string
+		accept    bool
+	}{
+		{name: "alias before transfer", host: "blog.remote.example", requested: "blog", identity: fmt.Sprintf(`,"address":%q,"name":"blog"`, serviceTestAddress), accept: true},
+		{name: "alias after transfer", host: "blog.remote.example", requested: "blog", identity: fmt.Sprintf(`,"address":%q,"name":"blog"`, otherOwner)},
+		{name: "legacy alias after transfer", host: "blog.remote.example", requested: "blog"},
+		{name: "legacy canonical", host: canonical, requested: "blog", accept: true},
+		{name: "canonical with conflicting identity", host: canonical, requested: "blog", identity: fmt.Sprintf(`,"address":%q,"name":"blog"`, otherOwner)},
+		{name: "different service", host: "blog.remote.example", requested: "blog", identity: fmt.Sprintf(`,"address":%q,"name":"other"`, serviceTestAddress)},
+		{name: "missing service name", host: "blog.remote.example", requested: "blog", identity: fmt.Sprintf(`,"address":%q`, serviceTestAddress)},
+		{name: "unnamed service", host: unnamed, requested: "", identity: fmt.Sprintf(`,"address":%q,"name":""`, serviceTestAddress), accept: true},
+		{name: "unnamed must not match named", host: unnamed, requested: "", identity: fmt.Sprintf(`,"address":%q,"name":"blog"`, serviceTestAddress)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lookup := NewServiceLookup(nil)
+			lookup.client.Transport = commentRoundTrip(func(r *http.Request) (*http.Response, error) {
+				query := r.URL.Query()
+				if query.Get("address") != serviceTestAddress || !query.Has("name") || query.Get("name") != tc.requested {
+					t.Errorf("identity not sent to origin: %s", r.URL)
 				}
-				data, _ := json.Marshal(types.APIEnvelope[any]{Data: payload, OK: true})
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(string(data))),
-					Header:     http.Header{"Content-Type": []string{"application/json"}},
-				}, nil
+				body := fmt.Sprintf(`{"ok":true,"data":{"comments":[{"id":"c1","text":"origin comment","created_at":%q}]%s}}`, time.Now().UTC().Format(time.RFC3339Nano), tc.identity)
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})
+			rows, _, err := lookup.fetchServiceComments(t.Context(), relay, tc.host, serviceTestAddress, tc.requested)
+			if tc.accept {
+				if err != nil || len(rows) != 1 || rows[0].RelayURL != relay {
+					t.Fatalf("matching origin comments lost: rows=%+v err=%v", rows, err)
+				}
+			} else if err == nil || len(rows) != 0 {
+				t.Fatalf("unbound comments accepted: rows=%+v err=%v", rows, err)
 			}
-			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("{}"))}, nil
 		})
-
-		resp, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if calledWithHost != "blog.remote.example" {
-			t.Fatalf("expected comments lookup with host blog.remote.example, got: %q", calledWithHost)
-		}
-		if len(resp.Comments) != 1 || resp.Comments[0].Text != "alias comment" {
-			t.Fatalf("expected alias comment returned, got: %+v", resp.Comments)
-		}
-	})
+	}
 }

@@ -27,6 +27,8 @@ export interface BaseServer {
   paymentLabel?: string;
   reputation?: ReputationSummary;
   observedLocalReputation?: ObservedReputation;
+  // Display-only totals; local moderation and viewer votes use reputation.
+  observedReputation?: ObservedReputation;
 }
 
 // The directory groups observations by name and owner. Prefer local card data
@@ -61,7 +63,8 @@ export function mergeDiscoveredServices(
     const locations = service.locations.filter((location) => !location.current_relay);
     if (!locations.length) continue;
     const metadata = parseLeaseMetadata(service.metadata);
-    const totals = locations.reduce(
+    const reportedLocations = locations.filter((loc) => loc.reputation !== undefined);
+    const totals = reportedLocations.reduce(
       (acc, loc) => {
         if (loc.reputation) {
           acc.up += loc.reputation.up;
@@ -85,14 +88,7 @@ export function mergeDiscoveredServices(
       link: "",
       remoteOnly: true,
       locations,
-      reputation: {
-        hostname: `service:${key}`,
-        up: totals.up,
-        down: totals.down,
-        total: totals.up - totals.down,
-        viewer_vote: "",
-        comments: 0,
-      },
+      observedReputation: reportedLocations.length ? totals : undefined,
     });
   }
   return [...byIdentity.values()];

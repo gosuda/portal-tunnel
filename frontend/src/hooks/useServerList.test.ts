@@ -32,7 +32,7 @@ afterEach(() => vi.useRealTimers());
 
 describe("useServerList public snapshot", () => {
 
-  it("adds remote-only observations in network scope and keeps the local list when switched", async () => {
+  it.each(["", lease.address])("keeps the local scope independent of identity %s", async (identity) => {
     const directory: ServiceDiscoveryResponse = {
       partial: true,
       relays_checked: 2,
@@ -53,8 +53,8 @@ describe("useServerList public snapshot", () => {
       }],
     };
     vi.mocked(apiClient.get).mockImplementation(async (path) =>
-      path === "/api/services" ? directory : { leases: [lease] });
-    const { result, rerender, unmount } = renderHook(({ network }) => useServerList("", network), {
+      path.startsWith("/api/services") ? directory : { leases: [lease] });
+    const { result, rerender, unmount } = renderHook(({ network }) => useServerList(identity, network), {
       initialProps: { network: true },
     });
     await act(async () => {});
@@ -231,6 +231,40 @@ describe("useServerList public snapshot", () => {
     act(() => result.current.toggleComments(app));
 
     expect(result.current.commentServer).toBeNull();
+    unmount();
+  });
+
+  it("does not hide remote-only services even if downvoted", async () => {
+    const directory: ServiceDiscoveryResponse = {
+      partial: false,
+      relays_checked: 1,
+      relays_skipped: 0,
+      services: [{
+        name: "remote-downvoted",
+        address: lease.address,
+        metadata: {},
+        locations: [{
+          relay_url: "https://other.example",
+          url: "https://remote.other.example/",
+          current_relay: false,
+          reported_ready: true,
+          observed_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+          verification: "relay-reported",
+          reputation: { up: 0, down: 10 },
+        }],
+      }],
+    };
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/services" ? directory : { leases: [] });
+    const { result, unmount } = renderHook(() => useServerList("", true));
+    await act(async () => {});
+
+    expect(result.current.hiddenCount).toBe(0);
+    expect(result.current.filteredServers).toHaveLength(1);
+    expect(result.current.filteredServers[0].remoteOnly).toBe(true);
+    expect(result.current.filteredServers[0].reputation).toBeUndefined();
+    expect(result.current.filteredServers[0].observedReputation).toEqual({ up: 0, down: 10 });
     unmount();
   });
 });

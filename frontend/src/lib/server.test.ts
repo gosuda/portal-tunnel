@@ -68,8 +68,21 @@ describe("identity discovery cards", () => {
     expect(remote?.remoteOnly).toBe(true);
     expect(remote?.description).toBe("An API");
     expect(remote?.tags).toEqual(["tools"]);
-    expect(remote?.reputation?.up).toBe(7);
-    expect(remote?.reputation?.down).toBe(2);
-    expect(remote?.reputation?.total).toBe(5);
+    expect(remote?.observedReputation).toEqual({ up: 7, down: 2 });
+    expect(remote?.reputation).toBeUndefined();
+    const remoteBlogWithoutRep = allCards.find((card) => card.address === "0x2222222222222222222222222222222222222222");
+    expect(remoteBlogWithoutRep?.observedReputation).toBeUndefined();
+  });
+
+  it("distinguishes an observed zero tally from unknown without local moderation authority", () => {
+    const cards = mergeDiscoveredServices([], [{
+      name: "zero", address: lease.address, metadata: {}, locations: [{
+        relay_url: "https://remote.example", current_relay: false,
+        reported_ready: true, observed_at: "", expires_at: "",
+        verification: "relay-reported", reputation: { up: 0, down: 0 },
+      }],
+    }]);
+    expect(cards[0].observedReputation).toEqual({ up: 0, down: 0 });
+    expect(cards[0].reputation).toBeUndefined();
   });
 });

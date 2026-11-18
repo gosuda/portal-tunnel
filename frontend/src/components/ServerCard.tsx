@@ -326,6 +326,16 @@ function CoverPanel({
 }
 
 function VoteControls({ server, isVoting, onVote, onSelect }: { server: BaseServer; isVoting: boolean; onVote: ((hostname: string, vote: ReputationVoteAction) => void | Promise<void>) | undefined; onSelect: (event: React.MouseEvent, direction: "up" | "down") => void }): JSX.Element | null {
+  if (server.remoteOnly) {
+    return server.observedReputation ? (
+      <span
+        className="inline-flex h-7 items-center gap-2 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] text-muted-foreground"
+        title="Observed totals across remote relays; voters are not deduplicated. Open Relays for source counts."
+      >
+        Observed +{server.observedReputation.up}/−{server.observedReputation.down}
+      </span>
+    ) : null;
+  }
   if (!onVote && !server.reputation) {
     return null;
   }
@@ -476,7 +486,7 @@ export function ServerCard({
   const isNavigable = navigable && !isTransportService && !server.remoteOnly;
   const observedRelayCount = relayCount ?? server.locations?.length ?? (server.remoteOnly ? 0 : 1);
   const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
-  const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || showRelaysChip));
+  const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
 
   const copyEndpoint = (protocol: string, address: string) =>
     copy(address, protocol);

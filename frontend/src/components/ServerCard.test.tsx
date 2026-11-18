@@ -143,6 +143,22 @@ function renderCardWithComments() {
 }
 
 describe("ServerCard comments interaction", () => {
+  it("displays remote observations without local vote controls or moderation labels", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard server={{
+          id: "service:blog:owner", name: "blog", description: "", tags: [],
+          thumbnail: "", owner: "", online: true, dns: "", link: "",
+          remoteOnly: true, observedReputation: { up: 0, down: 10 },
+        }} />
+      </MemoryRouter>
+    );
+    expect(screen.getByText("Observed +0/−10")).toBeTruthy();
+    expect(screen.queryByText("Hidden by downvotes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Recommend app" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Do not recommend app" })).toBeNull();
+  });
+
   it("opens the app's comments without navigating into the service", () => {
     const { onOpenComments } = renderCardWithComments();
     fireEvent.click(screen.getByRole("button", { name: "Comments" }));

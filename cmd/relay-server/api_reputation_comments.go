@@ -84,10 +84,19 @@ func (api *RelayAPI) serveComments(w http.ResponseWriter, r *http.Request) {
 		utils.MethodNotAllowedError().Write(w)
 		return
 	}
-	identity := api.publicIdentityFor(hostname)
-	if identity == "" {
+	lease := api.publicLeaseFor(hostname)
+	if lease == nil {
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
 		return
+	}
+	identity := lease.IdentityKey
+	if r.Method == http.MethodGet {
+		query := r.URL.Query()
+		if (query.Has("address") && !strings.EqualFold(lease.Address, query.Get("address"))) ||
+			(query.Has("name") && lease.Name != query.Get("name")) {
+			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
+			return
+		}
 	}
 	voterCookieID := ""
 	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
@@ -97,7 +106,11 @@ func (api *RelayAPI) serveComments(w http.ResponseWriter, r *http.Request) {
 	authorHash := commentAuthorHash(r)
 
 	if r.Method == http.MethodGet {
-		utils.WriteAPIData(w, http.StatusOK, types.CommentListResponse{Comments: api.reputation.ListComments(identity, viewerHash, authorHash)})
+		utils.WriteAPIData(w, http.StatusOK, types.CommentListResponse{
+			Comments: api.reputation.ListComments(identity, viewerHash, authorHash),
+			Address:  lease.Address,
+			Name:     lease.Name,
+		})
 		return
 	}
 	minted := ""
@@ -133,8 +146,8 @@ func (api *RelayAPI) deleteComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	identity := api.publicIdentityFor(types.NormalizeHostname(req.Hostname))
-	if identity == "" {
+	lease := api.publicLeaseFor(types.NormalizeHostname(req.Hostname))
+	if lease == nil {
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
 		return
 	}
@@ -142,7 +155,7 @@ func (api *RelayAPI) deleteComment(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(reputationVoterCookie); err == nil {
 		viewerHash = api.reputation.ViewerHashFor(cookie.Value)
 	}
-	comments, err := api.reputation.DeleteComment(identity, strings.TrimSpace(req.ID), viewerHash, commentAuthorHash(r))
+	comments, err := api.reputation.DeleteComment(lease.IdentityKey, strings.TrimSpace(req.ID), viewerHash, commentAuthorHash(r))
 	if err != nil {
 		if errors.Is(err, policy.ErrCommentNotFound) {
 			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "Comment not found.")
@@ -155,14 +168,14 @@ func (api *RelayAPI) deleteComment(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, types.CommentListResponse{Comments: comments})
 }
 
-func (api *RelayAPI) publicIdentityFor(hostname string) string {
+func (api *RelayAPI) publicLeaseFor(hostname string) *types.PolicyLease {
 	if hostname == "" {
-		return ""
+		return nil
 	}
 	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server.PolicyLeases()) {
 		if types.NormalizeHostname(lease.Hostname) == hostname || types.NormalizeHostname(lease.CanonicalHostname) == hostname {
-			return lease.IdentityKey
+			return &lease
 		}
 	}
-	return ""
+	return nil
 }

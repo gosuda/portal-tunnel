@@ -128,8 +128,9 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   separate admission and outbound slots, so comment traffic cannot make the
   service directory unavailable. The local list remains independent of remote responses.
   Locations and optional reputation are relay reports, not ownership proof or
-  unique voters. Comment threads use bounded, on-demand anonymous reads from
-  sources that report the requested identity. IDs and times remain source
+  unique voters. Remote reputation is display data, separate from local vote
+  summaries used for hiding or warnings. Comment threads use bounded, on-demand
+  anonymous reads from sources that report the requested identity. IDs and times remain source
   specific, and failures or truncation yield partial coverage. The 22-second
   comment deadline reserves directory lookup time and outbound waves for both
   admitted reads through their two shared slots; each source still has a

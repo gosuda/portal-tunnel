@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -90,7 +91,7 @@ func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string
 	for _, relay := range targets {
 		source := sources[relay]
 		workers.Go(func() {
-			rows, partial, err := s.fetchServiceComments(ctx, relay, source.hostname)
+			rows, partial, err := s.fetchServiceComments(ctx, relay, source.hostname, address, name)
 			results <- result{relay: relay, rows: rows, partial: partial, err: err}
 		})
 	}
@@ -118,7 +119,7 @@ func (s *ServiceLookup) Comments(ctx context.Context, self, address, name string
 	return response, nil
 }
 
-func (s *ServiceLookup) fetchServiceComments(ctx context.Context, relay, hostname string) ([]types.ObservedServiceComment, bool, error) {
+func (s *ServiceLookup) fetchServiceComments(ctx context.Context, relay, hostname, address, name string) ([]types.ObservedServiceComment, bool, error) {
 	if err := requirePublicRelayURL(relay); err != nil {
 		return nil, false, err
 	}
@@ -127,7 +128,7 @@ func (s *ServiceLookup) fetchServiceComments(ctx context.Context, relay, hostnam
 		return nil, false, err
 	}
 	target := utils.ResolveAPIURL(base, types.PathComments)
-	target.RawQuery = url.Values{"hostname": {hostname}}.Encode()
+	target.RawQuery = url.Values{"hostname": {hostname}, "address": {address}, "name": {name}}.Encode()
 	select {
 	case s.commentSlots <- struct{}{}:
 	case <-ctx.Done():
@@ -151,12 +152,27 @@ func (s *ServiceLookup) fetchServiceComments(ctx context.Context, relay, hostnam
 	}
 	var envelope types.APIEnvelope[struct {
 		Comments []json.RawMessage `json:"comments"`
+		Address  string            `json:"address,omitempty"`
+		Name     *string           `json:"name"`
 	}]
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, false, err
 	}
 	if !envelope.OK || envelope.Data.Comments == nil || len(envelope.Data.Comments) > commentDecodeLimit {
 		return nil, false, errors.New("service comments response rejected")
+	}
+	if envelope.Data.Address != "" || envelope.Data.Name != nil {
+		if !strings.EqualFold(envelope.Data.Address, address) || envelope.Data.Name == nil || *envelope.Data.Name != name {
+			return nil, false, errors.New("service comments identity mismatch")
+		}
+	} else {
+		// Legacy origins cannot attest an alias's owner in the comment response.
+		// A cached directory (or a second lookup) cannot bind these rows to an
+		// owner across alias reassignment. Only identity-bound hosts are safe.
+		expected, err := namespace.LocalTLSHostname(name, address, base.Hostname())
+		if err != nil || hostname != expected {
+			return nil, false, errors.New("service comments identity unavailable")
+		}
 	}
 	rows, partial := observedServiceComments(relay, envelope.Data.Comments, time.Now().UTC())
 	return rows, partial, nil

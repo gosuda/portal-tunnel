@@ -229,4 +229,6 @@ export interface VoteCommentRequest {
 
 export interface CommentListResponse {
   comments: AppComment[];
+  address?: string;
+  name?: string;
 }

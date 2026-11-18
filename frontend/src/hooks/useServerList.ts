@@ -282,7 +282,7 @@ export function useServerList(identityAddress = "", networkScope = false): UseLi
   };
 
 
-  const networkEnabled = (networkScope || Boolean(identityAddress)) && browseView === "home";
+  const networkEnabled = networkScope && browseView === "home";
   const identityDiscovery = useServiceDiscovery(identityAddress || undefined, undefined, networkEnabled, true);
   const servers: BaseServer[] = useMemo(
     () => {
