@@ -48,8 +48,8 @@ as terminal for that relay.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `protocol_version` | `string` | default SDK tunnel protocol, currently `11` |
-| `supported_protocol_versions` | `string[]` | optional authoritative protocol list, currently `["11"]`; absent or null falls back to the default, an empty list supports nothing |
+| `protocol_version` | `string` | default SDK tunnel protocol, currently `10` |
+| `supported_protocol_versions` | `string[]` | optional authoritative protocol list, currently `["10"]`; absent or null falls back to the default, an empty list supports nothing |
 | `replicas` | `boolean` | `true` when opt-in concurrent HTTP leases are supported; absent means unsupported |
 | `release_version` | `string` | relay software release |
 | `namespaces` | `string[]` | optional; includes `local-tls-v1` when new canonical Local TLS is supported |
