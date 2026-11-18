@@ -55,7 +55,7 @@ portal expose 3000
 
 **Windows (PowerShell):**
 ```powershell
-$ProgressPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue';
 irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
 portal expose 3000
 ```

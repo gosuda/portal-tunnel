@@ -42,7 +42,7 @@ describe("tunnelCommand", () => {
 
     expect(buildTunnelCommand(options)).toBe(
       [
-        `$ProgressPreference = 'SilentlyContinue'`,
+        `$ProgressPreference = 'SilentlyContinue';`,
         `irm https://relay.example.com/api/install.ps1 | iex`,
         `portal expose localhost:3000 --name my-app --relays https://relay.example.com --discovery=false --thumbnail https://example.com/thumb.png`,
       ].join("\n")
