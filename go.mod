@@ -92,7 +92,7 @@ require (
 	github.com/iotaledger/hive.go/constraints v0.0.0-20240520064018-c635e5900894 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
-	github.com/labstack/echo/v4 v4.16.3 // indirect
+	github.com/labstack/echo/v4 v4.16.5 // indirect
 	github.com/labstack/gommon v0.5.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
