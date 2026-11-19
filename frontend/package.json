@@ -30,6 +30,8 @@
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
+    "@babel/core": "^8.1.2",
+    "@rolldown/plugin-babel": "^0.3.1",
     "@tailwindcss/vite": "^4.3.5",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.6",
