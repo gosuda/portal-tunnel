@@ -419,8 +419,8 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
         [key]: { enabled: settings.enabled, max_leases: settings.maxLeases },
       });
 
-  const handleUDPSettingsChange = handleSettingsChange("udp");
-  const handleTCPPortSettingsChange = handleSettingsChange("tcp_port");
+  const handleUDPSettingsChange = (settings: PortSettings) => handleSettingsChange("udp")(settings);
+  const handleTCPPortSettingsChange = (settings: PortSettings) => handleSettingsChange("tcp_port")(settings);
 
   const handleApproveStatus = (identityKey: string, approve: boolean) =>
     runAdminAction(() => updateLeasePolicy(identityKey, { is_approved: approve }));
