@@ -1,16 +1,16 @@
 <script lang="ts">
-	import { base } from '$app/paths';
-	import { page } from '$app/stores';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
-	import Sidebar from '$lib/components/Sidebar.svelte';
-	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
-	import MobileNav from '$lib/components/MobileNav.svelte';
-	import TableOfContents from '$lib/components/TableOfContents.svelte';
-	import PrevNextNav from '$lib/components/PrevNextNav.svelte';
-	import { getPrevNext, guidesNavigation, referencesNavigation, isReferencePage } from '$lib/nav';
-	import SearchButton from '$lib/components/SearchButton.svelte';
-	import SearchModal from '$lib/components/SearchModal.svelte';
-	import { copyCode } from '$lib/actions/copy-code';
+	import Sidebar from '#lib/components/Sidebar.svelte';
+	import ThemeToggle from '#lib/components/ThemeToggle.svelte';
+	import MobileNav from '#lib/components/MobileNav.svelte';
+	import TableOfContents from '#lib/components/TableOfContents.svelte';
+	import PrevNextNav from '#lib/components/PrevNextNav.svelte';
+	import { getPrevNext, guidesNavigation, referencesNavigation, isReferencePage } from '#lib/nav';
+	import SearchButton from '#lib/components/SearchButton.svelte';
+	import SearchModal from '#lib/components/SearchModal.svelte';
+	import { copyCode } from '#lib/actions/copy-code';
 	import { useEventListener } from 'runed';
 	import '../app.css';
 
@@ -30,12 +30,14 @@
 		}
 	);
 
+	const homePath = resolve('/');
+	const bareHomePath = homePath === '/' ? '/' : homePath.replace(/\/$/, '');
 	const isLandingPage = $derived(
-		$page.url.pathname === `${base}/` || $page.url.pathname === base || $page.url.pathname === '/'
+		page.url.pathname === homePath || page.url.pathname === bareHomePath || page.url.pathname === '/'
 	);
 
-	const prevNext = $derived(getPrevNext($page.url.pathname, base));
-	const isReference = $derived(isReferencePage($page.url.pathname, base));
+	const prevNext = $derived(getPrevNext(page.url.pathname));
+	const isReference = $derived(isReferencePage(page.url.pathname));
 	const sidebarSections = $derived(isReference ? referencesNavigation : guidesNavigation);
 </script>
 
@@ -64,7 +66,7 @@
 			</button>
 			{/if}
 
-			<a href="{base}/" class="flex items-center gap-2">
+			<a href={resolve('/')} class="flex items-center gap-2">
 				<div class="flex h-10 w-10 shrink-0 items-center justify-center">
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
@@ -90,13 +92,13 @@
 			<div class="flex-1"></div>
 
 			<nav class="hidden items-center gap-6 text-base font-semibold text-gray-500 xl:flex dark:text-gray-400">
-				<a href="{base}/features" class="transition-colors {$page.url.pathname.includes('/features') ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
+				<a href={resolve('/features')} class="transition-colors {page.url.pathname.includes('/features') ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
 					Features
 				</a>
-				<a href="{base}/what-is-portal" class="transition-colors {!isLandingPage && !isReference && !$page.url.pathname.includes('/features') ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
+				<a href={resolve('/what-is-portal')} class="transition-colors {!isLandingPage && !isReference && !page.url.pathname.includes('/features') ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
 					Guides
 				</a>
-				<a href="{base}/cli-reference" class="transition-colors {isReference ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
+				<a href={resolve('/cli-reference')} class="transition-colors {isReference ? 'text-foreground' : 'hover:text-gray-900 dark:hover:text-white'}">
 					References
 				</a>
 			</nav>
@@ -132,7 +134,7 @@
 	<footer class="w-full border-t bg-secondary/35">
 		<div class="flex w-full flex-col gap-6 px-6 py-8 sm:px-8 md:flex-row md:items-end md:justify-between lg:px-10">
 			<div class="space-y-1.5">
-				<a href="{base}/" class="inline-block text-lg font-bold tracking-tight text-foreground transition-colors hover:text-primary">
+				<a href={resolve('/')} class="inline-block text-lg font-bold tracking-tight text-foreground transition-colors hover:text-primary">
 					PORTAL
 				</a>
 				<p class="text-sm text-text-muted">
@@ -140,7 +142,7 @@
 				</p>
 			</div>
 			<nav aria-label="Footer" class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-text-muted md:justify-end">
-				<a href="{base}/getting-started" class="transition-colors hover:text-foreground">Docs</a>
+				<a href={resolve('/getting-started')} class="transition-colors hover:text-foreground">Docs</a>
 				<a href="https://github.com/gosuda/portal-tunnel" target="_blank" rel="noopener noreferrer" class="transition-colors hover:text-foreground">Source</a>
 			</nav>
 		</div>
@@ -157,7 +159,7 @@
 			<aside role="note" data-disclaimer class="mx-auto mb-6 max-w-3xl rounded-xl border border-primary/20 bg-primary/[0.08] px-4 py-3 text-sm font-medium text-foreground/70 shadow-sm backdrop-blur-sm">
 				This documentation is under active development. Some pages may be incomplete or change without notice.
 			</aside>
-			{#key $page.url.pathname}
+			{#key page.url.pathname}
 			<article use:copyCode data-pagefind-body class="prose prose-gray dark:prose-invert mx-auto max-w-3xl">
 				{@render children()}
 			</article>

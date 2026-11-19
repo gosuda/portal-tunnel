@@ -1,0 +1,28 @@
+name: Docs PR Build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/actions/build-docs/**'
+      - '.github/workflows/docs-pr.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Build docs site
+        uses: ./.github/actions/build-docs

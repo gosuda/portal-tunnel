@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 
 	const features = [
 		{
@@ -60,7 +60,7 @@
 				Publish through a public ingress while an independent overlay network owns the path
 				behind it. Try <code>portal expose 3000 --overlay</code>; direct reverse transport
 				remains the default and fallback.
-				<a href="{base}/concepts#ivnp-backed-overlay-networking" class="text-primary underline underline-offset-4">Explore IVNP-backed overlay networking</a>.
+				<a href={resolve('/concepts#ivnp-backed-overlay-networking')} class="text-primary underline underline-offset-4">Explore IVNP-backed overlay networking</a>.
 			</p>
 		</div>
 	</div>
@@ -100,7 +100,7 @@
 			<p class="text-sm text-text-muted sm:text-base">
 				Looking for the complete capability breakdown across CLI, Agent, SDK, and Relay?
 				<a
-					href="{base}/features"
+					href={resolve('/features')}
 					class="ml-1 inline-flex items-center font-semibold text-primary underline underline-offset-4 hover:text-primary-light"
 				>
 					View the Canonical Feature Inventory &rarr;

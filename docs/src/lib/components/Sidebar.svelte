@@ -1,19 +1,19 @@
 <script lang="ts">
-	import { page } from '$app/stores';
-	import { base } from '$app/paths';
-	import type { NavSection } from '$lib/nav';
+	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
+	import type { NavSection } from '#lib/nav';
 
 	let { sections }: { sections: NavSection[] } = $props();
 
-	const currentPath = $derived($page.url.pathname);
-
+	const currentPath = $derived(page.url.pathname);
 	let userToggles: Record<number, boolean | null> = $state({});
 
 	function isItemActive(href: string): boolean {
+		const target = resolve(href);
 		return (
-			currentPath === `${base}${href}/` ||
-			currentPath === `${base}${href}` ||
-			currentPath.startsWith(`${base}${href}/`)
+			currentPath === `${target}/` ||
+			currentPath === target ||
+			currentPath.startsWith(`${target}/`)
 		);
 	}
 
@@ -87,7 +87,7 @@
 						{@const isActive = isItemActive(item.href)}
 						<li>
 							<a
-								href="{base}{item.href}"
+								href={resolve(item.href)}
 								class="block rounded-lg px-3 py-2 text-sm transition-colors {isActive
 									? 'bg-primary/10 font-medium text-primary dark:bg-primary-light/15 dark:text-primary-light'
 									: 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/6'}"

@@ -4,7 +4,7 @@ description: How Portal combines Keyless TLS, connection-bound signing, and TLS 
 ---
 
 <script>
-import Mermaid from '$lib/components/Mermaid.svelte'
+import Mermaid from '#lib/components/Mermaid.svelte'
 
 const handshake = `sequenceDiagram
     participant Browser
