@@ -1,8 +1,9 @@
-import adapter from '@sveltejs/adapter-static';
-import tailwindcss from '@tailwindcss/vite';
-import { mdsvex } from 'mdsvex';
-import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import rehypeSlug from 'rehype-slug';
+ import adapter from '@sveltejs/adapter-static';
+ import tailwindcss from '@tailwindcss/vite';
+ import { mdsvex } from 'mdsvex';
+ import { sveltekit } from '@sveltejs/kit/vite';
+ import { defineConfig } from 'vite';
 
 const base = process.env.BASE_PATH || '';
 
@@ -25,7 +26,8 @@ export default defineConfig({
 			preprocess: [
 				mdsvex({
 					extensions: ['.md'],
-					remarkPlugins: [remarkBaseLinks]
+					remarkPlugins: [remarkBaseLinks],
+					rehypePlugins: [rehypeSlug]
 				})
 			],
 			adapter: adapter({
@@ -38,7 +40,7 @@ export default defineConfig({
 				relative: false
 			},
 			prerender: {
-				handleMissingId: 'warn'
+				handleMissingId: 'fail'
 			}
 		})
 	]
