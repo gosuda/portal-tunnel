@@ -372,9 +372,10 @@ func awaitMailLease(t *testing.T, ctx context.Context, expose *tunnel.Runtime) [
 	return ready
 }
 
-func exposeMailTunnel(t *testing.T, ctx context.Context, cancel context.CancelFunc, sniAddr, target string, catcher *mailCatcher) (string, string) {
+func exposeMailTunnel(t *testing.T, ctx context.Context, sniAddr, target string, catcher *mailCatcher) (string, string) {
 	t.Helper()
-	expose, err := tunnel.Start(ctx, tunnel.Spec{
+	tunnelCtx, tunnelCancel := context.WithCancel(ctx)
+	expose, err := tunnel.Start(tunnelCtx, tunnel.Spec{
 		Identity:  tunnel.IdentitySpec{Name: "mail", Path: filepath.Join(t.TempDir(), "identity.json")},
 		Relays:    tunnel.RelaySpec{URLs: []string{"https://" + sniAddr}},
 		Transport: tunnel.TransportSpec{Target: target},
@@ -388,15 +389,15 @@ func exposeMailTunnel(t *testing.T, ctx context.Context, cancel context.CancelFu
 	if err != nil {
 		t.Fatalf("start tunnel: %v", err)
 	}
-	trackMailTunnelRun(t, ctx, cancel, expose)
-	ready := awaitMailLease(t, ctx, expose)
+	trackMailTunnelRun(t, tunnelCtx, tunnelCancel, expose)
+	ready := awaitMailLease(t, tunnelCtx, expose)
 	return strings.TrimSuffix(ready[0].PublicURL, "/"), strings.TrimSuffix(ready[0].AliasURL, "/")
 }
 
 func driveBrowserSignin(t *testing.T, page *browserPage, publicURL string, catcher *mailCatcher) string {
 	t.Helper()
 	page.open(publicURL + "/inbox")
-	page.waitFor("the email form", signinView("form"))
+	page.waitFor("the email form", "document.readyState !== 'loading' && "+signinView("form"))
 	page.evaluate(`document.querySelector('#email').value='alice@example.com';document.querySelector('#email-form').requestSubmit();true`)
 	page.waitFor("the sent screen", signinView("sent"))
 	mail := catcher.next(t)
@@ -500,7 +501,7 @@ func TestEmailSignInInARealBrowser(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	sniAddr, _ := bootMailRelay(t, ctx)
-	publicURL, _ := exposeMailTunnel(t, ctx, cancel, sniAddr, strings.TrimPrefix(upstream.URL, "http://"), catcher)
+	publicURL, _ := exposeMailTunnel(t, ctx, sniAddr, strings.TrimPrefix(upstream.URL, "http://"), catcher)
 
 	page := startBrowserPage(t, browser)
 	link := driveBrowserSignin(t, page, publicURL, catcher)
@@ -513,10 +514,10 @@ func TestEmailSignInLegacyAliasAuthority(t *testing.T) {
 	catcher := startMailCatcher(t)
 	upstream := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(upstream.Close)
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	sniAddr, port := bootMailRelay(t, ctx)
-	publicURL, aliasURL := exposeMailTunnel(t, ctx, cancel, sniAddr, strings.TrimPrefix(upstream.URL, "http://"), catcher)
+	publicURL, aliasURL := exposeMailTunnel(t, ctx, sniAddr, strings.TrimPrefix(upstream.URL, "http://"), catcher)
 
 	canonical, err := url.Parse(publicURL)
 	if err != nil {

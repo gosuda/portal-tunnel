@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - '.github/actions/build-docs/**'
       - '.github/workflows/docs-pr.yml'
 
 permissions:
@@ -23,15 +24,5 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install docs dependencies
-        working-directory: docs
-        run: bun install --frozen-lockfile
-
       - name: Build docs site
-        working-directory: docs
-        env:
-          BASE_PATH: '/portal-tunnel'
-        run: bun run build
+        uses: ./.github/actions/build-docs
