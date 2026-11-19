@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/net/http2"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk/staticsite"
 	"github.com/gosuda/portal-tunnel/v2/types"
@@ -143,9 +142,11 @@ func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Ser
 			}
 		},
 	}
-	// Configure the actual HTTP/2 server, not just ALPN. Native TLS connections
-	// are returned directly by httpTLSListener for net/http's protocol dispatch.
-	_ = http2.ConfigureServer(server, &http2.Server{})
+	// Native TLS connections are returned directly by httpTLSListener for
+	// net/http's protocol dispatch. Keep cleartext relay streams on HTTP/1.1.
+	server.Protocols = new(http.Protocols)
+	server.Protocols.SetHTTP1(true)
+	server.Protocols.SetHTTP2(true)
 	return server
 }
 
