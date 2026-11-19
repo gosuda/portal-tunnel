@@ -88,9 +88,9 @@ const UnnamedServiceLabel = "default"
 type RegisterChallengeRequest struct {
 	Namespace string `json:"namespace,omitempty"`
 	// Replica joins concurrent HTTP leases of the same service identity.
-	Replica  bool `json:"replica,omitempty"`
-	Cache    bool `json:"cache,omitempty"`
-	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
+	Replica    bool          `json:"replica,omitempty"`
+	Cache      bool          `json:"cache,omitempty"`
+	CacheTTL   int           `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
 	Identity   Identity      `json:"identity"`
 	Metadata   LeaseMetadata `json:"metadata"`
 	Overlay    bool          `json:"overlay,omitempty"`
