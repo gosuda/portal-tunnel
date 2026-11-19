@@ -32,10 +32,10 @@ function rehypeLegacyHeadingAliases() {
 		const seen = new Set<string>();
 		const headings: HastNode[] = [];
 		const walk = (node: HastNode) => {
-			if (node.type === 'element' && (node.tagName === 'h2' || node.tagName === 'h3')) {
-				headings.push(node);
+			if (node.type === 'element') {
 				const id = node.properties?.id;
 				if (typeof id === 'string') seen.add(id);
+				if (node.tagName === 'h2' || node.tagName === 'h3') headings.push(node);
 			}
 			for (const child of node.children ?? []) walk(child);
 		};
