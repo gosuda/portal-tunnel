@@ -1,5 +1,5 @@
-import { useEffect, useState, type JSX } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState, type JSX } from "react";
+import { useNavigationType, useSearchParams } from "react-router-dom";
 import { SsgoiTransition } from "@ssgoi/react";
 import { useServerList } from "@/hooks/useServerList";
 import { ServerListView } from "@/components/ServerListView";
@@ -16,7 +16,9 @@ const isHexAddress = (val: string) => /^0x[0-9a-fA-F]{40}$/i.test(val.trim());
 export function ServerList(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const identityParam = params.get("identity")?.trim() ?? "";
-  const [activeIdentity, setActiveIdentity] = useState(identityParam);
+  const activeIdentity = isHexAddress(identityParam) ? identityParam : "";
+  const navigationType = useNavigationType();
+  const previousIdentity = useRef("");
   const [networkScope, setNetworkScope] = useState(true);
   const [relayServerId, setRelayServerId] = useState<string | null>(null);
   const {
@@ -46,10 +48,13 @@ export function ServerList(): JSX.Element {
   } = useServerList(activeIdentity, networkScope);
 
   useEffect(() => {
-    if (identityParam && !searchQuery) {
-      handleSearchChange(identityParam);
+    const previous = previousIdentity.current;
+    if (previous === activeIdentity) return;
+    previousIdentity.current = activeIdentity;
+    if (activeIdentity || navigationType === "POP") {
+      handleSearchChange(activeIdentity);
     }
-  }, [identityParam, handleSearchChange, searchQuery]);
+  }, [activeIdentity, handleSearchChange, navigationType]);
 
   const onSearchChange = (value: string) => {
     const trimmed = value.trim();
@@ -60,13 +65,11 @@ export function ServerList(): JSX.Element {
     if (isHexAddress(trimmed)) {
       setNetworkScope(true);
       if (activeIdentity.toLowerCase() !== trimmed.toLowerCase()) {
-        setActiveIdentity(trimmed);
         const next = new URLSearchParams(params);
         next.set("identity", trimmed);
         setParams(next);
       }
-    } else if (activeIdentity) {
-      setActiveIdentity("");
+    } else if (params.has("identity")) {
       const next = new URLSearchParams(params);
       next.delete("identity");
       setParams(next);
