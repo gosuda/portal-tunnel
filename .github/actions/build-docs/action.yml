@@ -1,0 +1,24 @@
+name: Build docs
+description: Install dependencies and build docs site
+inputs:
+  base-path:
+    description: Base path for docs site
+    required: false
+    default: '/portal-tunnel'
+runs:
+  using: composite
+  steps:
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+
+    - name: Install docs dependencies
+      shell: bash
+      working-directory: docs
+      run: bun install --frozen-lockfile
+
+    - name: Build docs site
+      shell: bash
+      working-directory: docs
+      env:
+        BASE_PATH: ${{ inputs.base-path }}
+      run: bun run build
