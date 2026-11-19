@@ -937,6 +937,56 @@ func (s *Server) emitStartLog(cfg ServerConfig) {
 	logEvent.Msg("relay server started")
 }
 
+// ApplyServicePolicy updates routing and reconciles lease-owned resources as
+// one operator transaction. The caller serializes it with verified registration.
+func (s *Server) ApplyServicePolicy(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64, manual bool) {
+	if s == nil || s.registry == nil || !s.SetServiceIdentityAccess(key, access, revision) {
+		return
+	}
+	r := s.registry
+	r.mu.Lock()
+	if access != types.LeasePending {
+		delete(r.pending, key)
+	}
+	if !manual || access == types.LeaseRoutable {
+		r.mu.Unlock()
+		return
+	}
+	var removed []*leaseRecord
+	for i := len(r.records) - 1; i >= 0; i-- {
+		record := r.records[i]
+		if record.reverse != nil && record.ServiceKey() == key {
+			r.deleteRecord(i)
+			removed = append(removed, record)
+		}
+	}
+	for _, pool := range []*portPool{&r.udpPorts, &r.tcpPorts} {
+		if reserved, ok := pool.reserved[key]; ok {
+			pool.available = append(pool.available, reserved.port)
+			delete(pool.reserved, key)
+		}
+		for port, owner := range pool.inUse {
+			if owner.record.ServiceKey() == key {
+				owner.discard = true
+				owner.reservation = portReservation{}
+				pool.inUse[port] = owner
+			}
+		}
+	}
+	r.mu.Unlock()
+	for _, record := range removed {
+		r.closeRecord(record)
+		s.deleteLeaseDNS(context.Background(), record)
+	}
+}
+
+func (s *Server) PendingApprovals() []types.PendingApproval {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	return s.registry.PendingApprovals(time.Now())
+}
+
 func (s *Server) SetServiceIdentityAccess(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64) bool {
 	if s == nil || s.registry == nil {
 		return true
@@ -1022,11 +1072,21 @@ func (s *Server) AccessProjectionKeys() []types.ServiceIdentityKey {
 		return nil
 	}
 	keys := make(map[types.ServiceIdentityKey]struct{})
-	now := time.Now()
 	s.registry.mu.RLock()
 	for _, record := range s.registry.records {
-		if record != nil && record.reverse != nil && !record.isExpired(now) {
+		if record != nil && record.reverse != nil {
 			keys[record.ServiceKey()] = struct{}{}
+		}
+	}
+	for key := range s.registry.pending {
+		keys[key] = struct{}{}
+	}
+	for _, pool := range []*portPool{&s.registry.tcpPorts, &s.registry.udpPorts} {
+		for key := range pool.reserved {
+			keys[key] = struct{}{}
+		}
+		for _, owner := range pool.inUse {
+			keys[owner.record.ServiceKey()] = struct{}{}
 		}
 	}
 	s.registry.mu.RUnlock()

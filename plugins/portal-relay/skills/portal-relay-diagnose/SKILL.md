@@ -54,7 +54,7 @@ Say which place each result came from.
 
 ## 7. Policy (needs portal-relay-admin)
 
-- `lease_rejected`: the lease waits for approval in `manual` mode. `lease_denied`: the identity is denied or banned.
+- `lease_rejected`: registration waits for approval in manual mode; inspect the pending queue. Older relays return it when a lease waits at reverse connect. `lease_denied`: the identity is denied or banned.
 - `source_not_allowed`: the publisher's address is outside `TUNNEL_SOURCE_CIDRS`. Behind a proxy that also needs `TRUST_PROXY_HEADERS` and `TRUSTED_PROXY_CIDRS`.
 - Read the lease state through `portal-relay-admin`; do not change policy as part of diagnosis.
 

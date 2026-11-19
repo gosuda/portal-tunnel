@@ -108,10 +108,13 @@ func (api *RelayAPI) routePolicyRequest(w http.ResponseWriter, r *http.Request, 
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return settings, update, false
 		}
+		api.policies.Lifecycle.RLock()
 		state := api.policies.Snapshot()
-		utils.WriteAPIData(w, http.StatusOK, types.PolicyStateResponse{
-			Policy: policySettings(state), Leases: api.policyLeases(state),
-		})
+		view := types.PolicyStateResponse{
+			Policy: policySettings(state), Leases: api.policyLeases(state), Pending: api.server.PendingApprovals(),
+		}
+		api.policies.Lifecycle.RUnlock()
+		utils.WriteAPIData(w, http.StatusOK, view)
 		return settings, update, false
 	case types.PathPolicyLeases:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
@@ -225,8 +228,8 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	if !proceed {
 		return
 	}
-	api.policyWriteMu.Lock()
-	defer api.policyWriteMu.Unlock()
+	api.policies.Lifecycle.Lock()
+	defer api.policies.Lifecycle.Unlock()
 	next := api.policies.Snapshot()
 	var applied bool
 	if path == types.PathPolicy {
@@ -353,6 +356,7 @@ func (api *RelayAPI) policyLeases(access policy.State) []types.PolicyLease {
 		if err != nil {
 			continue
 		}
+		leases[i].ExplicitlyApproved = access.ExplicitlyApproved(key)
 		leases[i].IsApproved = access.EffectiveApproval(key)
 		leases[i].IsBanned = access.IsBanned(key)
 		leases[i].IsDenied = access.IsDenied(key)
@@ -383,7 +387,7 @@ func (api *RelayAPI) commitPolicy(next policy.State) error {
 		keys[key] = struct{}{}
 	}
 	for key := range keys {
-		api.server.SetServiceIdentityAccess(key, committed.Access(key), committed.Revision())
+		api.server.ApplyServicePolicy(key, committed.Access(key), committed.Revision(), committed.Mode() == policy.ModeManual)
 	}
 	return nil
 }

@@ -202,8 +202,9 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	Replicas   bool     `json:"replicas,omitempty"`
-	Namespaces []string `json:"namespaces,omitempty"`
+	ApprovalMode string   `json:"approval_mode,omitempty"`
+	Replicas     bool     `json:"replicas,omitempty"`
+	Namespaces   []string `json:"namespaces,omitempty"`
 	// TenantCertificateIssuance is independent of manual Local TLS support.
 	// Nil means that the relay predates issuance capability reporting.
 	TenantCertificateIssuance *bool              `json:"tenant_certificate_issuance,omitempty"`
@@ -266,9 +267,17 @@ type WalletAuthStatusResponse struct {
 	WalletAddress string `json:"wallet_address,omitempty"`
 }
 
+type PendingApproval struct {
+	IdentityKey string    `json:"identity_key"`
+	FirstSeenAt time.Time `json:"first_seen_at"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
 type PolicyStateResponse struct {
-	Policy PolicySettings `json:"policy"`
-	Leases []PolicyLease  `json:"leases,omitempty"`
+	Pending []PendingApproval `json:"pending,omitempty"`
+	Policy  PolicySettings    `json:"policy"`
+	Leases  []PolicyLease     `json:"leases,omitempty"`
 }
 
 // LeaseAccess is a relay's routing decision for one service identity.

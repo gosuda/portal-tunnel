@@ -7,10 +7,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,19 +25,27 @@ import (
 
 func registerRawLease(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, leaseIdentity types.Identity) types.RegisterResponse {
 	t.Helper()
-	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-		t.Fatal(err)
-	}
-	signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+	registered, err := tryRegisterLease(ctx, client, base, types.RegisterChallengeRequest{Identity: leaseIdentity})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var registered types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}, nil, &registered); err != nil {
-		t.Fatal(err)
-	}
 	return registered
+}
+
+func tryRegisterLease(ctx context.Context, client *http.Client, base *url.URL, req types.RegisterChallengeRequest) (types.RegisterResponse, error) {
+	var registered types.RegisterResponse
+	var challenge types.RegisterChallengeResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, req, nil, &challenge); err != nil {
+		return registered, err
+	}
+	signature, err := identity.NewLocalAuthority(req.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+	if err != nil {
+		return registered, err
+	}
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}, nil, &registered); err != nil {
+		return registered, err
+	}
+	return registered, nil
 }
 
 func dialReverseWithCapability(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, capability string) error {
@@ -58,25 +68,21 @@ func dialReverseWithCapability(t *testing.T, ctx context.Context, client *http.C
 	return utils.DecodeAPIRequestError(response)
 }
 
-func TestReverseCapabilitySurvivesApproval(t *testing.T) {
+func TestManualReleaseInvalidatesLease(t *testing.T) {
 	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
-	leaseIdentity, err := identity.Generate("approval-capability")
-	if err != nil {
+	id := generatePolicyIdentities(t, "approval-capability")[0]
+	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: id.Key(), IsApproved: ptr(true)})
+	registered := registerRawLease(t, ctx, client, base, id)
+	if err := dialReverseWithCapability(t, ctx, client, base, registered.ReverseEndpoint.Capability); err != nil {
 		t.Fatal(err)
 	}
-	registered := registerRawLease(t, ctx, client, base, leaseIdentity)
-	key := leaseIdentity.Key()
-
-	if err := dialReverseWithCapability(t, ctx, client, base, registered.ReverseEndpoint.Capability); !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}) {
-		t.Fatalf("waiting connect = %v", err)
+	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: id.Key(), IsApproved: ptr(false)})
+	if err := dialReverseWithCapability(t, ctx, client, base, registered.ReverseEndpoint.Capability); err == nil {
+		t.Fatal("revoked capability accepted")
 	}
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(true)})
-	if err := dialReverseWithCapability(t, ctx, client, base, registered.ReverseEndpoint.Capability); err != nil {
-		t.Fatalf("approved connect = %v", err)
-	}
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsDenied: ptr(true)})
-	if err := dialReverseWithCapability(t, ctx, client, base, registered.ReverseEndpoint.Capability); !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}) {
-		t.Fatalf("denied connect = %v", err)
+	err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRenew, types.RenewRequest{AccessToken: registered.AccessToken}, nil, new(types.RenewResponse))
+	if !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
+		t.Fatalf("renew after eviction: %v", err)
 	}
 }
 
@@ -156,21 +162,16 @@ func TestManualRelayApprovalLifecycle(t *testing.T) {
 
 	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(false)})
 	waitRelayApproval(t, exposure, sdk.RelayApprovalPending)
-	if lease := waitPolicyLease(t, ctx, client, base); lease.Ready != 0 {
-		t.Fatalf("a revoked lease kept %d idle streams", lease.Ready)
-	}
+	waitPendingApproval(t, ctx, client, base)
 
 	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(true)})
 	waitRelayReadyURL(t, exposure)
 
 	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsDenied: ptr(true)})
-	waitRelayApproval(t, exposure, sdk.RelayApprovalRefused)
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsDenied: ptr(false), IsApproved: ptr(true)})
-	waitRelayReadyURL(t, exposure)
-
-	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsBanned: ptr(true)})
-	waitRelayApproval(t, exposure, sdk.RelayApprovalRefused)
+	status := waitRelayStatus(t, exposure, "terminal denial", func(s sdk.RelayStatus) bool { return s.State == sdk.RelayFailed })
+	if !errors.Is(status.Err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}) {
+		t.Fatalf("denied publisher: %+v", status)
+	}
 }
 
 func populatePolicyCache(ctx context.Context, t *testing.T, tenantClient *http.Client, publicURL string) {
@@ -284,7 +285,7 @@ func readEffectiveApprovalMode(t *testing.T, ctx context.Context, base *url.URL,
 	return settings.ApprovalMode
 }
 
-func exposeUnapprovedManualLease(t *testing.T, ctx context.Context, base *url.URL, client *http.Client) (*sdk.Exposure, types.Identity, types.PolicyLease) {
+func exposeUnapprovedManualLease(t *testing.T, ctx context.Context, base *url.URL, client *http.Client) (*sdk.Exposure, types.Identity) {
 	t.Helper()
 	leaseIdentity, err := identity.Generate("initial-manual")
 	if err != nil {
@@ -300,11 +301,8 @@ func exposeUnapprovedManualLease(t *testing.T, ctx context.Context, base *url.UR
 			_, _ = io.WriteString(w, "approved tenant")
 		}), "")
 	}()
-	pending := waitPolicyLease(t, ctx, client, base)
-	if pending.IsApproved {
-		t.Fatalf("manual relay approved a lease on its own: %+v", pending)
-	}
-	return exposure, leaseIdentity, pending
+	waitPendingApproval(t, ctx, client, base)
+	return exposure, leaseIdentity
 }
 
 func assertUnapprovedLeaseBlocked(t *testing.T, ctx context.Context, exposure *sdk.Exposure, tenantClient *http.Client, publicURL string) {
@@ -336,9 +334,9 @@ func approveManualLease(t *testing.T, ctx context.Context, client *http.Client, 
 func checkManualLeaseNeedsApproval(t *testing.T) {
 	t.Helper()
 	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode", "manual")
-	exposure, leaseIdentity, pending := exposeUnapprovedManualLease(t, ctx, base, client)
+	exposure, leaseIdentity := exposeUnapprovedManualLease(t, ctx, base, client)
 	tenantClient := relayTenantClient(t, client, base)
-	publicURL := "https://" + net.JoinHostPort(pending.Hostname, base.Port())
+	publicURL := "https://" + net.JoinHostPort(leaseIdentity.Name+".localhost", base.Port())
 	assertUnapprovedLeaseBlocked(t, ctx, exposure, tenantClient, publicURL)
 	approveManualLease(t, ctx, client, base, exposure, leaseIdentity)
 	assertApprovedTenantServed(t, tenantClient, publicURL)
@@ -395,4 +393,87 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 			assertInvalidApprovalModeRejected(t, bin, value)
 		}
 	})
+}
+
+func TestManualProtocol10Compatibility(t *testing.T) {
+	oldCLI, oldRelay := os.Getenv("PORTAL_V10_BASE_CLI"), os.Getenv("PORTAL_V10_BASE_RELAY")
+	if oldCLI == "" || oldRelay == "" {
+		t.Skip("set PORTAL_V10_BASE_CLI and PORTAL_V10_BASE_RELAY to baseline binaries")
+	}
+	for _, tc := range []struct {
+		name, cli, relay string
+		legacyRelay      bool
+	}{
+		{"previous client", oldCLI, buildRelayBinary(t), false},
+		{"previous relay", buildPortalTunnelBinary(t), oldRelay, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, base, client := startPolicyRelayBinary(t, t.TempDir(), tc.relay, "--approval-mode=manual")
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "approved tenant") }))
+			defer target.Close()
+			relayURL := "https://localhost:" + base.Port()
+			records := launchJSONExpose(t, tc.cli, relayURL, filepath.Join(t.TempDir(), "identity.json"), target.Listener.Addr().String())
+			var key string
+			if tc.legacyRelay {
+				assertApprovalWaiting(t, records)
+				var state types.PolicyStateResponse
+				err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, http.Header{"Authorization": {"Bearer admin-test"}}, &state)
+				if err != nil || len(state.Leases) != 1 {
+					t.Fatalf("legacy pending lease: %v, %v", state.Leases, err)
+				}
+				key = state.Leases[0].IdentityKey
+			} else {
+				key = waitPendingApproval(t, ctx, client, base).IdentityKey
+			}
+			setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(true)})
+			publicURL := assertExposeReady(t, records, relayURL)
+			assertApprovedTenantServed(t, relayTenantClient(t, client, base), publicURL)
+		})
+	}
+}
+
+func TestManualModeSwitchReleasesOnlyUnapprovedResources(t *testing.T) {
+	port := strconv.Itoa(harnessPort(t, "127.0.0.1"))
+	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--tcp-enabled=true", "--min-port="+port, "--max-port="+port)
+	ids := generatePolicyIdentities(t, "keeper", "same-alias", "same-alias")
+	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: ids[0].Key(), IsApproved: ptr(true)})
+	keeper := registerRawLease(t, ctx, client, base, ids[0])
+	req := types.RegisterChallengeRequest{Identity: ids[1], TCPEnabled: true}
+	evicted, err := tryRegisterLease(ctx, client, base, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := http.Header{"Authorization": {"Bearer admin-test"}}
+	settings := types.PolicySettings{ApprovalMode: "manual", TCPPort: types.PolicyPortSettings{Enabled: true}}
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, settings, headers, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := dialReverseWithCapability(t, ctx, client, base, keeper.ReverseEndpoint.Capability); err != nil {
+		t.Fatalf("pre-approved lease lost: %v", err)
+	}
+	if err := dialReverseWithCapability(t, ctx, client, base, evicted.ReverseEndpoint.Capability); err == nil {
+		t.Fatal("auto-approved lease survived switch")
+	}
+	attempts := make(chan error, 4)
+	for range cap(attempts) {
+		go func() { _, err := tryRegisterLease(ctx, client, base, req); attempts <- err }()
+	}
+	for range cap(attempts) {
+		if err := <-attempts; !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseRejected}) {
+			t.Fatalf("registration: %v", err)
+		}
+	}
+	var state types.PolicyStateResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil || len(state.Pending) != 1 || len(state.Leases) != 1 {
+		t.Fatalf("duplicate requests affected capacity: %v, %v", state, err)
+	}
+	settings.ApprovalMode = "auto"
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, settings, headers, nil); err != nil {
+		t.Fatal(err)
+	}
+	req.Identity = ids[2]
+	replacement, err := tryRegisterLease(ctx, client, base, req)
+	if err != nil || replacement.TCPAddr != evicted.TCPAddr || replacement.Hostname != evicted.Hostname {
+		t.Fatalf("alias/port unavailable to new owner: %+v, %v", replacement, err)
+	}
 }

@@ -114,7 +114,7 @@ function IPLine({ isApproved, ip, displayIP }: { isApproved: boolean; ip: string
           Client IP: <span className="font-mono">{ip}</span>
         </div>
         <div>
-          Reported IP: <span className="font-mono">{displayIP}</span>
+          Publisher-reported IP: <span className="font-mono">{displayIP}</span>
         </div>
       </div>
     );
@@ -168,7 +168,7 @@ function IdentityPanel({ server, bps, onBPSSettingsClick, onApproveClick, onDeny
     <div className="flex flex-col gap-2 w-full mt-2">
       <div className="flex items-center justify-between w-full">
         <span className="text-xs text-muted-foreground">
-          BPS: <span className="font-medium text-foreground">{formatBPS(bps)}</span>
+          Stream limit (bytes/s): <span className="font-medium text-foreground">{formatBPS(bps)}</span>
         </span>
         <button
           onClick={onBPSSettingsClick}

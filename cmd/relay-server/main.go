@@ -108,7 +108,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.Bool(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
 	env.String(fs, &cfg.ApprovalMode, "approval-mode", string(policy.ModeAuto), "initial lease approval mode (auto|manual); a mode saved in policy.json wins", "APPROVAL_MODE")
 	env.Int(fs, &cfg.Relay.DefaultIdentityBPS, "default-identity-bps", types.DefaultIdentityBPS, nil, "default stream bytes per second per service identity; individual admin limits override it (0=unlimited)", "DEFAULT_IDENTITY_BPS")
-	env.Int(fs, &cfg.Relay.UnapprovedLeasesPerSource, "unapproved-leases-per-source", 64, nil, "leases one source IP can hold while they are not routable (0=unlimited)", "UNAPPROVED_LEASES_PER_SOURCE")
+	env.Int(fs, &cfg.Relay.UnapprovedLeasesPerSource, "unapproved-leases-per-source", 64, nil, "Per-source unapproved lease or pending request budget (0 disables the per-source limit)", "UNAPPROVED_LEASES_PER_SOURCE")
 	env.Int(fs, &cfg.Relay.MinPort, "min-port", 0, parseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	env.Int(fs, &cfg.Relay.MaxPort, "max-port", 0, parseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
@@ -232,9 +232,11 @@ func openRelayServer(cfg appConfig, ingress *policy.Ingress) (*portal.Server, *p
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create relay api: %w", err)
 	}
-	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && policies.Snapshot().Mode() == policy.ModeAuto {
-		log.Warn().Str("policy_path", policyPath).Msg("approval mode manual is ignored: policy.json saves auto, so every lease is approved; set the mode with the admin API")
+	effective := policies.Snapshot().Mode()
+	if effective != policy.Mode(cfg.ApprovalMode) {
+		log.Warn().Str("requested", cfg.ApprovalMode).Str("effective", string(effective)).Str("policy_path", policyPath).Msg("saved approval mode overrides startup setting")
 	}
+	log.Info().Str("approval_mode", string(effective)).Msg("effective relay admission policy")
 	return server, policies, relayAPI, nil
 }
 
@@ -272,7 +274,7 @@ func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402
 	}
 
 	appRoutes := relayAPI.Handler()
-	if err := mountRelayRoutes(x402Settings, server, appRoutes); err != nil {
+	if err := mountRelayRoutes(x402Settings, server, policies, appRoutes); err != nil {
 		return err
 	}
 	base := policy.ControlBodyHandler(appRoutes)

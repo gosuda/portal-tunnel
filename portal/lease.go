@@ -59,7 +59,16 @@ func requestedLeaseTTL(seconds int) (time.Duration, error) {
 	return time.Duration(seconds) * time.Second, nil
 }
 
+const approvalRequestTTL = 15 * time.Minute
+const maxApprovalRequests = 256
+
+type approvalRequest struct {
+	source      netip.Addr
+	first, last time.Time
+}
+
 type leaseRegistry struct {
+	pending        map[types.ServiceIdentityKey]approvalRequest
 	records        []*leaseRecord
 	rootHostname   string
 	tokenAuthority identity.Authority
@@ -105,6 +114,7 @@ func newLeaseRegistry(minPort, maxPort int, rootHostname string, tokenAuthority 
 	}
 
 	return &leaseRegistry{
+		pending:        make(map[types.ServiceIdentityKey]approvalRequest),
 		records:        make([]*leaseRecord, 0),
 		rootHostname:   types.NormalizeHostname(rootHostname),
 		tokenAuthority: tokenAuthority,
@@ -542,6 +552,11 @@ func (r *leaseRegistry) pruneLifecycleBlockedLocked(now time.Time) {
 func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 	r.mu.Lock()
 	expired := r.collectCleanupExpiredLocked(now)
+	for key, req := range r.pending {
+		if !now.Before(req.last.Add(approvalRequestTTL)) {
+			delete(r.pending, key)
+		}
+	}
 	r.pruneLifecycleBlockedLocked(now)
 	r.mu.Unlock()
 
@@ -623,6 +638,45 @@ func (r *leaseRegistry) PublicLeases(now time.Time) []types.Lease {
 	defer r.mu.RUnlock()
 
 	return r.collectPublicLeasesLocked(now)
+}
+
+// requestApproval retains only the authenticated service key, source and times.
+func (r *leaseRegistry) requestApproval(key types.ServiceIdentityKey, source netip.Addr, now time.Time) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fromSource := 0
+	for owner, p := range r.pending {
+		if !now.Before(p.last.Add(approvalRequestTTL)) {
+			delete(r.pending, owner)
+			continue
+		}
+		if p.source == source {
+			fromSource++
+		}
+	}
+	p, found := r.pending[key]
+	if !found {
+		if len(r.pending) >= maxApprovalRequests || (r.unapprovedPerSource > 0 && fromSource >= r.unapprovedPerSource) {
+			return 60, &apiError{types.APIErrorCodeApprovalQueueFull, "approval request budget exhausted", http.StatusServiceUnavailable}
+		}
+		p = approvalRequest{source: source, first: now}
+	}
+	p.last = now
+	r.pending[key] = p
+	return min(60, 5+int(now.Sub(p.first).Seconds())), nil
+}
+
+func (r *leaseRegistry) PendingApprovals(now time.Time) []types.PendingApproval {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []types.PendingApproval
+	for key, p := range r.pending {
+		if now.Before(p.last.Add(approvalRequestTTL)) {
+			out = append(out, types.PendingApproval{IdentityKey: key.String(), FirstSeenAt: p.first, LastSeenAt: p.last, ExpiresAt: p.last.Add(approvalRequestTTL)})
+		}
+	}
+	slices.SortFunc(out, func(a, b types.PendingApproval) int { return strings.Compare(a.IdentityKey, b.IdentityKey) })
+	return out
 }
 
 func (r *leaseRegistry) PolicyLeases(now time.Time) []types.PolicyLease {
@@ -751,6 +805,7 @@ type portReservation struct {
 }
 
 type portAllocation struct {
+	discard     bool // revoked owner cannot retain grace reservations on close
 	record      *leaseRecord
 	reservation portReservation
 }
@@ -828,6 +883,11 @@ func (a *portPool) release(port int, record *leaseRecord) {
 	delete(a.inUse, port)
 	key := record.ServiceKey()
 
+	if owner.discard {
+		a.available = append(a.available, port)
+		return
+	}
+
 	if prev, exists := a.reserved[key]; exists {
 		a.available = append(a.available, prev.port)
 	}
@@ -857,6 +917,11 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 		return nil
 	}
 	held := make(map[types.ServiceIdentityKey]struct{})
+	for owner, req := range r.pending {
+		if owner != key && req.source == source && now.Before(req.last.Add(approvalRequestTTL)) {
+			held[owner] = struct{}{}
+		}
+	}
 	issued := -1
 	for i, record := range r.records {
 		if record == nil || record.isExpired(now) {

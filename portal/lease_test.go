@@ -2251,3 +2251,36 @@ func TestCanonicalReadinessFollowsRenewedCertificateValidity(t *testing.T) {
 		t.Fatalf("withdrawn material still advertised: %+v", leases)
 	}
 }
+
+func TestPendingApprovalBudgetsAndExpiry(t *testing.T) {
+	r := &leaseRegistry{pending: make(map[types.ServiceIdentityKey]approvalRequest), unapprovedPerSource: 1}
+	source := netip.MustParseAddr("192.0.2.1")
+	now := time.Now()
+	first := types.NewServiceIdentityKey("demo", "one")
+	if _, err := r.requestApproval(first, source, now); err != nil {
+		t.Fatal(err)
+	}
+	other := types.NewServiceIdentityKey("demo", "two")
+	if _, err := r.requestApproval(other, source, now); err == nil {
+		t.Fatal("per-source limit exceeded")
+	}
+	for i := 1; i < maxApprovalRequests; i++ {
+		source = source.Next()
+		if _, err := r.requestApproval(types.NewServiceIdentityKey("demo", fmt.Sprint(i)), source, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.requestApproval(other, source.Next(), now); err == nil {
+		t.Fatal("global limit exceeded")
+	}
+	if _, err := r.requestApproval(first, source, now.Add(time.Minute)); err != nil {
+		t.Fatal("refresh of existing request refused:", err)
+	}
+	now = now.Add(approvalRequestTTL)
+	if got := r.PendingApprovals(now); len(got) != 1 || got[0].IdentityKey != first.String() {
+		t.Fatalf("unexpired requests: %+v", got)
+	}
+	if _, err := r.requestApproval(other, source.Next(), now); err != nil {
+		t.Fatal("expired capacity was not reusable:", err)
+	}
+}

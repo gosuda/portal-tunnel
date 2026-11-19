@@ -91,7 +91,7 @@ func assertApprovalWaiting(t *testing.T, records <-chan map[string]any) {
 
 func approveAndAwaitRawEndpoints(t *testing.T, ctx context.Context, records chan map[string]any, client *http.Client, base *url.URL) (string, string) {
 	t.Helper()
-	key := waitPolicyLease(t, ctx, client, base).IdentityKey
+	key := waitPendingApproval(t, ctx, client, base).IdentityKey
 	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsApproved: ptr(true)})
 	const rawLine = "raw transport endpoints allocated"
 	var ready bool

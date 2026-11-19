@@ -112,7 +112,10 @@ function normalizePolicySettings(settings: PolicySettings | undefined): PolicySe
   };
 }
 
+type PendingApprovals = NonNullable<PolicyStateResponse["pending"]>;
+
 interface PolicyViewState {
+  pending: PendingApprovals;
   serverData: PolicyLease[];
   settings: PolicySettings;
 }
@@ -123,10 +126,12 @@ async function loadPolicyState(): Promise<PolicyViewState> {
 
   return {
     serverData: normalizedLeases,
+    pending: state.pending ?? [],
     settings: normalizePolicySettings(state?.policy),
   };
 }
 interface UseAdminResult extends UseListReturn<AdminServer> {
+  pending: PendingApprovals;
   servers: AdminServer[];
   banFilter: BanFilter;
   approvalMode: ApprovalMode;
@@ -326,6 +331,7 @@ async function saveGuardedPolicySettings(current: PolicySettings, overrides: Par
 }
 
 export function useAdmin(enabled: boolean = true): UseAdminResult {
+  const [pending, setPending] = useState<PendingApprovals>([]);
   const [serverData, setServerData] = useState<PolicyLease[]>([]);
   const [policySettings, setPolicySettings] = useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
   const policyUpdatePending = useRef(false);
@@ -336,6 +342,7 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
   const [banFilter, setBanFilter] = useState<BanFilter>("all");
 
   const applyPolicyState = (state: PolicyViewState) => {
+    setPending(state.pending);
     setServerData(state.serverData);
     setPolicySettings(state.settings);
   };
@@ -410,8 +417,14 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     await applyServerBPSChange(identityKey, bps, { serverData, setServerData, runAdminAction, updateLeasePolicy });
   };
 
-  const handleApprovalModeChange = (mode: ApprovalMode) =>
-    updatePolicySettings({ approval_mode: mode });
+  const handleApprovalModeChange = async (mode: ApprovalMode) => {
+    if (mode === policySettings.approval_mode) return;
+    const count = mode === "manual" ? serverData.filter((s) => !s.explicitly_approved || s.is_banned || s.is_denied).length : pending.length;
+    if (count && !window.confirm(mode === "manual"
+      ? `${count} current lease(s) will lose their aliases, ports and cache. Switch to manual?`
+      : `${count} pending publisher(s) may register on their next attempt. Switch to auto?`)) return;
+    await updatePolicySettings({approval_mode: mode});
+  };
 
   const handleUDPSettingsChange = (settings: PortSettings) =>
     updatePolicySettings({ udp: { enabled: settings.enabled, max_leases: settings.maxLeases } });
@@ -445,6 +458,7 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
 
   return {
     servers,
+    pending,
     ...listState,
     banFilter,
     approvalMode,

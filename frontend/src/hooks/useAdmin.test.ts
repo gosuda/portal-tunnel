@@ -136,6 +136,7 @@ describe("useAdmin", () => {
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);
 
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
     mockPost.mockRejectedValueOnce(
       new APIClientError("request failed", 400, "invalid_mode"),
     );

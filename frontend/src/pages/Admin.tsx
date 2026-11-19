@@ -11,6 +11,7 @@ export function Admin(): JSX.Element {
 
   const {
     servers,
+    pending,
     filteredServers,
     availableTags,
     searchQuery,
@@ -75,6 +76,7 @@ export function Admin(): JSX.Element {
     <SsgoiTransition id="admin">
       <AdminServerList
         title="PORTAL ADMIN"
+        pending={pending}
         searchQuery={searchQuery}
         status={status}
         sortBy={sortBy}
