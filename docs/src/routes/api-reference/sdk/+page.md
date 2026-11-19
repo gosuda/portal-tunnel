@@ -353,6 +353,7 @@ A relay reports its routing decision only as the answer to a reverse connect.
 |-------------------------|---------|---------------|
 | `101` | lease may route | `State` is `ready`, `Approval` is empty |
 | `403 lease_rejected` | not approved yet, or approval was revoked | `State` is `connecting`, `Approval` is `pending` |
+| `403 approval_required` | strict admission requires pre-approval | terminal; give the operator the public identity key and start again after approval |
 | `403 lease_denied` | denied or banned | `State` is `connecting`, `Approval` is `refused` |
 
 The SDK retries every 3 seconds, so an approved lease becomes ready without a

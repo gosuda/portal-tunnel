@@ -2,6 +2,10 @@
 
 `portal-relay` is a portable, skills-only Agent Plugin for relay operators: deploy a public Portal relay with Docker Compose, delegate its DNS zone, optionally enable TCP/UDP lease ports, verify it, and register it in the public pool. Publishing or reaching services through a relay belongs to the separate [`portal-tunnel`](../portal-tunnel/README.md) plugin.
 
+## Run a relay. Stay in control.
+
+Choose `strict` to pre-approve identities before they reserve resources, `manual` to review pending leases, or `auto` for public registration. The operator handles egress charges, abuse complaints and IP/domain reputation. Review [operator safety](../../docs/src/routes/self-hosting/+page.md#operator-safety) before deploying.
+
 ## Layout
 
 ```text

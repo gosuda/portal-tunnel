@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,19 +24,27 @@ import (
 
 func registerRawLease(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, leaseIdentity types.Identity) types.RegisterResponse {
 	t.Helper()
-	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-		t.Fatal(err)
-	}
-	signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+	registered, err := tryRegisterLease(ctx, client, base, types.RegisterChallengeRequest{Identity: leaseIdentity})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var registered types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}, nil, &registered); err != nil {
-		t.Fatal(err)
-	}
 	return registered
+}
+
+func tryRegisterLease(ctx context.Context, client *http.Client, base *url.URL, req types.RegisterChallengeRequest) (types.RegisterResponse, error) {
+	var registered types.RegisterResponse
+	var challenge types.RegisterChallengeResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, req, nil, &challenge); err != nil {
+		return registered, err
+	}
+	signature, err := identity.NewLocalAuthority(req.Identity).SignEthereumPersonalMessage(challenge.SIWEMessage)
+	if err != nil {
+		return registered, err
+	}
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}, nil, &registered); err != nil {
+		return registered, err
+	}
+	return registered, nil
 }
 
 func dialReverseWithCapability(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, capability string) error {
@@ -212,11 +221,15 @@ func assertOfflineCacheServed(t *testing.T, exposure *sdk.Exposure, tenantClient
 	}
 }
 
-func switchPolicyToManual(t *testing.T, ctx context.Context, client *http.Client, base *url.URL) {
+func switchApprovalMode(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, mode string) {
 	t.Helper()
 	headers := http.Header{"Authorization": {"Bearer admin-test"}}
 	var settings types.PolicySettings
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, types.PolicySettings{ApprovalMode: "manual"}, headers, &settings); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicy, nil, headers, &settings); err != nil {
+		t.Fatal(err)
+	}
+	settings.ApprovalMode = mode
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathPolicy, settings, headers, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -245,7 +258,13 @@ func exposeCachedPolicySite(t *testing.T, ctx context.Context, relayPort, siteDi
 	return exposure
 }
 
-func TestManualModeRevokesOfflineCache(t *testing.T) {
+func TestApprovalModeRevokesOfflineCache(t *testing.T) {
+	for _, mode := range []string{"manual", "strict"} {
+		t.Run(mode, func(t *testing.T) { checkOfflinePolicyCache(t, mode) })
+	}
+}
+
+func checkOfflinePolicyCache(t *testing.T, mode string) {
 	stateDir, siteDir := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte("cached policy site"), 0o600); err != nil {
 		t.Fatal(err)
@@ -270,7 +289,7 @@ func TestManualModeRevokesOfflineCache(t *testing.T) {
 	publicURL := ready[0].PublicURL
 	populatePolicyCache(readyCtx, t, tenantClient, publicURL)
 	assertOfflineCacheServed(t, exposure, tenantClient, publicURL)
-	switchPolicyToManual(t, ctx, client, base)
+	switchApprovalMode(t, ctx, client, base, mode)
 	assertOfflineCacheRevoked(t, tenantClient, publicURL)
 }
 
@@ -379,6 +398,8 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 	for _, tc := range []struct {
 		name, saved, flag, want string
 	}{
+		{"saved auto wins over strict", `{"approval_mode":"auto"}`, "strict", "auto"},
+		{"saved strict wins over auto", `{"approval_mode":"strict"}`, "auto", "strict"},
 		{"saved auto wins over a manual flag", `{"approval_mode":"auto"}`, "manual", "auto"},
 		{"saved manual wins over an auto flag", `{"approval_mode":"manual"}`, "auto", "manual"},
 		{"a saved policy without a mode keeps the flag", `{}`, "manual", "manual"},
@@ -395,4 +416,61 @@ func TestRelayInitialApprovalMode(t *testing.T) {
 			assertInvalidApprovalModeRejected(t, bin, value)
 		}
 	})
+}
+
+func TestStrictAdmission(t *testing.T) {
+	port := strconv.Itoa(harnessPort(t, "127.0.0.1"))
+	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode=strict", "--tcp-enabled=true", "--min-port="+port, "--max-port="+port)
+	ids := generatePolicyIdentities(t, "same-alias", "same-alias")
+	req := types.RegisterChallengeRequest{Identity: ids[0], TCPEnabled: true}
+	approvalRequired := &types.APIRequestError{Code: types.APIErrorCodeApprovalRequired}
+
+	attempts := make(chan error, 4)
+	for range cap(attempts) {
+		go func() { _, err := tryRegisterLease(ctx, client, base, req); attempts <- err }()
+	}
+	for range cap(attempts) {
+		if err := <-attempts; !errors.Is(err, approvalRequired) {
+			t.Fatalf("unapproved registration: %v", err)
+		}
+	}
+	var state types.PolicyStateResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, http.Header{"Authorization": {"Bearer admin-test"}}, &state); err != nil || len(state.Leases) != 0 {
+		t.Fatalf("strict denial left leases: %+v, %v", state.Leases, err)
+	}
+
+	for _, initial := range []string{"auto", "manual"} {
+		switchApprovalMode(t, ctx, client, base, initial)
+		lease, err := tryRegisterLease(ctx, client, base, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switchApprovalMode(t, ctx, client, base, "strict")
+		err = utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRenew, types.RenewRequest{AccessToken: lease.AccessToken}, nil, new(types.RenewResponse))
+		if !errors.Is(err, approvalRequired) {
+			t.Fatalf("renew after %s -> strict: %v", initial, err)
+		}
+	}
+
+	other := types.RegisterChallengeRequest{Identity: ids[1], TCPEnabled: true}
+	for _, decision := range []types.LeasePolicyUpdate{
+		{IsApproved: ptr(false)}, {IsDenied: ptr(true)}, {IsBanned: ptr(true)},
+	} {
+		setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: ids[1].Key(), IsApproved: ptr(true), IsBanned: ptr(false)})
+		lease, err := tryRegisterLease(ctx, client, base, other)
+		if err != nil || lease.TCPAddr == "" {
+			t.Fatalf("pre-approved registration on only port: %+v, %v", lease, err)
+		}
+		if err := dialReverseWithCapability(t, ctx, client, base, lease.ReverseEndpoint.Capability); err != nil {
+			t.Fatal(err)
+		}
+		decision.IdentityKey = ids[1].Key()
+		setLeasePolicy(t, ctx, client, base, decision)
+		if err := dialReverseWithCapability(t, ctx, client, base, lease.ReverseEndpoint.Capability); err == nil {
+			t.Fatal("evicted capability accepted")
+		}
+		if _, err := tryRegisterLease(ctx, client, base, other); !errors.Is(err, approvalRequired) {
+			t.Fatalf("registration after removal: %v", err)
+		}
+	}
 }

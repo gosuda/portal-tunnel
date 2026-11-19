@@ -1,6 +1,6 @@
 ---
 name: portal-relay-admin
-description: Operate a running Portal relay through its admin and policy API - sign in with the relay ADMIN_TOKEN without exposing it, list leases and their approval state, approve, deny, ban, or rate-limit one identity, switch approval mode between auto and manual, change UDP and TCP lease limits, and read admin metrics. Use when the user runs a Portal relay and asks to approve or deny a tunnel, ban an identity, throttle a lease, change approval mode or lease limits, or check who is connected. Do not use for first deployment (portal-relay), for failure diagnosis (portal-relay-diagnose), or for exposing an app (portal-expose).
+description: Operate a running Portal relay through its admin and policy API - sign in with the relay ADMIN_TOKEN without exposing it, list leases and their approval state, approve, deny, ban, or rate-limit one identity, switch approval mode among auto, manual and strict, change UDP and TCP lease limits, and read admin metrics. Use when the user runs a Portal relay and asks to approve or deny a tunnel, ban an identity, throttle a lease, change approval mode or lease limits, or check who is connected. Do not use for first deployment (portal-relay), for failure diagnosis (portal-relay-diagnose), or for exposing an app (portal-expose).
 license: MIT
 ---
 
@@ -34,8 +34,9 @@ The admin surface is the relay's own API on its public `443` listener: `/api/adm
 
 ## Write
 
-- **One identity**: `POST /api/policy/leases` with `identity_key` and only the fields that change: `is_approved`, `is_denied` (`true` also revokes approval), `is_banned`, or `bps` (`0` removes the limit). A lease that stops being routable drops its idle streams; after approval it reconnects within about 3 seconds without re-registering.
-- **Relay policy**: `POST /api/policy` takes the whole `PolicySettings` object. Read it first, change only the requested field, and send the full object back so the other fields keep their values. `approval_mode` is `auto` or `manual`; `max_leases` is non-negative and `0` means unlimited.
+- **One identity**: `POST /api/policy/leases` with `identity_key` and only the fields that change: `is_approved`, `is_denied` (`true` also revokes approval), `is_banned`, or `bps` (`0` removes the limit). In manual mode, a lease that stops being routable drops its idle streams; after approval it reconnects within about 3 seconds without re-registering.
+- **Relay policy**: `POST /api/policy` takes the whole `PolicySettings` object. Read it first, change only the requested field, and send the full object back so the other fields keep their values. `approval_mode` is `auto`, `manual` or `strict`; `max_leases` is non-negative and `0` means unlimited.
+- Pre-approve a public `name:address` before registration using the same leases endpoint. Strict revocation releases leases and offline cache eligibility. Re-approval permits a new registration; restart a terminally refused client. Before switching to strict, count lease rows without explicit approval or with a deny/ban.
 - Switching to `manual` stops routing for every lease that is not approved yet. Say how many active leases that affects before asking for approval.
 - The saved mode in `policy.json` wins over `APPROVAL_MODE` at the next start, so set the mode here, not by editing `.env`.
 

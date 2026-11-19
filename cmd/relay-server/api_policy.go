@@ -131,7 +131,7 @@ func (api *RelayAPI) routePolicyRequest(w http.ResponseWriter, r *http.Request, 
 func (api *RelayAPI) applyPolicySettingsLocked(w http.ResponseWriter, next *policy.State, settings types.PolicySettings) bool {
 	mode, err := policy.ParseMode(settings.ApprovalMode)
 	if err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto' or 'manual'")
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "approval_mode must be 'auto', 'manual', or 'strict'")
 		return false
 	}
 	if err := api.server.ValidateTransportPolicy(settings.UDP.Enabled, settings.UDP.MaxLeases, settings.TCPPort.Enabled, settings.TCPPort.MaxLeases); err != nil {
@@ -353,6 +353,7 @@ func (api *RelayAPI) policyLeases(access policy.State) []types.PolicyLease {
 		if err != nil {
 			continue
 		}
+		leases[i].ExplicitlyApproved = access.ExplicitlyApproved(key)
 		leases[i].IsApproved = access.EffectiveApproval(key)
 		leases[i].IsBanned = access.IsBanned(key)
 		leases[i].IsDenied = access.IsDenied(key)
@@ -367,6 +368,11 @@ func (api *RelayAPI) commitPolicy(next policy.State) error {
 	api.server.BPSManager().SetServiceIdentityBPSLimits(next.IdentityBPS)
 	previous := api.policies.Snapshot()
 	committed := api.policies.Commit(next)
+	if committed.Mode() == policy.ModeStrict {
+		api.server.SetStrictAdmission(committed.Access)
+	} else if previous.Mode() == policy.ModeStrict {
+		api.server.SetStrictAdmission(nil)
+	}
 	keys := make(map[types.ServiceIdentityKey]struct{})
 	for _, state := range []policy.State{previous, committed} {
 		for _, key := range state.ApprovedKeys() {

@@ -325,10 +325,11 @@ their endpoints are unavailable.
 | `replica_conflict` | a replica cannot join a live exclusive lease or retained cache entry; retryable |
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not approved to route yet |
+| `approval_required` | strict registration or renewal requires operator pre-approval; retry after approval |
 | `lease_denied` | relay denied or banned the lease |
 | `source_not_allowed` | relay does not accept tunnels from the caller's network |
 | `invalid_address` | address path or body value is invalid |
-| `invalid_mode` | approval mode is not `auto` or `manual` |
+| `invalid_mode` | approval mode must be `auto`, `manual`, or `strict` |
 | `http11_only` | endpoint requires HTTP/1.1 |
 | `hijack_unsupported`, `hijack_failed` | reverse stream setup failed |
 | `udp_disabled`, `udp_capacity_exceeded`, `udp_port_exhausted` | UDP lease cannot be allocated |

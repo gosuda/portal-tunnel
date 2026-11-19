@@ -202,8 +202,9 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	Replicas   bool     `json:"replicas,omitempty"`
-	Namespaces []string `json:"namespaces,omitempty"`
+	ApprovalMode string   `json:"approval_mode,omitempty"`
+	Replicas     bool     `json:"replicas,omitempty"`
+	Namespaces   []string `json:"namespaces,omitempty"`
 	// TenantCertificateIssuance is independent of manual Local TLS support.
 	// Nil means that the relay predates issuance capability reporting.
 	TenantCertificateIssuance *bool              `json:"tenant_certificate_issuance,omitempty"`

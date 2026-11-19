@@ -44,7 +44,7 @@ const DEFAULT_POLICY_SETTINGS: PolicySettings = {
 };
 
 const ADMIN_ERROR_MESSAGE_BY_CODE: Record<string, string> = {
-  invalid_mode: "Invalid approval mode. Choose auto or manual and retry.",
+  invalid_mode: "Invalid approval mode. Choose auto, manual, or strict and retry.",
   invalid_address: "Selected address is invalid. Refresh and try again.",
   invalid_request: "Selected lease is invalid. Refresh and try again.",
   lease_rejected: "Request was rejected by policy. Review conflicts and retry.",
@@ -95,7 +95,7 @@ function toAdminServer(row: PolicyLease): AdminServer {
 }
 
 function normalizeApprovalMode(value: string | undefined): ApprovalMode {
-  return value === "manual" ? "manual" : "auto";
+  return value === "strict" || value === "manual" ? value : "auto";
 }
 
 function normalizePolicySettings(settings: PolicySettings | undefined): PolicySettings {
@@ -410,8 +410,19 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     await applyServerBPSChange(identityKey, bps, { serverData, setServerData, runAdminAction, updateLeasePolicy });
   };
 
-  const handleApprovalModeChange = (mode: ApprovalMode) =>
-    updatePolicySettings({ approval_mode: mode });
+  const handleApprovalModeChange = async (mode: ApprovalMode) => {
+    if (mode === policySettings.approval_mode) return;
+    const affected = serverData.filter((lease) => {
+      const blocked = lease.is_banned || lease.is_denied;
+      if (mode === "strict") return blocked || !lease.explicitly_approved;
+      if (blocked || lease.explicitly_approved) return false;
+      return mode === "auto" || policySettings.approval_mode === "auto";
+    });
+    const effect = mode === "strict" ? "lose their leases and reservations"
+      : mode === "auto" ? "become routable" : "stop routing";
+    if (affected.length && !window.confirm(`Switch to ${mode}? ${affected.length} current lease(s) will ${effect}.`)) return;
+    await updatePolicySettings({ approval_mode: mode });
+  };
 
   const handleSettingsChange = (key: "udp" | "tcp_port") =>
     (settings: PortSettings) =>

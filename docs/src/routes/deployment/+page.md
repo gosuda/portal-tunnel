@@ -11,6 +11,12 @@ Go binary owns TLS, SNI routing, relay APIs, tunnel ingress, and the embedded
 React SPA. Operators can replace only the SPA files without adding a reverse
 proxy or changing ownership of the Portal API paths.
 
+## Operator safety
+
+Before exposing public ports, choose an admission policy. Public (`auto`) accepts unknown publishers. Approval required (`manual`) holds their aliases and ports pending review. Strict (`strict`) admits only pre-approved service keys. For a first deployment, set `APPROVAL_MODE=strict`, sign into `/admin`, and pre-approve the publisher’s `name:address`. Check the effective mode at startup. Existing policy files take precedence.
+
+Egress bills, exhausted resources, abuse complaints and reputation damage remain possible. A per-identity stream byte rate cannot cap a monthly bill. See [operator safety](/self-hosting#operator-safety) for mode changes, limits and monitoring.
+
 ## Production Topology
 
 ```text

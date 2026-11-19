@@ -455,6 +455,7 @@ func TestTerminalRelayErrorsPreserveTransportRetries(t *testing.T) {
 		terminal bool
 	}{
 		{fmt.Errorf("manual TLS: %w", localtls.ErrLocalCertificate), true},
+		{&types.APIRequestError{Code: types.APIErrorCodeApprovalRequired, StatusCode: 403}, true},
 		{context.Canceled, false},
 		{context.DeadlineExceeded, false},
 		{io.EOF, false},

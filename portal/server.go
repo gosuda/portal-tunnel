@@ -271,6 +271,8 @@ var (
 )
 
 type Server struct {
+	// Order authenticated registration (including DNS publication) against strict policy transitions.
+	admissionMu  sync.RWMutex
 	cancel       context.CancelFunc
 	group        *errgroup.Group
 	shutdownOnce sync.Once
@@ -935,6 +937,48 @@ func (s *Server) emitStartLog(cfg ServerConfig) {
 		logEvent = logEvent.Str("internal_quic_backhaul_addr", s.quicBackhaul.Addr().String())
 	}
 	logEvent.Msg("relay server started")
+}
+
+// SetStrictAdmission installs the operator's authenticated admission decision.
+// A nil decision restores registration for pending identities.
+func (s *Server) SetStrictAdmission(access func(types.ServiceIdentityKey) types.LeaseAccess) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	r := s.registry
+	r.mu.Lock()
+	r.strictAccess = access
+	if access == nil {
+		r.mu.Unlock()
+		return
+	}
+	var evicted []*leaseRecord
+	for i := len(r.records) - 1; i >= 0; i-- {
+		record := r.records[i]
+		if record.reverse != nil && access(record.ServiceKey()) != types.LeaseRoutable {
+			r.deleteRecord(i)
+			evicted = append(evicted, record)
+		}
+	}
+	for _, owner := range r.cache.Owners() {
+		if access(owner) != types.LeaseRoutable {
+			r.cache.DetachOwner(owner)
+		}
+	}
+	for _, pool := range []*portPool{&r.tcpPorts, &r.udpPorts} {
+		for key := range pool.reserved {
+			if access(key) != types.LeaseRoutable {
+				pool.forgetReservation(key)
+			}
+		}
+	}
+	r.mu.Unlock()
+	for _, record := range evicted {
+		r.closeRecord(record)
+		s.deleteLeaseDNS(context.Background(), record)
+	}
 }
 
 func (s *Server) SetServiceIdentityAccess(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64) bool {

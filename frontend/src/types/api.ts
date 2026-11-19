@@ -15,7 +15,7 @@ export type APIEnvelope<T> =
       data?: unknown;
     };
 
-export type ApprovalMode = "auto" | "manual";
+export type ApprovalMode = "auto" | "manual" | "strict";
 
 export interface LeaseMetadata {
   description?: string;
@@ -49,6 +49,7 @@ export interface PolicyLease extends Lease {
   bps: number;
   client_ip: string;
   reported_ip?: string;
+  explicitly_approved?: boolean;
   is_approved: boolean;
   is_banned: boolean;
   is_denied: boolean;
@@ -134,6 +135,7 @@ export interface X402FacilitatorInfo {
 }
 
 export interface DomainResponse {
+  approval_mode?: ApprovalMode;
   protocol_version: string;
   release_version: string;
   ens: ENSStatus;

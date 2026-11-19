@@ -11,6 +11,22 @@ from one public HTTPS origin.
 
 You should have a relay running and accepting tunnel connections in about 10 minutes.
 
+## Operator safety
+
+A relay publishes services through your infrastructure. Visitors can exhaust bandwidth, ports or compute, generate egress charges, and trigger abuse complaints or IP, domain and CA reputation problems. Choose who may publish before opening the endpoint.
+
+| Admission mode | First registration | Routing |
+| --- | --- | --- |
+| Public (`auto`, default) | Allocates a lease | Open unless denied or banned |
+| Approval required (`manual`) | Allocates a pending lease, including its alias and requested ports | Waits for operator approval |
+| Pre-approved only (`strict`) | Verifies identity and requires explicit approval before allocation | Approved identities only |
+
+For a first or capacity-constrained relay, start with `strict`. Obtain the publisher’s public `name:address` identity key, sign in to `/admin`, and choose **Pre-approve**. A publisher receiving `403 approval_required` can start a new exposure after approval. Strict refusals create no pending lease. Revoke, deny or ban an identity to remove its strict leases and offline cache eligibility. Unban a banned identity and approve it before it registers again.
+
+Check the effective mode in the dashboard or at `GET /sdk/domain` (`data.approval_mode`). Saved `policy.json` overrides `APPROVAL_MODE` on restart. Before switching a running relay to strict, pre-approve every identity you want to keep. The dashboard previews the number of leases affected. Auto approval alone does not carry over.
+
+The dashboard shows pending leases and per-identity stream limits in bytes/second. Authenticated `GET /api/admin/metrics` reports active leases, connections and UDP flows. Publisher-reported IPs and remote relay observations are self-reported. Stream limits exclude UDP and cache traffic. Admission and rate limits cannot guarantee a monthly bill, prevent DDoS or abuse by approved publishers, or eliminate operator liability.
+
 ## Prerequisites
 
 - Docker installed on your server
@@ -266,7 +282,7 @@ A tunnel from any other address gets `403 source_not_allowed` when it registers
 or renews, with a message that names the address the relay saw, such as
 `this relay does not accept tunnels from 198.51.100.7`. The tunnel reports that
 relay as failed and does not retry it. Visitors are not affected. The list works
-with either approval mode, so a relay on `auto` serves new tunnels from your
+with every approval mode, so a relay on `auto` serves new tunnels from your
 networks at once, including every identity an embedder creates, and refuses the
 rest. Empty, the default, accepts every network, and a value that names no
 network, such as `,`, stops the relay at startup. The relay reads the list at

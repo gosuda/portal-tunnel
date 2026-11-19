@@ -14,12 +14,13 @@ type Mode string
 const (
 	ModeAuto   Mode = "auto"
 	ModeManual Mode = "manual"
+	ModeStrict Mode = "strict"
 )
 
 // ParseMode validates an approval mode. Empty and unknown values are rejected.
 func ParseMode(raw string) (Mode, error) {
 	mode := Mode(strings.TrimSpace(raw))
-	if mode != ModeAuto && mode != ModeManual {
+	if mode != ModeAuto && mode != ModeManual && mode != ModeStrict {
 		return "", fmt.Errorf("invalid approval mode: %q", raw)
 	}
 	return mode, nil
@@ -52,7 +53,7 @@ func (s State) snapshot() State {
 }
 
 func NewStore() *Store {
-	return &Store{state: utils.NewSnapshot(State{}, State.snapshot)}
+	return &Store{state: utils.NewSnapshot(State{})}
 }
 
 // Snapshot returns an independent copy for readers or a proposed transaction.
@@ -60,15 +61,18 @@ func (a *Store) Snapshot() State {
 	if a == nil {
 		return State{}
 	}
-	return a.state.Load()
+	return a.state.Load().snapshot()
 }
+
+// Mode serves public capability reports without copying private identity maps.
+func (a *Store) Mode() Mode { return a.state.Load().Mode() }
 
 // Commit installs a durably saved candidate as one immutable revision.
 func (a *Store) Commit(next State) State {
 	return a.state.Update(func(previous State) State {
 		next.revision = previous.revision + 1
-		return next
-	})
+		return next.snapshot()
+	}).snapshot()
 }
 
 func (s State) Revision() uint64 {
@@ -103,6 +107,10 @@ func (s State) EffectiveApproval(key types.ServiceIdentityKey) bool {
 	if s.Mode() == ModeAuto {
 		return true
 	}
+	return s.ExplicitlyApproved(key)
+}
+
+func (s State) ExplicitlyApproved(key types.ServiceIdentityKey) bool {
 	_, ok := s.approved[key]
 	return ok
 }

@@ -73,6 +73,7 @@ type leaseRegistry struct {
 	bindings       *keyless.BindingRegistry
 
 	blocked        map[types.ServiceIdentityKey]blockedIdentity
+	strictAccess   func(types.ServiceIdentityKey) types.LeaseAccess // immutable operator snapshot, protected by mu
 	accessRevision uint64
 	selectionOrder uint64
 
@@ -726,6 +727,11 @@ func (r *leaseRegistry) closeRecord(record *leaseRecord) {
 	if record.tcpPort > 0 {
 		r.tcpPorts.release(record.tcpPort, record)
 	}
+	key := record.ServiceKey()
+	if r.strictAccess != nil && r.strictAccess(key) != types.LeaseRoutable {
+		r.udpPorts.forgetReservation(key)
+		r.tcpPorts.forgetReservation(key)
+	}
 }
 
 func (r *leaseRegistry) rollbackRecord(record *leaseRecord) {
@@ -837,6 +843,13 @@ func (a *portPool) release(port int, record *leaseRecord) {
 		expiresAt: time.Now().Add(a.grace),
 	}
 	a.cleanupExpired(time.Now())
+}
+
+func (a *portPool) forgetReservation(key types.ServiceIdentityKey) {
+	if res, ok := a.reserved[key]; ok {
+		delete(a.reserved, key)
+		a.available = append(a.available, res.port)
+	}
 }
 
 func (a *portPool) cleanupExpired(now time.Time) {
@@ -1301,6 +1314,14 @@ func (r *leaseRegistry) refreshRenewRecordLocked(record *leaseRecord, req types.
 	return record.Identity, record.id, record.Overlay, expiresAt
 }
 
+// Caller holds either the registry lock or the server admission lock.
+func (r *leaseRegistry) strictAdmissionError(key types.ServiceIdentityKey) error {
+	if r.strictAccess != nil && r.strictAccess(key) != types.LeaseRoutable {
+		return &apiError{types.APIErrorCodeApprovalRequired, "relay requires pre-approval for " + key.String() + "; contact the operator and retry after approval", http.StatusForbidden}
+	}
+	return nil
+}
+
 func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, current *acme.TLSMaterial) (types.RenewResponse, reverseEndpointInput, error) {
 	if r == nil {
 		return types.RenewResponse{}, reverseEndpointInput{}, errFeatureUnavailable
@@ -1310,6 +1331,10 @@ func (r *leaseRegistry) Renew(req types.RenewRequest, sourceAddr netip.Addr, cur
 		return types.RenewResponse{}, reverseEndpointInput{}, err
 	}
 	r.mu.Lock()
+	if err := r.strictAdmissionError(leaseKey); err != nil {
+		r.mu.Unlock()
+		return types.RenewResponse{}, reverseEndpointInput{}, err
+	}
 	record, err := r.recordForVerifiedLeaseLocked(leaseKey, claims.LeaseID, time.Time{})
 	if err != nil {
 		r.mu.Unlock()

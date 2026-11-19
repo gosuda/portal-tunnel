@@ -173,6 +173,10 @@ export function AdminServerList({
   onBulkBan,
   auth,
 }: AdminServerListProps): JSX.Element {
+  const [identityKey, setIdentityKey] = useState("");
+  const [identityAction, setIdentityAction] = useState("approve");
+  const [policyMessage, setPolicyMessage] = useState("");
+  const [editingIdentity, setEditingIdentity] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const {
     selectedIdentityKeys,
@@ -297,6 +301,33 @@ export function AdminServerList({
         <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
           <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
             <AdminHeader title={title} auth={auth} />
+            <p className="text-sm">Effective approval mode: <strong>{approvalMode}</strong>. Saved policy overrides the startup setting.</p>
+            <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={async (event) => {
+              event.preventDefault();
+              const key = identityKey.trim();
+              if (!key || editingIdentity) return;
+              setEditingIdentity(true);
+              try {
+                if (identityAction === "ban" || identityAction === "unban") {
+                  await onBanStatusChange(key, identityAction === "ban");
+                } else {
+                  await onApproveStatusChange(key, identityAction === "approve");
+                }
+                setPolicyMessage(`Saved ${identityAction} for ${key}.`);
+              } catch (err) {
+                setPolicyMessage(err instanceof Error ? err.message : "Could not save identity policy.");
+              } finally {
+                setEditingIdentity(false);
+              }
+            }}>
+              <Input className="max-w-sm" aria-label="Service identity key" placeholder="Service identity key (name:address)" required value={identityKey} onChange={(e) => setIdentityKey(e.target.value)} />
+              <select aria-label="Identity policy action" value={identityAction} onChange={(e) => setIdentityAction(e.target.value)}>
+                <option value="approve">Pre-approve</option><option value="revoke">Revoke approval</option>
+                <option value="ban">Ban</option><option value="unban">Unban</option>
+              </select>
+              <button disabled={editingIdentity} type="submit" className="rounded bg-secondary px-3 py-2">Apply</button>
+              <span role="status">{policyMessage}</span>
+            </form>
             <div className="flex items-center gap-2">
               <div className="flex-1">{searchBar}</div>
             </div>

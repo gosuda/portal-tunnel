@@ -148,7 +148,7 @@ describe("useAdmin", () => {
 
     await waitFor(() => {
       expect(result.current.error).toBe(
-        "Invalid approval mode. Choose auto or manual and retry.",
+        "Invalid approval mode. Choose auto, manual, or strict and retry.",
       );
     });
   });

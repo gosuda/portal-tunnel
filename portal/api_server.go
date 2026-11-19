@@ -348,6 +348,12 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 	identityKey := challenge.Request.Identity.ServiceKey()
+	s.admissionMu.RLock()
+	defer s.admissionMu.RUnlock()
+	if err := s.registry.strictAdmissionError(identityKey); err != nil {
+		writeAPIErrorResponse(w, err)
+		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
+	}
 	// Exclusive registration starts fail-closed. Replicas keep the existing
 	// identity decision so joining a service cannot interrupt its siblings.
 	// Mux publishes the current decision before returning either kind of token.
