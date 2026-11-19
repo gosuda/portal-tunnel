@@ -1,10 +1,5 @@
 name: Build docs
 description: Install dependencies and build docs site
-inputs:
-  base-path:
-    description: Base path for docs site
-    required: false
-    default: '/portal-tunnel'
 runs:
   using: composite
   steps:
@@ -20,5 +15,5 @@ runs:
       shell: bash
       working-directory: docs
       env:
-        BASE_PATH: ${{ inputs.base-path }}
+        BASE_PATH: /portal-tunnel
       run: bun run build
