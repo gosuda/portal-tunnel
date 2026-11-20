@@ -47,7 +47,8 @@ run. From a checkout, install `deploy/helm/portal-relay` or
 The relay learns its public address by asking external services which address
 its outbound connections come from. It then publishes A and AAAA records for
 that address, both from the embedded DNS and through an external DNS provider.
-There is no setting that overrides the detected address.
+There is no setting that overrides the detected address yet;
+[#819](https://github.com/gosuda/portal-tunnel/issues/819) proposes one.
 
 On many clusters, outbound traffic leaves through a node address or a NAT
 gateway, not through the load balancer. DNS then sends visitors and tunnel
