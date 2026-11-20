@@ -693,6 +693,10 @@ Prints the installed version string and exits.
   `--identity-path`.
 - Multiple relay URLs are registered independently. A failed relay does not stop
   healthy relays from serving.
+- With `--discovery=false`, nothing replaces a failed relay, so `portal expose`
+  logs each relay's error and exits with a nonzero status once every relay has
+  failed, for example when each relay rejects the registration. With discovery
+  enabled, it keeps running while discovery selects other relays.
 - With discovery enabled, the tunnel consumes relay `/discovery` results and
   reconciles its relay pool.
 - MITM self-probing logs suspected termination by default; relay banning requires `--ban-mitm`.
