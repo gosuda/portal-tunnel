@@ -278,7 +278,8 @@ type Server struct {
 	ingressCtx        context.Context
 	ingressMu         sync.Mutex
 	ingressClosed     bool
-	ingressConns      map[net.Conn]struct{}
+	ingressConns      map[net.Conn]netip.Prefix
+	ingressSources    map[netip.Prefix]int
 	ingressInspecting int
 	ingressTenants    int
 	ingressWorkers    sync.WaitGroup
@@ -547,6 +548,7 @@ const (
 	quicBackhaulPerSourceLimit   = 4
 	publicIngressLimit           = 1024
 	publicInspectionLimit        = 128
+	publicInspectionSourceLimit  = 16
 )
 
 // Serve runs the complete relay lifecycle around the composed handler: the
@@ -1095,7 +1097,7 @@ func newBackhaulPendingSources() *backhaulPendingSources {
 func (p *backhaulPendingSources) acquire(remote net.Addr) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	prefix, ok := backhaulSourcePrefix(remote)
+	prefix, ok := remoteSourcePrefix(remote)
 	if !ok {
 		return true
 	}
@@ -1109,7 +1111,7 @@ func (p *backhaulPendingSources) acquire(remote net.Addr) bool {
 func (p *backhaulPendingSources) release(remote net.Addr) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	prefix, ok := backhaulSourcePrefix(remote)
+	prefix, ok := remoteSourcePrefix(remote)
 	if !ok {
 		return
 	}
@@ -1118,7 +1120,10 @@ func (p *backhaulPendingSources) release(remote net.Addr) {
 	}
 }
 
-func backhaulSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
+func remoteSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
+	if remote == nil {
+		return netip.Prefix{}, false
+	}
 	addrPort, err := netip.ParseAddrPort(remote.String())
 	if err != nil {
 		return netip.Prefix{}, false
@@ -1230,18 +1235,27 @@ func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 	if s.ingressClosed {
 		return false
 	}
+	source := netip.Prefix{}
 	if inspecting {
 		if s.ingressInspecting >= publicInspectionLimit {
+			return false
+		}
+		source, _ = remoteSourcePrefix(conn.RemoteAddr())
+		if s.ingressSources[source] >= publicInspectionSourceLimit {
 			return false
 		}
 	} else if s.ingressTenants >= publicIngressLimit {
 		return false
 	}
 	if s.ingressConns == nil {
-		s.ingressConns = make(map[net.Conn]struct{})
+		s.ingressConns = make(map[net.Conn]netip.Prefix)
 	}
-	s.ingressConns[conn] = struct{}{}
+	s.ingressConns[conn] = source
 	if inspecting {
+		if s.ingressSources == nil {
+			s.ingressSources = make(map[netip.Prefix]int)
+		}
+		s.ingressSources[source]++
 		s.ingressInspecting++
 	} else {
 		s.ingressTenants++
@@ -1250,27 +1264,36 @@ func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 	return true
 }
 
-func (s *Server) promoteIngress() bool {
+func (s *Server) promoteIngress(conn net.Conn) bool {
 	s.ingressMu.Lock()
 	defer s.ingressMu.Unlock()
 	if s.ingressClosed || s.ingressTenants >= publicIngressLimit {
 		return false
 	}
-	s.ingressInspecting--
+	s.releaseInspectionLocked(s.ingressConns[conn])
+	s.ingressConns[conn] = netip.Prefix{}
 	s.ingressTenants++
 	return true
 }
 
 func (s *Server) releaseIngress(conn net.Conn, inspecting bool) {
 	s.ingressMu.Lock()
+	source := s.ingressConns[conn]
 	delete(s.ingressConns, conn)
 	if inspecting {
-		s.ingressInspecting--
+		s.releaseInspectionLocked(source)
 	} else {
 		s.ingressTenants--
 	}
 	s.ingressMu.Unlock()
 	s.ingressWorkers.Done()
+}
+
+func (s *Server) releaseInspectionLocked(source netip.Prefix) {
+	s.ingressInspecting--
+	if s.ingressSources[source]--; s.ingressSources[source] <= 0 {
+		delete(s.ingressSources, source)
+	}
 }
 
 func (s *Server) closeIngress() {
@@ -1549,7 +1572,7 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 		}
 		return
 	}
-	if !s.promoteIngress() {
+	if !s.promoteIngress(conn) {
 		_ = wrappedConn.Close()
 		return
 	}

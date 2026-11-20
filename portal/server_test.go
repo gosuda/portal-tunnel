@@ -67,8 +67,85 @@ func TestPublicIngressAggregateAdmissionAndRelease(t *testing.T) {
 	defer extra.Close()
 	defer peer.Close()
 	checkIngressSaturation(t, &server, extra)
-	checkIngressCapacityReuse(t, &server, conns)
+	checkIngressCapacityReuse(t, &server, conns, extra)
 	checkIngressShutdown(t, &server, conns, extra)
+}
+
+func TestPublicIngressInspectionPreservesCapacityAcrossSources(t *testing.T) {
+	var server Server
+	var held []net.Conn
+	for i := range publicInspectionSourceLimit {
+		conn := newPublicIngressTestConn(t, net.IPv4(192, 0, 2, 1), 10000+i)
+		if !server.admitIngress(conn, true) {
+			t.Fatal("connection within source inspection limit rejected")
+		}
+		held = append(held, conn)
+	}
+	if server.admitIngress(newPublicIngressTestConn(t, net.IPv4(192, 0, 2, 1), 20000), true) {
+		t.Fatal("source port bypassed inspection source limit")
+	}
+	other := newPublicIngressTestConn(t, net.IPv4(192, 0, 2, 2), 20001)
+	if !server.admitIngress(other, true) {
+		t.Fatal("saturated source blocked a different source")
+	}
+
+	server.releaseIngress(held[0], true)
+	released := newPublicIngressTestConn(t, net.IPv4(192, 0, 2, 1), 20002)
+	if !server.admitIngress(released, true) {
+		t.Fatal("released source capacity was not reusable")
+	}
+	if !server.promoteIngress(held[1]) {
+		t.Fatal("inspection could not be promoted with tenant capacity available")
+	}
+	promoted := newPublicIngressTestConn(t, net.IPv4(192, 0, 2, 1), 20003)
+	if !server.admitIngress(promoted, true) {
+		t.Fatal("promoted inspection did not release source capacity")
+	}
+
+	server.releaseIngress(held[1], false)
+	for _, conn := range held[2:] {
+		server.releaseIngress(conn, true)
+	}
+	server.releaseIngress(other, true)
+	server.releaseIngress(released, true)
+	server.releaseIngress(promoted, true)
+	server.ingressWorkers.Wait()
+}
+
+func TestPublicIngressInspectionRetainsAggregateLimit(t *testing.T) {
+	var server Server
+	var conns []net.Conn
+	for i := range publicInspectionLimit {
+		conn := newPublicIngressTestConn(t, net.IPv4(198, 51, 100, byte(i+1)), 10000+i)
+		if !server.admitIngress(conn, true) {
+			t.Fatal("connection below aggregate inspection limit rejected")
+		}
+		conns = append(conns, conn)
+	}
+	extra := newPublicIngressTestConn(t, net.IPv4(203, 0, 113, 1), 20000)
+	if server.admitIngress(extra, true) {
+		t.Fatal("connection bypassed aggregate inspection limit")
+	}
+	for _, conn := range conns {
+		server.releaseIngress(conn, true)
+	}
+	server.ingressWorkers.Wait()
+}
+
+type publicIngressTestConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c *publicIngressTestConn) RemoteAddr() net.Addr {
+	return c.remote
+}
+
+func newPublicIngressTestConn(t *testing.T, ip net.IP, port int) net.Conn {
+	t.Helper()
+	conn, peer := net.Pipe()
+	t.Cleanup(func() { _ = conn.Close(); _ = peer.Close() })
+	return &publicIngressTestConn{Conn: conn, remote: &net.TCPAddr{IP: ip, Port: port}}
 }
 
 func fillIngressBudget(t *testing.T, server *Server) []net.Conn {
@@ -93,15 +170,15 @@ func checkIngressSaturation(t *testing.T, server *Server, extra net.Conn) {
 	if !server.admitIngress(extra, true) {
 		t.Fatal("tenant saturation blocked root inspection")
 	}
-	if server.promoteIngress() {
+	if server.promoteIngress(extra) {
 		t.Fatal("SNI tenant bypassed tenant connection budget")
 	}
 }
 
-func checkIngressCapacityReuse(t *testing.T, server *Server, conns []net.Conn) {
+func checkIngressCapacityReuse(t *testing.T, server *Server, conns []net.Conn, extra net.Conn) {
 	t.Helper()
 	server.releaseIngress(conns[0], false)
-	if !server.promoteIngress() {
+	if !server.promoteIngress(extra) {
 		t.Fatal("released tenant capacity was not reusable")
 	}
 }

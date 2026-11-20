@@ -296,10 +296,12 @@ ClientHello inspection and tenant bridges have separate server-wide budgets:
 at most 128 sockets may await inspection, and at most 1024 tenant connections
 may be pending or active. Root API and reverse-connect handoff does not consume
 the tenant budget, so tenant saturation does not prevent a fresh root connection.
-The inspection budget is shared across source addresses and the root API; a
-single source can occupy all 128 slots until their two-second deadlines expire.
-It bounds memory and workers but does not guarantee source fairness or root
-availability during a sustained ClientHello flood.
+Within the inspection budget, one IPv4 address or IPv6 /64 may hold at most 16
+sockets; unparseable peer addresses share the same fallback budget. This keeps
+one source from occupying every slot until the two-second deadlines expire while
+the aggregate cap continues to bound memory and workers. Root capacity is not
+reserved, so distributed floods or many clients behind one proxy still require
+protection at the deployment boundary when root availability must be guaranteed.
 
 A lease independently admits at most 128 pending reverse acquisitions and active
 bridges; the SDK also limits its local TCP proxy workers to 128. Idle established
