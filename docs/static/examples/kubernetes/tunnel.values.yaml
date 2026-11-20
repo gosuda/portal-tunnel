@@ -1,0 +1,12 @@
+# Exposes an in-cluster Service through a relay. The client creates its
+# identity on first start and keeps it on a persistent volume, so the URL
+# survives restarts. tunnel.yaml is the same deployment without Helm.
+#
+#   helm install my-app-tunnel oci://ghcr.io/gosuda/charts/portal-tunnel \
+#     -f tunnel.values.yaml
+target: my-app.default.svc.cluster.local:8080
+name: my-app
+relays:
+  - https://portal.example.com
+args:
+  - --discovery=false

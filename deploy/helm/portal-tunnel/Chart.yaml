@@ -1,0 +1,11 @@
+apiVersion: v2
+name: portal-tunnel
+description: Portal tunnel client, which exposes an in-cluster service through a Portal relay.
+type: application
+# Release CD packages the chart with --version and --app-version set from the
+# v* tag. A checkout installs the floating major image tag.
+version: 0.0.0
+appVersion: "2"
+home: https://gosuda.github.io/portal-tunnel/kubernetes
+sources:
+  - https://github.com/gosuda/portal-tunnel
