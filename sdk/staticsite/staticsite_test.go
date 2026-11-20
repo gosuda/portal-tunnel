@@ -204,3 +204,38 @@ func TestStaticSiteHandlerAllowsInRootSymlinks(t *testing.T) {
 		}
 	}
 }
+
+func TestStaticSiteHandlerPinsOpenedRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "site")
+	replacement := filepath.Join(parent, "replacement")
+	for path, content := range map[string]string{
+		root:        "original content",
+		replacement: "replacement secret",
+	} {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, utils.DefaultStaticIndex), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	handler, err := staticsite.OpenHandler("/", root, utils.DefaultStaticIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = handler.Close() })
+	if err := os.Rename(root, filepath.Join(parent, "opened-site")); err != nil {
+		t.Skipf("cannot rename opened static root: %v", err)
+	}
+	if err := os.Rename(replacement, root); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://public.example/", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "original content" {
+		t.Fatalf("replacement root served: status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+}

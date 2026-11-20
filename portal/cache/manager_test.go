@@ -476,11 +476,12 @@ func checkRedirectSyncRejected(t *testing.T, root string, content []byte, hash s
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = source.Close() })
 	syncer := &Syncer{
 		source:   source,
 		relayURL: *relayURL,
 		limits:   types.StaticCacheLimits{MaxExposureBytes: 1024, MaxObjectSize: 512},
-		snapshot: stageStaticSnapshot(root, hash, content),
+		snapshot: stageStaticSnapshot(source.root, hash, content),
 	}
 	if err := syncer.Sync(context.Background(), relay.Client(), "lease-token"); err == nil {
 		t.Fatal("redirect accepted as a successful cache sync")
@@ -559,13 +560,14 @@ func attachTransientRelay(t *testing.T, probe *transientAdmissionProbe, root str
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = source.Close() })
 	source.mu.Lock()
-	source.snapshot = stageStaticSnapshot(root, probe.hash, probe.content)
+	source.snapshot = stageStaticSnapshot(source.root, probe.hash, probe.content)
 	source.mu.Unlock()
 	probe.syncer = source.Subscribe(*relayURL, types.StaticCacheLimits{MaxExposureBytes: 1024, MaxObjectSize: 512})
 }
 
-func stageStaticSnapshot(root, hash string, content []byte) *sourceSnapshot {
+func stageStaticSnapshot(root *os.Root, hash string, content []byte) *sourceSnapshot {
 	return &sourceSnapshot{
 		root: root,
 		manifest: types.StaticCacheManifest{

@@ -107,7 +107,7 @@ func (s *Syncer) Sync(ctx context.Context, client *http.Client, accessToken stri
 func (s *Syncer) snapshotManifest() (types.StaticCacheManifest, error) {
 	var manifest types.StaticCacheManifest
 	snapshot := s.snapshot
-	if snapshot == nil {
+	if snapshot == nil || snapshot.root == nil {
 		return manifest, errCacheSourceGenerationIsUnavailable
 	}
 	if snapshot.err != nil {
@@ -180,11 +180,7 @@ func (s *Syncer) syncSnapshot(ctx context.Context, client *http.Client, accessTo
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(s.snapshot.root)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
+	root := s.snapshot.root
 	headers := http.Header{types.HeaderAccessToken: []string{accessToken}}
 	var status types.StaticCacheStatus
 	if err := utils.HTTPDoAPIPath(ctx, client, &s.relayURL, http.MethodPost, types.PathSDKCache, manifest, headers, &status); err != nil {

@@ -21,50 +21,52 @@ func newStaticSite(t *testing.T, files map[string]string) string {
 	return root
 }
 
-func TestResolveStaticSiteDirectoryUsesDefaultIndex(t *testing.T) {
+func TestOpenStaticSiteDirectoryUsesDefaultIndex(t *testing.T) {
 	t.Parallel()
 
 	dir := newStaticSite(t, map[string]string{"index.html": "<html>index</html>"})
 
-	root, index, err := ResolveStaticSite(dir)
+	root, index, err := OpenStaticSite(dir, "")
 	if err != nil {
-		t.Fatalf("ResolveStaticSite() error = %v", err)
+		t.Fatalf("OpenStaticSite() error = %v", err)
 	}
-	if root != dir {
-		t.Fatalf("root = %q, want %q", root, dir)
+	t.Cleanup(func() { _ = root.Close() })
+	if root.Name() != dir {
+		t.Fatalf("root = %q, want %q", root.Name(), dir)
 	}
 	if index != DefaultStaticIndex {
 		t.Fatalf("index = %q, want %q", index, DefaultStaticIndex)
 	}
 }
 
-func TestResolveStaticSiteFileUsesParentDirectory(t *testing.T) {
+func TestOpenStaticSiteFileUsesParentDirectory(t *testing.T) {
 	t.Parallel()
 
 	dir := newStaticSite(t, map[string]string{"main.html": "<html>main</html>"})
 
-	root, index, err := ResolveStaticSite(filepath.Join(dir, "main.html"))
+	root, index, err := OpenStaticSite(filepath.Join(dir, "main.html"), "")
 	if err != nil {
-		t.Fatalf("ResolveStaticSite() error = %v", err)
+		t.Fatalf("OpenStaticSite() error = %v", err)
 	}
-	if root != dir {
-		t.Fatalf("root = %q, want %q", root, dir)
+	t.Cleanup(func() { _ = root.Close() })
+	if root.Name() != dir {
+		t.Fatalf("root = %q, want %q", root.Name(), dir)
 	}
 	if index != "main.html" {
 		t.Fatalf("index = %q, want main.html", index)
 	}
 }
 
-func TestResolveStaticSiteRejectsMissingEntry(t *testing.T) {
+func TestOpenStaticSiteRejectsMissingEntry(t *testing.T) {
 	t.Parallel()
 
 	dir := newStaticSite(t, map[string]string{"assets/app.css": "body{}"})
-	if _, _, err := ResolveStaticSite(dir); err == nil {
-		t.Fatal("ResolveStaticSite() error = nil, want missing entry error")
+	if _, _, err := OpenStaticSite(dir, ""); err == nil {
+		t.Fatal("OpenStaticSite() error = nil, want missing entry error")
 	}
 
-	if _, _, err := ResolveStaticSite(filepath.Join(dir, "nope")); err == nil {
-		t.Fatal("ResolveStaticSite() error = nil, want missing path error")
+	if _, _, err := OpenStaticSite(filepath.Join(dir, "nope"), ""); err == nil {
+		t.Fatal("OpenStaticSite() error = nil, want missing path error")
 	}
 }
 

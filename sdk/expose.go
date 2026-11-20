@@ -336,6 +336,11 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if source != nil {
+			_ = source.Close()
+		}
+	}()
 	relayURLs, err := types.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return nil, err
@@ -367,6 +372,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		updates:        make(chan RelayStatus, 1),
 		discovery:      controller,
 	}
+	source = nil
 	if exposure.cache != nil {
 		go exposure.cache.Run(exposureCtx)
 	}
@@ -794,6 +800,7 @@ func (e *Exposure) Close() error {
 		event.Msg("exposure closed")
 		if e.cache != nil {
 			e.cache.Wait()
+			closeErr = errors.Join(closeErr, e.cache.Close())
 		}
 		e.acceptLoops.Wait()
 		e.drainAccepted()

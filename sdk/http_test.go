@@ -290,6 +290,7 @@ func TestHTTPRoutesServeStaticRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHTTPRoutes() error = %v", err)
 	}
+	t.Cleanup(func() { _ = handler.Close() })
 
 	req := httptest.NewRequest(http.MethodGet, "https://public.example/deep/route", nil)
 	rec := httptest.NewRecorder()
