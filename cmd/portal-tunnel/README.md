@@ -17,8 +17,8 @@ curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/inst
 
 **Windows (PowerShell):**
 ```powershell
-$ProgressPreference = 'SilentlyContinue'
-irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
+$ProgressPreference = 'SilentlyContinue';
+irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex;
 ```
 
 ### Docker Compose

@@ -52,6 +52,8 @@ func AssetFilename(slug string) (string, bool) {
 }
 
 func relayShellScript(portalURL, script string) string {
+	script = strings.ReplaceAll(script, "\r\n", "\n")
+	script = strings.ReplaceAll(script, "\r", "\n")
 	overrides := strings.Join([]string{
 		"BASE_URL=" + quoteShellValue(portalURL),
 		"RELAY_URL=" + quoteShellValue(portalURL),

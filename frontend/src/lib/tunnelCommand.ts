@@ -111,8 +111,8 @@ function buildTunnelCommandParts({
   if (os === "windows") {
     return {
       installLine: [
-        `$ProgressPreference = 'SilentlyContinue'`,
-        `irm ${formatToken(installPowerShellURL, os)} | iex`,
+        `$ProgressPreference = 'SilentlyContinue';`,
+        `irm ${formatToken(installPowerShellURL, os)} | iex;`,
       ].join("\n"),
       exposeHead: "portal expose",
       exposeOptions,
