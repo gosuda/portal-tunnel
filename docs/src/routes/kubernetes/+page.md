@@ -89,7 +89,7 @@ kubectl get service relay-portal-relay
 ```
 
 With the embedded DNS, delegate the relay domain to the Service address once,
-as described in [DNS Configuration](/deployment#dns-configuration), and publish
+as described in [DNS Configuration](/self-hosting#dns-configuration), and publish
 the DS record from the startup log for DNSSEC. Follow the first certificate
 issuance in the log:
 
