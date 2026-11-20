@@ -1,0 +1,72 @@
+image:
+  repository: ghcr.io/gosuda/portal
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Relay environment variables. Any key printed by
+# `relay-server config --format env` is accepted; leave a key out to keep the
+# relay default. PORTAL_URL is required.
+#
+# The chart sets SNI_PORT, EMBEDDED_DNS_PORT, HTTP_REDIRECT_ADDR and
+# IDENTITY_PATH itself. It reads these keys to decide what the Service publishes:
+#   PORTAL_URL             HTTPS port: 443, or the port the URL names
+#   ACME_DNS_PROVIDER      empty or "embedded" publishes 53/tcp and 53/udp
+#   HTTP_REDIRECT_ENABLED  publishes 80/tcp
+#   UDP_ENABLED            publishes the HTTPS port over UDP (QUIC backhaul)
+#                          and every UDP lease port
+#   TCP_ENABLED            publishes every TCP lease port
+#   MIN_PORT, MAX_PORT     lease port range, required by UDP_ENABLED/TCP_ENABLED
+env:
+  PORTAL_URL: ""
+
+# Secret relay environment variables, such as ADMIN_TOKEN, ACME_EAB_HMAC or a
+# DNS provider token. The chart stores them in a Secret it creates.
+secretEnv: {}
+
+# Existing Secret whose keys are relay environment variable names. Use it
+# instead of secretEnv to keep secrets out of Helm values.
+existingSecret: ""
+
+service:
+  type: LoadBalancer
+  # Keeps visitor and tunnel source addresses, which pre-auth limits and
+  # TUNNEL_SOURCE_CIDRS depend on. The relay does not read the PROXY protocol.
+  externalTrafficPolicy: Local
+  # A static address for the NS delegation of the relay domain.
+  loadBalancerIP: ""
+  annotations: {}
+
+persistence:
+  # Holds the relay identity, ACME account, certificates, policy state and the
+  # static cache. Without it, every restart registers a new ACME account and
+  # issues new certificates.
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  # Leaves room for the static cache (CACHE_MAX_BYTES, 1 GiB by default).
+  size: 2Gi
+
+podMonitor:
+  # Scrapes /api/admin/metrics with the ADMIN_TOKEN key of the chart Secret or
+  # existingSecret. Requires the Prometheus Operator CRDs.
+  enabled: false
+  interval: 30s
+  # Merged into the endpoint tlsConfig. serverName defaults to the PORTAL_URL
+  # host, because the relay routes TLS by SNI.
+  tlsConfig: {}
+
+resources: {}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# For example a GCP service-account file for GOOGLE_APPLICATION_CREDENTIALS,
+# or a custom frontend for PORTAL_FRONTEND_DIR.
+extraVolumes: []
+extraVolumeMounts: []

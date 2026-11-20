@@ -1,0 +1,23 @@
+# Public relay that serves its own DNS zone with the embedded DNS server, the
+# default DNS provider.
+#
+#   kubectl create secret generic portal-relay \
+#     --from-literal=ADMIN_TOKEN="$(openssl rand -hex 32)"
+#   helm install relay oci://ghcr.io/gosuda/charts/portal-relay \
+#     -f relay-embedded-dns.values.yaml
+#
+# Then delegate portal.example.com to ns.portal.example.com, with a glue
+# record for the Service address.
+env:
+  PORTAL_URL: https://portal.example.com
+  # Raw TCP and UDP leases. Each port in the range becomes a Service port.
+  # TCP_ENABLED: "true"
+  # UDP_ENABLED: "true"
+  # MIN_PORT: "40000"
+  # MAX_PORT: "40009"
+
+existingSecret: portal-relay
+
+service:
+  # Reserve this address with your load balancer before installing.
+  loadBalancerIP: 203.0.113.10

@@ -17,6 +17,16 @@ when offline and never fall back to cached content.
 
 ## Unreleased
 
+### Kubernetes: Helm charts for the relay and the tunnel client
+
+`deploy/helm/portal-relay` runs the relay and `deploy/helm/portal-tunnel` runs
+a tunnel client for an in-cluster Service. Release tags publish both to
+`oci://ghcr.io/gosuda/charts` with the release version. Example values files
+and plain client manifests are in `docs/static/examples/kubernetes`. The relay
+publishes DNS records for the address of its outbound connections, so the
+cluster's outbound address must be the relay Service address. See
+[Kubernetes](/kubernetes).
+
 ### Agent: relay status and configuration compatibility
 
 `/agent/status` now reports relay `state` (`ready`, `connecting`, or `failed`)

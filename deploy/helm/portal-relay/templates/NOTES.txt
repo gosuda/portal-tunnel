@@ -1,0 +1,32 @@
+The Portal relay for {{ .Values.env.PORTAL_URL }} is starting.
+
+1. Find the Service address:
+
+   kubectl get service {{ include "portal-relay.fullname" . }} --namespace {{ .Release.Namespace }}
+
+{{- if eq (include "portal-relay.embeddedDNS" .) "true" }}
+
+2. Delegate {{ include "portal-relay.host" . }} to the embedded DNS at the parent zone:
+
+   NS  {{ include "portal-relay.host" . }}     ns.{{ include "portal-relay.host" . }}
+   A   ns.{{ include "portal-relay.host" . }}  <Service address>   (glue)
+
+   The relay answers with the public address it detects on outbound
+   connections, which must be the Service address.
+{{- else }}
+
+2. The relay manages {{ include "portal-relay.host" . }} through {{ .Values.env.ACME_DNS_PROVIDER }}
+   and publishes A/AAAA records for the public address it detects on outbound
+   connections. That address must reach the Service.
+{{- end }}
+
+3. Follow the first certificate issuance:
+
+   kubectl logs deployment/{{ include "portal-relay.fullname" . }} --namespace {{ .Release.Namespace }} --follow
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence is disabled. Every restart registers a new ACME account
+and issues new certificates, which quickly reaches CA rate limits.
+{{- end }}
+
+Guide: https://gosuda.github.io/portal-tunnel/kubernetes

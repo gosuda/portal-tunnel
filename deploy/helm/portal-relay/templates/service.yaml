@@ -1,0 +1,70 @@
+{{- $httpsPort := include "portal-relay.httpsPort" . | int }}
+{{- $udp := eq (include "portal-relay.udp" .) "true" }}
+{{- $tcp := eq (include "portal-relay.tcp" .) "true" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "portal-relay.fullname" . }}
+  labels:
+    {{- include "portal-relay.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if has .Values.service.type (list "LoadBalancer" "NodePort") }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- with .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  # ACME DNS-01 validation queries the embedded DNS server before the first
+  # certificate exists, so traffic must reach the relay while it starts.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "portal-relay.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: https
+      port: {{ $httpsPort }}
+      targetPort: https
+      protocol: TCP
+    {{- if $udp }}
+    - name: quic
+      port: {{ $httpsPort }}
+      targetPort: quic
+      protocol: UDP
+    {{- end }}
+    {{- if eq (include "portal-relay.embeddedDNS" .) "true" }}
+    - name: dns-tcp
+      port: 53
+      targetPort: dns-tcp
+      protocol: TCP
+    - name: dns-udp
+      port: 53
+      targetPort: dns-udp
+      protocol: UDP
+    {{- end }}
+    {{- if eq (include "portal-relay.httpRedirect" .) "true" }}
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    {{- end }}
+    {{- if or $udp $tcp }}
+    {{- /* Lease ports are announced to clients as-is, so each one is published unchanged. */}}
+    {{- range $port := untilStep (int .Values.env.MIN_PORT) (int .Values.env.MAX_PORT | add1 | int) 1 }}
+    {{- if $tcp }}
+    - name: tcp-{{ $port }}
+      port: {{ $port }}
+      targetPort: {{ $port }}
+      protocol: TCP
+    {{- end }}
+    {{- if $udp }}
+    - name: udp-{{ $port }}
+      port: {{ $port }}
+      targetPort: {{ $port }}
+      protocol: UDP
+    {{- end }}
+    {{- end }}
+    {{- end }}

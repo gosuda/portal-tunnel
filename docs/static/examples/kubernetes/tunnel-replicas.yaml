@@ -1,0 +1,72 @@
+# Two clients serve one URL in HTTP replica mode, without Helm. They share an
+# identity from a Secret, and the relay spreads new connections among them.
+# tunnel-replicas.values.yaml is the same deployment for the chart.
+#
+#   kubectl create secret generic my-app-identity --from-file=identity.json
+#   kubectl apply -f tunnel-replicas.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app-tunnel
+spec:
+  replicas: 2
+  # A new client joins the URL before an old one leaves: a client registers a
+  # few seconds after it starts, so a new pod counts as available only after
+  # 10 seconds.
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: my-app-tunnel
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: my-app-tunnel
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tunnel
+          image: ghcr.io/gosuda/portal-tunnel:2
+          args:
+            - expose
+            - --name
+            - my-app
+            - --relays
+            - https://portal.example.com
+            - --discovery=false
+            - --replica
+            - --metrics-addr
+            - ":9090"
+            - my-app.default.svc.cluster.local:8080
+          env:
+            - name: IDENTITY_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: my-app-identity
+                  key: identity.json
+          ports:
+            - name: metrics
+              containerPort: 9090
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: work
+              mountPath: /identity
+      volumes:
+        # Working directory only; the identity comes from the Secret.
+        - name: work
+          emptyDir: {}

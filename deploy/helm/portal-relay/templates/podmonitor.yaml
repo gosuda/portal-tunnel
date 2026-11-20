@@ -1,0 +1,24 @@
+{{- if .Values.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "portal-relay.fullname" . }}
+  labels:
+    {{- include "portal-relay.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "portal-relay.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: https
+      scheme: https
+      path: /api/admin/metrics
+      interval: {{ .Values.podMonitor.interval }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "portal-relay.secretName" . }}
+          key: ADMIN_TOKEN
+      tlsConfig:
+        {{- merge (deepCopy .Values.podMonitor.tlsConfig) (dict "serverName" (include "portal-relay.host" .)) | toYaml | nindent 8 }}
+{{- end }}
