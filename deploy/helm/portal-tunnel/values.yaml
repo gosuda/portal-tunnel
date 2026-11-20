@@ -14,6 +14,8 @@ fullnameOverride: ""
 target: ""
 
 # Service name for a short URL such as https://my-app.<relay domain>/ (--name).
+# Required for HTTP services: the relay rejects an unnamed one unless args
+# select --tcp, --udp, --tls-auto or --tls-cert.
 name: ""
 
 # Relay URLs (--relays). Add --discovery=false to args to use only these.
@@ -36,15 +38,17 @@ existingSecret: ""
 identity:
   # Existing Secret holding the tunnel identity JSON, passed as IDENTITY_JSON.
   # Without it, the client creates an identity on first start and keeps it on
-  # the persistent volume.
+  # the persistent volume. Needs Portal v2.8.0 or later: earlier clients ignore
+  # name for an existing identity.
   existingSecret: ""
   key: identity.json
 
 # Clients serving the same URL. More than one adds --replica (HTTP replica
-# mode), which needs identity.existingSecret and a relay that supports
-# replicas, and rules out dedicated TCP/UDP ports, the relay cache, overlay,
-# email and SAML authentication, and paid Nano routes. To scale the Deployment
-# by other means, such as an autoscaler, add --replica to args yourself.
+# mode), which needs identity.existingSecret and Portal v2.8.0 or later on the
+# client and the relay, and rules out dedicated TCP/UDP ports, the relay
+# cache, overlay, email and SAML authentication, and paid Nano routes. To scale
+# the Deployment by other means, such as an autoscaler, add --replica to args
+# yourself.
 replicaCount: 1
 
 persistence:

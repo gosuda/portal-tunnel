@@ -32,6 +32,9 @@ run. From a checkout, install `deploy/helm/portal-relay` or
 ## Prerequisites
 
 - Kubernetes 1.26 or later, and Helm 3.8 or later for OCI charts.
+- Portal v2.8.0 or later. Earlier clients ignore `--name` for an identity
+  from a Secret and lack `--replica`. Until v2.8.0 is published, the `2` image
+  tag that charts from a checkout use points at an earlier release.
 - For the relay:
   - A `LoadBalancer` Service that can publish TCP and UDP on one address. The
     embedded DNS needs `53/tcp` and `53/udp` on the address its NS delegation
@@ -201,7 +204,7 @@ helm install my-app-tunnel oci://ghcr.io/gosuda/charts/portal-tunnel -f tunnel.v
 | Value | Effect |
 |---|---|
 | `target` | Address to expose, such as `my-app.default.svc.cluster.local:8080` |
-| `name` | Service name for the short URL (`--name`) |
+| `name` | Service name for the short URL (`--name`). Required for HTTP services; the relay rejects an unnamed one unless `args` select `--tcp`, `--udp`, `--tls-auto` or `--tls-cert` |
 | `relays` | Relay URLs (`--relays`) |
 | `args` | Other `portal expose` flags, such as `--discovery=false`, `--tcp` or `--auth` |
 | `env`, `secretEnv`, `existingSecret` | Environment variables read by `portal expose`; secret ones, such as `AUTH_OIDC_CLIENT_SECRET`, go in a Secret |
@@ -315,6 +318,11 @@ addresses through.
 
 **Lease ports are unreachable.** Check that the load balancer accepted every
 port of the range, and that UDP and TCP are on in `env`.
+
+**The client runs but never logs `service ready at`.** The liveness probe
+checks only `/metrics`, so a client whose relays all refused it stays
+`Running`. Look for `failed permanently` in the client log; the error before
+it names the cause, such as `unnamed HTTP services require Local TLS`.
 
 **The relay or client cannot write its volume.** Both run as UID and GID
 65532 and rely on `fsGroup`. With a storage driver that ignores `fsGroup`,
