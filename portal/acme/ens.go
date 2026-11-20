@@ -219,7 +219,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		return m.applyENSCommandRemove(ctx, command)
 	}
 	if command.hostname != m.cfg.BaseDomain {
-		publicIPs, err := utils.ResolvePublicIPs(ctx)
+		publicIPs, err := m.publicIPs(ctx)
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
 		}
