@@ -376,8 +376,6 @@ Show `Approval.Message()` to people: `waiting for relay approval` or
 The browser SDK stays at `connecting`, because a failed WebSocket does not
 expose its status.
 
-<div id="browser-wasm-sdk-runtime"></div>
-
 ## Browser/WASM SDK Runtime
 
 The same `sdk.Expose` and `sdk.RunHTTP` lifecycle can run in a Go WebAssembly

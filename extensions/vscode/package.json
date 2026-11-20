@@ -16,7 +16,7 @@
   },
   "packageManager": "pnpm@10.34.5",
   "engines": {
-    "vscode": "^1.109.0"
+    "vscode": "^1.146.0"
   },
   "extensionKind": [
     "workspace"
@@ -48,7 +48,9 @@
       "properties": {
         "portal.relayUrls": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Relay server URLs (https only, e.g. https://my-relay.example.com). Leave empty to use the public registry at https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json.",
           "restricted": true
@@ -82,13 +84,13 @@
     "test": "pnpm run compile-tests && node --test out/test/extension.test.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.109.0",
-    "@types/node": "22.x",
-    "@vscode/vsce": "4.0.0",
-    "typescript-eslint": "^8.54.0",
-    "eslint": "^9.39.2",
-    "esbuild": "^0.27.2",
+    "@types/vscode": "^1.146.0",
+    "@types/node": "^26.6.6",
+    "@vscode/vsce": "^4.1.1",
+    "typescript-eslint": "^8.73.0",
+    "eslint": "^10.15.0",
+    "esbuild": "^0.28.2",
     "npm-run-all": "^4.1.5",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }

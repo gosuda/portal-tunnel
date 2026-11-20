@@ -121,8 +121,6 @@ Client browser
 
 Tenant TLS terminates on the SDK side. The local service receives the decrypted stream from the tunnel process, while the relay only handles routing metadata and ciphertext.
 
-<div id="browser-wasm-transport"></div>
-
 ### Browser/WASM transport
 
 For an ordinary uncached exposure, running the SDK in WebAssembly changes the
