@@ -52,7 +52,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $unnamedAllowed = true }}
 {{- end }}
 {{- end }}
-{{- if not (or .Values.name $unnamedAllowed) }}
+{{- if not (or (trim (toString .Values.name)) $unnamedAllowed) }}
 {{- fail "set name: the relay rejects an unnamed HTTP service unless args select --tcp, --udp, --tls-auto or --tls-cert" }}
 {{- end }}
 {{- if and (gt (int .Values.replicaCount) 1) (not .Values.identity.existingSecret) }}

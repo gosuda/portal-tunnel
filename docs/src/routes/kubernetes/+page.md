@@ -228,7 +228,9 @@ one stops: in replica mode both serve the URL meanwhile, and a single client
 hands its lease over to the new one. A client registers a few seconds after
 it starts and has no readiness check for that, so the chart sets
 `minReadySeconds: 10` to keep the old client running until then. Set it on
-your own Deployments too, as the plain examples do.
+your own Deployments too, as the plain examples do. A single client can still
+drop a few requests around the handover; with `replicaCount: 2`, another
+client serves the URL throughout a rollout.
 
 ### Without Helm
 
@@ -322,7 +324,9 @@ port of the range, and that UDP and TCP are on in `env`.
 **The client runs but never logs `service ready at`.** The liveness probe
 checks only `/metrics`, so a client whose relays all refused it stays
 `Running`. Look for `failed permanently` in the client log; the error before
-it names the cause, such as `unnamed HTTP services require Local TLS`.
+it names the cause, such as `unnamed HTTP services require Local TLS`. An
+unnamed client with `--tls-auto` on a relay that does not issue tenant
+certificates logs the warning `tenant_issuance_disabled` instead.
 
 **The relay or client cannot write its volume.** Both run as UID and GID
 65532 and rely on `fsGroup`. With a storage driver that ignores `fsGroup`,
