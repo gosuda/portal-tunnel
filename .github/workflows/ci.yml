@@ -17,7 +17,7 @@ concurrency:
 jobs:
   changes:
     name: Changes
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -60,7 +60,7 @@ jobs:
     name: Verify
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Require successful change detection
@@ -130,7 +130,7 @@ jobs:
     name: E2E Tests
     needs: changes
     if: needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -153,7 +153,7 @@ jobs:
     name: Build Tunnel Image
     needs: changes
     if: needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout code
