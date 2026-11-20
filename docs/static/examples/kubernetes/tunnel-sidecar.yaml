@@ -11,6 +11,9 @@ metadata:
   name: my-app
 spec:
   replicas: 2
+  # The tunnel registers a few seconds after the pod starts, so a new pod
+  # counts as available only after 10 seconds, before an old one stops.
+  minReadySeconds: 10
   selector:
     matchLabels:
       app.kubernetes.io/name: my-app

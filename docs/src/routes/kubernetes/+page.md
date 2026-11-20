@@ -222,7 +222,10 @@ as an autoscaler, add `--replica` to `args`.
 With an identity on a volume, the Deployment uses the `Recreate` strategy.
 With an identity Secret, a rolling update starts the new client before the old
 one stops: in replica mode both serve the URL meanwhile, and a single client
-hands its lease over to the new one.
+hands its lease over to the new one. A client registers a few seconds after
+it starts and has no readiness check for that, so the chart sets
+`minReadySeconds: 10` to keep the old client running until then. Set it on
+your own Deployments too, as the plain examples do.
 
 ### Without Helm
 

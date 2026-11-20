@@ -10,7 +10,10 @@ metadata:
   name: my-app-tunnel
 spec:
   replicas: 2
-  # A new client joins the URL before an old one leaves.
+  # A new client joins the URL before an old one leaves: a client registers a
+  # few seconds after it starts, so a new pod counts as available only after
+  # 10 seconds.
+  minReadySeconds: 10
   strategy:
     type: RollingUpdate
   selector:

@@ -8,15 +8,19 @@ metadata:
     {{- include "portal-tunnel.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if $persistent }}
+  # One ReadWriteOnce volume holds the identity.
   strategy:
-    {{- if $persistent }}
-    # One ReadWriteOnce volume holds the identity.
     type: Recreate
-    {{- else }}
-    # The new client registers before the old one stops: it joins the URL in
-    # replica mode, or takes the lease over from a single client.
+  {{- else }}
+  # A client registers with its relays a few seconds after it starts and has
+  # no readiness check for that. Waiting 10 seconds before a new pod counts as
+  # available lets it register before an old one stops: it joins the URL in
+  # replica mode, or takes the lease over from a single client.
+  minReadySeconds: 10
+  strategy:
     type: RollingUpdate
-    {{- end }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "portal-tunnel.selectorLabels" . | nindent 6 }}
