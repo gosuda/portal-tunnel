@@ -29,6 +29,7 @@ func newTestReputationAPI(t *testing.T) *RelayAPI {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = api.close() })
 	return api
 }
 
@@ -112,6 +113,9 @@ func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, e
 		t.Fatal(err)
 	}
 	api, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{})
+	if err == nil {
+		t.Cleanup(func() { _ = api.close() })
+	}
 	return api, server, err
 }
 
@@ -174,11 +178,14 @@ func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = api.close() })
 	checkMigratedIdentitySnapshot(t, api)
 	checkMigratedPolicyFile(t, path)
-	if _, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{}); err != nil {
+	restarted, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{})
+	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
+	t.Cleanup(func() { _ = restarted.close() })
 	checkRemovedIPEndpoints(t, api)
 }
 

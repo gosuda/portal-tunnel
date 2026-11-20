@@ -270,6 +270,7 @@ func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402
 	if err != nil {
 		return err
 	}
+	defer relayAPI.close()
 
 	appRoutes := relayAPI.Handler()
 	if err := mountRelayRoutes(x402Settings, server, appRoutes); err != nil {
