@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { apiClient, APIClientError } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import type { DiscoveredService, ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
+import { mergeLocations } from "@/lib/server";
+import type { DiscoveredService, ServiceDiscoveryResponse } from "@/types/api";
 
 const REFRESH_MS = 25_000;
 const REQUEST_TIMEOUT_MS = 7_000;
@@ -27,49 +28,24 @@ function pruneExpiredLocations(response: ServiceDiscoveryResponse, now: number) 
   };
 }
 
+// Keep locations from earlier polls until they expire.
 export function mergeDiscoveryResponses(
   previous: ServiceDiscoveryResponse | undefined,
   incoming: ServiceDiscoveryResponse,
 ): ServiceDiscoveryResponse {
   if (!previous) return incoming;
-  const servicesMap = new Map<string, DiscoveredService>();
-
-  for (const s of previous.services) {
-    const key = `${s.name.toLowerCase()}:${s.address.toLowerCase()}`;
-    servicesMap.set(key, { ...s, locations: [...s.locations] });
+  const identity = (service: DiscoveredService) =>
+    `${service.name.toLowerCase()}:${service.address.toLowerCase()}`;
+  const services = new Map(previous.services.map((service) => [identity(service), service]));
+  for (const service of incoming.services) {
+    const existing = services.get(identity(service));
+    services.set(identity(service), existing
+      ? { ...service, locations: mergeLocations(existing.locations, service.locations) }
+      : service);
   }
-
-  for (const s of incoming.services) {
-    const key = `${s.name.toLowerCase()}:${s.address.toLowerCase()}`;
-    const existing = servicesMap.get(key);
-    if (!existing) {
-      servicesMap.set(key, s);
-    } else {
-      const locMap = new Map<string, ServiceLocation>();
-      for (const l of existing.locations) {
-        locMap.set(l.relay_url, l);
-      }
-      for (const l of s.locations) {
-        if (!locMap.has(l.relay_url)) {
-          locMap.set(l.relay_url, l);
-        } else {
-          const prev = locMap.get(l.relay_url)!;
-          locMap.set(l.relay_url, {
-            ...prev,
-            ...l,
-            url: l.url || prev.url,
-            reported_ready: l.reported_ready ?? prev.reported_ready,
-            reputation: l.reputation ?? prev.reputation,
-          });
-        }
-      }
-      existing.locations = Array.from(locMap.values());
-    }
-  }
-
   return {
     ...incoming,
-    services: Array.from(servicesMap.values()),
+    services: [...services.values()],
     relays_checked: Math.max(previous.relays_checked, incoming.relays_checked),
     relays_skipped: Math.min(previous.relays_skipped, incoming.relays_skipped),
   };
