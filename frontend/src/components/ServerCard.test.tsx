@@ -374,6 +374,114 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByText("admin-app")).toBeTruthy();
     expect(screen.getByText("admin controls")).toBeTruthy();
   });
+
+  it("opens local apps in the same tab", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard server={leaseToServer({
+          name: "local-app", address: "", hostname: "local-app.relay.example.com", canonical_hostname: "",
+          first_seen_at: "", last_seen_at: "", expires_at: "", metadata: {}, ready: 1,
+        })} />
+      </MemoryRouter>
+    );
+
+    const links = screen.getAllByRole("link", { name: "Open local-app" });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link.getAttribute("href")).toBe("https://local-app.relay.example.com/");
+      expect(link.getAttribute("target")).toBeNull();
+    }
+  });
+
+  it("navigates remote services directly using an available relay location", () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const live = {
+      current_relay: false,
+      reported_ready: true,
+      observed_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 30_000).toISOString(),
+      verification: "relay-reported",
+    } as const;
+    const [server] = mergeDiscoveredServices([], [{
+      name: "remote-app", address, metadata: {}, locations: [
+        { ...live, relay_url: "https://stale.example.com", url: "https://remote-app.stale.example.com/", expires_at: new Date(Date.now() - 1).toISOString() },
+        { ...live, relay_url: "https://down.example.com", url: "https://remote-app.down.example.com/", reported_ready: false },
+        { ...live, relay_url: "https://plain.example.com", url: "http://remote-app.plain.example.com/" },
+        { ...live, relay_url: "https://relay2.example.com", url: "https://remote-app.relay2.example.com/" },
+      ],
+    }], address);
+
+    render(
+      <MemoryRouter>
+        <ServerCard server={server} />
+      </MemoryRouter>
+    );
+
+    const links = screen.getAllByRole("link", { name: "Open remote-app" });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link.getAttribute("href")).toBe("https://remote-app.relay2.example.com/");
+      expect(link.getAttribute("target")).toBe("_blank");
+    }
+  });
+
+  it("lists a remote service without a link when no relay is available", () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const [server] = mergeDiscoveredServices([], [{
+      name: "remote-app", address, metadata: {}, locations: [
+        {
+          relay_url: "https://stale.example.com", url: "https://remote-app.stale.example.com/",
+          current_relay: false, reported_ready: true, verification: "relay-reported",
+          observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z",
+        },
+        {
+          relay_url: "https://down.example.com", url: "https://remote-app.down.example.com/",
+          current_relay: false, reported_ready: false, verification: "relay-reported",
+          observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(),
+        },
+      ],
+    }], address);
+
+    render(<MemoryRouter><ServerCard server={server} onOpenRelays={vi.fn()} /></MemoryRouter>);
+
+    expect(screen.getByRole("heading", { name: "remote-app" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Open remote-app" })).toBeNull();
+    expect(screen.getByText(/No relay available now/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /2 relays connected/ })).toBeTruthy();
+  });
+
+  it("uses relay hostname for endpoint address when host is localhost or empty", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "tcp-srv",
+            name: "TCP Srv",
+            description: "",
+            tags: [],
+            thumbnail: "",
+            owner: "",
+            online: true,
+            dns: "",
+            link: "",
+            tcpAddr: ":45000",
+            locations: [{
+              relay_url: "https://relay.portal.example.com",
+              url: "",
+              current_relay: true,
+              reported_ready: true,
+              observed_at: "",
+              expires_at: "",
+              verification: "relay-reported",
+            }],
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("relay.portal.example.com:45000")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy TCP" })).toBeTruthy();
+  });
 });
 
 describe("createConstellationData determinism", () => {

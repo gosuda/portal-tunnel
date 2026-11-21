@@ -1,24 +1,24 @@
 import type { JSX } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ExternalLink, X } from "lucide-react";
-import type { BaseServer } from "@/lib/server";
+import { isLocationAvailable, type BaseServer } from "@/lib/server";
 import type { ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
 
-export function ServiceRelaysPanel({ server, response, loading, error, onCheckMore, onClose }: {
+export function ServiceRelaysPanel({ server, response, loading, error, onClose }: {
   server: BaseServer;
   response?: ServiceDiscoveryResponse;
   loading: boolean;
   error?: string;
-  onCheckMore: () => void;
   onClose: () => void;
 }): JSX.Element {
   const discoveredLocations = server.locations?.length ? server.locations
     : response?.services.find((service) => service.name === (server.serviceName ?? "") && service.address.toLowerCase() === server.address?.toLowerCase())?.locations;
 
+  const isTransportService = Boolean(server.tcpAddr || server.udpAddr);
   const currentOrigin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "https://localhost";
   const defaultLocalLocation: ServiceLocation = {
     relay_url: currentOrigin,
-    url: server.link || (server.dns ? `https://${server.dns}/` : ""),
+    url: !isTransportService ? (server.link || (server.dns ? `https://${server.dns}/` : "")) : "",
     current_relay: true,
     reported_ready: server.online,
     observed_at: "",
@@ -54,7 +54,8 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
 
           <div className="mt-4 space-y-2">
             {resolvedLocations.map((loc) => {
-              if (loc.url) {
+              // This relay's own row comes from the local lease; remote rows must be available.
+              if (loc.url && !isTransportService && (loc.current_relay || isLocationAvailable(loc))) {
                 const displayText = loc.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
                 return (
                   <a
@@ -77,7 +78,8 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
                 );
               }
 
-              const displayText = loc.relay_url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+              // A transport service is not reachable over the HTTP URL, so name the relay.
+              const displayText = (isTransportService ? loc.relay_url : loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
               return (
                 <div
                   key={loc.relay_url}
@@ -91,7 +93,13 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
                       </span>
                     )}
                   </div>
-                  <span className="shrink-0 text-xs text-muted-foreground">Unavailable</span>
+                  {isTransportService ? (
+                    <span className="shrink-0 text-xs font-mono text-muted-foreground">
+                      {[server.tcpAddr && "TCP", server.udpAddr && "UDP"].filter(Boolean).join("/")}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-xs text-muted-foreground">Unavailable</span>
+                  )}
                 </div>
               );
             })}
@@ -102,17 +110,6 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
               </p>
             )}
           </div>
-
-          {(response?.partial || error) && (
-            <button
-              type="button"
-              disabled={loading}
-              onClick={onCheckMore}
-              className="mt-4 w-full rounded-lg bg-secondary py-2 text-sm font-medium hover:bg-secondary/80 disabled:opacity-50"
-            >
-              Check more relays
-            </button>
-          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
