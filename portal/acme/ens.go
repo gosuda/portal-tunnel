@@ -32,6 +32,7 @@ type ensDNSCommand struct {
 	address  string
 	remove   bool
 	ready    chan error
+	failed   bool // only the retry timer or shutdown retries failed work
 }
 
 func newENSStatus(cfg Config, dns dnsProvider) types.ENSStatus {
@@ -215,6 +216,12 @@ func (m *Manager) queueENSCommand(ctx context.Context, command ensDNSCommand) er
 	if command.ready == nil {
 		if m.pendingENS == nil {
 			m.pendingENS = make(map[string]ensDNSCommand)
+		}
+		if previous, exists := m.pendingENS[command.hostname]; exists && previous.address == command.address && previous.remove == command.remove {
+			// Repeated registration must not bypass a failed intent's retry
+			// schedule. A changed desired state is admitted as fresh work.
+			m.commandMu.Unlock()
+			return nil
 		}
 		m.pendingENS[command.hostname] = command
 		// The map retains work, including failures. The channel only wakes the
