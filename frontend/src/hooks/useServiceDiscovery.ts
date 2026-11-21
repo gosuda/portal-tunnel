@@ -27,37 +27,11 @@ function pruneExpiredLocations(response: ServiceDiscoveryResponse, now: number) 
   };
 }
 
-export type DiscoveredLocationEvent = {
-  serviceName: string;
-  serviceAddress: string;
-  location: ServiceLocation;
-};
-
 export function mergeDiscoveryResponses(
-  previous?: ServiceDiscoveryResponse,
-  incoming?: ServiceDiscoveryResponse,
-): { response: ServiceDiscoveryResponse; newLocations: DiscoveredLocationEvent[] } {
-  if (!previous) {
-    const newLocations: DiscoveredLocationEvent[] = [];
-    for (const service of incoming?.services ?? []) {
-      for (const location of service.locations) {
-        newLocations.push({
-          serviceName: service.name,
-          serviceAddress: service.address,
-          location,
-        });
-      }
-    }
-    return {
-      response: incoming ?? { services: [], partial: false, relays_checked: 0, relays_skipped: 0 },
-      newLocations,
-    };
-  }
-  if (!incoming) {
-    return { response: previous, newLocations: [] };
-  }
-
-  const newLocations: DiscoveredLocationEvent[] = [];
+  previous: ServiceDiscoveryResponse | undefined,
+  incoming: ServiceDiscoveryResponse,
+): ServiceDiscoveryResponse {
+  if (!previous) return incoming;
   const servicesMap = new Map<string, DiscoveredService>();
 
   for (const s of previous.services) {
@@ -70,13 +44,6 @@ export function mergeDiscoveryResponses(
     const existing = servicesMap.get(key);
     if (!existing) {
       servicesMap.set(key, s);
-      for (const loc of s.locations) {
-        newLocations.push({
-          serviceName: s.name,
-          serviceAddress: s.address,
-          location: loc,
-        });
-      }
     } else {
       const locMap = new Map<string, ServiceLocation>();
       for (const l of existing.locations) {
@@ -85,11 +52,6 @@ export function mergeDiscoveryResponses(
       for (const l of s.locations) {
         if (!locMap.has(l.relay_url)) {
           locMap.set(l.relay_url, l);
-          newLocations.push({
-            serviceName: s.name,
-            serviceAddress: s.address,
-            location: l,
-          });
         } else {
           const prev = locMap.get(l.relay_url)!;
           locMap.set(l.relay_url, {
@@ -106,13 +68,10 @@ export function mergeDiscoveryResponses(
   }
 
   return {
-    response: {
-      ...incoming,
-      services: Array.from(servicesMap.values()),
-      relays_checked: Math.max(previous.relays_checked, incoming.relays_checked),
-      relays_skipped: Math.min(previous.relays_skipped, incoming.relays_skipped),
-    },
-    newLocations,
+    ...incoming,
+    services: Array.from(servicesMap.values()),
+    relays_checked: Math.max(previous.relays_checked, incoming.relays_checked),
+    relays_skipped: Math.min(previous.relays_skipped, incoming.relays_skipped),
   };
 }
 
@@ -148,16 +107,11 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
         const { nextExpiry } = pruneExpiredLocations(incoming, Date.now());
         refreshDelay = Math.min(REFRESH_MS, Math.max(1, nextExpiry - Date.now() + 1));
         if (!cancelled) {
-          setState((previous) => {
-            const prevResponse = previous?.key === key ? previous.response : undefined;
-            const { response: merged, newLocations } = mergeDiscoveryResponses(prevResponse, incoming);
-            if (newLocations.length > 0 && typeof window !== "undefined") {
-              window.dispatchEvent(
-                new CustomEvent("portal:relay-discovered", { detail: { newLocations } }),
-              );
-            }
-            return { key, request, response: merged };
-          });
+          setState((previous) => ({
+            key,
+            request,
+            response: mergeDiscoveryResponses(previous?.key === key ? previous.response : undefined, incoming),
+          }));
         }
       } catch (error) {
         if (cancelled) return;

@@ -49,69 +49,62 @@ describe("service discovery", () => {
     }
   });
 
-  it("merges newly discovered locations and dispatches portal:relay-discovered event only for newly added locations", async () => {
-    const eventHandler = vi.fn();
-    window.addEventListener("portal:relay-discovered", eventHandler);
-    try {
-      vi.mocked(apiClient.get).mockResolvedValueOnce({
-        services: [{
-          name: "blog",
-          address,
-          metadata: {},
-          locations: [{
-            relay_url: "https://relay-1.example",
+  it("keeps relay locations discovered by earlier polls", async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      services: [{
+        name: "blog",
+        address,
+        metadata: {},
+        locations: [{
+          relay_url: "https://relay-1.example",
+          current_relay: false,
+          reported_ready: true,
+          observed_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 30_000).toISOString(),
+          verification: "relay-reported",
+        }],
+      }],
+      partial: true,
+      relays_checked: 5,
+      relays_skipped: 5,
+    });
+
+    const { result } = renderHook(() => useServiceDiscovery(address));
+    await act(async () => {});
+
+    expect(result.current.response?.services[0].locations).toHaveLength(1);
+
+    // Second response has a new relay location for the same service
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      services: [{
+        name: "blog",
+        address,
+        metadata: {},
+        locations: [
+          {
+            relay_url: "https://relay-2.example",
             current_relay: false,
             reported_ready: true,
             observed_at: new Date().toISOString(),
             expires_at: new Date(Date.now() + 30_000).toISOString(),
             verification: "relay-reported",
-          }],
-        }],
-        partial: true,
-        relays_checked: 5,
-        relays_skipped: 5,
-      });
+          },
+        ],
+      }],
+      partial: false,
+      relays_checked: 10,
+      relays_skipped: 0,
+    });
 
-      const { result } = renderHook(() => useServiceDiscovery(address));
-      await act(async () => {});
+    act(() => result.current.checkMore());
+    await act(async () => {});
 
-      expect(eventHandler).toHaveBeenCalledTimes(1);
-      expect(result.current.response?.services[0].locations).toHaveLength(1);
-
-      // Second response has a new relay location for the same service
-      vi.mocked(apiClient.get).mockResolvedValueOnce({
-        services: [{
-          name: "blog",
-          address,
-          metadata: {},
-          locations: [
-            {
-              relay_url: "https://relay-2.example",
-              current_relay: false,
-              reported_ready: true,
-              observed_at: new Date().toISOString(),
-              expires_at: new Date(Date.now() + 30_000).toISOString(),
-              verification: "relay-reported",
-            },
-          ],
-        }],
-        partial: false,
-        relays_checked: 10,
-        relays_skipped: 0,
-      });
-
-      act(() => result.current.checkMore());
-      await act(async () => {});
-
-      expect(eventHandler).toHaveBeenCalledTimes(2);
-      // Both relay locations must be retained
-      expect(result.current.response?.services[0].locations).toHaveLength(2);
-      const urls = result.current.response?.services[0].locations.map((l) => l.relay_url);
-      expect(urls).toContain("https://relay-1.example");
-      expect(urls).toContain("https://relay-2.example");
-    } finally {
-      window.removeEventListener("portal:relay-discovered", eventHandler);
-    }
+    expect(result.current.response).toMatchObject({ partial: false, relays_checked: 10, relays_skipped: 0 });
+    // Both relay locations must be retained
+    expect(result.current.response?.services[0].locations).toHaveLength(2);
+    const urls = result.current.response?.services[0].locations.map((l) => l.relay_url);
+    expect(urls).toContain("https://relay-1.example");
+    expect(urls).toContain("https://relay-2.example");
   });
 
   it("queries the current backend only after the relay selector is opened", async () => {
