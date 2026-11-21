@@ -176,12 +176,14 @@ export function extractRelayHostname(server: BaseServer): string {
       server.locations.find((l) => l.url || l.relay_url);
     if (loc) {
       const urlStr = loc.relay_url || loc.url;
-      try {
-        const parsed = new URL(urlStr.startsWith("http") ? urlStr : `https://${urlStr}`);
-        if (parsed.hostname && !isLoopbackOrEmpty(parsed.hostname)) {
-          return parsed.hostname;
-        }
-      } catch {}
+      if (urlStr) {
+        try {
+          const parsed = new URL(urlStr.startsWith("http") ? urlStr : `https://${urlStr}`);
+          if (parsed.hostname && !isLoopbackOrEmpty(parsed.hostname)) {
+            return parsed.hostname;
+          }
+        } catch {}
+      }
     }
   }
   if (typeof window !== "undefined" && window.location.hostname && !isLoopbackOrEmpty(window.location.hostname)) {
@@ -240,7 +242,7 @@ function resolveVoteRequest(server: BaseServer, targetVote: "up" | "down"): { ta
   return { targetHost, nextVote };
 }
 
-function resolveDetailPath(server: BaseServer, serverId: string, isWarning: boolean, effectiveLink: string): string {
+function resolveDetailPath(_server: BaseServer, serverId: string, isWarning: boolean, effectiveLink: string): string {
   if (isWarning && serverId) {
     return `/server/${encodeURIComponent(serverId)}`;
   }
