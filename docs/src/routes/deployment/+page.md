@@ -251,13 +251,25 @@ subdomains must continue to reach their tunnel targets through the same public
 
 ## Upgrading
 
-Clients and relays perform an exact protocol version match. This release ships
-tunnel protocol version 10 while discovery stays at version 9, so tunnel
-handshake compatibility is decoupled from discovery compatibility: a relay and
-tunnel client must agree on the tunnel protocol version, and a mismatch is
-rejected (`relay sdk protocol version mismatch`). Upgrade relays and the tunnel
-clients that dial them together: a relay upgraded first rejects every older
-client until the clients catch up (`portal update`).
+The current source retains tunnel protocol 10 and discovery version 9. New SDKs
+select their implemented protocol from `supported_protocol_versions`, falling
+back to exact equality with `protocol_version` when the list is absent or null.
+The current relay advertises default `10` and supported `["10"]`. Feature
+capabilities are negotiated separately.
+
+Keeping protocol 10 preserves main's version negotiation behavior. SDK v2.7.3
+and v2.7.4 pass that check but require the removed canonical response field,
+even when callers use only an alias. Those releases still need a relay that
+provides their original contract or an SDK upgrade. Check the pinned SDK's
+registration and lifecycle behavior before deployment; the source release
+label alone does not establish compatibility.
+
+Named HTTP services can use their granted friendly alias with the current SDK.
+Unnamed HTTP services require explicit Local TLS with usable certificate
+material. Move traffic after replacement clients are ready and drain existing
+connections before retiring a relay. See the
+[compatibility matrix](https://github.com/gosuda/portal-tunnel/blob/main/docs/maintainer/sdk-compatibility.md)
+for the current limitations.
 
 For replacement within a compatible protocol version, see
 [Relay Replacement with External Infrastructure](/relay-replacement). It
@@ -292,7 +304,7 @@ host :443 -> nginx container
 
 Mixing this with a host-loopback port mapping does not work: if Portal also
 published `127.0.0.1:8443`, nginx's own listener on that address could not
-bind. Pick this topology or a host nginx reaching Portal over published ports —
+bind. Pick this topology or a host nginx reaching Portal over published ports ??
 not both.
 
 `SNI_PORT` stays `443` inside the container. The SNI router is Portal's single
@@ -375,7 +387,7 @@ allowlist also lets the wrong tunnels in.
 
 That address has to be *fixed*. Compose assigns container addresses
 dynamically, so a `/32` matching whatever nginx got today stops matching the
-next time it is recreated — and the failure is silent: everything still works,
+next time it is recreated ??and the failure is silent: everything still works,
 Portal just ignores the forwarded address and starts applying rate
 limits to nginx instead of to visitors. Give the network its own IPAM and pin
 nginx into it:

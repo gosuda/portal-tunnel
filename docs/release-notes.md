@@ -3,9 +3,14 @@
 Only friendly aliases and negotiated Local TLS canonical URLs remain. Old
 `<address>.<root>`, `<name>-<address>.<root>`, and `<hash>--<address>.<root>`
 canonical URLs, `legacy_canonical_hostname`, and `LegacyURL` are removed with
-no redirects. Clients requiring these URLs must upgrade; clients able to use
-only a granted alias may continue to do so. Unnamed HTTP services require Local
-TLS. Dedicated raw TCP/UDP addresses use the relay control hostname.
+no redirects. The tunnel protocol remains `10`; discovery remains `9`.
+SDK v2.7.3 and v2.7.4 require the removed canonical field even when callers use
+only an alias. They pass protocol negotiation but cannot complete registration
+with the current response contract. Keeping protocol 10 preserves main's
+version negotiation behavior; it does not repair this existing limitation. See
+[the compatibility matrix and rollout](maintainer/sdk-compatibility.md).
+Unnamed HTTP services require Local TLS. Dedicated raw TCP/UDP addresses use
+the relay control hostname.
 
 `--cache` / `--cache-ttl` now target the currently granted friendly alias and
 can coexist with canonical Local TLS. An absent alias makes caching unavailable.
