@@ -283,7 +283,8 @@ function AppLink({
       </Link>
     );
   }
-  const isExternal = Boolean(server.remoteOnly || (detailPath && /^https?:\/\//i.test(detailPath)));
+  // Only relay-reported services leave this relay; local apps keep same-tab navigation.
+  const isExternal = Boolean(server.remoteOnly);
   return (
     <a
       href={detailPath || "#"}

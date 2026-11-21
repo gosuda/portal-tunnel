@@ -375,6 +375,24 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByText("admin controls")).toBeTruthy();
   });
 
+  it("opens local apps in the same tab", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard server={leaseToServer({
+          name: "local-app", address: "", hostname: "local-app.relay.example.com", canonical_hostname: "",
+          first_seen_at: "", last_seen_at: "", expires_at: "", metadata: {}, ready: 1,
+        })} />
+      </MemoryRouter>
+    );
+
+    const links = screen.getAllByRole("link", { name: "Open local-app" });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link.getAttribute("href")).toBe("https://local-app.relay.example.com/");
+      expect(link.getAttribute("target")).toBeNull();
+    }
+  });
+
   it("navigates remote services directly using an available relay location", () => {
     const address = "0x1111111111111111111111111111111111111111";
     const [server] = mergeDiscoveredServices([], [{
