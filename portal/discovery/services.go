@@ -39,10 +39,11 @@ var (
 )
 
 type serviceObservation struct {
-	leases []types.Lease
-	at     time.Time
-	until  time.Time
-	failed bool
+	leases     []types.Lease
+	reputation map[string]*types.ObservedServiceReputation
+	at         time.Time
+	until      time.Time
+	failed     bool
 }
 
 type serviceLookupCall struct {
@@ -53,18 +54,29 @@ type serviceLookupCall struct {
 // ServiceLookup owns bounded, request-driven public-directory observations.
 // It neither discovers new relays nor changes their routing/health policy.
 type ServiceLookup struct {
-	relays     *RelaySet
-	client     *http.Client
-	slots      chan struct{}
-	lookups    chan struct{}
-	mu         sync.Mutex
-	cache      map[string]serviceObservation
-	inflight   map[string]*serviceLookupCall
-	nextTarget int
+	relays         *RelaySet
+	client         *http.Client
+	slots          chan struct{}
+	lookups        chan struct{}
+	commentSlots   chan struct{}
+	commentLookups chan struct{}
+	mu             sync.Mutex
+	cache          map[string]serviceObservation
+	inflight       map[string]*serviceLookupCall
+	nextTarget     int
 }
 
 func NewServiceLookup(relays *RelaySet) *ServiceLookup {
-	return &ServiceLookup{relays: relays, client: newPublicRelayClient(), slots: make(chan struct{}, serviceConcurrency), lookups: make(chan struct{}, serviceLookupLimit), cache: make(map[string]serviceObservation), inflight: make(map[string]*serviceLookupCall)}
+	return &ServiceLookup{
+		relays:         relays,
+		client:         newPublicRelayClient(),
+		slots:          make(chan struct{}, serviceConcurrency),
+		lookups:        make(chan struct{}, serviceLookupLimit),
+		commentSlots:   make(chan struct{}, commentConcurrency),
+		commentLookups: make(chan struct{}, commentLookupLimit),
+		cache:          make(map[string]serviceObservation),
+		inflight:       make(map[string]*serviceLookupCall),
+	}
 }
 
 // serviceTargets keeps eligibility in Discovery rather than duplicating it at
@@ -89,8 +101,9 @@ func (s *RelaySet) serviceTargets(now time.Time) []string {
 	return targets
 }
 
-// Lookup filters the same relay observations by address and optional service
-// name. Local entries are read directly and never depend on remote success.
+// Lookup browses or filters the same relay observations. An empty address
+// browses all observed identities; a nonempty address may narrow by name.
+// Local entries are read directly and never depend on remote success.
 func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.Lease, address string, name *string) (types.ServiceDiscoveryResponse, error) {
 	// Bound waiters as well as outbound requests. Admission never queues and
 	// does not consume the registration/authentication pre-auth budget.
@@ -100,6 +113,12 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 	default:
 		return types.ServiceDiscoveryResponse{}, errServiceLookupBusy
 	}
+	return s.lookup(ctx, self, local, address, name, s.slots, nil), nil
+}
+
+// slots is the outbound budget of the caller's admission class. Directory and
+// comment reads share snapshots and in-flight work, but never each other's slots.
+func (s *ServiceLookup) lookup(ctx context.Context, self string, local []types.Lease, address string, name *string, slots chan struct{}, commentSources map[string]commentSource) types.ServiceDiscoveryResponse {
 	ctx, cancel := context.WithTimeout(ctx, serviceLookupTimeout)
 	defer cancel()
 	response := types.ServiceDiscoveryResponse{Services: []types.DiscoveredService{}, RelaysChecked: 1}
@@ -125,7 +144,7 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 	results := make(chan result, len(targets))
 	var workers sync.WaitGroup
 	for _, target := range targets {
-		workers.Go(func() { results <- result{target, s.observe(ctx, target)} })
+		workers.Go(func() { results <- result{target, s.observe(ctx, target, slots)} })
 	}
 	workers.Wait()
 	close(results)
@@ -165,7 +184,7 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 				continue
 			}
 			id, err := identity.NormalizeIdentity(types.Identity{Name: lease.Name, Address: lease.Address})
-			if err != nil || !strings.EqualFold(id.Address, address) {
+			if err != nil || (address != "" && !strings.EqualFold(id.Address, address)) {
 				continue
 			}
 			if name != nil && id.Name != *name {
@@ -176,6 +195,12 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 				continue
 			}
 			location.CurrentRelay = relay == self
+			if len(observation.reputation) != 0 {
+				if tally := observedServiceReputation(relay, lease, id, observation.reputation); tally != nil {
+					snapshot := *tally
+					location.Reputation = &snapshot
+				}
+			}
 			key := id.ServiceKey()
 			index, exists := indices[key]
 			if !exists {
@@ -192,15 +217,23 @@ func (s *ServiceLookup) Lookup(ctx context.Context, self string, local []types.L
 			locations := response.Services[index].Locations
 			if !slices.ContainsFunc(locations, func(existing types.ServiceLocation) bool { return existing.RelayURL == relay }) {
 				response.Services[index].Locations = append(locations, location)
+				if commentSources != nil && !location.CurrentRelay {
+					commentSources[relay] = commentSource{hostname: publicServiceCanonicalHostname(relay, lease, id), expiresAt: location.ExpiresAt}
+				}
 			}
 		}
 	}
-	slices.SortFunc(response.Services, func(a, b types.DiscoveredService) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(response.Services, func(a, b types.DiscoveredService) int {
+		if a.Name != b.Name {
+			return strings.Compare(a.Name, b.Name)
+		}
+		return strings.Compare(a.Address, b.Address)
+	})
 	response.Partial = response.Partial || response.RelaysSkipped > 0
-	return response, nil
+	return response
 }
 
-func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObservation {
+func (s *ServiceLookup) observe(ctx context.Context, relay string, slots chan struct{}) serviceObservation {
 	var call *serviceLookupCall
 	for {
 		if ctx.Err() != nil {
@@ -234,16 +267,18 @@ func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObserv
 	// acquisition; waiting consumes only the caller's lookup deadline.
 	select {
 	case <-ctx.Done():
-	case s.slots <- struct{}{}:
+	case slots <- struct{}{}:
 		fetchCtx, cancel := context.WithTimeout(ctx, serviceRelayTimeout)
-		leases, err := s.fetch(fetchCtx, relay)
+		fetched, err := s.fetch(fetchCtx, relay)
 		cancel()
-		<-s.slots
+		<-slots
 		if ctx.Err() == nil {
 			observed := time.Now().UTC()
 			observation = serviceObservation{at: observed, until: observed.Add(serviceNegativeTTL), failed: true}
 			if err == nil {
-				observation = serviceObservation{leases: leases, at: observed, until: observed.Add(serviceCacheTTL)}
+				observation = fetched
+				observation.at = observed
+				observation.until = observed.Add(serviceCacheTTL)
 			}
 		}
 	}
@@ -272,41 +307,107 @@ func (s *ServiceLookup) observe(ctx context.Context, relay string) serviceObserv
 	return observation
 }
 
-func (s *ServiceLookup) fetch(ctx context.Context, relay string) ([]types.Lease, error) {
+func (s *ServiceLookup) fetch(ctx context.Context, relay string) (serviceObservation, error) {
 	if err := requirePublicRelayURL(relay); err != nil {
-		return nil, err
+		return serviceObservation{}, err
 	}
 	base, err := url.Parse(relay)
 	if err != nil {
-		return nil, err
+		return serviceObservation{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, utils.ResolveAPIURL(base, types.PathState).String(), nil)
 	if err != nil {
-		return nil, err
+		return serviceObservation{}, err
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return serviceObservation{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || resp.ContentLength > serviceResponseBytes {
-		return nil, errServiceDirectoryResponseRejected
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, serviceResponseBytes+1))
+	body, err := readServiceResponse(resp, serviceResponseBytes)
 	if err != nil {
-		return nil, err
+		return serviceObservation{}, err
 	}
-	if len(body) > serviceResponseBytes {
-		return nil, errServiceDirectoryResponseTooLarge
-	}
-	var envelope types.APIEnvelope[types.PublicStateResponse]
+	var envelope types.APIEnvelope[struct {
+		types.PublicStateResponse
+		Reputation json.RawMessage `json:"reputation"`
+	}]
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, err
+		return serviceObservation{}, err
 	}
 	if !envelope.OK || len(envelope.Data.Leases) > serviceLeaseLimit {
-		return nil, errServiceDirectoryResponseRejected
+		return serviceObservation{}, errServiceDirectoryResponseRejected
 	}
-	return slices.DeleteFunc(envelope.Data.Leases, func(lease types.Lease) bool { return lease.Metadata.Hide }), nil
+	return serviceObservation{
+		leases:     slices.DeleteFunc(envelope.Data.Leases, func(lease types.Lease) bool { return lease.Metadata.Hide }),
+		reputation: parseObservedReputation(envelope.Data.Reputation),
+	}, nil
+}
+
+// Parse reputation separately so broken or absent optional community data
+// cannot make public services disappear from an otherwise usable snapshot.
+func parseObservedReputation(raw json.RawMessage) map[string]*types.ObservedServiceReputation {
+	var rows []json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil || len(rows) > serviceLeaseLimit {
+		return nil
+	}
+	tallies := make(map[string]*types.ObservedServiceReputation, len(rows))
+	for _, row := range rows {
+		var report struct {
+			Hostname string  `json:"hostname"`
+			Up       *uint32 `json:"up"`
+			Down     *uint32 `json:"down"`
+			Total    *uint32 `json:"total"`
+		}
+		if err := json.Unmarshal(row, &report); err != nil || report.Up == nil || report.Down == nil || report.Total == nil ||
+			uint64(*report.Up)+uint64(*report.Down) != uint64(*report.Total) {
+			continue
+		}
+		hostname := types.NormalizeHostname(report.Hostname)
+		if hostname == "" {
+			continue
+		}
+		if _, duplicate := tallies[hostname]; duplicate {
+			tallies[hostname] = nil
+			continue
+		}
+		tallies[hostname] = &types.ObservedServiceReputation{Up: *report.Up, Down: *report.Down}
+	}
+	return tallies
+}
+
+// A tally must match this relay's host for the advertised service identity.
+func observedServiceReputation(relay string, lease types.Lease, id types.Identity, tallies map[string]*types.ObservedServiceReputation) *types.ObservedServiceReputation {
+	if lease.CanonicalHostname == "" {
+		return tallies[lease.Hostname]
+	}
+	return tallies[publicServiceCanonicalHostname(relay, lease, id)]
+}
+
+// Called only after serviceLocation validated the lease and source. Returns the
+// verified canonical hostname if present, or the verified alias hostname for
+// alias-only services, ensuring federated comments can be discovered.
+func publicServiceCanonicalHostname(relay string, lease types.Lease, id types.Identity) string {
+	if lease.Namespace == types.LocalTLSNamespaceV1 {
+		return lease.CanonicalHostname
+	}
+	base, err := url.Parse(relay)
+	if err != nil {
+		return ""
+	}
+	if lease.CanonicalHostname != "" {
+		expected, err := namespace.LocalTLSHostname(id.Name, id.Address, base.Hostname())
+		if err == nil && expected == lease.CanonicalHostname {
+			return expected
+		}
+	}
+	if lease.Hostname != "" {
+		expected, err := namespace.AliasHostname(id.Name, base.Hostname())
+		if err == nil && expected == lease.Hostname {
+			return expected
+		}
+	}
+	return ""
 }
 
 func serviceLocation(relay string, lease types.Lease, id types.Identity, observed, until time.Time) (types.ServiceLocation, bool) {
@@ -349,4 +450,19 @@ func serviceLocation(relay string, lease types.Lease, id types.Identity, observe
 		location.URL = location.AliasURL
 	}
 	return location, location.AliasURL != "" || lease.Namespace == types.LocalTLSNamespaceV1 || lease.TCPEnabled || lease.UDPEnabled
+}
+
+// readServiceResponse applies the same bound to fixed-length and streamed bodies.
+func readServiceResponse(resp *http.Response, limit int) ([]byte, error) {
+	if resp.StatusCode != http.StatusOK || resp.ContentLength > int64(limit) {
+		return nil, errServiceDirectoryResponseRejected
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > limit {
+		return nil, errServiceDirectoryResponseTooLarge
+	}
+	return body, nil
 }

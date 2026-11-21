@@ -13,6 +13,42 @@ beforeEach(() => {
 });
 
 describe("service discovery", () => {
+  it("refreshes cached locations at expiry instead of waiting a full polling interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const observedAt = Date.now();
+      vi.mocked(apiClient.get).mockImplementation(async () => ({
+        services: [{
+          name: "blog",
+          address,
+          metadata: {},
+          locations: [{
+            relay_url: "https://remote.example",
+            current_relay: false,
+            reported_ready: true,
+            observed_at: new Date(observedAt).toISOString(),
+            expires_at: new Date(Date.now() < observedAt + 30_000
+              ? observedAt + 30_000 : Date.now() + 30_000).toISOString(),
+            verification: "relay-reported",
+          }],
+        }],
+        partial: false,
+        relays_checked: 2,
+        relays_skipped: 0,
+      }));
+      const { result, unmount } = renderHook(() => useServiceDiscovery(undefined, undefined, true, true));
+      await act(async () => {});
+      await act(async () => { await vi.advanceTimersByTimeAsync(25_000); });
+      expect(result.current.response?.services).toHaveLength(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_001); });
+      expect(result.current.response?.services).toHaveLength(1);
+      expect(Date.parse(result.current.response!.services[0].locations[0].expires_at)).toBeGreaterThan(Date.now());
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("checks the next relay window only when requested and keeps existing observations while loading", async () => {
     vi.mocked(apiClient.get).mockResolvedValueOnce({ services: [], partial: true, relays_checked: 9, relays_skipped: 3 });
     const { result } = renderHook(() => useServiceDiscovery(address));
@@ -39,14 +75,50 @@ describe("service discovery", () => {
     expect(result.current.response?.relays_checked).toBe(1);
   });
 
+  it("drops expired locations even if no new directory snapshot has arrived", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(apiClient.get).mockResolvedValue({
+        services: [{
+          name: "blog",
+          address,
+          metadata: {},
+          locations: [{
+            relay_url: "https://remote.example",
+            current_relay: false,
+            reported_ready: true,
+            observed_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 1000).toISOString(),
+            verification: "relay-reported",
+          }],
+        }],
+        partial: false,
+        relays_checked: 2,
+        relays_skipped: 0,
+      });
+      const { result, unmount } = renderHook(() => useServiceDiscovery(undefined));
+      await act(async () => {});
+      expect(result.current.response?.services).toHaveLength(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(result.current.response?.services).toEqual([]);
+      expect(result.current.response?.partial).toBe(true);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not carry another identity's response into a new filter", async () => {
     vi.mocked(apiClient.get).mockResolvedValueOnce({ services: [], partial: false, relays_checked: 1, relays_skipped: 0 });
     const { result, rerender } = renderHook(({ owner }) => useServiceDiscovery(owner), { initialProps: { owner: address } });
     await act(async () => {});
     expect(result.current.response).toBeDefined();
-    vi.mocked(apiClient.get).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(apiClient.get).mockRejectedValueOnce(new Error("lookup failed"));
     rerender({ owner: "0x2222222222222222222222222222222222222222" });
     expect(result.current.response).toBeUndefined();
     expect(result.current.loading).toBe(true);
+    await act(async () => {});
+    expect(result.current.response).toBeUndefined();
+    expect(result.current.error).toContain("local directory is still available");
   });
 });

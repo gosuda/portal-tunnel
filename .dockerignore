@@ -7,9 +7,10 @@ bin/
 # CI/CD
 .github/
 
-# Documentation
+# Documentation and Kubernetes deployment
 docs/
 *.md
+deploy/
 
 # Local relay/tunnel state
 .portal-certs/

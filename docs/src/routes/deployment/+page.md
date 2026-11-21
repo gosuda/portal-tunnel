@@ -30,6 +30,7 @@ separate API listener and nothing else to publish.
 This topology assumes Portal owns public `443/tcp`. If that port already
 belongs to something else on the host, see
 [Running Behind an Existing Reverse Proxy](#running-behind-an-existing-reverse-proxy).
+For a Kubernetes cluster, see [Kubernetes](/kubernetes).
 
 ## Prerequisites
 

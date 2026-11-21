@@ -17,7 +17,7 @@ concurrency:
 jobs:
   changes:
     name: Changes
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -29,6 +29,7 @@ jobs:
         steps.filter.outputs.backend == 'true' ||
         steps.filter.outputs.appauth == 'true' }}
       frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
+      charts: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.charts == 'true' }}
     steps:
       - name: Checkout code
         if: github.event_name == 'push'
@@ -46,6 +47,7 @@ jobs:
               - '**'
               - '!frontend/**'
               - '!docs/**'
+              - '!deploy/**'
               - '!extensions/**'
               - '!*.md'
             # Shared JSON fixtures are also inputs to sdk/appauth's Go tests.
@@ -55,12 +57,17 @@ jobs:
               - 'frontend/**'
               - 'Makefile'
               - '.github/workflows/ci.yml'
+            charts:
+              - 'deploy/helm/**'
+              - 'docs/static/examples/kubernetes/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
 
   verify:
     name: Verify
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Require successful change detection
@@ -130,7 +137,7 @@ jobs:
     name: E2E Tests
     needs: changes
     if: needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -149,11 +156,32 @@ jobs:
       - name: Run E2E tests
         run: make test-e2e
 
+  charts:
+    name: Helm Charts
+    needs: changes
+    if: needs.changes.outputs.charts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KUBECONFORM_VERSION: v0.8.0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # Helm is preinstalled on GitHub-hosted Ubuntu runners.
+      - name: Install kubeconform
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+
+      - name: Lint charts and validate Kubernetes examples
+        run: make check-charts
+
   tunnel-image:
     name: Build Tunnel Image
     needs: changes
     if: needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout code

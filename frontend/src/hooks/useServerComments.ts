@@ -43,18 +43,18 @@ async function mutateCommentList(
   }
 }
 
-export function useServerComments(server: BaseServer): { comments: AppComment[]; draft: string; setDraft: Dispatch<SetStateAction<string>>; loading: boolean; pending: "post" | "delete" | null; votingCommentId: string | null; error: string; refresh: () => Promise<void>; submit: () => Promise<void>; remove: (id: string) => Promise<void>; voteComment: (id: string, vote: ReputationVoteAction) => Promise<void> } {
+export function useServerComments(server: BaseServer, enabled = true): { comments: AppComment[]; draft: string; setDraft: Dispatch<SetStateAction<string>>; loading: boolean; pending: "post" | "delete" | null; votingCommentId: string | null; error: string; refresh: () => Promise<void>; submit: () => Promise<void>; remove: (id: string) => Promise<void>; voteComment: (id: string, vote: ReputationVoteAction) => Promise<void> } {
   const [comments, setComments] = useState<AppComment[]>([]);
   const [draft, setDraft] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [pending, setPending] = useState<"post" | "delete" | null>(null);
   const [votingCommentId, setVotingCommentId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const path = `${RELAY_API_PATHS.public.comments}?hostname=${encodeURIComponent(server.id)}`;
 
-  useEffect(() => subscribeInitialComments(path, setComments, setError, setLoading), [path]);
+  useEffect(() => enabled ? subscribeInitialComments(path, setComments, setError, setLoading) : undefined, [path, enabled]);
 
-  const busy = loading || pending !== null || votingCommentId !== null;
+  const busy = !enabled || loading || pending !== null || votingCommentId !== null;
 
   const refresh = async () => {
     if (busy) return;

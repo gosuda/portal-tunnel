@@ -45,7 +45,10 @@ func (api *RelayAPI) serveVote(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
 		return
 	}
-	identity := api.publicIdentityFor(hostname)
+	identity := ""
+	if lease := api.publicLeaseFor(hostname); lease != nil {
+		identity = lease.IdentityKey
+	}
 	if commentVote && identity == "" {
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
 		return

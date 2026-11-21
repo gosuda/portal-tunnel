@@ -1,0 +1,62 @@
+# Runs the tunnel client next to the application in the same pod, so it
+# reaches the application on localhost and scales with it. The Helm chart
+# cannot add a container to another workload, so this pattern has no chart
+# form. All replicas share one identity and serve one URL in HTTP replica mode.
+#
+#   kubectl create secret generic my-app-identity --from-file=identity.json
+#   kubectl apply -f tunnel-sidecar.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 2
+  # The tunnel registers a few seconds after the pod starts, so a new pod
+  # counts as available only after 10 seconds, before an old one stops.
+  minReadySeconds: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: my-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: my-app
+    spec:
+      containers:
+        - name: app
+          image: registry.example.com/my-app:1.0.0
+          ports:
+            - name: http
+              containerPort: 8080
+        - name: tunnel
+          image: ghcr.io/gosuda/portal-tunnel:2
+          args:
+            - expose
+            - --name
+            - my-app
+            - --relays
+            - https://portal.example.com
+            - --discovery=false
+            - --replica
+            - 127.0.0.1:8080
+          env:
+            - name: IDENTITY_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: my-app-identity
+                  key: identity.json
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tunnel-work
+              mountPath: /identity
+      volumes:
+        # Working directory of the tunnel client; the identity comes from the Secret.
+        - name: tunnel-work
+          emptyDir: {}

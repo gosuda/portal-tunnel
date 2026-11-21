@@ -1,15 +1,16 @@
 package types
 
 const (
-	PathRoot           = "/"
-	PathLLMs           = "/llms.txt"
-	PathAPIPrefix      = "/api"
-	PathHealthz        = PathAPIPrefix + "/healthz"
-	PathState          = PathAPIPrefix + "/state"
-	PathServices       = PathAPIPrefix + "/services"
-	PathComments       = PathAPIPrefix + "/comments"
-	PathCommentsVote   = PathComments + "/vote"
-	PathCommentsDelete = PathComments + "/delete"
+	PathRoot            = "/"
+	PathLLMs            = "/llms.txt"
+	PathAPIPrefix       = "/api"
+	PathHealthz         = PathAPIPrefix + "/healthz"
+	PathState           = PathAPIPrefix + "/state"
+	PathServices        = PathAPIPrefix + "/services"
+	PathServiceComments = PathServices + "/comments"
+	PathComments        = PathAPIPrefix + "/comments"
+	PathCommentsVote    = PathComments + "/vote"
+	PathCommentsDelete  = PathComments + "/delete"
 
 	PathAdmin           = PathAPIPrefix + "/admin"
 	PathAdminPrefix     = PathAdmin + "/"

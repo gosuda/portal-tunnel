@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"

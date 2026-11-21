@@ -1,0 +1,14 @@
+# Relay whose DNS zone stays at Cloudflare. The relay writes its records and
+# DNS-01 challenges through the Cloudflare API, so 53/tcp and 53/udp are not
+# published.
+#
+#   kubectl create secret generic portal-relay \
+#     --from-literal=ADMIN_TOKEN="$(openssl rand -hex 32)" \
+#     --from-literal=CLOUDFLARE_TOKEN=replace-with-a-zone-dns-edit-token
+#   helm install relay oci://ghcr.io/gosuda/charts/portal-relay \
+#     -f relay-cloudflare.values.yaml
+env:
+  PORTAL_URL: https://portal.example.com
+  ACME_DNS_PROVIDER: cloudflare
+
+existingSecret: portal-relay
