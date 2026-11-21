@@ -27,6 +27,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -215,7 +216,41 @@ func runExposeCommand(args []string) error {
 		return err
 	}
 	defer runtime.Close()
-	return runtime.Run(ctx)
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	if !spec.Relays.Discovery {
+		// Without discovery the relay set never changes, so a failed relay stays
+		// failed. Exit once every relay has failed so a supervisor sees it.
+		go func() { cancel(waitRelaysFailed(runCtx, runtime.Exposure)) }()
+	}
+	err = runtime.Run(runCtx)
+	if ctx.Err() == nil {
+		err = errors.Join(context.Cause(runCtx), err)
+	}
+	return err
+}
+
+// waitRelaysFailed returns the relay errors once every relay has failed. A
+// failed relay's listener has stopped; only a relay set change starts another.
+func waitRelaysFailed(ctx context.Context, exposure *sdk.Exposure) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-exposure.Updates():
+		}
+		var failed error
+		for _, relay := range exposure.Relays() {
+			if relay.State != sdk.RelayFailed {
+				failed = nil
+				break
+			}
+			failed = errors.Join(failed, fmt.Errorf("relay %s: %w", relay.RelayURL, relay.Err))
+		}
+		if failed != nil {
+			return fmt.Errorf("every relay failed: %w", failed)
+		}
+	}
 }
 
 func startRunExposeCommandMetrics(metricsAddr string) {

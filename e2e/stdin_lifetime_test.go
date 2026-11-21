@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -162,6 +163,8 @@ func TestPortalExposeStdinLifetime(t *testing.T) {
 	})
 	t.Run("failed", func(t *testing.T) {
 		// An incompatible relay is a permanent SDK failure, without retries.
+		// Without discovery nothing replaces it, so portal exits with an error
+		// while its owner still holds stdin open.
 		relay := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"ok":true,"data":{"protocol_version":"incompatible"}}`)
@@ -172,8 +175,15 @@ func TestPortalExposeStdinLifetime(t *testing.T) {
 		waitLifecycleRecord(t, process.records, func(r map[string]any) bool {
 			return r["event"] == "relay_status" && r["state"] == "failed"
 		}, 30*time.Second)
-		process.stdin.Close()
-		process.waitExit(t)
+		process.waitOutputClosed(t)
+		select {
+		case err := <-process.done:
+			if exitErr, ok := errors.AsType[*exec.ExitError](err); !ok || exitErr.ExitCode() <= 0 {
+				t.Fatalf("portal exit = %v, want a nonzero exit status", err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("portal did not exit after its only relay failed")
+		}
 	})
 	t.Run("parent-exit", func(t *testing.T) {
 		relay := startMembershipRelay(t, t.Context())
