@@ -1186,11 +1186,7 @@ func backhaulSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
 	if err != nil {
 		return netip.Prefix{}, false
 	}
-	addr := addrPort.Addr().Unmap()
-	if addr.Is4() {
-		return netip.PrefixFrom(addr, addr.BitLen()), true
-	}
-	return netip.PrefixFrom(addr, 64).Masked(), true
+	return utils.SourcePrefix(addrPort.Addr()), true
 }
 
 func (s *Server) rejectAdmitReverseOffer(offer overlay.ReverseOffer, admitErr error) {

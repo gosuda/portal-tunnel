@@ -6,6 +6,21 @@ import (
 	"time"
 )
 
+func TestSourceLimiterSharesIPv6PrefixBudget(t *testing.T) {
+	limiter := NewSourceLimiter(1, 1, 0, 0)
+	now := time.Unix(1700000000, 0)
+	limiter.clock = func() time.Time { return now }
+	if retry, _ := limiter.Allow(netip.MustParseAddr("2001:db8:1::1"), 1); retry != 0 {
+		t.Fatal("first request refused")
+	}
+	if retry, _ := limiter.Allow(netip.MustParseAddr("2001:db8:1::2"), 1); retry == 0 {
+		t.Fatal("rotating IPv6 address bypassed admission budget")
+	}
+	if retry, _ := limiter.Allow(netip.MustParseAddr("2001:db8:2::1"), 1); retry != 0 {
+		t.Fatal("unrelated prefix was refused")
+	}
+}
+
 func TestWeightedAdmissionIsolatesSourcesAndRefills(t *testing.T) {
 	limiter := NewSourceLimiter(10, 20, 600, 200)
 	now := time.Now()

@@ -33,6 +33,20 @@ var (
 	}
 )
 
+// SourcePrefix groups admission budgets by IPv4 address or IPv6 /64. It does
+// not replace the original source used for authentication or diagnostics.
+func SourcePrefix(source netip.Addr) netip.Prefix {
+	if !source.IsValid() {
+		return netip.Prefix{}
+	}
+	source = source.Unmap().WithZone("")
+	bits := source.BitLen()
+	if source.Is6() {
+		bits = 64
+	}
+	return netip.PrefixFrom(source, bits).Masked()
+}
+
 var errInvalidPublicIPResponse = errors.New("invalid public ip response")
 
 // ResolvePublicIP determines the caller's public IP address using well-known

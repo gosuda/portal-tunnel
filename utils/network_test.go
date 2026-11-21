@@ -14,6 +14,23 @@ import (
 	"time"
 )
 
+func TestSourcePrefix(t *testing.T) {
+	for _, test := range []struct{ source, prefix string }{
+		{"192.0.2.1", "192.0.2.1/32"},
+		{"::ffff:192.0.2.1", "192.0.2.1/32"},
+		{"2001:db8:1::1", "2001:db8:1::/64"},
+		{"2001:db8:1::ffff", "2001:db8:1::/64"},
+		{"fe80::1%eth0", "fe80::/64"},
+	} {
+		if got := SourcePrefix(netip.MustParseAddr(test.source)); got != netip.MustParsePrefix(test.prefix) {
+			t.Errorf("SourcePrefix(%q) = %v, want %s", test.source, got, test.prefix)
+		}
+	}
+	if SourcePrefix(netip.Addr{}).IsValid() {
+		t.Fatal("unknown source became a valid network")
+	}
+}
+
 var errServiceUnavailable = errors.New("service unavailable")
 
 func TestSanitizeReportedIP(t *testing.T) {

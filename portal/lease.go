@@ -36,17 +36,17 @@ var (
 )
 
 const (
-	defaultLeaseTTL                          = 2 * time.Minute
-	maxLeaseTTL                              = 10 * time.Minute
-	defaultRegisterChallengeTTL              = 2 * time.Minute
-	defaultRegisterChallengeOutstandingPerIP = 32
-	defaultRegisterChallengeOutstanding      = 256
-	defaultPortReservationGrace              = 5 * time.Minute
-	defaultIdleKeepalive                     = 15 * time.Second
-	maxClaimedStartedAge                     = 7 * 24 * time.Hour
-	defaultReadyQueueLimit                   = 8
-	defaultLeaseBridgeLimit                  = 128
-	defaultReplicaLimit                      = 16
+	defaultLeaseTTL                              = 2 * time.Minute
+	maxLeaseTTL                                  = 10 * time.Minute
+	defaultRegisterChallengeTTL                  = 2 * time.Minute
+	defaultRegisterChallengeOutstandingPerSource = 32
+	defaultRegisterChallengeOutstanding          = 256
+	defaultPortReservationGrace                  = 5 * time.Minute
+	defaultIdleKeepalive                         = 15 * time.Second
+	maxClaimedStartedAge                         = 7 * 24 * time.Hour
+	defaultReadyQueueLimit                       = 8
+	defaultLeaseBridgeLimit                      = 128
+	defaultReplicaLimit                          = 16
 )
 
 func requestedLeaseTTL(seconds int) (time.Duration, error) {
@@ -413,7 +413,7 @@ func (r *leaseRegistry) sweepRegisterChallengeLocked(now time.Time, sourceAddr n
 			continue
 		}
 		globalPending++
-		if record.sourceAddr == sourceAddr {
+		if utils.SourcePrefix(record.sourceAddr) == utils.SourcePrefix(sourceAddr) {
 			pending++
 		}
 		i++
@@ -448,7 +448,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	defer r.mu.Unlock()
 
 	pending, globalPending := r.sweepRegisterChallengeLocked(now, sourceAddr)
-	if pending >= defaultRegisterChallengeOutstandingPerIP || globalPending >= defaultRegisterChallengeOutstanding {
+	if pending >= defaultRegisterChallengeOutstandingPerSource || globalPending >= defaultRegisterChallengeOutstanding {
 		return types.RegisterChallengeResponse{}, errRegisterChallengePending
 	}
 	r.records = append(r.records, &leaseRecord{
@@ -652,18 +652,19 @@ func (r *leaseRegistry) requestApproval(key types.ServiceIdentityKey, source net
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	fromSource := 0
+	prefix := utils.SourcePrefix(source)
 	for owner, p := range r.pending {
 		if !now.Before(p.last.Add(approvalRequestTTL)) {
 			delete(r.pending, owner)
 			continue
 		}
-		if p.source == source {
+		if utils.SourcePrefix(p.source) == prefix {
 			fromSource++
 		}
 	}
 	p, found := r.pending[key]
 	if (!found && len(r.pending) >= maxApprovalRequests) ||
-		((!found || p.source != source) && r.unapprovedPerSource > 0 && fromSource >= r.unapprovedPerSource) {
+		((!found || utils.SourcePrefix(p.source) != prefix) && r.unapprovedPerSource > 0 && fromSource >= r.unapprovedPerSource) {
 		return 60, &apiError{types.APIErrorCodeApprovalQueueFull, "approval request budget exhausted", http.StatusServiceUnavailable}
 	}
 	if !found {
@@ -926,8 +927,9 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 		return nil
 	}
 	held := make(map[types.ServiceIdentityKey]struct{})
+	prefix := utils.SourcePrefix(source)
 	for owner, req := range r.pending {
-		if owner != key && req.source == source && now.Before(req.last.Add(approvalRequestTTL)) {
+		if owner != key && utils.SourcePrefix(req.source) == prefix && now.Before(req.last.Add(approvalRequestTTL)) {
 			held[owner] = struct{}{}
 		}
 	}
@@ -939,10 +941,10 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 		var holder types.ServiceIdentityKey
 		var isIssued bool
 		switch {
-		case record.registerChallenge != nil && record.sourceAddr == source:
+		case record.registerChallenge != nil && utils.SourcePrefix(record.sourceAddr) == prefix:
 			holder = record.registerChallenge.Request.Identity.ServiceKey()
 			isIssued = record.registerChallenge.ChallengeID == challengeID
-		case record.reverse != nil && record.registerSource == source:
+		case record.reverse != nil && utils.SourcePrefix(record.registerSource) == prefix:
 			holder = record.ServiceKey()
 		default:
 			continue

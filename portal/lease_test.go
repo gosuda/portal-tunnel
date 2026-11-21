@@ -178,16 +178,20 @@ func TestIssueRegisterChallengeBoundsPending(t *testing.T) {
 		name  string
 		limit int
 	}{
-		{"per IP", defaultRegisterChallengeOutstandingPerIP},
+		{"per source", defaultRegisterChallengeOutstandingPerSource},
+		{"IPv6 prefix", defaultRegisterChallengeOutstandingPerSource},
 		{"global", defaultRegisterChallengeOutstanding},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := newTestRegistry(t, false, false)
 			sourceAddr := netip.MustParseAddr("203.0.113.50")
+			if tc.name == "IPv6 prefix" {
+				sourceAddr = netip.MustParseAddr("2001:db8:1::1")
+			}
 			request := types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "pending")}
 			for i := range tc.limit {
 				issuePendingChallenge(t, registry, request, sourceAddr, i)
-				if tc.name == "global" {
+				if tc.name == "global" || tc.name == "IPv6 prefix" {
 					sourceAddr = sourceAddr.Next()
 				}
 			}
@@ -354,7 +358,7 @@ func checkUnapprovedSlotBurst(t *testing.T, registry *leaseRegistry, source neti
 	t.Helper()
 	newcomer := newTestLeaseIdentity(t, "third")
 	registry.setIdentityAccess(newcomer.ServiceKey(), types.LeasePending, 4)
-	for range defaultRegisterChallengeOutstandingPerIP + 1 {
+	for range defaultRegisterChallengeOutstandingPerSource + 1 {
 		if _, err := askUnapprovedSlotChallenge(t, registry, newcomer, source); !errors.Is(err, errUnapprovedLeaseLimit) {
 			t.Fatalf("third unapproved lease = %v", err)
 		}
@@ -2322,5 +2326,43 @@ func TestPendingApprovalSourceMigration(t *testing.T) {
 	}
 	if _, err := r.requestApproval(third, source, refreshed); err != nil {
 		t.Fatal("migration did not release previous source budget:", err)
+	}
+}
+
+func TestPendingApprovalIPv6PrefixBudget(t *testing.T) {
+	r := &leaseRegistry{pending: make(map[types.ServiceIdentityKey]approvalRequest), unapprovedPerSource: 64}
+	now := time.Unix(1700000000, 0)
+	source := netip.MustParseAddr("2001:db8:1::1")
+	first := types.NewServiceIdentityKey("demo", "0")
+	for i := range 64 {
+		if _, err := r.requestApproval(types.NewServiceIdentityKey("demo", fmt.Sprint(i)), source, now); err != nil {
+			t.Fatal(err)
+		}
+		source = source.Next()
+	}
+	if _, err := r.requestApproval(types.NewServiceIdentityKey("demo", "overflow"), source, now); err == nil {
+		t.Fatal("rotating IPv6 addresses exceeded the prefix budget")
+	}
+	if _, err := r.requestApproval(first, source, now.Add(time.Minute)); err != nil {
+		t.Fatal("refresh within the same full prefix was refused:", err)
+	}
+	if _, err := r.requestApproval(types.NewServiceIdentityKey("demo", "other"), netip.MustParseAddr("2001:db8:2::1"), now); err != nil {
+		t.Fatal("one prefix exhausted another prefix's capacity:", err)
+	}
+}
+
+func TestUnapprovedLeaseIPv6PrefixBudget(t *testing.T) {
+	r := newTestRegistry(t, false, false)
+	r.unapprovedPerSource = 1
+	first := newTestLeaseIdentity(t, "first")
+	r.setIdentityAccess(first.ServiceKey(), types.LeasePending, 1)
+	registerUnapprovedSlotLease(t, r, first, netip.MustParseAddr("2001:db8:1::1"))
+	other := newTestLeaseIdentity(t, "other")
+	r.setIdentityAccess(other.ServiceKey(), types.LeasePending, 2)
+	if _, err := askUnapprovedSlotChallenge(t, r, other, netip.MustParseAddr("2001:db8:1::2")); !errors.Is(err, errUnapprovedLeaseLimit) {
+		t.Fatalf("rotating IPv6 address bypassed the unapproved lease limit: %v", err)
+	}
+	if _, err := askUnapprovedSlotChallenge(t, r, other, netip.MustParseAddr("2001:db8:2::1")); err != nil {
+		t.Fatal("unrelated IPv6 prefix was refused:", err)
 	}
 }
