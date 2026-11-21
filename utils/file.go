@@ -85,33 +85,58 @@ func WriteJSONFile(path string, payload any, mode os.FileMode) error {
 	return WriteFileAtomic(path, data, mode)
 }
 
-// ResolveStaticSite turns a user-supplied path into a static site root
-// directory and its SPA entry file. A directory serves DefaultStaticIndex; a
-// file serves its parent directory with that file as the entry. The entry file
-// must exist. Callers add their own flag or field context to the error.
-func ResolveStaticSite(input string) (root string, index string, err error) {
+// OpenStaticSite resolves input, opens its root once, and validates index
+// through that confined directory handle. When index is empty, a directory
+// uses DefaultStaticIndex and a file uses its own name. The caller owns the
+// returned Root and must close it after static serving or cache publication
+// has stopped.
+func OpenStaticSite(input, index string) (*os.Root, string, error) {
 	abs, err := filepath.Abs(strings.TrimSpace(input))
 	if err != nil {
-		return "", "", err
+		return nil, "", err
 	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return "", "", err
-	}
-	if info.IsDir() {
-		root, index = abs, DefaultStaticIndex
-	} else {
-		root, index = filepath.Dir(abs), filepath.Base(abs)
+	root := abs
+	var inputInfo os.FileInfo
+	if strings.TrimSpace(index) == "" {
+		inputInfo, err = os.Stat(abs)
+		if err != nil {
+			return nil, "", err
+		}
+		if inputInfo.IsDir() {
+			index = DefaultStaticIndex
+		} else {
+			root, index = filepath.Dir(abs), filepath.Base(abs)
+		}
 	}
 
-	indexInfo, err := os.Stat(filepath.Join(root, index))
+	dir, err := os.OpenRoot(root)
 	if err != nil {
-		return "", "", fmt.Errorf("entry file %q not found: %w", index, err)
+		return nil, "", err
+	}
+	indexInfo, err := dir.Stat(index)
+	if err != nil {
+		_ = dir.Close()
+		return nil, "", fmt.Errorf("entry file %q not found: %w", index, err)
 	}
 	if indexInfo.IsDir() {
-		return "", "", fmt.Errorf("entry %q is a directory", index)
+		_ = dir.Close()
+		return nil, "", fmt.Errorf("entry %q is a directory", index)
 	}
-	return root, index, nil
+	if inputInfo != nil {
+		openedInfo := indexInfo
+		if inputInfo.IsDir() {
+			openedInfo, err = dir.Stat(".")
+			if err != nil {
+				_ = dir.Close()
+				return nil, "", err
+			}
+		}
+		if !os.SameFile(inputInfo, openedInfo) {
+			_ = dir.Close()
+			return nil, "", fmt.Errorf("static site %q changed while opening", input)
+		}
+	}
+	return dir, index, nil
 }
 
 // StaticSiteRequestPath strips the route prefix from a request path and returns

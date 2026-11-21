@@ -18,7 +18,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -291,11 +290,7 @@ func buildExposedRoutes(spec Spec) ([]gateway.ExposedHTTPRoute, error) {
 		return routes, nil
 	}
 	if serve := strings.TrimSpace(spec.HTTP.Serve); serve != "" {
-		root, index, err := utils.ResolveStaticSite(serve)
-		if err != nil {
-			return nil, fmt.Errorf("resolve static site %q: %w", serve, err)
-		}
-		routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", StaticRoot: root, StaticIndex: index})
+		routes = append(routes, gateway.ExposedHTTPRoute{Prefix: "/", StaticRoot: serve})
 	}
 	for _, route := range spec.HTTP.Routes {
 		routes = append(routes, gateway.ExposedHTTPRoute{

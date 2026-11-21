@@ -238,35 +238,42 @@ type HTTPRoutes struct {
 	routes []*httpRoute
 }
 
-// NewHTTPRoutes creates routed HTTP handling for the given route configs.
+// NewHTTPRoutes creates routed HTTP handling for the given route configs. The
+// caller must call Close after serving has stopped.
 func NewHTTPRoutes(routeConfigs []HTTPRouteConfig) (*HTTPRoutes, error) {
 	if len(routeConfigs) == 0 {
 		return nil, errLeastOneHTTPRouteRequired
 	}
 
-	routes := make([]*httpRoute, 0, len(routeConfigs))
+	routes := &HTTPRoutes{routes: make([]*httpRoute, 0, len(routeConfigs))}
 	seen := make(map[string]struct{}, len(routeConfigs))
 	for _, routeConfig := range routeConfigs {
 		route, err := newHTTPRoute(routeConfig)
 		if err != nil {
+			_ = routes.Close()
 			return nil, err
 		}
 		if _, ok := seen[route.prefix]; ok {
+			_ = routes.Close()
 			return nil, fmt.Errorf("duplicate http route prefix %q", route.prefix)
 		}
 		seen[route.prefix] = struct{}{}
-		route.handler = route.baseHandler()
-		routes = append(routes, route)
+		route.handler, err = route.baseHandler()
+		if err != nil {
+			_ = routes.Close()
+			return nil, fmt.Errorf("http route %q static site: %w", route.prefix, err)
+		}
+		routes.routes = append(routes.routes, route)
 	}
 
-	sort.Slice(routes, func(i, j int) bool {
-		if len(routes[i].prefix) == len(routes[j].prefix) {
-			return routes[i].prefix < routes[j].prefix
+	sort.Slice(routes.routes, func(i, j int) bool {
+		if len(routes.routes[i].prefix) == len(routes.routes[j].prefix) {
+			return routes.routes[i].prefix < routes.routes[j].prefix
 		}
-		return len(routes[i].prefix) > len(routes[j].prefix)
+		return len(routes.routes[i].prefix) > len(routes.routes[j].prefix)
 	})
 
-	return &HTTPRoutes{routes: routes}, nil
+	return routes, nil
 }
 
 func (h *HTTPRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -295,6 +302,21 @@ func (h *HTTPRoutes) Match(path string) (string, http.Handler) {
 		return route.prefix, route.handler
 	}
 	return "", nil
+}
+
+// Close releases resources retained by static routes. The caller must stop
+// serving requests before closing the route table.
+func (h *HTTPRoutes) Close() error {
+	if h == nil {
+		return nil
+	}
+	var closeErr error
+	for _, route := range h.routes {
+		if closer, ok := route.handler.(interface{ Close() error }); ok {
+			closeErr = errors.Join(closeErr, closer.Close())
+		}
+	}
+	return closeErr
 }
 
 type httpRoute struct {
@@ -358,9 +380,9 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	}, nil
 }
 
-func (r *httpRoute) baseHandler() http.Handler {
+func (r *httpRoute) baseHandler() (http.Handler, error) {
 	if r.staticRoot != "" {
-		return staticsite.NewHandler(r.prefix, r.staticRoot, r.staticIndex)
+		return staticsite.OpenHandler(r.prefix, r.staticRoot, r.staticIndex)
 	}
 	return &httputil.ReverseProxy{
 		Rewrite:        r.rewriteProxyRequest,
@@ -372,7 +394,7 @@ func (r *httpRoute) baseHandler() http.Handler {
 				Msg("http route proxy failed")
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		},
-	}
+	}, nil
 }
 
 func (r *httpRoute) rewriteProxyRequest(pr *httputil.ProxyRequest) {

@@ -33,18 +33,21 @@ type SourceConfig struct {
 // Source belongs to one exposure. Its producer publishes immutable
 // manifests to every relay; subscribers own only transport and relay limits.
 type Source struct {
-	root, index string
-	ttl         time.Duration
-	mu          sync.Mutex
-	limits      map[*Syncer]types.StaticCacheLimits
-	snapshot    *sourceSnapshot
-	changed     chan struct{}
-	wake        chan struct{}
-	done        chan struct{}
+	root     *os.Root
+	index    string
+	ttl      time.Duration
+	mu       sync.Mutex
+	limits   map[*Syncer]types.StaticCacheLimits
+	snapshot *sourceSnapshot
+	changed  chan struct{}
+	wake     chan struct{}
+	done     chan struct{}
+	close    sync.Once
+	closeErr error
 }
 
 type sourceSnapshot struct {
-	root     string
+	root     *os.Root
 	manifest types.StaticCacheManifest
 	err      error
 }
@@ -54,7 +57,7 @@ func NewSource(cfg SourceConfig) (*Source, error) {
 	if cfg.TTL != 0 && (cfg.TTL < time.Second || cfg.TTL > 365*24*time.Hour) {
 		return nil, errRelayCacheTTLMustZeroOr
 	}
-	root, index, err := utils.ResolveStaticSite(cfg.Path)
+	root, index, err := utils.OpenStaticSite(cfg.Path, "")
 	if err != nil {
 		return nil, fmt.Errorf("relay cache source: %w", err)
 	}
@@ -117,6 +120,20 @@ func (s *Source) Wait() {
 	<-s.done
 }
 
+// Close releases the source's pinned static root after Run and all subscribers
+// have stopped. It is safe to call more than once.
+func (s *Source) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.close.Do(func() {
+		if s.root != nil {
+			s.closeErr = s.root.Close()
+		}
+	})
+	return s.closeErr
+}
+
 func (snapshot *sourceSnapshot) hashFile(root *os.Root, path string, limits types.StaticCacheLimits, total *int64) error {
 	file, err := root.Open(path)
 	if err != nil {
@@ -141,14 +158,8 @@ func (snapshot *sourceSnapshot) hashFile(root *os.Root, path string, limits type
 
 func (s *Source) scan(ctx context.Context, limits types.StaticCacheLimits) *sourceSnapshot {
 	snapshot := &sourceSnapshot{root: s.root, manifest: types.StaticCacheManifest{Index: s.index}}
-	root, err := os.OpenRoot(s.root)
-	if err != nil {
-		snapshot.err = err
-		return snapshot
-	}
-	defer root.Close()
 	var total int64
-	snapshot.err = walkSnapshotTree(ctx, root, snapshot, limits, &total)
+	snapshot.err = walkSnapshotTree(ctx, s.root, snapshot, limits, &total)
 	if snapshot.err != nil {
 		return snapshot
 	}

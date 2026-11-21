@@ -6,37 +6,68 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
-// NewHandler serves files under root with SPA/CSR fallback: a
-// concrete file is served as-is, while the root and any unknown path return
-// index. File access stays within root even when a path contains symlinks.
-func NewHandler(prefix, root, index string) http.Handler {
-	if strings.TrimSpace(index) == "" {
-		index = utils.DefaultStaticIndex
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		rel, ok := utils.StaticSiteRequestPath(prefix, req.URL.Path)
-		if !ok {
-			http.NotFound(w, req)
-			return
-		}
-		dir, err := os.OpenRoot(root)
-		if err != nil {
-			http.NotFound(w, req)
-			return
-		}
-		defer dir.Close()
+// Handler serves one static site from the directory pinned by NewHandler.
+type Handler struct {
+	prefix   string
+	index    string
+	root     *os.Root
+	closeErr error
+	close    sync.Once
+}
 
-		if serveStaticSiteFile(w, req, dir, rel) {
-			return
-		}
-		if served, err := serveStaticFile(w, req, dir, "/"+index); err != nil || !served {
-			http.NotFound(w, req)
+// NewHandler opens root once and serves it with SPA/CSR fallback. If root or
+// index is invalid, the returned handler fails closed with not-found responses.
+// Call OpenHandler when the caller has an explicit lifecycle for Close.
+func NewHandler(prefix, root, index string) http.Handler {
+	handler, err := OpenHandler(prefix, root, index)
+	if err != nil {
+		return http.NotFoundHandler()
+	}
+	return handler
+}
+
+// OpenHandler opens root once and serves it with SPA/CSR fallback: a concrete
+// file is served as-is, while the root and any unknown path return index. File
+// access stays within the opened root even when its pathname is later replaced.
+// The caller must call Close after serving has stopped.
+func OpenHandler(prefix, root, index string) (*Handler, error) {
+	dir, index, err := utils.OpenStaticSite(root, index)
+	if err != nil {
+		return nil, err
+	}
+	return &Handler{prefix: prefix, index: index, root: dir}, nil
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	rel, ok := utils.StaticSiteRequestPath(h.prefix, req.URL.Path)
+	if !ok || h.root == nil {
+		http.NotFound(w, req)
+		return
+	}
+	if serveStaticSiteFile(w, req, h.root, rel) {
+		return
+	}
+	if served, err := serveStaticFile(w, req, h.root, "/"+h.index); err != nil || !served {
+		http.NotFound(w, req)
+	}
+}
+
+// Close releases the pinned directory. It is safe to call more than once.
+func (h *Handler) Close() error {
+	if h == nil {
+		return nil
+	}
+	h.close.Do(func() {
+		if h.root != nil {
+			h.closeErr = h.root.Close()
 		}
 	})
+	return h.closeErr
 }
 
 func serveStaticSiteFile(w http.ResponseWriter, req *http.Request, dir *os.Root, rel string) bool {

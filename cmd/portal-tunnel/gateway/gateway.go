@@ -129,14 +129,16 @@ func ComposeHTTPRoutes(routes []ExposedHTTPRoute, contract X402Config) (*HTTPGat
 	}
 	pw, err := paywall.New(contract.paywallConfig(), paid)
 	if err != nil {
+		_ = routed.Close()
 		return nil, fmt.Errorf("x402 payment: %w", err)
 	}
-	return &HTTPGateway{payment: pw, handler: pw.Wrap(routed)}, nil
+	return &HTTPGateway{payment: pw, routes: routed, handler: pw.Wrap(routed)}, nil
 }
 
 // HTTPGateway is the routed tunnel handler with its payment runtime.
 type HTTPGateway struct {
 	payment *paywall.Paywall
+	routes  *sdk.HTTPRoutes
 	handler http.Handler
 }
 
@@ -148,10 +150,11 @@ func (g *HTTPGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.handler.ServeHTTP(w, r)
 }
 
-// Close releases the payment runtime. It is safe on a nil gateway.
+// Close releases the payment runtime and any pinned static roots. It is safe
+// on a nil gateway.
 func (g *HTTPGateway) Close() error {
 	if g == nil {
 		return nil
 	}
-	return g.payment.Close()
+	return errors.Join(g.payment.Close(), g.routes.Close())
 }
