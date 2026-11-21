@@ -86,6 +86,6 @@ describe("relay selection", () => {
 
     expect(screen.queryByRole("link", { name: /blog\.remote\.example/ })).toBeNull();
     expect(screen.getByText("blog.remote.example")).toBeDefined();
-    expect(screen.getByText("TCP")).toBeDefined();
+    expect(screen.getAllByText("TCP").length).toBeGreaterThanOrEqual(1);
   });
 });

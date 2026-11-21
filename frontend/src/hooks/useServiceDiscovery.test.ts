@@ -27,7 +27,7 @@ describe("service discovery", () => {
             current_relay: false,
             reported_ready: true,
             observed_at: new Date(observedAt).toISOString(),
-            expires_at: new Date(observedAt + 30_000).toISOString(),
+            expires_at: new Date(Date.now() + 30_000).toISOString(),
             verification: "relay-reported",
           }],
         }],
