@@ -63,7 +63,38 @@ describe("relay selection", () => {
     expect(screen.getByText("blog.remote2.example")).toBeDefined();
     expect(within(screen.getByRole("link", { name: /blog\.remote2\.example/ })).getByText("+10/-2")).toBeDefined();
     expect(screen.getByText("remote3.example")).toBeDefined();
+    expect(screen.getByText("+0/-0")).toBeDefined();
     expect(screen.getByText("Unavailable")).toBeDefined();
+  });
+
+  it("shows unknown for missing local and remote observations despite a local vote fallback", () => {
+    render(<ServiceRelaysPanel
+      server={{
+        ...server,
+        reputation: { hostname: server.id, up: 0, down: 0, total: 0, viewer_vote: "" },
+        locations: [observation],
+      }}
+      loading={false}
+      onCheckMore={vi.fn()}
+      onClose={vi.fn()}
+    />);
+
+    expect(within(screen.getByRole("link", { name: /blog\.local\.example/ })).getByText("Unknown")).toBeDefined();
+    expect(within(screen.getByRole("link", { name: /blog\.remote\.example/ })).getByText("Unknown")).toBeDefined();
+    expect(screen.queryByText("+0/-0")).toBeNull();
+  });
+
+  it("shows an observed local zero tally", () => {
+    render(<ServiceRelaysPanel
+      server={server}
+      localReputation={{ up: 0, down: 0 }}
+      loading={false}
+      onCheckMore={vi.fn()}
+      onClose={vi.fn()}
+    />);
+
+    expect(within(screen.getByRole("link", { name: /blog\.local\.example/ })).getByText("+0/-0")).toBeDefined();
+    expect(screen.queryByText("Unknown")).toBeNull();
   });
 
   it("shows empty state when no relays exist for remote-only server with no locations", () => {

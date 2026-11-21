@@ -85,7 +85,7 @@ function compareServers(
   switch (sortValue) {
     case "recommended":
       return (a, b) =>
-        (b.reputation?.up ?? b.observedReputation?.up ?? 0) - (a.reputation?.up ?? a.observedReputation?.up ?? 0) ||
+        (b.reputation?.up ?? 0) - (a.reputation?.up ?? 0) ||
         a.name.localeCompare(b.name) ||
         a.id.localeCompare(b.id);
     case "name-asc":

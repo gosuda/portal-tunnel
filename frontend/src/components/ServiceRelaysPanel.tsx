@@ -56,9 +56,9 @@ export function ServiceRelaysPanel({ server, response, loading, error, localRepu
           <div className="mt-4 space-y-2">
             {resolvedLocations.map((loc) => {
               const rep = loc.current_relay
-                ? (localReputation || (server.reputation ? { up: server.reputation.up, down: server.reputation.down } : undefined))
+                ? localReputation
                 : loc.reputation;
-              const repText = rep && (rep.up > 0 || rep.down > 0) ? `+${rep.up}/-${rep.down}` : null;
+              const repText = rep ? `+${rep.up}/-${rep.down}` : "Unknown";
 
               if (loc.url) {
                 const displayText = loc.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
@@ -79,11 +79,9 @@ export function ServiceRelaysPanel({ server, response, loading, error, localRepu
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      {repText && (
-                        <span className="font-mono text-xs text-muted-foreground">
-                          {repText}
-                        </span>
-                      )}
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {repText}
+                      </span>
                       <ExternalLink className="size-4 text-muted-foreground" />
                     </div>
                   </a>
@@ -105,11 +103,9 @@ export function ServiceRelaysPanel({ server, response, loading, error, localRepu
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    {repText && (
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {repText}
-                      </span>
-                    )}
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {repText}
+                    </span>
                     <span className="text-xs text-muted-foreground">Unavailable</span>
                   </div>
                 </div>
