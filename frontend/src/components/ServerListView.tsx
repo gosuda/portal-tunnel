@@ -397,6 +397,23 @@ export function ServerListView({
   const handleTagToggle = (tag: string) =>
     animateReorder(() => onTagToggle(tag), leases?.length ?? Infinity);
 
+  const handleClearTags = () =>
+    animateReorder(() => onClearTags(), leases?.length ?? Infinity);
+
+  const handleToggleThisRelay = onToggleThisRelay
+    ? () => animateReorder(() => onToggleThisRelay(), leases?.length ?? Infinity)
+    : undefined;
+
+  const handleSearchChange = (value: string) =>
+    animateReorder(() => onSearchChange(value), leases?.length ?? Infinity);
+
+  const handleSortByChange = (value: SortOption) =>
+    animateReorder(() => onSortByChange(value), leases?.length ?? Infinity);
+
+  const handleSelectIdentity = onSelectIdentity
+    ? (identity: string) => animateReorder(() => onSelectIdentity(identity), leases?.length ?? Infinity)
+    : handleSearchChange;
+
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
 
   const isAppView = browseView === "home" || browseView === "favorites";
@@ -412,7 +429,7 @@ export function ServerListView({
         isAppView={isAppView}
         sidebarOpen={sidebarOpen}
         onSidebarOpenChange={onSidebarOpenChange}
-        onSearchChange={onSearchChange}
+        onSearchChange={handleSearchChange}
         onBrowseViewChange={onBrowseViewChange}
       />
 
@@ -422,7 +439,7 @@ export function ServerListView({
         sortBy={sortBy}
         favorites={favorites}
         onBrowseViewChange={onBrowseViewChange}
-        onSortByChange={onSortByChange}
+        onSortByChange={handleSortByChange}
         onClose={() => onSidebarOpenChange(false)}
       />
 
@@ -432,10 +449,10 @@ export function ServerListView({
             <CategoryFilterRow
               selectedTags={selectedTags}
               availableTags={availableTags}
-              onClearTags={onClearTags}
+              onClearTags={handleClearTags}
               onToggleTag={handleTagToggle}
               thisRelayActive={thisRelayActive}
-              onToggleThisRelay={onToggleThisRelay}
+              onToggleThisRelay={handleToggleThisRelay}
               discoveryLoading={discoveryLoading}
               discoveryError={discoveryError}
               searchQuery={searchQuery}
@@ -449,7 +466,7 @@ export function ServerListView({
                 onToggleHidden={() => onShowHiddenChange(!showHidden)}
               />
               {filteredServers.length > 0 ? (
-                <ServerGrid servers={filteredServers} browseView={browseView} onOpenComments={onOpenComments} onVote={onVote} onOpenRelays={onOpenRelays} relayCounts={relayCounts} onSelectIdentity={onSelectIdentity ?? onSearchChange} />
+                <ServerGrid servers={filteredServers} browseView={browseView} onOpenComments={onOpenComments} onVote={onVote} onOpenRelays={onOpenRelays} relayCounts={relayCounts} onSelectIdentity={handleSelectIdentity} />
               ) : (
                 <EmptyResults browseView={browseView} title={emptyMessage.title} body={emptyMessage.body} />
               )}
