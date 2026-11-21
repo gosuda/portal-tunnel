@@ -125,6 +125,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.String(fs, &cfg.Relay.ACME.EABKID, "acme-eab-kid", "", "external account binding key ID for new ACME accounts; pair with ACME_EAB_HMAC", "ACME_EAB_KID")
 	env.String(fs, &cfg.Relay.ACME.EABHMAC, "acme-eab-hmac", "", "external account binding base64url HMAC secret for new ACME accounts; pair with ACME_EAB_KID", "ACME_EAB_HMAC")
 	env.String(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01 and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
+	env.CSV(fs, &cfg.Relay.ACME.PublicIPs, "public-ips", "", "public IPv4 and/or IPv6 address to publish in A/AAAA records, comma-separated, at most one per family; empty discovers them from outbound connections", "PUBLIC_IPS")
 	env.Bool(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
 	env.Int(fs, &cfg.Relay.ACME.EmbeddedDNSPort, "embedded-dns-port", 53, parsePortNumber, "listen port for the embedded authoritative DNS server (the default DNS provider); requires a one-time NS delegation of the base domain and open 53/tcp+udp", "EMBEDDED_DNS_PORT")
 	env.String(fs, &cfg.Relay.ACME.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token for DNS automation (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
@@ -207,6 +208,7 @@ func runServeCommand(args []string) error {
 		Str("state_dir", cfg.Relay.StateDir).
 		Int("sni_port", cfg.Relay.SNIPort).
 		Str("tunnel_source_cidrs", cfg.TunnelSourceCIDRs).
+		Str("public_ips", strings.Join(cfg.Relay.ACME.PublicIPs, ",")).
 		Msg("starting relay server")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)

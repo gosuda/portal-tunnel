@@ -45,6 +45,7 @@ type Config struct {
 	ENSGaslessEnabled      bool
 	ENSGaslessAddress      string
 	EmbeddedDNSPort        int
+	PublicIPs              []string // replaces public IP discovery for both families when set
 	CloudflareToken        string
 	GCPProjectID           string
 	GCPManagedZone         string
@@ -76,6 +77,9 @@ type Manager struct {
 	material     *utils.Snapshot[servedMaterial]
 
 	pendingDNSAddress bool
+	// publishedIPs are the apex addresses of the last successful DNS sync,
+	// logged when they change.
+	publishedIPs []string
 }
 
 func NewManager(cfg Config) (*Manager, error) {
@@ -86,6 +90,9 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, err
 	}
 	cfg.CADirURL = caDirURL
+	if cfg.PublicIPs, err = NormalizePublicIPs(cfg.PublicIPs); err != nil {
+		return nil, err
+	}
 	cfg.EABKID = strings.TrimSpace(cfg.EABKID)
 	cfg.EABHMAC = strings.TrimSpace(cfg.EABHMAC)
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
@@ -152,6 +159,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 		return "", "", errACMEManagerIsNil
 	}
 	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
+		m.warnPublicIPs(false)
 		if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
 			return "", "", err
 		}
@@ -167,6 +175,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if err != nil {
 		return "", "", err
 	}
+	m.warnPublicIPs(manual)
 	if _, err := m.syncDNS(ctx); err != nil {
 		return "", "", fmt.Errorf("ensure dns records: %w", err)
 	}

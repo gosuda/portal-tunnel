@@ -1,4 +1,5 @@
 The Portal relay for {{ .Values.env.PORTAL_URL }} is starting.
+{{- $publicIPs := nospace (toString (.Values.env.PUBLIC_IPS | default "")) }}
 
 1. Find the Service address:
 
@@ -10,14 +11,25 @@ The Portal relay for {{ .Values.env.PORTAL_URL }} is starting.
 
    NS  {{ include "portal-relay.host" . }}     ns.{{ include "portal-relay.host" . }}
    A   ns.{{ include "portal-relay.host" . }}  <Service address>   (glue)
-
-   The relay answers with the public address it detects on outbound
-   connections, which must be the Service address.
 {{- else }}
 
-2. The relay manages {{ include "portal-relay.host" . }} through {{ .Values.env.ACME_DNS_PROVIDER }}
-   and publishes A/AAAA records for the public address it detects on outbound
-   connections. That address must reach the Service.
+2. The relay manages {{ include "portal-relay.host" . }} through {{ .Values.env.ACME_DNS_PROVIDER }}.
+{{- end }}
+{{- if $publicIPs }}
+
+   The relay publishes A/AAAA records for {{ $publicIPs }} (env.PUBLIC_IPS).
+{{- else }}
+
+   The relay publishes A/AAAA records for the address of its outbound
+   connections, which on Kubernetes is often a node or NAT address. Set
+   env.PUBLIC_IPS to the Service address unless the two are the same.
+{{- end }}
+{{- with .Values.service.loadBalancerIP }}
+{{- if and $publicIPs (not (has . (splitList "," $publicIPs))) }}
+
+   WARNING: service.loadBalancerIP {{ . }} is not in env.PUBLIC_IPS, so DNS does
+   not point at it. That is right only behind a DNAT to the Service.
+{{- end }}
 {{- end }}
 
 3. Follow the first certificate issuance:

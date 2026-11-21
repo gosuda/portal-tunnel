@@ -22,10 +22,22 @@ when offline and never fall back to cached content.
 `deploy/helm/portal-relay` runs the relay and `deploy/helm/portal-tunnel` runs
 a tunnel client for an in-cluster Service. Release tags publish both to
 `oci://ghcr.io/gosuda/charts` with the release version. Example values files
-and plain client manifests are in `docs/static/examples/kubernetes`. The relay
-publishes DNS records for the address of its outbound connections, so the
-cluster's outbound address must be the relay Service address. See
+and plain client manifests are in `docs/static/examples/kubernetes`. Set
+`env.PUBLIC_IPS` to the relay Service address so DNS points at it. See
 [Kubernetes](/kubernetes).
+
+### Relay: `PUBLIC_IPS` sets the addresses published in DNS
+
+`PUBLIC_IPS` (`--public-ips`) lists the relay's public IPv4 and/or IPv6
+address, at most one per family. When it is set, the relay publishes exactly
+these addresses in A and AAAA records for the apex, the wildcard, and tracked
+ENS hostnames, and no longer asks external services for the address of its
+outbound connections. Use it behind a load balancer, a NAT gateway, a floating
+IP, or a DNAT rule, where that outbound address is not the one clients reach.
+A family left out of the list is not published, and existing records of that
+family at an external provider stay until you remove them. Empty, the default,
+keeps discovery. The relay now logs the addresses it publishes and their
+source. See [IPv4 and IPv6](/configuration#ipv4-and-ipv6).
 
 ### Agent: relay status and configuration compatibility
 
