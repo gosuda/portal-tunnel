@@ -26,8 +26,8 @@ optional for clients. The examples live in
 
 Release tags publish both charts to `oci://ghcr.io/gosuda/charts`, with the
 chart version equal to the Portal release. Pin `--version` to the release you
-run. From a checkout, install `deploy/helm/portal-relay` or
-`deploy/helm/portal-tunnel` instead.
+run. From a checkout, install `docs/examples/helm/portal-relay` or
+`docs/examples/helm/portal-tunnel` instead.
 
 ## Prerequisites
 

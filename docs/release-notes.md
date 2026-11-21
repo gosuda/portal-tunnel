@@ -19,7 +19,7 @@ when offline and never fall back to cached content.
 
 ### Kubernetes: Helm charts for the relay and the tunnel client
 
-`deploy/helm/portal-relay` runs the relay and `deploy/helm/portal-tunnel` runs
+`docs/examples/helm/portal-relay` runs the relay and `docs/examples/helm/portal-tunnel` runs
 a tunnel client for an in-cluster Service. Release tags publish both to
 `oci://ghcr.io/gosuda/charts` with the release version. Example values files
 and plain client manifests are in `docs/static/examples/kubernetes`. Set
