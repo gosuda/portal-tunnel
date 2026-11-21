@@ -1,7 +1,7 @@
 import type { JSX } from "react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { Search, X, Star, Menu, Plus } from "lucide-react";
+import { Search, X, Star, Menu, Plus, Radio } from "lucide-react";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { PublicRelaysSection } from "@/components/PublicRelaysSection";
 import { ServerCard } from "@/components/ServerCard";
@@ -36,9 +36,12 @@ function animateReorder(update: () => void, maxCards: number): void {
   document.startViewTransition(() => flushSync(update));
 }
 
+const isIdentityQuery = (val: string) => /^0x[0-9a-fA-F]*$/i.test(val.trim());
+
 export function appListTitle(browseView: BrowseView, searchQuery: string, sortBy: SortOption): string {
   if (browseView === "favorites") return "Favorites";
-  if (searchQuery.trim() !== "") return `Results for ${searchQuery}`;
+  const trimmed = searchQuery.trim();
+  if (trimmed !== "" && !isIdentityQuery(trimmed)) return `Results for ${searchQuery}`;
   if (sortBy === "recommended") return "Most recommended";
   return "Home";
 }
@@ -196,17 +199,84 @@ function BrowserSidebar({ open, browseView, sortBy, favorites, onBrowseViewChang
   );
 }
 
-function CategoryFilterRow({ selectedTags, availableTags, onClearTags, onToggleTag }: {
+function CategoryFilterRow({
+  selectedTags,
+  availableTags,
+  onClearTags,
+  onToggleTag,
+  thisRelayActive,
+  onToggleThisRelay,
+  discoveryLoading,
+  discoveryError,
+  discoveryCheckMore,
+  searchQuery,
+}: {
   selectedTags: string[];
   availableTags: string[];
   onClearTags: () => void;
   onToggleTag: (tag: string) => void;
+  thisRelayActive?: boolean;
+  onToggleThisRelay?: () => void;
+  discoveryLoading?: boolean;
+  discoveryError?: string;
+  discoveryCheckMore?: () => void;
+  searchQuery?: string;
 }): JSX.Element {
+  const isAllActive = !thisRelayActive && selectedTags.length === 0 && (!searchQuery || searchQuery.trim() === "");
+
   return (
     <div className="sticky top-[116px] z-30 bg-background/80 px-4 pb-3 pt-2 backdrop-blur-xl md:top-16 lg:px-8">
-      <div aria-label="Filter by category" className="flex gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <button type="button" aria-pressed={selectedTags.length === 0} onClick={onClearTags} className={`portal-category ${selectedTags.length === 0 ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>All</button>
-        {availableTags.map((tag) => <button key={tag} type="button" aria-pressed={selectedTags.includes(tag)} onClick={() => onToggleTag(tag)} className={`portal-category ${selectedTags.includes(tag) ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}>{tag}</button>)}
+      <div aria-label="Filter by category" className="flex items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <button
+          type="button"
+          aria-pressed={isAllActive}
+          onClick={onClearTags}
+          className={`portal-category ${isAllActive ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}
+        >
+          All
+        </button>
+        {onToggleThisRelay && (
+          <button
+            type="button"
+            aria-pressed={thisRelayActive}
+            onClick={onToggleThisRelay}
+            className={`portal-category inline-flex items-center gap-1.5 ${thisRelayActive ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}
+          >
+            <Radio className="size-3.5" />
+            This relay
+          </button>
+        )}
+        {availableTags.map((tag) => (
+          <button
+            key={tag}
+            type="button"
+            aria-pressed={selectedTags.includes(tag)}
+            onClick={() => onToggleTag(tag)}
+            className={`portal-category ${selectedTags.includes(tag) ? "bg-foreground text-background" : "bg-secondary text-foreground"}`}
+          >
+            {tag}
+          </button>
+        ))}
+        {discoveryLoading && (
+          <span role="status" className="shrink-0 text-xs text-muted-foreground">
+            Checking relays…
+          </span>
+        )}
+        {discoveryError && (
+          <span role="alert" className="shrink-0 text-xs text-destructive">
+            {discoveryError}
+          </span>
+        )}
+        {discoveryCheckMore && (
+          <button
+            type="button"
+            disabled={discoveryLoading}
+            onClick={discoveryCheckMore}
+            className="shrink-0 rounded-lg bg-secondary px-3 py-1 text-xs disabled:opacity-50"
+          >
+            Check more relays
+          </button>
+        )}
       </div>
     </div>
   );
@@ -230,20 +300,21 @@ function ResultsHeader({ title, status, hiddenCount, showHidden, onToggleHidden 
   );
 }
 
-function ServerGrid({ servers, browseView, onOpenComments, onVote, onOpenRelays, relayCounts }: {
+function ServerGrid({ servers, browseView, onOpenComments, onVote, onOpenRelays, relayCounts, onSelectIdentity }: {
   servers: BaseServer[];
   browseView: BrowseView;
   onOpenComments: (server: BaseServer) => void;
   onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
   onOpenRelays?: (server: BaseServer) => void;
   relayCounts?: Record<string, number>;
+  onSelectIdentity?: (identity: string) => void;
 }): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const renderedServerIds = servers.map((server) => server.id).join("\n");
   useEffect(() => watchCardReveal(gridRef.current), [renderedServerIds, browseView]);
   return (
     <div ref={gridRef} className="grid grid-cols-1 gap-x-4 gap-y-10 min-[600px]:grid-cols-2 min-[1150px]:grid-cols-3 min-[1600px]:grid-cols-4 min-[2000px]:grid-cols-5">
-      {servers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={server.remoteOnly ? undefined : onOpenComments} onVote={server.remoteOnly ? undefined : onVote} onOpenRelays={onOpenRelays} relayCount={relayCounts?.[server.id]} /></LiveAppCard>)}
+      {servers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} onVote={server.remoteOnly ? undefined : onVote} onOpenRelays={onOpenRelays} relayCount={relayCounts?.[server.id]} onSelectIdentity={onSelectIdentity} /></LiveAppCard>)}
     </div>
   );
 }
@@ -263,7 +334,11 @@ function EmptyResults({ browseView, title, body }: {
 }
 
 interface ServerListViewProps {
-  identityFilter?: ReactNode;
+  thisRelayActive?: boolean;
+  onToggleThisRelay?: () => void;
+  discoveryLoading?: boolean;
+  discoveryError?: string;
+  discoveryCheckMore?: () => void;
   onOpenRelays?: (server: BaseServer) => void;
   relayCounts?: Record<string, number>;
   browseView: BrowseView;
@@ -285,12 +360,17 @@ interface ServerListViewProps {
   onSortByChange: (value: SortOption) => void;
   onTagToggle: (tag: string) => void;
   onClearTags: () => void;
+  onSelectIdentity?: (identity: string) => void;
   onOpenComments: (server: BaseServer) => void;
   onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
 }
 
 export function ServerListView({
-  identityFilter,
+  thisRelayActive,
+  onToggleThisRelay,
+  discoveryLoading,
+  discoveryError,
+  discoveryCheckMore,
   onOpenRelays,
   relayCounts,
   browseView,
@@ -312,6 +392,7 @@ export function ServerListView({
   onSortByChange,
   onTagToggle,
   onClearTags,
+  onSelectIdentity,
   onOpenComments,
   onVote,
 }: ServerListViewProps): JSX.Element {
@@ -367,8 +448,13 @@ export function ServerListView({
               availableTags={availableTags}
               onClearTags={onClearTags}
               onToggleTag={handleTagToggle}
+              thisRelayActive={thisRelayActive}
+              onToggleThisRelay={onToggleThisRelay}
+              discoveryLoading={discoveryLoading}
+              discoveryError={discoveryError}
+              discoveryCheckMore={discoveryCheckMore}
+              searchQuery={searchQuery}
             />
-            {identityFilter}
             <div className="px-4 lg:px-8">
               <ResultsHeader
                 title={appListTitle(browseView, searchQuery, sortBy)}
@@ -378,7 +464,7 @@ export function ServerListView({
                 onToggleHidden={() => onShowHiddenChange(!showHidden)}
               />
               {filteredServers.length > 0 ? (
-                <ServerGrid servers={filteredServers} browseView={browseView} onOpenComments={onOpenComments} onVote={onVote} onOpenRelays={onOpenRelays} relayCounts={relayCounts} />
+                <ServerGrid servers={filteredServers} browseView={browseView} onOpenComments={onOpenComments} onVote={onVote} onOpenRelays={onOpenRelays} relayCounts={relayCounts} onSelectIdentity={onSelectIdentity ?? onSearchChange} />
               ) : (
                 <EmptyResults browseView={browseView} title={emptyMessage.title} body={emptyMessage.body} />
               )}

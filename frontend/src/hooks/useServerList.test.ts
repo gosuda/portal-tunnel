@@ -1,11 +1,14 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/apiClient";
-import type { Lease } from "@/types/api";
+import type { Lease, ServiceDiscoveryResponse } from "@/types/api";
 import type { BaseServer } from "@/lib/server";
 import { useServerList } from "./useServerList";
 
-vi.mock("@/lib/apiClient", () => ({ apiClient: { get: vi.fn() } }));
+vi.mock("@/lib/apiClient", () => ({
+  apiClient: { get: vi.fn() },
+  APIClientError: class extends Error {},
+}));
 vi.mock("@/hooks/useList", () => ({
   useList: ({ servers }: { servers: BaseServer[] }) => ({ filteredServers: servers }),
 }));
@@ -28,6 +31,95 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("useServerList public snapshot", () => {
+
+  it.each(["", lease.address])("keeps the local scope independent of identity %s", async (identity) => {
+    const directory: ServiceDiscoveryResponse = {
+      partial: true,
+      relays_checked: 2,
+      relays_skipped: 1,
+      services: [{
+        name: "remote",
+        address: lease.address,
+        metadata: { tags: ["network"] },
+        locations: [{
+          relay_url: "https://other.example",
+          url: "https://remote.other.example/",
+          current_relay: false,
+          reported_ready: true,
+          observed_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+          verification: "relay-reported",
+        }],
+      }],
+    };
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path.startsWith("/api/services") ? directory : { leases: [lease] });
+    const { result, rerender, unmount } = renderHook(({ network }) => useServerList(identity, network), {
+      initialProps: { network: true },
+    });
+    await act(async () => {});
+    expect(result.current.filteredServers).toHaveLength(2);
+    expect(result.current.filteredServers.find((server) => server.remoteOnly)?.name).toBe("remote");
+    expect(result.current.identityDiscovery.response?.partial).toBe(true);
+
+    rerender({ network: false });
+    expect(result.current.filteredServers.map((server) => server.id)).toEqual([lease.canonical_hostname]);
+    expect(result.current.identityDiscovery.response).toBeUndefined();
+    unmount();
+  });
+
+  it("keeps unexpired remote cards after a failed refresh, then removes them at expiry", async () => {
+    const remoteLocation = {
+      relay_url: "https://other.example",
+      url: "https://remote.other.example/",
+      current_relay: false,
+      reported_ready: true,
+      observed_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      verification: "relay-reported",
+    } as const;
+    let failed = false;
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path !== "/api/services") return { leases: [lease] };
+      if (failed) throw new Error("network directory unavailable");
+      return {
+        partial: false,
+        relays_checked: 2,
+        relays_skipped: 0,
+        services: [{ name: "remote", address: lease.address, metadata: {}, locations: [remoteLocation] }],
+      };
+    });
+    const { result, unmount } = renderHook(() => useServerList("", true));
+    await act(async () => {});
+    expect(result.current.filteredServers).toHaveLength(2);
+
+    failed = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(result.current.filteredServers).toHaveLength(2);
+    expect(result.current.filteredServers.find((server) => server.remoteOnly)?.name).toBe("remote");
+    expect(result.current.identityDiscovery.error).toContain("local directory is still available");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(result.current.filteredServers.map((server) => server.id)).toEqual([lease.canonical_hostname]);
+    expect(result.current.identityDiscovery.response?.partial).toBe(true);
+    expect(result.current.identityDiscovery.error).toContain("local directory is still available");
+    unmount();
+  });
+  it("distinguishes local reputation observed in public state from the local action fallback", async () => {
+    const hostname = lease.canonical_hostname ?? lease.hostname;
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({ leases: [lease] })
+      .mockResolvedValueOnce({ leases: [lease], reputation: [{ hostname, up: 0, down: 0, total: 0 }] });
+    const { result, unmount } = renderHook(() => useServerList());
+    await act(async () => {});
+    expect(result.current.filteredServers[0].reputation?.total).toBe(0);
+    expect(result.current.filteredServers[0].observedLocalReputation).toBeUndefined();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(result.current.filteredServers[0].observedLocalReputation).toMatchObject({ up: 0, down: 0 });
+    unmount();
+  });
+
   it("refreshes the original leases and directory entries together", async () => {
     vi.mocked(apiClient.get)
       .mockResolvedValueOnce({ leases: [lease] })
@@ -139,6 +231,40 @@ describe("useServerList public snapshot", () => {
     act(() => result.current.toggleComments(app));
 
     expect(result.current.commentServer).toBeNull();
+    unmount();
+  });
+
+  it("does not hide remote-only services even if downvoted", async () => {
+    const directory: ServiceDiscoveryResponse = {
+      partial: false,
+      relays_checked: 1,
+      relays_skipped: 0,
+      services: [{
+        name: "remote-downvoted",
+        address: lease.address,
+        metadata: {},
+        locations: [{
+          relay_url: "https://other.example",
+          url: "https://remote.other.example/",
+          current_relay: false,
+          reported_ready: true,
+          observed_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+          verification: "relay-reported",
+          reputation: { up: 0, down: 10 },
+        }],
+      }],
+    };
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/services" ? directory : { leases: [] });
+    const { result, unmount } = renderHook(() => useServerList("", true));
+    await act(async () => {});
+
+    expect(result.current.hiddenCount).toBe(0);
+    expect(result.current.filteredServers).toHaveLength(1);
+    expect(result.current.filteredServers[0].remoteOnly).toBe(true);
+    expect(result.current.filteredServers[0].reputation).toBeUndefined();
+    expect(result.current.filteredServers[0].observedReputation).toEqual({ up: 0, down: 10 });
     unmount();
   });
 });

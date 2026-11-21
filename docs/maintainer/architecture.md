@@ -116,23 +116,27 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
   events. This package owns polling, baselines, and durable evidence without
   controlling TLS readiness, certificate issuance, or relay selection.
 
-- `portal/discovery.ServiceLookup`: request-driven public-directory observations
-  for address and service-identity queries. `RelaySet` remains the owner of
-  eligible relay targets; the lookup owns a bounded short-lived cache and
-  outbound request slots using the Discovery public-address transport. It admits
-  at most eight concurrent lookups without queueing; excess requests receive
-  HTTP 503 with Retry-After, independently of registration/auth budgets. It reads
-  completed snapshots across eligible relays and rotates its bounded refresh
-  window between requests. Concurrent misses for one relay wait for its pending
-  observation; slot acquisition waits outside the cache lock within the caller's
-  deadline, and canceled callers do not create negative relay observations. Sources
-  are public `/api/state` snapshots; lookup never expands the discovery graph or changes
-  relay health on directory failure. The frontend filters identity results into
-  the existing app list and queries alternate origins only when a visitor opens
-  a card's relay selector. Partial results expose a manual Check more relays
-  action that reuses the rotating window and cache. The selector opens HTTP
-  URLs only; TCP/UDP endpoint selection is not provided. Relay claims remain
-  explicitly unverified.
+- `portal/discovery.ServiceLookup`: request-driven network browsing and
+  address/service-identity queries over public `/api/state` observations.
+  `RelaySet` owns eligible targets. Lookup shares short-lived snapshots and
+  rotates a bounded refresh window. It admits at most eight concurrent lookups
+  without queueing; excess requests receive HTTP 503 with Retry-After,
+  independently of registration/auth budgets. Partial directory coverage offers
+  a manual Check more relays action. Concurrent misses for one relay share
+  pending work; a canceled caller does not record a failed remote observation.
+  Directory and comment reads use the Discovery public-address transport with
+  separate admission and outbound slots, so comment traffic cannot make the
+  service directory unavailable. The local list remains independent of remote responses.
+  Locations and optional reputation are relay reports, not ownership proof or
+  unique voters. Remote reputation is display data, separate from local vote
+  summaries used for hiding or warnings. Comment threads use bounded, on-demand
+  anonymous reads from sources that report the requested identity. IDs and times remain source
+  specific, and failures or truncation yield partial coverage. The 22-second
+  comment deadline reserves directory lookup time and outbound waves for both
+  admitted reads through their two shared slots; each source still has a
+  two-second fetch timeout. Votes, posting
+  and deletion stay at the source relay; federation does not forward cookies
+  or replicate comments.
 
 - `portal/keyless`: the Keyless TLS feature boundary. It owns tenant TLS termination
   via the `keyless_tls` t13server and keyless remote signing — certificate chains

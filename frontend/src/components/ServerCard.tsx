@@ -1,9 +1,9 @@
 import { useState, type JSX, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ROUTE_PATHS } from "@/lib/apiPaths";
 import clsx from "clsx";
 import {
   BadgeDollarSign,
+  Globe,
   MessageSquare,
   ThumbsDown,
   ThumbsUp,
@@ -78,12 +78,12 @@ function CommentsTrigger({ server, onOpenComments }: {
         event.stopPropagation();
         onOpenComments(server);
       }}
-      aria-label="Comments"
-      title={`Comments: ${server.reputation?.comments ?? 0}`}
+      aria-label={server.remoteOnly ? "View network comments" : "Comments"}
+      title={server.remoteOnly ? "View relay-reported comments" : `Comments: ${server.reputation?.comments ?? 0}`}
       className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
     >
       <MessageSquare className="size-3.5 shrink-0" />
-      <span className="tabular-nums">{server.reputation?.comments ?? 0}</span>
+      <span className="tabular-nums">{server.remoteOnly ? "Comments" : server.reputation?.comments ?? 0}</span>
     </button>
   );
 }
@@ -125,7 +125,7 @@ function ServerHoverDetails({ description, tags, isTransportService, endpointCou
   return (
     <div
       className={clsx(
-        "pointer-events-none absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100",
+        "pointer-events-none absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-3.5 opacity-0 transition-opacity duration-200 group-hover/cover:opacity-100 group-focus-within/cover:opacity-100",
         isTransportService ? (endpointCount > 1 ? "pb-24" : "pb-18") : ""
       )}
     >
@@ -176,19 +176,108 @@ function resolveDetailPath(server: BaseServer, serverId: string, isWarning: bool
   return server.link || "#";
 }
 
-function CoverPanel({ server, effectiveThumbnail, action, showPaymentBadge, effectivePaymentLabel, isTransportService, hasDetails, description, tags, endpoints, copiedProtocol, onCopyEndpoint, onThumbnailError }: { server: BaseServer; effectiveThumbnail: string; action: ReactNode; showPaymentBadge: boolean; effectivePaymentLabel: string; isTransportService: boolean; hasDetails: boolean; description: string | undefined; tags: string[] | undefined; endpoints: { protocol: string; address: string }[]; copiedProtocol: string | null; onCopyEndpoint: (protocol: string, address: string) => void; onThumbnailError: () => void }): JSX.Element {
+function AppLink({
+  isNavigable,
+  isWarning,
+  detailPath,
+  server,
+  name,
+  className,
+  children,
+  ariaLabel,
+}: {
+  isNavigable: boolean;
+  isWarning: boolean;
+  detailPath: string;
+  server: BaseServer;
+  name: string;
+  className?: string;
+  children?: ReactNode;
+  ariaLabel?: string;
+}): JSX.Element {
+  if (!isNavigable) {
+    return <div className={className}>{children}</div>;
+  }
+  if (isWarning) {
+    return (
+      <Link
+        to={detailPath}
+        state={server}
+        aria-label={ariaLabel ?? `Open ${name}`}
+        className={className}
+      >
+        {children}
+      </Link>
+    );
+  }
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-muted shadow-2xs transition-all duration-300 ease-out group-hover:scale-[1.02] group-hover:border-border group-hover:shadow-md">
+    <a
+      href={server.link || "#"}
+      aria-label={ariaLabel ?? `Open ${name}`}
+      className={className}
+    >
+      {children}
+    </a>
+  );
+}
+
+function CoverPanel({
+  server,
+  effectiveThumbnail,
+  action,
+  showPaymentBadge,
+  effectivePaymentLabel,
+  isTransportService,
+  hasDetails,
+  description,
+  tags,
+  endpoints,
+  copiedProtocol,
+  onCopyEndpoint,
+  onThumbnailError,
+  isNavigable,
+  isWarning,
+  detailPath,
+}: {
+  server: BaseServer;
+  effectiveThumbnail: string;
+  action: ReactNode;
+  showPaymentBadge: boolean;
+  effectivePaymentLabel: string;
+  isTransportService: boolean;
+  hasDetails: boolean;
+  description: string | undefined;
+  tags: string[] | undefined;
+  endpoints: { protocol: string; address: string }[];
+  copiedProtocol: string | null;
+  onCopyEndpoint: (protocol: string, address: string) => void;
+  onThumbnailError: () => void;
+  isNavigable: boolean;
+  isWarning: boolean;
+  detailPath: string;
+}): JSX.Element {
+  return (
+    <div className="group/cover relative aspect-video w-full overflow-hidden rounded-xl border border-border/70 dark:border-white/10 bg-muted shadow-2xs transition-all duration-300 ease-out hover:scale-[1.02] hover:border-border hover:shadow-md">
       {effectiveThumbnail ? (
         <img
           src={effectiveThumbnail}
           alt=""
           loading="lazy"
-          className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]"
+          className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover/cover:scale-[1.03]"
           onError={onThumbnailError}
         />
       ) : (
         <DefaultServerThumbnail server={server} />
+      )}
+      {isNavigable && (
+        <AppLink
+          isNavigable={isNavigable}
+          isWarning={isWarning}
+          detailPath={detailPath}
+          server={server}
+          name={server.name}
+          className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        />
       )}
       {action && (
         <div className="pointer-events-auto absolute top-2.5 right-2.5 z-30">
@@ -237,6 +326,16 @@ function CoverPanel({ server, effectiveThumbnail, action, showPaymentBadge, effe
 }
 
 function VoteControls({ server, isVoting, onVote, onSelect }: { server: BaseServer; isVoting: boolean; onVote: ((hostname: string, vote: ReputationVoteAction) => void | Promise<void>) | undefined; onSelect: (event: React.MouseEvent, direction: "up" | "down") => void }): JSX.Element | null {
+  if (server.remoteOnly) {
+    return server.observedReputation ? (
+      <span
+        className="inline-flex h-7 items-center gap-2 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] text-muted-foreground"
+        title="Observed totals across remote relays; voters are not deduplicated. Open Relays for source counts."
+      >
+        Observed +{server.observedReputation.up}/−{server.observedReputation.down}
+      </span>
+    ) : null;
+  }
   if (!onVote && !server.reputation) {
     return null;
   }
@@ -263,45 +362,87 @@ function VoteControls({ server, isVoting, onVote, onSelect }: { server: BaseServ
   );
 }
 
-function TitleRow({ server, name, showActions, isNavigable, isVoting, onVote, onOpenComments, onSelectVote }: { server: BaseServer; name: string; showActions: boolean; isNavigable: boolean; isVoting: boolean; onVote: ((hostname: string, vote: ReputationVoteAction) => void | Promise<void>) | undefined; onOpenComments: ((server: BaseServer) => void) | undefined; onSelectVote: (event: React.MouseEvent, direction: "up" | "down") => void }): JSX.Element {
+function RelaysTrigger({ count, onClick }: { count: number; onClick: () => void }): JSX.Element {
+  const countLabel = count === 1 ? "1 relay" : `${count} relays`;
   return (
-    <div className={clsx("mt-2.5 flex items-center justify-between gap-2", isNavigable ? "pointer-events-none" : "")}>
+    <button
+      type="button"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      }}
+      aria-label={`${countLabel} connected`}
+      aria-haspopup="dialog"
+      title={`${countLabel} connected`}
+      className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
+    >
+      <Globe className="size-3.5 shrink-0" />
+      <span className="tabular-nums">{count}</span>
+    </button>
+  );
+}
+
+function TitleRow({
+  server,
+  name,
+  showActions,
+  isNavigable,
+  isWarning,
+  detailPath,
+  isVoting,
+  onVote,
+  onOpenComments,
+  onSelectVote,
+  onOpenRelays,
+  relayCount,
+}: {
+  server: BaseServer;
+  name: string;
+  showActions: boolean;
+  isNavigable: boolean;
+  isWarning: boolean;
+  detailPath: string;
+  isVoting: boolean;
+  onVote: ((hostname: string, vote: ReputationVoteAction) => void | Promise<void>) | undefined;
+  onOpenComments: ((server: BaseServer) => void) | undefined;
+  onSelectVote: (event: React.MouseEvent, direction: "up" | "down") => void;
+  onOpenRelays?: (server: BaseServer) => void;
+  relayCount?: number;
+}): JSX.Element {
+  const showRelays = Boolean(
+    onOpenRelays &&
+    relayCount !== undefined &&
+    relayCount > 0
+  );
+
+  return (
+    <div className="mt-2.5 flex items-center justify-between gap-2">
       <h3
         title={name}
-        className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-foreground transition-colors group-hover:text-primary"
+        className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-foreground"
       >
-        {name}
+        <AppLink
+          isNavigable={isNavigable}
+          isWarning={isWarning}
+          detailPath={detailPath}
+          server={server}
+          name={name}
+          className="hover:text-primary transition-colors cursor-pointer"
+        >
+          {name}
+        </AppLink>
       </h3>
       {showActions && (
-        <div className="pointer-events-auto relative z-30 flex shrink-0 items-center gap-1.5">
+        <div className="relative z-30 flex shrink-0 items-center gap-1.5">
+          {showRelays && (
+            <RelaysTrigger count={relayCount!} onClick={() => onOpenRelays!(server)} />
+          )}
           <VoteControls server={server} isVoting={isVoting} onVote={onVote} onSelect={onSelectVote} />
           <CommentsTrigger server={server} onOpenComments={onOpenComments} />
         </div>
       )}
     </div>
-  );
-}
-
-function LinkOverlay({ isNavigable, isWarning, detailPath, server, name }: { isNavigable: boolean; isWarning: boolean; detailPath: string; server: BaseServer; name: string }): JSX.Element | null {
-  if (!isNavigable) {
-    return null;
-  }
-  if (isWarning) {
-    return (
-      <Link
-        to={detailPath}
-        state={server}
-        aria-label={`Open ${name}`}
-        className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-      />
-    );
-  }
-  return (
-    <a
-      href={server.link || "#"}
-      aria-label={`Open ${name}`}
-      className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-    />
   );
 }
 
@@ -314,6 +455,7 @@ interface ServerCardProps {
   onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
   onOpenRelays?: (server: BaseServer) => void;
   relayCount?: number;
+  onSelectIdentity?: (identity: string) => void;
 }
 
 export function ServerCard({
@@ -325,6 +467,7 @@ export function ServerCard({
   onVote,
   onOpenRelays,
   relayCount,
+  onSelectIdentity,
 }: ServerCardProps): JSX.Element {
   const {
     id: serverId, name, description, tags, thumbnail,
@@ -341,8 +484,9 @@ export function ServerCard({
   const endpoints = buildEndpoints(tcpAddr, udpAddr);
   const isTransportService = endpoints.length > 0;
   const isNavigable = navigable && !isTransportService && !server.remoteOnly;
-  const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation));
-  const observedRelayCount = relayCount ?? server.locations?.length;
+  const observedRelayCount = relayCount ?? server.locations?.length ?? (server.remoteOnly ? 0 : 1);
+  const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
+  const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
 
   const copyEndpoint = (protocol: string, address: string) =>
     copy(address, protocol);
@@ -368,28 +512,68 @@ export function ServerCard({
   const detailPath = resolveDetailPath(server, serverId, isWarning);
 
   return (
-    <div className="group relative" title={description || undefined}>
+    <div className="relative" title={description || undefined}>
       <article className="relative w-full min-w-0">
-        <CoverPanel server={server} effectiveThumbnail={effectiveThumbnail} action={action} showPaymentBadge={showPaymentBadge} effectivePaymentLabel={effectivePaymentLabel} isTransportService={isTransportService} hasDetails={hasDetails} description={description} tags={tags} endpoints={endpoints} copiedProtocol={copiedProtocol} onCopyEndpoint={copyEndpoint} onThumbnailError={handleThumbnailError} />
-        <TitleRow server={server} name={name} showActions={showActions} isNavigable={isNavigable} isVoting={isVoting} onVote={onVote} onOpenComments={onOpenComments} onSelectVote={handleSelectVote} />
-        {server.address && onOpenRelays && (
-          <div className="relative z-30 mt-2 flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
-            <Link className="min-w-0 truncate hover:text-primary" title={server.address} to={`${ROUTE_PATHS.home}?${new URLSearchParams({ identity: server.address })}`}>
-              by {server.address.slice(0, 6)}…{server.address.slice(-4)}
-            </Link>
-            <button type="button" aria-haspopup="dialog" title="Observed relay locations" className="shrink-0 rounded-md bg-secondary px-2 py-1 hover:text-primary" onClick={() => onOpenRelays(server)}>
-              {observedRelayCount !== undefined ? `${observedRelayCount} relay${observedRelayCount === 1 ? "" : "s"}` : "Relays"}
-            </button>
-          </div>
-        )}
-        {server.remoteOnly && <p className="mt-2 text-xs text-muted-foreground">Relay-reported · Choose a relay to open</p>}
+        <CoverPanel
+          server={server}
+          effectiveThumbnail={effectiveThumbnail}
+          action={action}
+          showPaymentBadge={showPaymentBadge}
+          effectivePaymentLabel={effectivePaymentLabel}
+          isTransportService={isTransportService}
+          hasDetails={hasDetails}
+          description={description}
+          tags={tags}
+          endpoints={endpoints}
+          copiedProtocol={copiedProtocol}
+          onCopyEndpoint={copyEndpoint}
+          onThumbnailError={handleThumbnailError}
+          isNavigable={isNavigable}
+          isWarning={isWarning}
+          detailPath={detailPath}
+        />
+        <TitleRow
+          server={server}
+          name={name}
+          showActions={showActions}
+          isNavigable={isNavigable}
+          isWarning={isWarning}
+          detailPath={detailPath}
+          isVoting={isVoting}
+          onVote={onVote}
+          onOpenComments={onOpenComments}
+          onSelectVote={handleSelectVote}
+          onOpenRelays={onOpenRelays}
+          relayCount={observedRelayCount}
+        />
+        {server.address && (() => {
+          const address = server.address;
+          const displayAddress = address.length > 24
+            ? `${address.slice(0, 10)}…${address.slice(-8)}`
+            : address;
+          return (
+            <div className="mt-1 flex items-center justify-start">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onSelectIdentity?.(address);
+                }}
+                title={`Filter by identity: ${address}`}
+                className="pointer-events-auto relative z-30 font-mono text-xs text-muted-foreground/80 transition-colors hover:text-primary hover:underline cursor-pointer"
+              >
+                {displayAddress}
+              </button>
+            </div>
+          );
+        })()}
         {children && (
           <div className="pointer-events-auto relative z-30 mt-3 border-t border-border pt-3">
             {children}
           </div>
         )}
       </article>
-      <LinkOverlay isNavigable={isNavigable} isWarning={isWarning} detailPath={detailPath} server={server} name={name} />
     </div>
   );
 }

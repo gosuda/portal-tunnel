@@ -39,6 +39,31 @@ func TestServiceLookupRejectsOverloadWithoutWaiting(t *testing.T) {
 	}
 }
 
+// INV: comment reads and directory lookups have separate admission, so a
+// saturated comment budget never refuses directory browsing (and vice versa).
+func TestCommentReadsDoNotConsumeDirectoryAdmission(t *testing.T) {
+	const self = "https://local.example"
+	lookup := NewServiceLookup(nil)
+	for range commentLookupLimit {
+		lookup.commentLookups <- struct{}{}
+	}
+	if _, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog"); !errors.Is(err, errServiceLookupBusy) {
+		t.Fatalf("overloaded comment read error = %v", err)
+	}
+	if _, err := lookup.Lookup(t.Context(), self, nil, "", nil); err != nil {
+		t.Fatalf("comment pressure refused directory lookup: %v", err)
+	}
+	for range commentLookupLimit {
+		<-lookup.commentLookups
+	}
+	for range serviceLookupLimit {
+		lookup.lookups <- struct{}{}
+	}
+	if _, err := lookup.Comments(t.Context(), self, serviceTestAddress, "blog"); err != nil {
+		t.Fatalf("directory pressure refused comment read: %v", err)
+	}
+}
+
 func TestServiceLookupBoundsObservationsAndResults(t *testing.T) {
 	now := time.Now().UTC()
 	set := NewRelaySet(nil)
@@ -185,13 +210,13 @@ func TestServiceLookupWaitsForSameRelayInFlight(t *testing.T) {
 		}
 	}))
 	first, second := make(chan serviceObservation, 1), make(chan serviceObservation, 1)
-	go func() { first <- lookup.observe(ctx, "https://relay.example") }()
+	go func() { first <- lookup.observe(ctx, "https://relay.example", lookup.slots) }()
 	select {
 	case <-entered:
 	case <-ctx.Done():
 		t.Fatal("directory request did not start")
 	}
-	go func() { second <- lookup.observe(ctx, "https://relay.example") }()
+	go func() { second <- lookup.observe(ctx, "https://relay.example", lookup.slots) }()
 	select {
 	case <-second:
 		t.Fatal("pending directory lookup was returned as a completed result")
@@ -227,7 +252,7 @@ func TestServiceLookupCanceledLeaderDoesNotNegativeCacheRelay(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	result := make(chan serviceObservation, 1)
-	go func() { result <- lookup.observe(ctx, "https://relay.example") }()
+	go func() { result <- lookup.observe(ctx, "https://relay.example", lookup.slots) }()
 	select {
 	case <-entered:
 	case <-time.After(serviceRelayTimeout):
@@ -237,7 +262,7 @@ func TestServiceLookupCanceledLeaderDoesNotNegativeCacheRelay(t *testing.T) {
 	if observation := <-result; !observation.failed {
 		t.Fatal("canceled lookup unexpectedly succeeded")
 	}
-	if observation := lookup.observe(t.Context(), "https://relay.example"); observation.failed || len(observation.leases) != 1 {
+	if observation := lookup.observe(t.Context(), "https://relay.example", lookup.slots); observation.failed || len(observation.leases) != 1 {
 		t.Fatalf("caller cancellation poisoned the next lookup: %+v", observation)
 	}
 }
@@ -251,7 +276,7 @@ func TestServiceLookupSlotWaitHonorsCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		result := make(chan serviceObservation, 1)
-		go func() { result <- lookup.observe(ctx, "https://relay.example") }()
+		go func() { result <- lookup.observe(ctx, "https://relay.example", lookup.slots) }()
 		synctest.Wait()
 		select {
 		case <-result:
@@ -279,6 +304,14 @@ func TestServiceLookupGroupsIdentityAndRelayLocations(t *testing.T) {
 	otherOwner.Hostname = "blog.remote.example"
 	remoteBlog := first
 	remoteBlog.Hostname = "blog.remote.example"
+	var err error
+	remoteBlog.CanonicalHostname, err = namespace.LocalTLSHostname(remoteBlog.Name, remoteBlog.Address, "remote.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The other owner may repeat the alias claim, but cannot borrow the first
+	// identity's tally by claiming its canonical hostname.
+	otherOwner.CanonicalHostname = remoteBlog.CanonicalHostname
 	hidden := remoteBlog
 	hidden.Name, hidden.Hostname, hidden.Metadata.Hide = "secret", "secret.remote.example", true
 	api := remoteBlog
@@ -287,7 +320,11 @@ func TestServiceLookupGroupsIdentityAndRelayLocations(t *testing.T) {
 	spoofed.Name, spoofed.Hostname = "spoofed", "spoofed.evil.example"
 	expired := remoteBlog
 	expired.Name, expired.Hostname, expired.ExpiresAt = "expired", "expired.remote.example", now.Add(-time.Second)
-	lookup.cache[remote] = serviceObservation{leases: []types.Lease{remoteBlog, remoteBlog, otherOwner, api, hidden, spoofed, expired}, at: now, until: now.Add(serviceCacheTTL)}
+	lookup.cache[remote] = serviceObservation{
+		leases:     []types.Lease{remoteBlog, remoteBlog, otherOwner, api, hidden, spoofed, expired},
+		reputation: parseObservedReputation(fmt.Appendf(nil, `[{"hostname":%q,"up":4,"down":1,"total":5}]`, remoteBlog.CanonicalHostname)),
+		at:         now, until: now.Add(serviceCacheTTL),
+	}
 	result, err := lookup.Lookup(t.Context(), self, []types.Lease{first}, serviceTestAddress, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -309,6 +346,25 @@ func TestServiceLookupGroupsIdentityAndRelayLocations(t *testing.T) {
 			}
 		}
 	}
+	network, err := lookup.Lookup(t.Context(), self, []types.Lease{first}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if network.Partial || len(network.Services) != 3 {
+		t.Fatalf("unfiltered lookup omitted remote owners or exposed invalid entries: %+v", network)
+	}
+	if network.Services[0].Name != "api" || network.Services[0].Locations[0].CurrentRelay ||
+		network.Services[1].Name != "blog" || network.Services[1].Address != serviceTestAddress || len(network.Services[1].Locations) != 2 ||
+		network.Services[2].Name != "blog" || network.Services[2].Address != otherOwner.Address || len(network.Services[2].Locations) != 1 {
+		t.Fatalf("network directory lost remote-only services or merged distinct owners: %+v", network.Services)
+	}
+	localTally := network.Services[1].Locations[0].Reputation
+	remoteTally := network.Services[1].Locations[1].Reputation
+	otherOwnerTally := network.Services[2].Locations[0].Reputation
+	if localTally != nil || remoteTally == nil || remoteTally.Up != 4 || remoteTally.Down != 1 || otherOwnerTally != nil {
+		t.Fatalf("reputation was lost or attributed to the wrong source/identity: %+v", network.Services)
+	}
+
 	name := "blog"
 	filtered, err := lookup.Lookup(t.Context(), self, []types.Lease{first}, serviceTestAddress, &name)
 	if err != nil {
@@ -410,5 +466,29 @@ func TestServiceLocationValidatesNamespaceAndDoesNotPromoteLegacyURLs(t *testing
 				t.Fatalf("location=%+v valid=%v", location, valid)
 			}
 		})
+	}
+}
+
+func TestObservedReputationKeepsUnknownDistinctFromZero(t *testing.T) {
+	tallies := parseObservedReputation([]byte(`[
+		{"hostname":"zero.example","up":0,"down":0,"total":0},
+		{"hostname":"missing.example","up":1,"total":1},
+		{"hostname":"negative.example","up":-1,"down":2,"total":1},
+		{"hostname":"incorrect.example","up":1,"down":1,"total":100},
+		{"hostname":"overflow.example","up":4294967295,"down":2,"total":1},
+		{"hostname":"duplicate.example","up":3,"down":1,"total":4},
+		{"hostname":"DUPLICATE.example","up":1,"down":0,"total":1},
+		{"hostname":"good.example","up":2,"down":1,"total":3}
+	]`))
+	if zero, good := tallies["zero.example"], tallies["good.example"]; zero == nil || zero.Up != 0 || zero.Down != 0 || good == nil || good.Up != 2 {
+		t.Fatalf("valid reports were lost: %+v", tallies)
+	}
+	for _, name := range []string{"missing", "negative", "incorrect", "overflow", "duplicate"} {
+		if tallies[name+".example"] != nil {
+			t.Fatalf("invalid or ambiguous %s report was treated as observed", name)
+		}
+	}
+	if unknown := parseObservedReputation([]byte(`{}`)); unknown != nil {
+		t.Fatalf("malformed optional reputation must be unknown: %+v", unknown)
 	}
 }

@@ -75,6 +75,22 @@ describe("default order", () => {
 });
 
 describe("recommendation sorting", () => {
+  it("uses only local votes even when remote observed totals are higher", () => {
+    const servers: BaseServer[] = [
+      { ...server("remote"), remoteOnly: true, observedReputation: { up: 1000, down: 0 } },
+      server("local", 10),
+      { ...server("zero", 0), observedReputation: { up: 2000, down: 0 } },
+      server("unrated"),
+    ];
+    const { result } = renderHook(() => useList({ servers }));
+
+    act(() => result.current.handleSortByChange("recommended"));
+
+    expect(result.current.filteredServers.map(({ id }) => id)).toEqual([
+      "local", "remote", "unrated", "zero",
+    ]);
+  });
+
   it("orders by recommendation count, then name and hostname, treating missing votes as zero", () => {
     const servers = [
       server("z", 4, "Same name"),

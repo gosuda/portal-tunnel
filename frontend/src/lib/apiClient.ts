@@ -170,8 +170,8 @@ function jsonRequestInit(body?: unknown): RequestInit {
 }
 
 export const apiClient = {
-  get<T>(path: string): Promise<T> {
-    return request<T>(path, { method: "GET" });
+  get<T>(path: string, signal?: AbortSignal): Promise<T> {
+    return request<T>(path, signal ? { method: "GET", signal } : { method: "GET" });
   },
   post<T>(path: string, body?: unknown): Promise<T> {
     return request<T>(path, jsonRequestInit(body));

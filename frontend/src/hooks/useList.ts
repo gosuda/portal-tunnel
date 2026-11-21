@@ -72,6 +72,7 @@ function matchesListSearch(server: BaseServer, query: string): boolean {
   return (
     server.name.toLowerCase().includes(query) ||
     server.description.toLowerCase().includes(query) ||
+    (server.address || "").toLowerCase().includes(query) ||
     (server.paymentLabel || "").toLowerCase().includes(query) ||
     server.tags.some((tag) => tag.toLowerCase().includes(query))
   );
