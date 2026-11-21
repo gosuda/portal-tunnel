@@ -68,7 +68,7 @@ describe("useServerList public snapshot", () => {
     unmount();
   });
 
-  it("keeps unexpired remote cards after a failed refresh, then removes them at expiry", async () => {
+  it("keeps a discovered remote card listed after expiry but marks it offline", async () => {
     const remoteLocation = {
       relay_url: "https://other.example",
       url: "https://remote.other.example/",
@@ -99,9 +99,11 @@ describe("useServerList public snapshot", () => {
     expect(result.current.filteredServers.find((server) => server.remoteOnly)?.name).toBe("remote");
     expect(result.current.identityDiscovery.error).toContain("local directory is still available");
 
+    expect(result.current.filteredServers.find((server) => server.remoteOnly)?.online).toBe(true);
+
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
-    expect(result.current.filteredServers.map((server) => server.id)).toEqual([lease.canonical_hostname]);
-    expect(result.current.identityDiscovery.response?.partial).toBe(true);
+    expect(result.current.filteredServers).toHaveLength(2);
+    expect(result.current.filteredServers.find((server) => server.remoteOnly)?.online).toBe(false);
     expect(result.current.identityDiscovery.error).toContain("local directory is still available");
     unmount();
   });

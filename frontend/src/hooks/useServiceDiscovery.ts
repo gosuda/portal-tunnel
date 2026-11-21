@@ -6,30 +6,23 @@ import type { DiscoveredService, ServiceDiscoveryResponse } from "@/types/api";
 
 const REFRESH_MS = 25_000;
 const REQUEST_TIMEOUT_MS = 7_000;
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
-function pruneExpiredLocations(response: ServiceDiscoveryResponse, now: number) {
-  let nextExpiry = Infinity;
-  let stale = false;
-  const services = response.services.flatMap((service) => {
-    const locations = service.locations.filter((location) => {
+// Earliest future expires_at in a snapshot, or Infinity when none is left.
+function nextLocationExpiry(response: ServiceDiscoveryResponse, now: number): number {
+  let next = Infinity;
+  for (const service of response.services) {
+    for (const location of service.locations) {
       const expires = Date.parse(location.expires_at);
-      if (!Number.isFinite(expires) || expires <= now) {
-        stale = true;
-        return false;
-      }
-      nextExpiry = Math.min(nextExpiry, expires);
-      return true;
-    });
-    return locations.length ? [{ ...service, locations }] : [];
-  });
-  return {
-    response: stale ? { ...response, services, partial: true } : response,
-    nextExpiry,
-  };
+      if (Number.isFinite(expires) && expires > now) next = Math.min(next, expires);
+    }
+  }
+  return next;
 }
 
-// Keep locations from earlier polls until they expire. The newest snapshot
-// owns service metadata and coverage counts.
+// Keep every location seen for this filter. expires_at decides only whether a
+// location is available, never whether it is listed. The newest snapshot owns
+// service metadata and coverage counts.
 export function mergeDiscoveryResponses(
   previous: ServiceDiscoveryResponse | undefined,
   incoming: ServiceDiscoveryResponse,
@@ -76,8 +69,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
         // A poll can return a cached observation about to expire. Recheck just
         // after expiry so the backend can fetch it again instead of waiting
         // another full polling interval with no locations.
-        const { nextExpiry } = pruneExpiredLocations(incoming, Date.now());
-        refreshDelay = Math.min(REFRESH_MS, Math.max(1, nextExpiry - Date.now() + 1));
+        refreshDelay = Math.min(REFRESH_MS, Math.max(1, nextLocationExpiry(incoming, Date.now()) - Date.now() + 1));
         if (!cancelled) {
           setState((previous) => ({
             key,
@@ -88,13 +80,10 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
       } catch (error) {
         if (cancelled) return;
         const unsupported = error instanceof APIClientError && error.status === 404;
-        const now = Date.now();
         setState((previous) => ({
           key,
           request,
-          response: previous?.key === key && previous.response
-            ? pruneExpiredLocations(previous.response, now).response
-            : undefined,
+          response: previous?.key === key ? previous.response : undefined,
           error: unsupported
             ? "This relay does not support service discovery. The local directory is still available."
             : "Other relay locations could not be checked. The local directory is still available.",
@@ -113,21 +102,21 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
     };
   }, [key, request, enabled, refresh, valid]);
 
+  // Locations stay listed after expiry. Publish a new services array when one
+  // expires so memoized consumers derive availability again.
   useEffect(() => {
     if (!state?.response) return;
     const { key: snapshotKey, response: snapshot } = state;
     const now = Date.now();
-    const { response, nextExpiry } = pruneExpiredLocations(snapshot, now);
-    if (snapshot === response && !Number.isFinite(nextExpiry)) return;
-    const delay = Math.max(0, nextExpiry - now);
+    const next = nextLocationExpiry(snapshot, now);
+    if (!Number.isFinite(next)) return;
     const timer = window.setTimeout(() => {
-      const currentTime = Date.now();
       setState((current) =>
         current?.key === snapshotKey && current.response
-          ? { ...current, response: pruneExpiredLocations(current.response, currentTime).response }
+          ? { ...current, response: { ...current.response, services: [...current.response.services] } }
           : current,
       );
-    }, delay);
+    }, Math.min(next - now, MAX_TIMER_MS));
     return () => window.clearTimeout(timer);
   }, [state]);
 

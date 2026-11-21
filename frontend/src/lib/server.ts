@@ -41,6 +41,22 @@ export function mergeLocations(
   return [...byRelay.values()];
 }
 
+// A live location is reported ready by its relay and its observation has not expired.
+export function isLocationLive(location: ServiceLocation, now = Date.now()): boolean {
+  const expires = Date.parse(location.expires_at);
+  return location.reported_ready === true && Number.isFinite(expires) && expires > now;
+}
+
+// An available location is live and has an HTTPS URL, so it is a navigation target.
+export function isLocationAvailable(location: ServiceLocation, now = Date.now()): boolean {
+  if (!isLocationLive(location, now) || !location.url) return false;
+  try {
+    return new URL(location.url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 // The directory groups observations by name and owner. Prefer local card data
 // when available so its link, thumbnail, community actions, and status stay intact.
 export function mergeDiscoveredServices(
@@ -94,7 +110,7 @@ export function mergeDiscoveredServices(
       tags: metadata.tags,
       owner: metadata.owner,
       thumbnail: "",
-      online: locations.some((location) => location.reported_ready),
+      online: locations.some((location) => isLocationLive(location)),
       dns: "",
       link: "",
       remoteOnly: true,
