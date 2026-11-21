@@ -77,7 +77,8 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
                 );
               }
 
-              const displayText = (loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
+              // A transport service is not reachable over the HTTP URL, so name the relay.
+              const displayText = (isTransportService ? loc.relay_url : loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
               return (
                 <div
                   key={loc.relay_url}
