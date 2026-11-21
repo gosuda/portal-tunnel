@@ -242,7 +242,7 @@ function resolveVoteRequest(server: BaseServer, targetVote: "up" | "down"): { ta
   return { targetHost, nextVote };
 }
 
-function resolveDetailPath(_server: BaseServer, serverId: string, isWarning: boolean, effectiveLink: string): string {
+function resolveDetailPath(serverId: string, isWarning: boolean, effectiveLink: string): string {
   if (isWarning && serverId) {
     return `/server/${encodeURIComponent(serverId)}`;
   }
@@ -588,7 +588,7 @@ export function ServerCard({
   const handleSelectVote = (event: React.MouseEvent, direction: "up" | "down") => void handleVote(event, direction);
   const handleThumbnailError = () => setFailedThumbnail(thumbnail);
   const isWarning = isReputationWarning(server.reputation);
-  const detailPath = resolveDetailPath(server, serverId, isWarning, effectiveLink);
+  const detailPath = resolveDetailPath(serverId, isWarning, effectiveLink);
 
   return (
     <div className="relative" title={description || undefined}>
