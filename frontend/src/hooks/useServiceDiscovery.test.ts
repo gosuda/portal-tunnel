@@ -49,7 +49,7 @@ describe("service discovery", () => {
     }
   });
 
-  it("keeps relay locations discovered by earlier polls", async () => {
+  it("keeps earlier relay locations and takes coverage from the newest snapshot", async () => {
     vi.mocked(apiClient.get).mockResolvedValueOnce({
       services: [{
         name: "blog",
@@ -91,15 +91,15 @@ describe("service discovery", () => {
           },
         ],
       }],
-      partial: false,
-      relays_checked: 10,
-      relays_skipped: 0,
+      partial: true,
+      relays_checked: 3,
+      relays_skipped: 7,
     });
 
     act(() => result.current.checkMore());
     await act(async () => {});
 
-    expect(result.current.response).toMatchObject({ partial: false, relays_checked: 10, relays_skipped: 0 });
+    expect(result.current.response).toMatchObject({ partial: true, relays_checked: 3, relays_skipped: 7 });
     // Both relay locations must be retained
     expect(result.current.response?.services[0].locations).toHaveLength(2);
     const urls = result.current.response?.services[0].locations.map((l) => l.relay_url);

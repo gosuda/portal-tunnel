@@ -28,7 +28,8 @@ function pruneExpiredLocations(response: ServiceDiscoveryResponse, now: number) 
   };
 }
 
-// Keep locations from earlier polls until they expire.
+// Keep locations from earlier polls until they expire. The newest snapshot
+// owns service metadata and coverage counts.
 export function mergeDiscoveryResponses(
   previous: ServiceDiscoveryResponse | undefined,
   incoming: ServiceDiscoveryResponse,
@@ -43,12 +44,7 @@ export function mergeDiscoveryResponses(
       ? { ...service, locations: mergeLocations(existing.locations, service.locations) }
       : service);
   }
-  return {
-    ...incoming,
-    services: [...services.values()],
-    relays_checked: Math.max(previous.relays_checked, incoming.relays_checked),
-    relays_skipped: Math.min(previous.relays_skipped, incoming.relays_skipped),
-  };
+  return { ...incoming, services: [...services.values()] };
 }
 
 // Mounted by the public-list page. Card rendering alone never starts a lookup.
