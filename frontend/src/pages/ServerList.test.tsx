@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,6 +93,32 @@ describe("ServerList active identity and URL synchronization", () => {
     expect(searchInput.value).toBe(IDENTITY_A);
     expect(screen.getByText("service-alpha")).toBeTruthy();
     expect(router.state.location.search).toBe(`?identity=${IDENTITY_A}`);
+  });
+
+  it("clears the identity when navigating through Favorites back to Home", async () => {
+    const router = createMemoryRouter(
+      [{ path: "/", element: <ServerList /> }],
+      { initialEntries: [`/?identity=${IDENTITY_A}`] }
+    );
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
+    await act(async () => {});
+
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Navigation" }))
+      .getByRole("button", { name: /^Favorites/ }));
+    await act(async () => {});
+    expect(router.state.location.search).toBe("");
+    expect((screen.getByRole("searchbox", { name: /search apps/i }) as HTMLInputElement).value).toBe("");
+
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Navigation" }))
+      .getByRole("button", { name: "Home" }));
+    await act(async () => {});
+    expect(router.state.location.search).toBe("");
+    expect(screen.queryByText("service-alpha")).toBeNull();
+    expect(apiClient.get).toHaveBeenCalledWith("/api/services", expect.any(AbortSignal));
   });
 
   it("identity search -> ordinary text search: identity query param is removed without input being reset", async () => {

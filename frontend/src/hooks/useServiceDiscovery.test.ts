@@ -13,6 +13,42 @@ beforeEach(() => {
 });
 
 describe("service discovery", () => {
+  it("refreshes cached locations at expiry instead of waiting a full polling interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const observedAt = Date.now();
+      vi.mocked(apiClient.get).mockImplementation(async () => ({
+        services: [{
+          name: "blog",
+          address,
+          metadata: {},
+          locations: [{
+            relay_url: "https://remote.example",
+            current_relay: false,
+            reported_ready: true,
+            observed_at: new Date(observedAt).toISOString(),
+            expires_at: new Date(Date.now() < observedAt + 30_000
+              ? observedAt + 30_000 : Date.now() + 30_000).toISOString(),
+            verification: "relay-reported",
+          }],
+        }],
+        partial: false,
+        relays_checked: 2,
+        relays_skipped: 0,
+      }));
+      const { result, unmount } = renderHook(() => useServiceDiscovery(undefined, undefined, true, true));
+      await act(async () => {});
+      await act(async () => { await vi.advanceTimersByTimeAsync(25_000); });
+      expect(result.current.response?.services).toHaveLength(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_001); });
+      expect(result.current.response?.services).toHaveLength(1);
+      expect(Date.parse(result.current.response!.services[0].locations[0].expires_at)).toBeGreaterThan(Date.now());
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("checks the next relay window only when requested and keeps existing observations while loading", async () => {
     vi.mocked(apiClient.get).mockResolvedValueOnce({ services: [], partial: true, relays_checked: 9, relays_skipped: 3 });
     const { result } = renderHook(() => useServiceDiscovery(address));

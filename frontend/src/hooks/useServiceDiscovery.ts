@@ -44,6 +44,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
     let controller: AbortController | undefined;
     const path = key ? `${RELAY_API_PATHS.public.services}?${key}` : RELAY_API_PATHS.public.services;
     async function load() {
+      let refreshDelay = REFRESH_MS;
       if (refresh) {
         controller = new AbortController();
         deadline = window.setTimeout(() => controller?.abort(), REQUEST_TIMEOUT_MS);
@@ -52,7 +53,12 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
         const response = refresh && controller
           ? await apiClient.get<ServiceDiscoveryResponse>(path, controller.signal)
           : await apiClient.get<ServiceDiscoveryResponse>(path);
-        if (!cancelled) setState({ key, request, response: pruneExpiredLocations(response, Date.now()).response });
+        const snapshot = pruneExpiredLocations(response, Date.now());
+        // A poll can return a cached observation about to expire. Recheck just
+        // after expiry so the backend can fetch it again instead of waiting
+        // another full polling interval with no locations.
+        refreshDelay = Math.min(REFRESH_MS, Math.max(1, snapshot.nextExpiry - Date.now() + 1));
+        if (!cancelled) setState({ key, request, response: snapshot.response });
       } catch (error) {
         if (cancelled) return;
         const unsupported = error instanceof APIClientError && error.status === 404;
@@ -69,7 +75,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
         }));
       } finally {
         window.clearTimeout(deadline);
-        if (refresh && !cancelled) timer = window.setTimeout(() => void load(), REFRESH_MS);
+        if (refresh && !cancelled) timer = window.setTimeout(() => void load(), refreshDelay);
       }
     }
     void load();

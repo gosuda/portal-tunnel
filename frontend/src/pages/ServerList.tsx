@@ -86,9 +86,7 @@ export function ServerList(): JSX.Element {
   const handleClearAll = () => {
     clearTags();
     setNetworkScope(true);
-    if (searchQuery) {
-      onSearchChange("");
-    }
+    onSearchChange("");
   };
 
   const handleSelectIdentity = (address: string) => {
@@ -126,7 +124,10 @@ export function ServerList(): JSX.Element {
         browseView={browseView}
         sidebarOpen={sidebarOpen}
         onSidebarOpenChange={setSidebarOpen}
-        onBrowseViewChange={handleBrowseViewChange}
+        onBrowseViewChange={(view) => {
+          onSearchChange("");
+          handleBrowseViewChange(view);
+        }}
         leases={leases}
         searchQuery={searchQuery}
         sortBy={sortBy}
