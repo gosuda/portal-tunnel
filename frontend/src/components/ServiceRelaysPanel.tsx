@@ -1,7 +1,7 @@
 import type { JSX } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ExternalLink, X } from "lucide-react";
-import type { BaseServer } from "@/lib/server";
+import { isLocationAvailable, type BaseServer } from "@/lib/server";
 import type { ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
 
 export function ServiceRelaysPanel({ server, response, loading, error, onClose }: {
@@ -54,7 +54,8 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
 
           <div className="mt-4 space-y-2">
             {resolvedLocations.map((loc) => {
-              if (loc.url && !isTransportService) {
+              // This relay's own row comes from the local lease; remote rows must be available.
+              if (loc.url && !isTransportService && (loc.current_relay || isLocationAvailable(loc))) {
                 const displayText = loc.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
                 return (
                   <a

@@ -8,7 +8,7 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import type { BaseServer } from "@/lib/server";
+import { isLocationAvailable, type BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes, isReputationWarning } from "@/utils/reputation";
@@ -212,17 +212,8 @@ export function resolveRepresentativeLink(server: BaseServer): string {
   if (server.link) {
     return server.link;
   }
-  if (server.locations && server.locations.length > 0) {
-    const readyWithUrl = server.locations.find((l) => l.url && l.reported_ready);
-    if (readyWithUrl?.url) {
-      return readyWithUrl.url;
-    }
-    const withUrl = server.locations.find((l) => l.url);
-    if (withUrl?.url) {
-      return withUrl.url;
-    }
-  }
-  return "";
+  // Navigate only to a relay that is ready, unexpired, and serves HTTPS.
+  return server.locations?.find((location) => isLocationAvailable(location))?.url ?? "";
 }
 
 export function buildEndpoints(
@@ -649,7 +640,8 @@ export function ServerCard({
         })()}
         {server.remoteOnly && (
           <p className="mt-2 text-xs text-muted-foreground">
-            Relay-reported · {effectiveLink ? "Opens available relay" : "No HTTP URL available"}
+            Relay-reported · {effectiveLink ? "Opens available relay"
+              : server.locations?.some((location) => location.url) ? "No relay available now" : "No HTTP URL available"}
           </p>
         )}
         {children && (

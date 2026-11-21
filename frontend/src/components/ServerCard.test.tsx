@@ -395,16 +395,20 @@ describe("ServerCard comments interaction", () => {
 
   it("navigates remote services directly using an available relay location", () => {
     const address = "0x1111111111111111111111111111111111111111";
+    const live = {
+      current_relay: false,
+      reported_ready: true,
+      observed_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 30_000).toISOString(),
+      verification: "relay-reported",
+    } as const;
     const [server] = mergeDiscoveredServices([], [{
-      name: "remote-app", address, metadata: {}, locations: [{
-        relay_url: "https://relay2.example.com",
-        url: "https://remote-app.relay2.example.com/",
-        current_relay: false,
-        reported_ready: true,
-        observed_at: "2026-11-16T00:00:00Z",
-        expires_at: "2026-11-16T00:00:30Z",
-        verification: "relay-reported",
-      }],
+      name: "remote-app", address, metadata: {}, locations: [
+        { ...live, relay_url: "https://stale.example.com", url: "https://remote-app.stale.example.com/", expires_at: new Date(Date.now() - 1).toISOString() },
+        { ...live, relay_url: "https://down.example.com", url: "https://remote-app.down.example.com/", reported_ready: false },
+        { ...live, relay_url: "https://plain.example.com", url: "http://remote-app.plain.example.com/" },
+        { ...live, relay_url: "https://relay2.example.com", url: "https://remote-app.relay2.example.com/" },
+      ],
     }], address);
 
     render(
@@ -419,6 +423,31 @@ describe("ServerCard comments interaction", () => {
       expect(link.getAttribute("href")).toBe("https://remote-app.relay2.example.com/");
       expect(link.getAttribute("target")).toBe("_blank");
     }
+  });
+
+  it("lists a remote service without a link when no relay is available", () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const [server] = mergeDiscoveredServices([], [{
+      name: "remote-app", address, metadata: {}, locations: [
+        {
+          relay_url: "https://stale.example.com", url: "https://remote-app.stale.example.com/",
+          current_relay: false, reported_ready: true, verification: "relay-reported",
+          observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z",
+        },
+        {
+          relay_url: "https://down.example.com", url: "https://remote-app.down.example.com/",
+          current_relay: false, reported_ready: false, verification: "relay-reported",
+          observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(),
+        },
+      ],
+    }], address);
+
+    render(<MemoryRouter><ServerCard server={server} onOpenRelays={vi.fn()} /></MemoryRouter>);
+
+    expect(screen.getByRole("heading", { name: "remote-app" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Open remote-app" })).toBeNull();
+    expect(screen.getByText(/No relay available now/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /2 relays connected/ })).toBeTruthy();
   });
 
   it("uses relay hostname for endpoint address when host is localhost or empty", () => {
