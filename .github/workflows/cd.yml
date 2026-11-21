@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build-and-push:
     name: Build and Push Container Images
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -85,10 +85,38 @@ jobs:
           cache-from: type=gha,scope=portal-tunnel
           cache-to: type=gha,mode=max,scope=portal-tunnel
 
+  publish-charts:
+    name: Publish Helm Charts
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # The chart version and appVersion both follow the release tag, so each
+      # chart installs the images built from the same tag.
+      - name: Package and push charts
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "$REGISTRY_TOKEN" | helm registry login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
+          for chart in deploy/helm/*/; do
+            helm package "$chart" --version "$version" --app-version "$version" --destination dist/charts
+          done
+          for package in dist/charts/*.tgz; do
+            helm push "$package" "oci://$REGISTRY/gosuda/charts"
+          done
+
   release-binaries:
     name: Build and Release Tunnel Binaries
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     permissions:
       contents: write
 

@@ -1,0 +1,136 @@
+{{- include "portal-relay.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "portal-relay.fullname" . }}
+  labels:
+    {{- include "portal-relay.labels" . | nindent 4 }}
+spec:
+  # The relay keeps its state on one ReadWriteOnce volume, so a single replica
+  # stops before its replacement starts.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "portal-relay.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "portal-relay.selectorLabels" . | nindent 8 }}
+      {{- if or .Values.secretEnv .Values.podAnnotations }}
+      annotations:
+        {{- if .Values.secretEnv }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: relay
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Unprivileged listeners; the Service publishes them on 443, 53 and 80.
+          env:
+            - name: SNI_PORT
+              value: "8443"
+            - name: EMBEDDED_DNS_PORT
+              value: "5353"
+            - name: HTTP_REDIRECT_ADDR
+              value: ":8080"
+            - name: IDENTITY_PATH
+              value: /portal-certs
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ toString $value | quote }}
+            {{- end }}
+          {{- if or .Values.secretEnv .Values.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ include "portal-relay.secretName" . }}
+          {{- end }}
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            {{- if eq (include "portal-relay.udp" .) "true" }}
+            - name: quic
+              containerPort: 8443
+              protocol: UDP
+            {{- end }}
+            {{- if eq (include "portal-relay.embeddedDNS" .) "true" }}
+            - name: dns-tcp
+              containerPort: 5353
+              protocol: TCP
+            - name: dns-udp
+              containerPort: 5353
+              protocol: UDP
+            {{- end }}
+            {{- if eq (include "portal-relay.httpRedirect" .) "true" }}
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            {{- end }}
+          # The HTTPS listener opens once the first certificate is ready, which
+          # can take minutes on a new install.
+          startupProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: state
+              mountPath: /portal-certs
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: state
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "portal-relay.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

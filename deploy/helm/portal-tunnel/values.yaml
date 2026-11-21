@@ -1,0 +1,79 @@
+image:
+  repository: ghcr.io/gosuda/portal-tunnel
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Address to expose, usually an in-cluster Service such as
+# my-app.default.svc.cluster.local:8080. Required unless args select another
+# mode, such as --http-route.
+target: ""
+
+# Service name for a short URL such as https://my-app.<relay domain>/ (--name).
+# Required for HTTP services: the relay rejects an unnamed one unless args
+# select --tcp, --udp, --tls-auto or --tls-cert.
+name: ""
+
+# Relay URLs (--relays). Add --discovery=false to args to use only these.
+relays: []
+
+# Extra `portal expose` flags, for example --discovery=false, --tcp or --auth.
+args: []
+
+# Plain environment variables read by `portal expose`, such as UDP_ENABLED.
+env: {}
+
+# Secret environment variables such as AUTH_OIDC_CLIENT_SECRET or
+# AUTH_SMTP_PASSWORD. The chart stores them in a Secret it creates.
+secretEnv: {}
+
+# Existing Secret whose keys are environment variable names. Use it instead of
+# secretEnv to keep secrets out of Helm values.
+existingSecret: ""
+
+identity:
+  # Existing Secret holding the tunnel identity JSON, passed as IDENTITY_JSON.
+  # Without it, the client creates an identity on first start and keeps it on
+  # the persistent volume. Needs Portal v2.8.0 or later: earlier clients ignore
+  # name for an existing identity.
+  existingSecret: ""
+  key: identity.json
+
+# Clients serving the same URL. More than one adds --replica (HTTP replica
+# mode), which needs identity.existingSecret and Portal v2.8.0 or later on the
+# client and the relay, and rules out dedicated TCP/UDP ports, the relay
+# cache, overlay, email and SAML authentication, and paid Nano routes. To scale
+# the Deployment by other means, such as an autoscaler, add --replica to args
+# yourself.
+replicaCount: 1
+
+persistence:
+  # Keeps a generated identity, and so the URL, across restarts. Unused when
+  # identity.existingSecret is set.
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  size: 64Mi
+
+metrics:
+  # Serves Prometheus /metrics (--metrics-addr), which the liveness probe uses.
+  enabled: true
+  port: 9090
+  podMonitor:
+    # Requires the Prometheus Operator CRDs.
+    enabled: false
+    interval: 30s
+
+resources: {}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# For example a SAML metadata file for AUTH_SAML_METADATA_FILE.
+extraVolumes: []
+extraVolumeMounts: []

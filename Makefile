@@ -1,4 +1,4 @@
-.PHONY: help install install-lint fmt vet lint lint-auto test test-unit test-go-unit test-e2e tidy all run build build-frontend build-docs build-tunnel build-wasm build-server build-server-bin clean check-env-example env-reference
+.PHONY: help install install-lint fmt vet lint lint-auto test test-unit test-go-unit test-e2e tidy all run build build-frontend build-docs build-tunnel build-wasm build-server build-server-bin clean check-env-example check-charts env-reference
 
 .DEFAULT_GOAL := help
 
@@ -20,6 +20,7 @@ help:
 	@echo "  make lint-auto         - Run autofix lint/format pipeline"
 	@echo "  make test              - Run Go and frontend tests"
 	@echo "  make check-env-example - Fail if .env.example is missing a configuration key"
+	@echo "  make check-charts      - Lint the Helm charts and validate the Kubernetes examples"
 	@echo "  make env-reference     - Print every configuration key, generated from the flags"
 	@echo "  make build             - Build Go tunnel and relay server artifacts"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
@@ -104,6 +105,34 @@ check-env-example:
 
 env-reference:
 	@go run ./cmd/relay-server config --format env
+
+# Each *.values.yaml example renders through the chart its name starts with;
+# the other examples are plain manifests. Needs helm and kubeconform.
+HELM_CHARTS_DIR := deploy/helm
+K8S_EXAMPLES_DIR := docs/static/examples/kubernetes
+
+check-charts:
+	@set -e; \
+	for values in $(K8S_EXAMPLES_DIR)/*.values.yaml; do \
+		case "$$(basename "$$values")" in \
+			relay-*) chart=$(HELM_CHARTS_DIR)/portal-relay ;; \
+			tunnel*) chart=$(HELM_CHARTS_DIR)/portal-tunnel ;; \
+			*) echo "[charts] $$values names no chart"; exit 1 ;; \
+		esac; \
+		echo "[charts] $$chart -f $$values"; \
+		helm lint --strict --quiet "$$chart" -f "$$values"; \
+		helm template example "$$chart" -f "$$values" | kubeconform -strict -summary; \
+	done; \
+	echo "[charts] portal-relay with lease ports, HTTP redirect and PodMonitor"; \
+	helm template example $(HELM_CHARTS_DIR)/portal-relay -f $(K8S_EXAMPLES_DIR)/relay-embedded-dns.values.yaml \
+		--set env.TCP_ENABLED=true,env.UDP_ENABLED=true,env.HTTP_REDIRECT_ENABLED=true,env.MIN_PORT=40000,env.MAX_PORT=40009,podMonitor.enabled=true \
+		| kubeconform -strict -summary -skip PodMonitor; \
+	echo "[charts] portal-tunnel with PodMonitor"; \
+	helm template example $(HELM_CHARTS_DIR)/portal-tunnel -f $(K8S_EXAMPLES_DIR)/tunnel.values.yaml \
+		--set metrics.podMonitor.enabled=true \
+		| kubeconform -strict -summary -skip PodMonitor; \
+	echo "[charts] plain manifests"; \
+	kubeconform -strict -summary $$(ls $(K8S_EXAMPLES_DIR)/*.yaml | grep -v '\.values\.yaml$$')
 
 all: fmt vet lint test build
 

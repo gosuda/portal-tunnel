@@ -1,0 +1,17 @@
+# Two clients serve one URL in HTTP replica mode: they share an identity from a
+# Secret, and the relay spreads new connections among them. A replicaCount
+# above 1 adds --replica. tunnel-replicas.yaml is the same deployment without
+# Helm.
+#
+#   kubectl create secret generic my-app-identity --from-file=identity.json
+#   helm install my-app-tunnel oci://ghcr.io/gosuda/charts/portal-tunnel \
+#     -f tunnel-replicas.values.yaml
+target: my-app.default.svc.cluster.local:8080
+name: my-app
+relays:
+  - https://portal.example.com
+args:
+  - --discovery=false
+replicaCount: 2
+identity:
+  existingSecret: my-app-identity

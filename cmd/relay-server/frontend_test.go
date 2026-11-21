@@ -66,6 +66,9 @@ func TestServeFrontendCustomDirectoryConfinesSymlinksAndKeepsLiveFiles(t *testin
 			t.Fatalf("%s initial response: status = %d, body = %q", target, response.Code, response.Body.String())
 		}
 	}
+	if response := request("/deep/route"); response.Code != http.StatusOK || response.Body.String() != "index" {
+		t.Fatalf("SPA fallback: status = %d, body = %q", response.Code, response.Body.String())
+	}
 	if err := os.WriteFile(assetPath, []byte("updated"), 0o600); err != nil {
 		t.Fatal(err)
 	}

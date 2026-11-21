@@ -1,0 +1,12 @@
+The Portal tunnel client is starting{{ with .Values.target }} for {{ . }}{{ end }}.
+
+Find the public URL in the client log, on the line starting with "service ready at":
+
+  kubectl logs deployment/{{ include "portal-tunnel.fullname" . }} --namespace {{ .Release.Namespace }}
+{{- if and (not .Values.identity.existingSecret) (not .Values.persistence.enabled) }}
+
+WARNING: the identity is neither in a Secret nor on a persistent volume. Each
+new pod creates a new identity, so the URL changes on every restart.
+{{- end }}
+
+Guide: https://gosuda.github.io/portal-tunnel/kubernetes
