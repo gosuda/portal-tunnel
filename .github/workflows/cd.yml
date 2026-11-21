@@ -106,7 +106,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           echo "$REGISTRY_TOKEN" | helm registry login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
-          for chart in deploy/helm/*/; do
+          for chart in docs/examples/helm/*/; do
             helm package "$chart" --version "$version" --app-version "$version" --destination dist/charts
           done
           for package in dist/charts/*.tgz; do
