@@ -30,8 +30,9 @@ describe("relay selection", () => {
       loading={false}
       onCheckMore={checkMore}
       onClose={vi.fn()}
-      response={{ partial: true, relays_checked: 2, relays_skipped: 1, services: [{ name: "blog", address, metadata: {}, locations: [
+      response={{ partial: true, relays_checked: 3, relays_skipped: 1, services: [{ name: "blog", address, metadata: {}, locations: [
         { relay_url: "https://remote.example", url: "https://blog.remote.example/", current_relay: false, reported_ready: true, verification: "relay-reported", observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z" },
+        { relay_url: "https://older.example", current_relay: false, reported_ready: true, verification: "relay-reported", observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z" },
       ] }] }}
     />);
     expect(checkMore).not.toHaveBeenCalled();

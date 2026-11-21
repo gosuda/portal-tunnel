@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { Mock } from "vitest";
 import { describe, expect, it, vi } from "vitest";
 import type { ReputationSummary } from "@/types/api";
+import { leaseToServer, mergeDiscoveredServices } from "@/lib/server";
 import { ServerCard } from "./ServerCard";
 import { createConstellationData } from "./constellation";
 
@@ -253,6 +254,37 @@ describe("ServerCard comments interaction", () => {
     for (const link of screen.getAllByRole("link", { name: "Open Cool App" })) {
       expect(link.getAttribute("href")).toBe("https://cool.relay.example.com/");
     }
+  });
+
+  it("lists a legacy HTTP lease with no link to open", () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const server = leaseToServer({
+      name: "blog", address, hostname: "", canonical_hostname: `blog-${address.slice(2)}.relay.example`,
+      first_seen_at: "", last_seen_at: "", expires_at: "", metadata: {}, ready: 1,
+    });
+    render(<MemoryRouter><ServerCard server={server} onOpenRelays={vi.fn()} /></MemoryRouter>);
+
+    expect(screen.getByRole("heading", { name: "blog" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Open blog" })).toBeNull();
+    expect(screen.getByRole("button", { name: /1 relay connected/ })).toBeTruthy();
+  });
+
+  it("shows an unnamed remote service with only a relay observation", () => {
+    const address = "0x1111111111111111111111111111111111111111";
+    const [server] = mergeDiscoveredServices([], [{
+      name: "", address, metadata: {}, locations: [{
+        relay_url: "https://older.example", current_relay: false, reported_ready: true,
+        observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z", verification: "relay-reported",
+      }],
+    }], address);
+    const openRelays = vi.fn();
+    render(<MemoryRouter><ServerCard server={server} onOpenRelays={openRelays} /></MemoryRouter>);
+
+    expect(screen.getByRole("heading", { name: "(unnamed)" })).toBeTruthy();
+    expect(screen.getByText(/No HTTP URL available/)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /^Open / })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /1 relay connected/ }));
+    expect(openRelays).toHaveBeenCalledWith(server);
   });
 
   it("renders description and tags in overlay alongside transport endpoints", () => {

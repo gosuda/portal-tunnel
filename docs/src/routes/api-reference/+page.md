@@ -103,8 +103,9 @@ contains `relay_url`, optional preferred `url`, `alias_url`, `canonical_url`,
 `verification: "relay-reported"`. A remote location may include
 `reputation: {up, down}`; absence is unknown, not zero. Repeated voters across
 relays are not deduplicated. Readiness is a relay claim, not a live probe.
-Unavailable canonical certificates do not produce canonical links. A service
-without an available HTTP URL can still have a location (for example raw TCP).
+Unavailable canonical certificates do not produce canonical links. A location
+can still appear without an HTTP URL, for example for a raw TCP service or an
+older HTTP lease with only a retired canonical hostname or no hostname at all.
 
 Results are observed public services, never an exhaustive address inventory or
 cryptographic proof of ownership. Remote metadata is relay-reported; remote
