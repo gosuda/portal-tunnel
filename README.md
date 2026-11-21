@@ -183,3 +183,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT License - see [LICENSE](LICENSE).
+
+[![Built with Depot](https://depot.dev/badges/built-with-depot.svg)](https://depot.dev?utm_source=gosuda)

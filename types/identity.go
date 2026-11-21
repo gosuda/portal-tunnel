@@ -204,6 +204,8 @@ type AppComment struct {
 
 type CommentListResponse struct {
 	Comments []AppComment `json:"comments"`
+	Address  string       `json:"address,omitempty"`
+	Name     string       `json:"name"`
 }
 
 type CreateCommentRequest struct {

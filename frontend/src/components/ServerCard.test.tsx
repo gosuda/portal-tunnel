@@ -83,7 +83,9 @@ describe("ServerCard raw transport endpoints", () => {
     renderCard({});
 
     expect(screen.queryByRole("button", { name: /^Copy / })).toBeNull();
-    expect(screen.getByRole("link")).toBeTruthy();
+    for (const link of screen.getAllByRole("link", { name: "Open minecraft" })) {
+      expect(link.getAttribute("href")).toBe("/server/srv-1");
+    }
   });
 
   it("keeps every copy control keyboard reachable and outside a link", () => {
@@ -143,6 +145,22 @@ function renderCardWithComments() {
 }
 
 describe("ServerCard comments interaction", () => {
+  it("displays remote observations without local vote controls or moderation labels", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard server={{
+          id: "service:blog:owner", name: "blog", description: "", tags: [],
+          thumbnail: "", owner: "", online: true, dns: "", link: "",
+          remoteOnly: true, observedReputation: { up: 0, down: 10 },
+        }} />
+      </MemoryRouter>
+    );
+    expect(screen.getByText("Observed +0/−10")).toBeTruthy();
+    expect(screen.queryByText("Hidden by downvotes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Recommend app" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Do not recommend app" })).toBeNull();
+  });
+
   it("opens the app's comments without navigating into the service", () => {
     const { onOpenComments } = renderCardWithComments();
     fireEvent.click(screen.getByRole("button", { name: "Comments" }));
@@ -205,9 +223,10 @@ describe("ServerCard comments interaction", () => {
       </MemoryRouter>
     );
 
-    const openLink = screen.getByRole("link", { name: "Open Cool App" });
-    expect(openLink.getAttribute("href")).toBe("/server/cool-app");
-    fireEvent.click(openLink);
+    for (const link of screen.getAllByRole("link", { name: "Open Cool App" })) {
+      expect(link.getAttribute("href")).toBe("/server/cool-app");
+    }
+    fireEvent.click(screen.getByText("Cool App"));
     expect(screen.getByText("reputation gate page")).toBeTruthy();
   });
 
@@ -231,8 +250,9 @@ describe("ServerCard comments interaction", () => {
       </MemoryRouter>
     );
 
-    const openLink = screen.getByRole("link", { name: "Open Cool App" });
-    expect(openLink.getAttribute("href")).toBe("https://cool.relay.example.com/");
+    for (const link of screen.getAllByRole("link", { name: "Open Cool App" })) {
+      expect(link.getAttribute("href")).toBe("https://cool.relay.example.com/");
+    }
   });
 
   it("renders description and tags in overlay alongside transport endpoints", () => {

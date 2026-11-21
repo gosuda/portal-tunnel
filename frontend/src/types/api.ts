@@ -59,6 +59,11 @@ export interface PublicStateResponse {
   reputation?: ReputationSummary[];
 }
 
+export interface ObservedReputation {
+  up: number;
+  down: number;
+}
+
 export interface ServiceLocation {
   relay_url: string;
   url?: string;
@@ -69,6 +74,7 @@ export interface ServiceLocation {
   observed_at: string;
   expires_at: string;
   verification: "relay-reported";
+  reputation?: ObservedReputation;
 }
 
 export interface DiscoveredService {
@@ -200,6 +206,21 @@ export interface AppComment {
   can_delete?: boolean;
 }
 
+export interface FederatedComment {
+  relay_url: string;
+  id: string;
+  text: string;
+  created_at: string;
+  deleted?: boolean;
+}
+
+export interface FederatedCommentsResponse {
+  comments: FederatedComment[];
+  relays_checked: number;
+  relays_skipped: number;
+  partial: boolean;
+}
+
 export interface VoteCommentRequest {
   hostname: string;
   id: string;
@@ -208,4 +229,6 @@ export interface VoteCommentRequest {
 
 export interface CommentListResponse {
   comments: AppComment[];
+  address?: string;
+  name?: string;
 }

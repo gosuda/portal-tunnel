@@ -132,6 +132,28 @@ func TestPublicIngressInspectionRetainsAggregateLimit(t *testing.T) {
 	server.ingressWorkers.Wait()
 }
 
+func TestRemoteSourcePrefixGroupsAddressAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		remote net.Addr
+		want   netip.Prefix
+	}{
+		{"IPv4", &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 10000}, netip.MustParsePrefix("192.0.2.1/32")},
+		{"different port", &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 20000}, netip.MustParsePrefix("192.0.2.1/32")},
+		{"IPv6", &net.TCPAddr{IP: net.ParseIP("2001:db8:1:2::1"), Port: 10000}, netip.MustParsePrefix("2001:db8:1:2::/64")},
+		{"same IPv6 network", &net.TCPAddr{IP: net.ParseIP("2001:db8:1:2:ffff::2"), Port: 20000}, netip.MustParsePrefix("2001:db8:1:2::/64")},
+		{"unknown peer", &net.UnixAddr{Name: "unknown", Net: "unix"}, netip.Prefix{}},
+		{"nil peer", nil, netip.Prefix{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := remoteSourcePrefix(tc.remote)
+			if got != tc.want || ok != tc.want.IsValid() {
+				t.Fatalf("source prefix = %v, %v; want %v, %v", got, ok, tc.want, tc.want.IsValid())
+			}
+		})
+	}
+}
+
 type publicIngressTestConn struct {
 	net.Conn
 	remote net.Addr

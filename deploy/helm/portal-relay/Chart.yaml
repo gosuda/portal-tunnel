@@ -1,0 +1,13 @@
+apiVersion: v2
+name: portal-relay
+description: Portal relay server, which publishes tunnels from Portal clients under its own domain.
+type: application
+# Release CD packages the chart with --version and --app-version set from the
+# v* tag. A checkout installs the floating major image tag.
+version: 0.0.0
+appVersion: "2"
+# Mixed TCP/UDP LoadBalancer Services are GA from 1.26.
+kubeVersion: ">=1.26.0-0"
+home: https://gosuda.github.io/portal-tunnel/kubernetes
+sources:
+  - https://github.com/gosuda/portal-tunnel

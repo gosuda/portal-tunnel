@@ -1,0 +1,18 @@
+# Relay that accepts tunnels only from your own networks. Visitors can still
+# reach published sites; only tunnel registration is restricted.
+#
+#   kubectl create secret generic portal-relay \
+#     --from-literal=ADMIN_TOKEN="$(openssl rand -hex 32)"
+#   helm install relay oci://ghcr.io/gosuda/charts/portal-relay \
+#     -f relay-private.values.yaml
+env:
+  PORTAL_URL: https://portal.example.com
+  # Source networks the relay sees for your tunnel clients, such as an office
+  # egress or the cluster's NAT gateway. A refused registration answers
+  # 403 source_not_allowed.
+  TUNNEL_SOURCE_CIDRS: 198.51.100.0/24
+  # Tunnels from the allowed networks connect at once. Use manual to hold
+  # every new key for approval as well.
+  APPROVAL_MODE: auto
+
+existingSecret: portal-relay

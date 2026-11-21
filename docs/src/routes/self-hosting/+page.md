@@ -10,6 +10,7 @@ team. The `portal` image serves the dashboard, relay APIs, and tunnel ingress
 from one public HTTPS origin.
 
 You should have a relay running and accepting tunnel connections in about 10 minutes.
+To run the relay on Kubernetes instead, see [Kubernetes](/kubernetes).
 
 ## Prerequisites
 
