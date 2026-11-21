@@ -307,7 +307,7 @@ func TestCanonicalDNSLifecycle(t *testing.T) {
 				if err := manager.SyncLeaseHostname(ctx, host, address); err != nil {
 					t.Fatal(err)
 				}
-				if err := manager.maintenanceLoopFlushCommands(ctx, state); err != nil {
+				if err := manager.maintenanceLoopApplyPendingENS(ctx, state); err != nil {
 					t.Fatal(err)
 				}
 				if zone.hasARecord(parent) || len(zone.txtValues(parent)) != 0 || !zone.hasARecord(host) || len(zone.txtValues(host)) != wantTXT {
@@ -330,7 +330,7 @@ func TestCanonicalDNSLifecycle(t *testing.T) {
 			if err := manager.DeleteLeaseHostname(ctx, first); err != nil {
 				t.Fatal(err)
 			}
-			if err := manager.maintenanceLoopFlushCommands(ctx, state); err != nil {
+			if err := manager.maintenanceLoopApplyPendingENS(ctx, state); err != nil {
 				t.Fatal(err)
 			}
 			if zone.hasARecord(first) || zone.hasARecord(parent) || !zone.hasARecord(second) || len(zone.txtValues(second)) != wantTXT+1 {
@@ -480,7 +480,7 @@ func TestLeaseDNSChangesDoNotWaitForProviderAndKeepNewestOwner(t *testing.T) {
 	}
 	close(zone.resume)
 	<-done
-	if err := manager.maintenanceLoopFlushCommands(ctx, state); err != nil {
+	if err := manager.maintenanceLoopApplyPendingENS(ctx, state); err != nil {
 		t.Fatal(err)
 	}
 	if !zone.hasARecord(host) {
@@ -504,7 +504,7 @@ func TestLeaseDNSFailedWithdrawalIsSupersededByRegistration(t *testing.T) {
 	if err := manager.DeleteLeaseHostname(t.Context(), host); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.maintenanceLoopFlushCommands(t.Context(), state); !errors.Is(err, errTestNamespacePublicationUnavailable) {
+	if err := manager.maintenanceLoopApplyPendingENS(t.Context(), state); !errors.Is(err, errTestNamespacePublicationUnavailable) {
 		t.Fatalf("failed withdrawal: %v", err)
 	}
 	if err := manager.checkLeaseDNS(host); !errors.Is(err, errLeaseDNSPending) {
@@ -513,7 +513,7 @@ func TestLeaseDNSFailedWithdrawalIsSupersededByRegistration(t *testing.T) {
 	if err := manager.SyncLeaseHostname(t.Context(), host, address); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.maintenanceLoopFlushCommands(t.Context(), state); err != nil {
+	if err := manager.maintenanceLoopApplyPendingENS(t.Context(), state); err != nil {
 		t.Fatal(err)
 	}
 	if !zone.hasARecord(host) {

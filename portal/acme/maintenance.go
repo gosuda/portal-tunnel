@@ -52,7 +52,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		select {
 		case <-m.stopCh:
 			syncCtx, cancel := context.WithTimeout(m.stopCtx, defaultSyncTimeout)
-			m.stopErr = m.maintenanceLoopFlushCommands(syncCtx, state)
+			m.stopErr = m.maintenanceLoopApplyPendingENS(syncCtx, state)
 			cancel()
 			if m.stopErr != nil {
 				log.Warn().Err(m.stopErr).Str("base_domain", m.cfg.BaseDomain).Msg("flush dns records")
@@ -114,20 +114,6 @@ func (m *Manager) syncChangedAddressRecords(ctx context.Context, state *maintena
 	return syncErr
 }
 
-func (m *Manager) maintenanceLoopDrainENSCommands() {
-drainENS:
-	for {
-		select {
-		case command := <-m.ensCommands:
-			if command.ready != nil {
-				command.ready <- errLeaseDNSPending
-			}
-		default:
-			break drainENS
-		}
-	}
-}
-
 func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *maintenanceLoopState) error {
 	m.commandMu.RLock()
 	pending := maps.Clone(m.pendingENS)
@@ -147,11 +133,6 @@ func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *mai
 		}
 	}
 	return err
-}
-
-func (m *Manager) maintenanceLoopFlushCommands(ctx context.Context, state *maintenanceLoopState) error {
-	m.maintenanceLoopDrainENSCommands()
-	return m.maintenanceLoopApplyPendingENS(ctx, state)
 }
 
 func (m *Manager) maintenanceLoopRearmRetryTimer(state *maintenanceLoopState) {
@@ -213,7 +194,7 @@ func (m *Manager) maintenanceLoopSyncRetryTick(ctx context.Context, state *maint
 	if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
 		err = errors.Join(err, m.syncENSDNSSEC(ctx))
 	}
-	return errors.Join(err, m.maintenanceLoopFlushCommands(ctx, state))
+	return errors.Join(err, m.maintenanceLoopApplyPendingENS(ctx, state))
 }
 
 func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
