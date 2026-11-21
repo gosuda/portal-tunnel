@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-acme/lego/v4/challenge"
 
@@ -102,7 +103,7 @@ func newTestENSManager(cfg Config, dns dnsProvider) *Manager {
 		cfg:         cfg,
 		dns:         dns,
 		stopCh:      make(chan struct{}),
-		ensCommands: make(chan ensDNSCommand, 8),
+		ensCommands: make(chan ensDNSCommand, 1),
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, dns)),
 	}
 }
@@ -301,12 +302,12 @@ func TestCanonicalDNSLifecycle(t *testing.T) {
 			if ens {
 				wantTXT = 1
 			}
+			state := &maintenanceLoopState{lastPublicIPs: map[bool]string{}}
 			for _, host := range []string{first, second} {
 				if err := manager.SyncLeaseHostname(ctx, host, address); err != nil {
 					t.Fatal(err)
 				}
-				command := <-manager.ensCommands
-				if err := manager.applyENSCommand(ctx, command); err != nil {
+				if err := manager.maintenanceLoopApplyPendingENS(ctx, state, false); err != nil {
 					t.Fatal(err)
 				}
 				if zone.hasARecord(parent) || len(zone.txtValues(parent)) != 0 || !zone.hasARecord(host) || len(zone.txtValues(host)) != wantTXT {
@@ -317,7 +318,6 @@ func TestCanonicalDNSLifecycle(t *testing.T) {
 			if err != nil || slices.Contains(tracked, parent) || !slices.Contains(tracked, first) || !slices.Contains(tracked, second) {
 				t.Fatalf("tracking: %v %v", tracked, err)
 			}
-			state := &maintenanceLoopState{lastPublicIPs: map[bool]string{}}
 			if err := manager.syncChangedAddressRecords(ctx, state, []string{"203.0.113.11"}); err != nil {
 				t.Fatal(err)
 			}
@@ -330,7 +330,7 @@ func TestCanonicalDNSLifecycle(t *testing.T) {
 			if err := manager.DeleteLeaseHostname(ctx, first); err != nil {
 				t.Fatal(err)
 			}
-			if err := manager.applyENSCommand(ctx, <-manager.ensCommands); err != nil {
+			if err := manager.maintenanceLoopApplyPendingENS(ctx, state, false); err != nil {
 				t.Fatal(err)
 			}
 			if zone.hasARecord(first) || zone.hasARecord(parent) || !zone.hasARecord(second) || len(zone.txtValues(second)) != wantTXT+1 {
@@ -370,7 +370,7 @@ func TestTenantIssuanceWaitsForNamespaceAddressDNS(t *testing.T) {
 	child, _ := namespace.LocalTLSHostname("api", address, root)
 	zone := &namespaceDNSPublicationZone{fakeZone: newFakeZone(), unavailableParent: child}
 	manager := newTestENSManager(Config{BaseDomain: root, KeyDir: t.TempDir()}, zone)
-	state := &maintenanceLoopState{pendingENS: make(map[string]ensDNSCommand)}
+	state := &maintenanceLoopState{}
 	previous := utils.DefaultHTTPClient
 	utils.DefaultHTTPClient = &http.Client{Transport: publicIPTransport{ip: "203.0.113.10"}}
 	t.Cleanup(func() { utils.DefaultHTTPClient = previous })
@@ -381,15 +381,177 @@ func TestTenantIssuanceWaitsForNamespaceAddressDNS(t *testing.T) {
 	if zone.hasARecord(child) {
 		t.Fatal("failed DNS publication became visible")
 	}
-	if err := manager.checkLeaseDNS(state, child); !errors.Is(err, errLeaseDNSPending) {
+	if err := manager.checkLeaseDNS(child); !errors.Is(err, errLeaseDNSPending) {
 		t.Fatalf("failed publication admitted issuance: %v", err)
 	}
 	zone.unavailableParent = ""
-	_ = manager.maintenanceLoopApplyPendingENS(t.Context(), state)
+	other, _ := namespace.LocalTLSHostname("other", address, root)
+	ready := make(chan error, 1)
+	if err := manager.queueENSCommand(t.Context(), ensDNSCommand{hostname: child, ready: ready}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SyncLeaseHostname(t.Context(), other, address); err != nil {
+		t.Fatal(err)
+	}
+	manager.maintenanceLoopHandleENSCommand(t.Context(), state, <-manager.ensCommands)
+	if err := <-ready; !errors.Is(err, errLeaseDNSPending) {
+		t.Fatalf("readiness check bypassed failed publication's retry schedule: %v", err)
+	}
+	if zone.hasARecord(other) {
+		t.Fatal("readiness check published an unrelated hostname")
+	}
+	select {
+	case work := <-manager.ensCommands:
+		manager.maintenanceLoopHandleENSCommand(t.Context(), state, work)
+	default:
+		t.Fatal("readiness check lost notification for another hostname")
+	}
+	// Provider recovery alone must not cause ordinary wakes or identical SDK
+	// registration retries to bypass the DNS retry timer.
+	for range 2 {
+		if err := manager.SyncLeaseHostname(t.Context(), child, address); err != nil {
+			t.Fatal(err)
+		}
+		manager.maintenanceLoopHandleENSCommand(t.Context(), state, ensDNSCommand{})
+	}
+	if zone.hasARecord(child) || !zone.hasARecord(other) {
+		t.Fatal("wake retried failed work or failed to publish fresh work")
+	}
+	_ = manager.maintenanceLoopApplyPendingENS(t.Context(), state, true)
 	if !zone.hasARecord(child) {
 		t.Fatal("retry did not publish exact service DNS")
 	}
-	if err := manager.checkLeaseDNS(state, child); err != nil {
+	if err := manager.checkLeaseDNS(child); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type pausedDNSRemovalZone struct {
+	*fakeZone
+	started chan struct{}
+	resume  chan struct{}
+}
+
+func TestLeaseDNSReadinessWaitsForPublication(t *testing.T) {
+	const root = "relay.example.com"
+	address := "0x" + strings.Repeat("a", 40)
+	host, _ := namespace.LocalTLSHostname("api", address, root)
+	zone := &namespaceDNSPublicationZone{fakeZone: newFakeZone()}
+	manager := newTestENSManager(Config{BaseDomain: root, KeyDir: t.TempDir()}, zone)
+	previous := utils.DefaultHTTPClient
+	utils.DefaultHTTPClient = &http.Client{Transport: publicIPTransport{ip: "203.0.113.10"}}
+	t.Cleanup(func() { utils.DefaultHTTPClient = previous })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	manager.Start(ctx)
+	defer func() { cancel(); _ = manager.Stop(t.Context()) }()
+	if err := manager.SyncLeaseHostname(ctx, host, address); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.waitLeaseDNS(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	if !zone.hasARecord(host) {
+		t.Fatal("DNS-01 admitted before address publication")
+	}
+}
+
+func (z *pausedDNSRemovalZone) DeleteAddressRecords(ctx context.Context, name string) error {
+	select {
+	case z.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-z.resume:
+		return z.fakeZone.DeleteAddressRecords(ctx, name)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestLeaseDNSChangesDoNotWaitForProviderAndKeepNewestOwner(t *testing.T) {
+	const root = "relay.example.com"
+	address := "0x" + strings.Repeat("a", 40)
+	host, _ := namespace.LocalTLSHostname("api", address, root)
+	zone := &pausedDNSRemovalZone{fakeZone: newFakeZone(), started: make(chan struct{}, 1), resume: make(chan struct{})}
+	manager := newTestENSManager(Config{BaseDomain: root, KeyDir: t.TempDir()}, zone)
+	previous := utils.DefaultHTTPClient
+	utils.DefaultHTTPClient = &http.Client{Transport: publicIPTransport{ip: "203.0.113.10"}}
+	t.Cleanup(func() { utils.DefaultHTTPClient = previous })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := zone.EnsureAddressRecord(ctx, host, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.DeleteLeaseHostname(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	state := &maintenanceLoopState{}
+	done := make(chan struct{})
+	go func() {
+		manager.maintenanceLoopHandleENSCommand(ctx, state, <-manager.ensCommands)
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-zone.started:
+	case <-ctx.Done():
+		t.Fatal("DNS removal did not reach provider")
+	}
+	// Repeated policy/registration changes must be accepted while the sole
+	// worker is in provider I/O. Only the final desired state needs applying.
+	for range 512 {
+		if err := manager.SyncLeaseHostname(ctx, host, address); err != nil {
+			t.Fatal("registration waited for DNS provider:", err)
+		}
+		if err := manager.DeleteLeaseHostname(ctx, host); err != nil {
+			t.Fatal("withdrawal waited for DNS provider:", err)
+		}
+	}
+	if err := manager.SyncLeaseHostname(ctx, host, address); err != nil {
+		t.Fatal(err)
+	}
+	close(zone.resume)
+	<-done
+	if err := manager.maintenanceLoopApplyPendingENS(ctx, state, false); err != nil {
+		t.Fatal(err)
+	}
+	if !zone.hasARecord(host) {
+		t.Fatal("old withdrawal discarded the new registration")
+	}
+	if err := manager.checkLeaseDNS(host); err != nil {
+		t.Fatal("new registration did not become ready:", err)
+	}
+}
+
+func TestLeaseDNSFailedWithdrawalIsSupersededByRegistration(t *testing.T) {
+	const root = "relay.example.com"
+	address := "0x" + strings.Repeat("a", 40)
+	host, _ := namespace.LocalTLSHostname("api", address, root)
+	zone := newFakeZone()
+	manager := newTestENSManager(Config{BaseDomain: root, KeyDir: t.TempDir()}, failingTXTZone{dnsProvider: zone, err: errTestNamespacePublicationUnavailable})
+	previous := utils.DefaultHTTPClient
+	utils.DefaultHTTPClient = &http.Client{Transport: publicIPTransport{ip: "203.0.113.10"}}
+	t.Cleanup(func() { utils.DefaultHTTPClient = previous })
+	state := &maintenanceLoopState{}
+	if err := manager.DeleteLeaseHostname(t.Context(), host); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.maintenanceLoopApplyPendingENS(t.Context(), state, false); !errors.Is(err, errTestNamespacePublicationUnavailable) {
+		t.Fatalf("failed withdrawal: %v", err)
+	}
+	if err := manager.checkLeaseDNS(host); !errors.Is(err, errLeaseDNSPending) {
+		t.Fatalf("failed work was not retained: %v", err)
+	}
+	if err := manager.SyncLeaseHostname(t.Context(), host, address); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.maintenanceLoopApplyPendingENS(t.Context(), state, false); err != nil {
+		t.Fatal(err)
+	}
+	if !zone.hasARecord(host) {
+		t.Fatal("failed withdrawal outlived a new registration")
+	}
+	if err := manager.checkLeaseDNS(host); err != nil {
 		t.Fatal(err)
 	}
 }

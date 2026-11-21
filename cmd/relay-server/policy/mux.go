@@ -174,7 +174,7 @@ func handleMuxRelayChallenge(s *portal.Server, access *Store) sourceHandler {
 
 func handleMuxRelayRegister(s *portal.Server, access *Store) sourceHandler {
 	return func(w http.ResponseWriter, r *http.Request, _ netip.Addr) {
-		key, response, ok := s.HandleRegister(w, r)
+		key, response, ok := s.HandleRegister(w, r, access.beginRegistration)
 		if reportAccessPublishFailure(w, ok, publishServiceAccess(s, access, key)) {
 			return
 		}

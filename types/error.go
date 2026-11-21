@@ -19,6 +19,7 @@ const (
 	APIErrorCodeInvalidMode               = "invalid_mode"
 	APIErrorCodeInvalidRequest            = "invalid_request"
 	APIErrorCodeInternal                  = "internal"
+	APIErrorCodeApprovalQueueFull         = "approval_queue_full"
 	APIErrorCodeLeaseDenied               = "lease_denied"
 	APIErrorCodeLeaseNotFound             = "lease_not_found"
 	APIErrorCodeLeaseRejected             = "lease_rejected"

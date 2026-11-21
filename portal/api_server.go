@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -332,7 +333,7 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 // decision, then writes the response so the lease cannot become observable
 // before its routability is known.
 
-func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.ServiceIdentityKey, types.RegisterResponse, bool) {
+func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, begin func(types.ServiceIdentityKey) (types.LeaseAccess, func())) (types.ServiceIdentityKey, types.RegisterResponse, bool) {
 	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
@@ -349,6 +350,22 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 	identityKey := challenge.Request.Identity.ServiceKey()
+	decision, done := begin(identityKey)
+	defer done()
+	switch decision {
+	case types.LeasePending:
+		delay, err := s.registry.requestApproval(identityKey, sourceAddr, time.Now())
+		w.Header().Set("Retry-After", strconv.Itoa(delay))
+		if err != nil {
+			writeAPIErrorResponse(w, err)
+		} else {
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeLeaseRejected, "waiting for relay approval: "+identityKey.String())
+		}
+		return identityKey, types.RegisterResponse{}, false
+	case types.LeaseDenied:
+		writeAPIErrorResponse(w, errLeaseDenied)
+		return identityKey, types.RegisterResponse{}, false
+	}
 	// Exclusive registration starts fail-closed. Replicas keep the existing
 	// identity decision so joining a service cannot interrupt its siblings.
 	// Mux publishes the current decision before returning either kind of token.

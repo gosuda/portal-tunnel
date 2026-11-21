@@ -44,14 +44,6 @@ func MatchesAlias(hostname, name, rootHost string) bool {
 	return err == nil && hostname == expected
 }
 
-// AddressParent returns the address.<root> DNS parent of a Local TLS hostname.
-// Callers must first validate the hostname with IsLocalTLSHostname or use a
-// canonical hostname derived for a negotiated Local TLS lease.
-func AddressParent(hostname string) string {
-	_, parent, _ := strings.Cut(hostname, ".")
-	return parent
-}
-
 // NormalizeServiceName normalizes a service name to a DNS label that cannot
 // be mistaken for a canonical label, so a friendly hostname never collides
 // with an identity-bound one.

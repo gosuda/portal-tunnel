@@ -356,7 +356,9 @@ func (l *listener) reportAvailable() {
 func (l *listener) run(ctx context.Context) {
 	var retries int
 	for {
-		l.report(listenerStatus{state: RelayConnecting})
+		if retries == 0 {
+			l.report(listenerStatus{state: RelayConnecting})
+		}
 		err := l.registerAndConfigure(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
@@ -364,6 +366,9 @@ func (l *listener) run(ctx context.Context) {
 			}
 			if l.closeForTerminalRelayError(err) {
 				return
+			}
+			if approval := relayApprovalFromError(err); approval != "" {
+				l.report(listenerStatus{state: RelayConnecting, approval: approval, version: l.api.relayReleaseVersion()})
 			}
 			retries++
 			if !l.waitRetry(ctx, "lease registration", err, retries, 0) {

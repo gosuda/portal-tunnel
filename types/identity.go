@@ -155,14 +155,15 @@ type Lease struct {
 
 type PolicyLease struct {
 	Lease
-	LeaseID     string `json:"lease_id"`
-	IdentityKey string `json:"identity_key,omitempty"`
-	BPS         int64  `json:"bps"`
-	ClientIP    string `json:"client_ip"`
-	ReportedIP  string `json:"reported_ip,omitempty"`
-	IsApproved  bool   `json:"is_approved"`
-	IsBanned    bool   `json:"is_banned"`
-	IsDenied    bool   `json:"is_denied"`
+	LeaseID            string `json:"lease_id"`
+	IdentityKey        string `json:"identity_key,omitempty"`
+	BPS                int64  `json:"bps"`
+	ClientIP           string `json:"client_ip"`
+	ReportedIP         string `json:"reported_ip,omitempty"`
+	ExplicitlyApproved bool   `json:"explicitly_approved"`
+	IsApproved         bool   `json:"is_approved"`
+	IsBanned           bool   `json:"is_banned"`
+	IsDenied           bool   `json:"is_denied"`
 }
 
 // Relay descriptor addresses must stay small enough to share the discovery budget.

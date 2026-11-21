@@ -298,6 +298,7 @@ their endpoints are unavailable.
 | `bps` | `number` |
 | `client_ip`, `reported_ip` | `string` |
 | `is_approved`, `is_banned`, `is_denied` | `boolean` |
+| `explicitly_approved` | `boolean` (saved identity decision, independent of auto approval) |
 
 `PublicStateResponse`:
 
@@ -311,6 +312,7 @@ their endpoints are unavailable.
 |-------|------|
 | `policy` | `PolicySettings` |
 | `leases` | `PolicyLease[]` |
+| `pending` | Optional array of authenticated requests. Each contains `identity_key`, `first_seen_at`, `last_seen_at`, and `expires_at`. |
 
 `PolicyPortSettings`:
 
@@ -368,6 +370,7 @@ their endpoints are unavailable.
 | `replica_conflict` | a replica cannot join a live exclusive lease or retained cache entry; retryable |
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not approved to route yet |
+| `approval_queue_full` | signed registration could not be queued; retry after the supplied delay |
 | `lease_denied` | relay denied or banned the lease |
 | `source_not_allowed` | relay does not accept tunnels from the caller's network |
 | `invalid_address` | address path or body value is invalid |

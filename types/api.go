@@ -204,6 +204,7 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
+	ApprovalMode string `json:"approval_mode,omitempty"`
 	// SupportedProtocolVersions is authoritative when present. Omission means
 	// that only ProtocolVersion is supported, as on older relays.
 	SupportedProtocolVersions []string `json:"supported_protocol_versions,omitzero"`
@@ -284,9 +285,17 @@ type WalletAuthStatusResponse struct {
 	WalletAddress string `json:"wallet_address,omitempty"`
 }
 
+type PendingApproval struct {
+	IdentityKey string    `json:"identity_key"`
+	FirstSeenAt time.Time `json:"first_seen_at"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
 type PolicyStateResponse struct {
-	Policy PolicySettings `json:"policy"`
-	Leases []PolicyLease  `json:"leases,omitempty"`
+	Pending []PendingApproval `json:"pending,omitempty"`
+	Policy  PolicySettings    `json:"policy"`
+	Leases  []PolicyLease     `json:"leases,omitempty"`
 }
 
 // LeaseAccess is a relay's routing decision for one service identity.

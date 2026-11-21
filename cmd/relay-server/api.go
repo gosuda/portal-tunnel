@@ -46,7 +46,6 @@ type RelayAPI struct {
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
 	reputation           *policy.ReputationStore
-	policyWriteMu        sync.Mutex
 }
 
 func applyNewRelayAPIInitialPolicy(api *RelayAPI, initialSettings types.PolicySettings) error {
