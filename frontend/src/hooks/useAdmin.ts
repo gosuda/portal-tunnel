@@ -138,6 +138,7 @@ interface UseAdminResult extends UseListReturn<AdminServer> {
   udpSettings: PortSettings;
   tcpPortSettings: PortSettings;
   policySaving: boolean;
+  loaded: boolean;
   loading: boolean;
   error: string;
   handleBanFilterChange: (value: BanFilter) => void;
@@ -333,7 +334,8 @@ async function saveGuardedPolicySettings(current: PolicySettings, overrides: Par
 export function useAdmin(enabled: boolean = true): UseAdminResult {
   const [pending, setPending] = useState<PendingApprovals>([]);
   const [serverData, setServerData] = useState<PolicyLease[]>([]);
-  const [policySettings, setPolicySettings] = useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
+  const [loadedSettings, setPolicySettings] = useState<PolicySettings>();
+  const policySettings = loadedSettings ?? DEFAULT_POLICY_SETTINGS;
   const policyUpdatePending = useRef(false);
   const [policySaving, setPolicySaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -465,6 +467,7 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     udpSettings,
     tcpPortSettings,
     policySaving,
+    loaded: loadedSettings !== undefined,
     loading,
     error,
     handleBanFilterChange,
