@@ -15,10 +15,11 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
   const discoveredLocations = server.locations?.length ? server.locations
     : response?.services.find((service) => service.name === (server.serviceName ?? "") && service.address.toLowerCase() === server.address?.toLowerCase())?.locations;
 
+  const isTransportService = Boolean(server.tcpAddr || server.udpAddr);
   const currentOrigin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "https://localhost";
   const defaultLocalLocation: ServiceLocation = {
     relay_url: currentOrigin,
-    url: server.link || (server.dns ? `https://${server.dns}/` : ""),
+    url: !isTransportService ? (server.link || (server.dns ? `https://${server.dns}/` : "")) : "",
     current_relay: true,
     reported_ready: server.online,
     observed_at: "",
@@ -54,7 +55,7 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
 
           <div className="mt-4 space-y-2">
             {resolvedLocations.map((loc) => {
-              if (loc.url) {
+              if (loc.url && !isTransportService) {
                 const displayText = loc.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
                 return (
                   <a
@@ -77,7 +78,7 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
                 );
               }
 
-              const displayText = loc.relay_url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+              const displayText = (loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
               return (
                 <div
                   key={loc.relay_url}
@@ -91,7 +92,13 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
                       </span>
                     )}
                   </div>
-                  <span className="shrink-0 text-xs text-muted-foreground">Unavailable</span>
+                  {isTransportService ? (
+                    <span className="shrink-0 text-xs font-mono text-muted-foreground">
+                      {[server.tcpAddr && "TCP", server.udpAddr && "UDP"].filter(Boolean).join("/")}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-xs text-muted-foreground">Unavailable</span>
+                  )}
                 </div>
               );
             })}

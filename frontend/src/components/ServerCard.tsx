@@ -156,10 +156,81 @@ function ServerHoverDetails({ description, tags, isTransportService, endpointCou
     </div>
   );
 }
-function buildEndpoints(tcpAddr: string | undefined, udpAddr: string | undefined): { protocol: string; address: string }[] {
+export function isLoopbackOrEmpty(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    !normalized ||
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "0.0.0.0" ||
+    normalized === "::1" ||
+    normalized === "::"
+  );
+}
+
+export function extractRelayHostname(server: BaseServer): string {
+  if (server.locations && server.locations.length > 0) {
+    const loc =
+      server.locations.find((l) => l.current_relay && (l.url || l.relay_url)) ||
+      server.locations.find((l) => l.reported_ready && (l.url || l.relay_url)) ||
+      server.locations.find((l) => l.url || l.relay_url);
+    if (loc) {
+      const urlStr = loc.relay_url || loc.url;
+      try {
+        const parsed = new URL(urlStr.startsWith("http") ? urlStr : `https://${urlStr}`);
+        if (parsed.hostname && !isLoopbackOrEmpty(parsed.hostname)) {
+          return parsed.hostname;
+        }
+      } catch {}
+    }
+  }
+  if (typeof window !== "undefined" && window.location.hostname && !isLoopbackOrEmpty(window.location.hostname)) {
+    return window.location.hostname;
+  }
+  return "";
+}
+
+export function formatEndpointAddress(address: string, fallbackHost?: string): string {
+  if (!address) return "";
+  const trimmed = address.trim();
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon === -1) {
+    return trimmed;
+  }
+  const hostPart = trimmed.slice(0, lastColon);
+  const portPart = trimmed.slice(lastColon + 1);
+
+  if (isLoopbackOrEmpty(hostPart) && fallbackHost) {
+    return `${fallbackHost}:${portPart}`;
+  }
+  return trimmed;
+}
+
+export function resolveRepresentativeLink(server: BaseServer): string {
+  if (server.link) {
+    return server.link;
+  }
+  if (server.locations && server.locations.length > 0) {
+    const readyWithUrl = server.locations.find((l) => l.url && l.reported_ready);
+    if (readyWithUrl?.url) {
+      return readyWithUrl.url;
+    }
+    const withUrl = server.locations.find((l) => l.url);
+    if (withUrl?.url) {
+      return withUrl.url;
+    }
+  }
+  return "";
+}
+
+export function buildEndpoints(
+  tcpAddr: string | undefined,
+  udpAddr: string | undefined,
+  fallbackHost?: string,
+): { protocol: string; address: string }[] {
   return [
-    ...(tcpAddr ? [{ protocol: "TCP", address: tcpAddr }] : []),
-    ...(udpAddr ? [{ protocol: "UDP", address: udpAddr }] : []),
+    ...(tcpAddr ? [{ protocol: "TCP", address: formatEndpointAddress(tcpAddr, fallbackHost) }] : []),
+    ...(udpAddr ? [{ protocol: "UDP", address: formatEndpointAddress(udpAddr, fallbackHost) }] : []),
   ];
 }
 
@@ -169,11 +240,11 @@ function resolveVoteRequest(server: BaseServer, targetVote: "up" | "down"): { ta
   return { targetHost, nextVote };
 }
 
-function resolveDetailPath(server: BaseServer, serverId: string, isWarning: boolean): string {
+function resolveDetailPath(server: BaseServer, serverId: string, isWarning: boolean, effectiveLink: string): string {
   if (isWarning && serverId) {
     return `/server/${encodeURIComponent(serverId)}`;
   }
-  return server.link;
+  return effectiveLink;
 }
 
 function AppLink({
@@ -210,9 +281,12 @@ function AppLink({
       </Link>
     );
   }
+  const isExternal = Boolean(server.remoteOnly || (detailPath && /^https?:\/\//i.test(detailPath)));
   return (
     <a
-      href={server.link || "#"}
+      href={detailPath || "#"}
+      target={isExternal ? "_blank" : undefined}
+      rel={isExternal ? "noopener noreferrer" : undefined}
       aria-label={ariaLabel ?? `Open ${name}`}
       className={className}
     >
@@ -481,9 +555,11 @@ export function ServerCard({
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
-  const endpoints = buildEndpoints(tcpAddr, udpAddr);
+  const fallbackHost = extractRelayHostname(server);
+  const endpoints = buildEndpoints(tcpAddr, udpAddr, fallbackHost);
   const isTransportService = endpoints.length > 0;
-  const isNavigable = navigable && !isTransportService && !server.remoteOnly && Boolean(server.link);
+  const effectiveLink = resolveRepresentativeLink(server);
+  const isNavigable = navigable && !isTransportService && Boolean(effectiveLink);
   const observedRelayCount = relayCount ?? server.locations?.length ?? (server.remoteOnly ? 0 : 1);
   const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
   const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
@@ -509,7 +585,7 @@ export function ServerCard({
   const handleSelectVote = (event: React.MouseEvent, direction: "up" | "down") => void handleVote(event, direction);
   const handleThumbnailError = () => setFailedThumbnail(thumbnail);
   const isWarning = isReputationWarning(server.reputation);
-  const detailPath = resolveDetailPath(server, serverId, isWarning);
+  const detailPath = resolveDetailPath(server, serverId, isWarning, effectiveLink);
 
   return (
     <div className="relative" title={description || undefined}>
@@ -570,7 +646,7 @@ export function ServerCard({
         })()}
         {server.remoteOnly && (
           <p className="mt-2 text-xs text-muted-foreground">
-            Relay-reported · {server.locations?.some((location) => location.url) ? "Choose a relay to open" : "No HTTP URL available"}
+            Relay-reported · {effectiveLink ? "Opens available relay" : "No HTTP URL available"}
           </p>
         )}
         {children && (

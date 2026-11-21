@@ -76,4 +76,23 @@ describe("relay selection", () => {
 
     expect(screen.getByText("No relays connected.")).toBeDefined();
   });
+
+  it("disables links for TCP/UDP transport services in relays panel", () => {
+    render(<ServiceRelaysPanel
+      server={{
+        ...server,
+        tcpAddr: "relay.local.example:50000",
+        locations: [
+          { ...observation, relay_url: "https://remote.example", url: "https://blog.remote.example/" },
+        ],
+      }}
+      loading={false}
+      onCheckMore={vi.fn()}
+      onClose={vi.fn()}
+    />);
+
+    expect(screen.queryByRole("link", { name: /blog\.remote\.example/ })).toBeNull();
+    expect(screen.getByText("blog.remote.example")).toBeDefined();
+    expect(screen.getByText("TCP")).toBeDefined();
+  });
 });
