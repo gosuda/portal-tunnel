@@ -1,60 +1,77 @@
 # Unprivileged Sandboxes and gvx Workloads
 
-Use this reference when exposing a service running inside a locked-down, rootless, or unprivileged container sandbox, such as [`gfire-sigs/gvx`](https://github.com/gfire-sigs/gvx) (gVisor Everywhere), an unprivileged Kubernetes pod, or a restricted CI runner without Docker daemon or `sudo` access. The human-facing copy is the docs page `docs/src/routes/unprivileged-sandboxes/+page.md`; when either changes, update both.
+Use this reference for services in [gvx](https://github.com/gfire-sigs/gvx), rootless containers or restricted CI runners. The human-facing source is `docs/src/routes/unprivileged-sandboxes/+page.md`; update both copies together.
 
-Because Portal tunnels rely entirely on an outbound reverse session backhaul (over TLS/WebSocket/QUIC) to a relay server, workloads running inside unprivileged sandboxes require no inbound firewall ports on the host.
+## Choose the Trust Boundary First
 
-## Integration Patterns
+- **Untrusted or AI-generated code:** Prefer Host-Side Portal. Keep its identity, authentication configuration and secrets outside every guest mount. Do not inject persistent `IDENTITY_JSON` or expose host credential directories to the guest.
+- **Trusted workload:** Either pattern is possible. Separate the public content directory from the identity directory.
+- **Trusted ephemeral CI:** In-Sandbox Portal may use a new disposable identity. Never reuse a production publisher identity there or include keys in artifacts, logs or caches.
 
-### Pattern 1: In-Sandbox Reverse Tunnel (Preferred for Zero Host Inbound)
+An application and Portal in the same guest share a security boundary. Different directories prevent accidental HTTP disclosure, but do not keep keys or signing authority safe from malicious guest code. Visitor authentication protects public access, not secrets from another process in the guest.
 
-Run `portal expose` directly inside the sandbox alongside the target workload. This requires that the sandbox has outbound network egress (such as gVisor's user-space `netstack`).
+Follow the main skill's installation, exposure, authentication and lifecycle rules. Use the [gvx setup guide](https://github.com/gfire-sigs/gvx#3-quickstart) and [security model](https://github.com/gfire-sigs/gvx/blob/main/SECURITY.md) for host/backend prerequisites. These shell examples use Bash. Ensure DNS and outbound HTTPS to the selected relays; image pulls and package installation also require registry/repository access.
 
-- **Architecture:**
-  - The application listens on sandbox loopback (e.g. `127.0.0.1:8080`).
-  - `portal expose 8080 --name <app>` runs inside the sandbox.
-  - The tunnel process initiates an outbound reverse connection to the relay.
-  - The host machine has zero inbound ports open and requires no root privileges.
+## Pattern 1: Host-Side Portal (Default for Untrusted Code)
 
-- **Sample Sandbox Script:**
+Host terminal 1, with the application in the foreground and only a loopback port published:
 
-  ```bash
-  # Inside the gvx / unprivileged container:
-  # 1. Start application in background
-  python3 -m http.server 8080 &
+```bash
+rungv run -net=nat -p 127.0.0.1:8080:80 nginx:alpine
+```
 
-  # 2. Expose via Portal
-  portal expose 8080 --name sandbox-demo
-  ```
+`rungv run -d` is unsupported: there is no background daemon. Retain this terminal or its managed process handle. This sample mounts no host files and passes no secrets. Review guest-to-host network access controls for the chosen workload; loopback binding is not an egress policy.
 
-### Pattern 2: Host Tunnel with Sandboxed Port-Forwarding
+Host terminal 2, with Portal already installed on the trusted host:
 
-When the `portal` binary is managed on the host and the container only runs the target application:
+```bash
+curl --fail --max-time 5 http://127.0.0.1:8080/
+umask 077
+mkdir -p "$HOME/.local/state/portal/sandbox-preview"
+portal expose 127.0.0.1:8080 --name my-app-preview \
+  --identity-path "$HOME/.local/state/portal/sandbox-preview/identity.json"
+```
 
-- **Run container with unprivileged user-space port forward:**
+Keep the identity outside the repository, document root and every sandbox mount. A persistent identity stays on this host. The host has a loopback listener, but needs no public listener or inbound firewall rule. The guest still controls the application's responses.
 
-  ```bash
-  rungv run -d -p 127.0.0.1:8080:80 nginx:alpine
-  ```
+## Pattern 2: In-Sandbox Portal (Trusted Workloads Only)
 
-- **Run Portal on the host:**
+With guest outbound egress, run Portal beside the trusted application without a host port mapping. Use a disposable identity for CI.
 
-  ```bash
-  portal expose 8080 --name sandbox-preview
-  ```
+```bash
+rungv run -it --rm -net=nat ubuntu:24.04 bash
+```
 
-## Rules for Ephemeral Sandboxes & Agents
+Inside the guest, install dependencies explicitly. These commands use guest root, not host `sudo`; a non-root/read-only CI image must provide the dependencies beforehand.
 
-1. **Ephemeral vs Injected Identity:**
-   - In ephemeral containers or RL rollouts, generate temporary keys by omitting `--identity-path`.
-   - To keep a stable hostname across container restarts, inject the signing key via `IDENTITY_JSON` in the container environment rather than mounting host files:
-     ```bash
-     export IDENTITY_JSON='{"private_key":"<hex>","token_secret":"<secret>"}'
-     portal expose 8080 --name stable-sandbox
-     ```
+```bash
+set -euo pipefail
+apt-get update
+apt-get install -y --no-install-recommends curl ca-certificates python3
+curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | bash
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+portal version
 
-2. **Access Control on Interactive Consoles:**
-   - If the sandboxed service provides an interactive shell, code execution API, or debug console, always protect it with Portal's sign-in flags (`--auth siwe`, `--auth credential`, etc.) as documented in `application-auth.md`.
+mkdir -p /srv/preview/public
+printf '%s\n' '<h1>Sandbox preview</h1>' > /srv/preview/public/index.html
+python3 -m http.server 8080 --bind 127.0.0.1 --directory /srv/preview/public &
+app_pid=$!
+trap 'kill "$app_pid" 2>/dev/null || true' EXIT
+curl --fail --max-time 5 --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/
 
-3. **Outbound Connectivity Requirement:**
-   - Ensure the sandbox network policy permits outbound TCP/443 traffic to the configured relay domain(s).
+unset IDENTITY_JSON
+umask 077
+identity_dir="$(mktemp -d /tmp/portal-preview.XXXXXX)"
+portal expose 127.0.0.1:8080 --name my-sandbox-preview \
+  --identity-path "$identity_dir/identity.json"
+```
+
+The installer prints its destination and may update a profile, but does not change the current shell's PATH. Use the printed directory if it differs from the user bin directories above. The CLI defaults to `./identity.json`; omitting `--identity-path` does not make an identity ephemeral or memory-only. Always pass an absolute path outside the served directory. Never serve the whole current directory or guest home containing identity material. Discard this guest filesystem after the run; the private temporary directory is not an isolation boundary from other guest code.
+
+## Identity, Readiness and Handoff
+
+- The examples assume `IDENTITY_JSON` is unset; it overrides `--identity-path`. Persistent injected identity JSON belongs only in a trusted Portal environment, not alongside untrusted code.
+- Read the actual ready output or JSON `public_url` and `alias_url`. Prefer a granted alias, otherwise the ready public URL, and verify that endpoint as the main skill requires. Never invent a hostname from `--name`: aliases are optional. A supported Local TLS setup may obtain a canonical URL when an alias is taken; alias-only registration may fail.
+- For a user-selected relay, append `--relays <https-relay-url> --discovery=false`. Pending approval is not readiness.
+- Before exposing an interactive console, administrative interface or code execution API, follow `application-auth.md` and the main skill's sensitive-service rules. With untrusted workloads, keep Portal authentication on the trusted host.
+- Retain ownership of both the app/sandbox and Portal processes. Stop only this workflow's processes at the end or on cancellation; do not call a foreground preview permanent.
