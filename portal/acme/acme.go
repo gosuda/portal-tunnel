@@ -73,6 +73,7 @@ type Manager struct {
 	stopOnce     sync.Once
 	ensStatus    *utils.Snapshot[types.ENSStatus]
 	ensCommands  chan ensDNSCommand
+	pendingENS   map[string]ensDNSCommand // latest unapplied lease DNS intent, guarded by commandMu
 	material     *utils.Snapshot[servedMaterial]
 
 	pendingDNSAddress bool
@@ -135,7 +136,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	manager := &Manager{
 		cfg:         cfg,
 		stopCh:      make(chan struct{}),
-		ensCommands: make(chan ensDNSCommand, 256),
+		ensCommands: make(chan ensDNSCommand, 1),
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 		material:    utils.NewSnapshot(servedMaterial{}),
 	}

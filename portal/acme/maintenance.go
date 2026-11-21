@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -37,7 +37,6 @@ func nextSyncDelay(consecutiveFailures int) time.Duration {
 }
 
 type maintenanceLoopState struct {
-	pendingENS             map[string]ensDNSCommand
 	lastPublicIPs          map[bool]string
 	consecutiveDNSFailures int
 	renewTimer             *time.Timer
@@ -86,7 +85,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 
 func (m *Manager) maintenanceLoopNewState() *maintenanceLoopState {
 	state := &maintenanceLoopState{
-		pendingENS:    make(map[string]ensDNSCommand),
 		lastPublicIPs: make(map[bool]string),
 	}
 	m.commandMu.RLock()
@@ -118,15 +116,13 @@ func (m *Manager) syncChangedAddressRecords(ctx context.Context, state *maintena
 	return syncErr
 }
 
-func (m *Manager) maintenanceLoopDrainENSCommands(state *maintenanceLoopState) {
+func (m *Manager) maintenanceLoopDrainENSCommands() {
 drainENS:
 	for {
 		select {
 		case command := <-m.ensCommands:
 			if command.ready != nil {
 				command.ready <- errLeaseDNSPending
-			} else {
-				state.pendingENS[command.hostname] = command
 			}
 		default:
 			break drainENS
@@ -135,9 +131,18 @@ drainENS:
 }
 
 func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *maintenanceLoopState) error {
+	m.commandMu.RLock()
+	pending := maps.Clone(m.pendingENS)
+	m.commandMu.RUnlock()
 	var err error
-	for _, command := range state.pendingENS {
-		if commandErr := m.applyENSCommand(ctx, command); commandErr != nil {
+	for _, command := range pending {
+		if ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+		commandErr := m.applyENSCommand(syncCtx, command)
+		cancel()
+		if commandErr != nil {
 			err = errors.Join(err, commandErr)
 		} else {
 			m.finishENSCommand(state, command)
@@ -147,7 +152,7 @@ func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *mai
 }
 
 func (m *Manager) maintenanceLoopFlushCommands(ctx context.Context, state *maintenanceLoopState) error {
-	m.maintenanceLoopDrainENSCommands(state)
+	m.maintenanceLoopDrainENSCommands()
 	return m.maintenanceLoopApplyPendingENS(ctx, state)
 }
 
@@ -232,33 +237,25 @@ func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
 }
 
 func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *maintenanceLoopState, command ensDNSCommand) {
-	if command.ready != nil {
-		command.ready <- m.checkLeaseDNS(state, command.hostname)
-		return
-	}
-	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-	err := m.applyENSCommand(syncCtx, command)
-	cancel()
+	err := m.maintenanceLoopApplyPendingENS(ctx, state)
 	if err != nil {
-		state.pendingENS[command.hostname] = command
-		log.Warn().Err(err).Str("hostname", command.hostname).Msg("apply ENS dns command")
-	} else {
-		m.finishENSCommand(state, command)
+		log.Warn().Err(err).Msg("apply lease dns commands")
+	}
+	if command.ready != nil {
+		command.ready <- m.checkLeaseDNS(command.hostname)
 	}
 }
 
 func (m *Manager) finishENSCommand(state *maintenanceLoopState, command ensDNSCommand) {
-	delete(state.pendingENS, command.hostname)
+	m.commandMu.Lock()
+	// A policy change or registration may have replaced the intent while DNS
+	// I/O was running. Completing old work must not discard that newer work.
+	if current, exists := m.pendingENS[command.hostname]; exists && current == command {
+		delete(m.pendingENS, command.hostname)
+	}
+	m.commandMu.Unlock()
 	if command.remove {
 		return
 	}
 	clear(state.lastPublicIPs)
-	if namespace.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
-		parent := namespace.AddressParent(command.hostname)
-		// The new child republished the shared parent. An old withdrawal
-		// intent must not outlive the newly registered DNS owner.
-		if state.pendingENS[parent].remove {
-			delete(state.pendingENS, parent)
-		}
-	}
 }

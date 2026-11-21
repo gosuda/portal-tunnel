@@ -243,65 +243,30 @@ func (s *Server) isDNSHostnameOwnedLocked(hostname string, now time.Time) bool {
 	return false
 }
 
-// deferLeaseDNSDeletesLocked retains cleanup until the registry janitor can
-// enqueue it. Hostname ownership is checked again before every attempt.
-func (r *leaseRegistry) deferLeaseDNSDeletesLocked(hostnames []string) {
-	if len(hostnames) == 0 {
+func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
+	if s == nil || record == nil || s.acmeManager == nil || s.registry == nil {
 		return
 	}
-	if r.pendingDNSDeletes == nil {
-		r.pendingDNSDeletes = make(map[string]struct{})
-	}
-	for _, hostname := range hostnames {
-		r.pendingDNSDeletes[hostname] = struct{}{}
-	}
-}
-
-func (s *Server) flushLeaseDNSDeletes(ctx context.Context) {
-	if s == nil || s.registry == nil {
-		return
-	}
-	registry := s.registry
-	registry.mu.Lock()
-	hostnames := make([]string, 0, len(registry.pendingDNSDeletes))
-	for hostname := range registry.pendingDNSDeletes {
-		hostnames = append(hostnames, hostname)
-	}
-	registry.pendingDNSDeletes = nil
-	registry.mu.Unlock()
-	s.deleteLeaseDNS(ctx, hostnames)
-}
-
-func (s *Server) deleteLeaseDNS(ctx context.Context, hostnames []string) {
-	if s == nil || len(hostnames) == 0 || s.acmeManager == nil || s.registry == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-	defer cancel()
 	registry := s.registry
 	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	now := time.Now()
-	var retry []string
+
+	hostnames := record.hostnames()
 	for _, hostname := range hostnames {
 		if s.isDNSHostnameOwnedLocked(hostname, now) {
 			continue
 		}
-		// Delete is an enqueue-only operation. Keeping the registry read lock
-		// through the enqueue orders this command against lease registration's
-		// write lock and its later DNS sync enqueue.
+		// Delete only records intent; the DNS worker performs provider I/O.
+		// Keeping the registry read lock through admission orders withdrawal
+		// against registration's write lock and its later DNS publication.
 		err := s.acmeManager.DeleteLeaseHostname(ctx, hostname)
 		if err != nil {
-			retry = append(retry, hostname)
 			log.Warn().
 				Err(err).
 				Str("hostname", hostname).
+				Str("address", record.Address).
 				Msg("delete ens gasless hostname")
 		}
-	}
-	registry.mu.RUnlock()
-	if len(retry) != 0 {
-		registry.mu.Lock()
-		registry.deferLeaseDNSDeletesLocked(retry)
-		registry.mu.Unlock()
 	}
 }
