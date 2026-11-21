@@ -94,5 +94,36 @@ describe("Admin sign-in", () => {
 
     expect(screen.getByText("Error: Could not load policy")).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Service identity key" })).toBeNull();
+
+    vi.mocked(apiClient.get).mockResolvedValue({
+      leases: [], policy: { approval_mode: "manual", udp: { enabled: false, max_leases: 0 }, tcp_port: { enabled: false, max_leases: 0 } },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh policy" }));
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Service identity key" })).toBeTruthy();
+  });
+
+  it("refreshes pending requests on demand without clearing the identity input", async () => {
+    render(<ThemeProvider><Admin /></ThemeProvider>);
+    await act(async () => {});
+    fireEvent.change(screen.getByPlaceholderText("Admin token"), { target: { value: "secret" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Login/ }));
+    });
+    const input = screen.getByRole("textbox", { name: "Service identity key" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "draft identity" } });
+    const identityKey = "demo:0x1111111111111111111111111111111111111111";
+    vi.mocked(apiClient.get).mockResolvedValue({
+      leases: [], pending: [{ identity_key: identityKey, expires_at: "2026-12-01T00:00:00Z" }],
+      policy: { approval_mode: "manual", udp: { enabled: false, max_leases: 0 }, tcp_port: { enabled: false, max_leases: 0 } },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh policy" }));
+    });
+
+    expect(screen.getByRole("region", { name: "Pending requests" }).textContent).toContain(identityKey);
+    expect(input.value).toBe("draft identity");
   });
 });

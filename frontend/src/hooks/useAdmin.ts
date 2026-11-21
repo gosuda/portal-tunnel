@@ -141,6 +141,7 @@ interface UseAdminResult extends UseListReturn<AdminServer> {
   loaded: boolean;
   loading: boolean;
   error: string;
+  refresh: () => Promise<void>;
   handleBanFilterChange: (value: BanFilter) => void;
   handleBanStatus: (identityKey: string, isBan: boolean) => Promise<void>;
   handleBPSChange: (identityKey: string, bps: number | null) => Promise<void>;
@@ -350,6 +351,7 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
   };
 
   const loadGeneration = useRef(0);
+  const activeActions = useRef(0);
 
   const reload = async (showLoading: boolean) => {
     const generation = ++loadGeneration.current;
@@ -361,9 +363,28 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     applyEnabledState(enabled, reload, setError, setLoading);
   });
 
+  const refresh = async () => {
+    if (!enabled || activeActions.current > 0) return;
+    await reload(loadedSettings === undefined);
+  };
+
+  const poll = useEffectEvent(async () => {
+    if (!document.hidden) await refresh();
+  });
+
   useEffect(() => {
     loadOnEnable();
+    let cancelled = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        void poll().finally(() => { if (!cancelled) schedule(); });
+      }, 10_000);
+    };
+    if (enabled) schedule();
     return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
       loadGeneration.current += 1;
     };
   }, [enabled]);
@@ -381,6 +402,10 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
   });
 
   const runAdminAction = async (action: () => Promise<void>) => {
+    activeActions.current++;
+    // A read started before this write must not replace its result or an
+    // optimistic bandwidth edit. Polling resumes after the action's reload.
+    loadGeneration.current++;
     setError("");
     try {
       await action();
@@ -388,6 +413,8 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     } catch (err: unknown) {
       reportAdminActionError(err, setError);
       throw err;
+    } finally {
+      activeActions.current--;
     }
   };
 
@@ -470,6 +497,7 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     loaded: loadedSettings !== undefined,
     loading,
     error,
+    refresh,
     handleBanFilterChange,
     handleBanStatus,
     handleBPSChange,

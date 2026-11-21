@@ -86,6 +86,35 @@ func TestManualReleaseInvalidatesLease(t *testing.T) {
 	}
 }
 
+func TestAutoRefusesDeniedPublishersBeforeAllocatingResources(t *testing.T) {
+	port := strconv.Itoa(harnessPort(t, "127.0.0.1"))
+	ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode=auto", "--tcp-enabled=true", "--min-port="+port, "--max-port="+port)
+	ids := generatePolicyIdentities(t, "admission", "admission", "admission")
+	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: ids[0].Key(), IsDenied: ptr(true)})
+	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: ids[1].Key(), IsBanned: ptr(true)})
+	for _, id := range ids[:2] {
+		registered, err := tryRegisterLease(ctx, client, base, types.RegisterChallengeRequest{Identity: id, TCPEnabled: true})
+		if !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}) {
+			t.Fatalf("denied publisher registration: %+v, %v", registered, err)
+		}
+		if registered.AccessToken != "" || registered.TCPAddr != "" {
+			t.Fatal("denied publisher received a token or endpoint")
+		}
+	}
+	var state types.PolicyStateResponse
+	headers := http.Header{"Authorization": {"Bearer admin-test"}}
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Leases) != 0 || len(state.Pending) != 0 {
+		t.Fatalf("denied publishers retained leases or approval requests: %+v", state)
+	}
+	registered, err := tryRegisterLease(ctx, client, base, types.RegisterChallengeRequest{Identity: ids[2], TCPEnabled: true})
+	if err != nil || registered.Hostname != "admission.localhost" || registered.TCPAddr == "" {
+		t.Fatalf("denied publishers consumed the alias or only port: %+v, %v", registered, err)
+	}
+}
+
 func waitRelayStatus(t *testing.T, exposure *sdk.Exposure, name string, match func(sdk.RelayStatus) bool) sdk.RelayStatus {
 	t.Helper()
 	deadline := time.After(20 * time.Second)

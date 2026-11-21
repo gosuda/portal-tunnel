@@ -24,6 +24,7 @@ interface AdminServerListProps {
   selectedTags: string[];
   availableTags: string[];
   pending: { identity_key: string; expires_at: string }[];
+  onRefresh: () => Promise<void>;
   filteredServers: AdminServer[];
   onSearchChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;
@@ -147,6 +148,7 @@ function useAdminSelection(filteredServers: AdminServer[]): {
 export function AdminServerList({
   title = "PORTAL ADMIN",
   pending,
+  onRefresh,
   searchQuery,
   status,
   sortBy,
@@ -303,6 +305,7 @@ export function AdminServerList({
         <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
           <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
             <AdminHeader title={title} auth={auth} />
+            <button type="button" onClick={() => void onRefresh()} className="self-start rounded bg-secondary px-3 py-2">Refresh policy</button>
             <p className="text-sm">Effective approval mode: <strong>{approvalMode}</strong>. Auto admits public registrations. Manual holds requests for approval before assigning resources. Saved policy overrides the startup setting.</p>
             <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={async (event) => {
               event.preventDefault();

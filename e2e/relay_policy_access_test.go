@@ -32,23 +32,6 @@ func writeInitialPolicyDenying(t *testing.T, leaseIdentity types.Identity) (stri
 	return stateDir, policyPath
 }
 
-func registerBannedLease(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, leaseIdentity types.Identity) types.RegisterResponse {
-	t.Helper()
-	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-		t.Fatal(err)
-	}
-	signature, err := identity.NewLocalAuthority(leaseIdentity).SignEthereumPersonalMessage(challenge.SIWEMessage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var registered types.RegisterResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{ChallengeID: challenge.ChallengeID, SIWEMessage: challenge.SIWEMessage, SIWESignature: signature}, nil, &registered); err != nil {
-		t.Fatal(err)
-	}
-	return registered
-}
-
 func postPolicyLeases(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, body string, status int) {
 	t.Helper()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base.String()+types.PathPolicyLeases, strings.NewReader(body))
@@ -154,7 +137,12 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	}
 	stateDir, policyPath := writeInitialPolicyDenying(t, leaseIdentity)
 	ctx, base, client := startPolicyRelay(t, stateDir, "--cache-enabled=false")
-	registered := registerBannedLease(t, ctx, client, base, leaseIdentity)
+	if _, err := tryRegisterLease(ctx, client, base, types.RegisterChallengeRequest{Identity: leaseIdentity}); !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}) {
+		t.Fatalf("persisted ban did not reject registration: %v", err)
+	}
+	postPolicyLeases(t, ctx, client, base, `{"identity_key":"`+leaseIdentity.Key()+`","is_banned":false}`, http.StatusOK)
+	registered := registerRawLease(t, ctx, client, base, leaseIdentity)
+	postPolicyLeases(t, ctx, client, base, `{"identity_key":"`+leaseIdentity.Key()+`","is_banned":true}`, http.StatusOK)
 
 	assertReverseBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
 	postPolicyLeases(t, ctx, client, base, `{"identity_key":"`+leaseIdentity.Key()+`","is_banned":false,"is_denied":true,"bps":10000}`, http.StatusOK)

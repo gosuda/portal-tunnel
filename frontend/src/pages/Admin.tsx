@@ -25,6 +25,7 @@ export function Admin(): JSX.Element {
     loaded,
     loading,
     error,
+    refresh,
     handleSearchChange,
     handleStatusChange,
     handleSortByChange,
@@ -69,7 +70,10 @@ export function Admin(): JSX.Element {
     return <div className="p-8 text-foreground">Loading...</div>;
   }
   if (!loaded && error) {
-    return <div className="p-8 text-red-500">Error: {error}</div>;
+    return <div className="p-8 text-red-500">
+      <p role="alert">Error: {error}</p>
+      <button type="button" onClick={() => void refresh()}>Refresh policy</button>
+    </div>;
   }
 
   return (
@@ -78,6 +82,7 @@ export function Admin(): JSX.Element {
       <AdminServerList
         title="PORTAL ADMIN"
         pending={pending}
+        onRefresh={refresh}
         searchQuery={searchQuery}
         status={status}
         sortBy={sortBy}

@@ -76,11 +76,7 @@ func (a *Store) beginRegistration(key types.ServiceIdentityKey) (types.LeaseAcce
 	}
 	a.Lifecycle.RLock()
 	state := a.state.Load()
-	access := types.LeaseRoutable
-	if state.Mode() == ModeManual {
-		access = state.Access(key)
-	}
-	return access, a.Lifecycle.RUnlock
+	return state.Access(key), a.Lifecycle.RUnlock
 }
 
 // Commit installs a durably saved candidate as one immutable revision.

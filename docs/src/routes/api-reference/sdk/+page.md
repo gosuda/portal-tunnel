@@ -352,7 +352,7 @@ A manual relay verifies the registration signature before accepting an approval 
 | Operation | Response | Publisher behavior |
 | --- | --- | --- |
 | Register, awaiting manual approval | `503 lease_rejected` with `Retry-After` (5–60 seconds) | Repeat the signed registration exchange after the delay |
-| Register, denied or banned in manual mode | `403 lease_denied` | Terminal refusal |
+| Register, denied or banned in either mode | `403 lease_denied` | Terminal refusal before lease allocation |
 | Connect or renew a removed lease | Missing or invalid lease | Obtain a fresh registration |
 | Reverse connect on a legacy pending lease | `403 lease_rejected` | Wait for approval on the existing lease |
 

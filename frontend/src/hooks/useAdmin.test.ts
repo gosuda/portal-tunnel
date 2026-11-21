@@ -9,6 +9,7 @@ import { APIClientError, apiClient } from "@/lib/apiClient";
 type DeferredPolicyState = {
   leases: PolicyLease[];
   policy: PolicySettings;
+  pending?: { identity_key: string; expires_at: string }[];
 };
 
 vi.mock("@/hooks/useList", () => ({
@@ -103,6 +104,58 @@ describe("useAdmin", () => {
       }
       return {} as T;
     });
+  });
+
+  it("observes new pending requests while signed in and stops refreshing after sign-out", async () => {
+    vi.useFakeTimers();
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    try {
+      const state = { leases: [], policy: buildSettings("manual"), pending: [] };
+      mockGet.mockResolvedValue(state);
+      const { result, rerender, unmount } = renderHook(({ enabled }) => useAdmin(enabled), {
+        initialProps: { enabled: true },
+      });
+      await act(async () => {});
+      expect(result.current.pending).toEqual([]);
+
+      const pending = [{ identity_key: "demo:0x1111111111111111111111111111111111111111", expires_at: "2026-12-01T00:00:00Z" }];
+      mockGet.mockResolvedValue({ ...state, pending });
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(result.current.pending).toEqual(pending);
+
+      rerender({ enabled: false });
+      mockGet.mockResolvedValue(state);
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(result.current.pending).toEqual(pending);
+      unmount();
+    } finally {
+      hidden.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an earlier refresh erase pending requests or an action failure", async () => {
+    const pending = [{ identity_key: "demo:0x1111111111111111111111111111111111111111", expires_at: "2026-12-01T00:00:00Z" }];
+    const state = { leases: [], policy: buildSettings("manual"), pending };
+    mockGet.mockResolvedValue(state);
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    let resolveStale: ((value: DeferredPolicyState) => void) | undefined;
+    mockGet.mockImplementationOnce(() => new Promise<DeferredPolicyState>((resolve) => { resolveStale = resolve; }) as never);
+    let refresh: Promise<void> | undefined;
+    act(() => { refresh = result.current.refresh(); });
+    mockPost.mockRejectedValueOnce(new Error("Approval failed"));
+    await act(async () => {
+      await expect(result.current.handleApproveStatus(pending[0].identity_key, true)).rejects.toThrow("Approval failed");
+    });
+    await act(async () => {
+      resolveStale?.({ ...state, pending: [] });
+      await refresh;
+    });
+
+    expect(result.current.pending).toEqual(pending);
+    expect(result.current.error).toBe("Approval failed");
   });
 
   it("normalizes fetchData results on success", async () => {
