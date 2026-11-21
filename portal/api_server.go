@@ -376,7 +376,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, begin fu
 	record, replaced, resp, err := s.registry.Register(challenge.Request, sourceAddr, req.ReportedIP, self, descriptors, s.acmeManager.TLSMaterial())
 	if replaced != nil {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-		s.deleteLeaseDNS(cleanupCtx, replaced)
+		s.deleteLeaseDNS(cleanupCtx, replaced.hostnames())
 		cleanupCancel()
 	}
 	if err != nil {
@@ -416,7 +416,7 @@ func (s *Server) syncHandleRegisterLeaseDNS(w http.ResponseWriter, r *http.Reque
 			removed = record
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-		s.deleteLeaseDNS(cleanupCtx, removed)
+		s.deleteLeaseDNS(cleanupCtx, removed.hostnames())
 		cleanupCancel()
 		writeAPIErrorResponse(w, err)
 		return false
@@ -523,7 +523,7 @@ func (s *Server) HandleUnregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dnsCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultClaimTimeout)
-	s.deleteLeaseDNS(dnsCtx, record)
+	s.deleteLeaseDNS(dnsCtx, record.hostnames())
 	cancel()
 
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{})

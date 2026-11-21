@@ -694,8 +694,9 @@ func (s *Server) haltRelayTransports(ctx context.Context) []*leaseRecord {
 
 func (s *Server) deleteHaltedLeaseDNS(ctx context.Context, records []*leaseRecord) {
 	for _, record := range records {
-		s.deleteLeaseDNS(ctx, record)
+		s.deleteLeaseDNS(ctx, record.hostnames())
 	}
+	s.flushLeaseDNSDeletes(ctx)
 }
 
 func (s *Server) closeRelayServers(ctx context.Context) error {
@@ -957,6 +958,7 @@ func (s *Server) ApplyServicePolicy(key types.ServiceIdentityKey, access types.L
 		record := r.records[i]
 		if record.reverse != nil && record.ServiceKey() == key {
 			r.deleteRecord(i)
+			r.deferLeaseDNSDeletesLocked(record.hostnames())
 			removed = append(removed, record)
 		}
 	}
@@ -976,7 +978,6 @@ func (s *Server) ApplyServicePolicy(key types.ServiceIdentityKey, access types.L
 	r.mu.Unlock()
 	for _, record := range removed {
 		r.closeRecord(record)
-		s.deleteLeaseDNS(context.Background(), record)
 	}
 }
 
@@ -1462,9 +1463,12 @@ func (s *Server) runRegistryJanitor(ctx context.Context, interval time.Duration)
 			now := time.Now()
 			records := s.registry.cleanupExpired(now)
 			s.registry.bindings.SweepExpired(now)
+			s.registry.mu.Lock()
 			for _, record := range records {
-				s.deleteLeaseDNS(ctx, record)
+				s.registry.deferLeaseDNSDeletesLocked(record.hostnames())
 			}
+			s.registry.mu.Unlock()
+			s.flushLeaseDNSDeletes(ctx)
 		}
 	}
 }

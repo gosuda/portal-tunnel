@@ -68,6 +68,8 @@ type approvalRequest struct {
 }
 
 type leaseRegistry struct {
+	pendingDNSDeletes map[string]struct{}
+
 	pending        map[types.ServiceIdentityKey]approvalRequest
 	records        []*leaseRecord
 	rootHostname   string

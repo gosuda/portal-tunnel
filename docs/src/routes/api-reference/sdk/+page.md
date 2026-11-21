@@ -353,6 +353,8 @@ An authenticated retry from a different source IP moves the pending request to t
 
 Denying or banning an identity in either mode removes its existing leases and releases alias and port reservations. Revoking approval does the same in manual mode; in auto mode, revoking approval alone keeps the lease routable.
 
+Policy changes defer DNS cleanup to the registry's five-second maintenance loop. DNS queue admission has a bounded wait, and failed admissions are retained for retry. Every attempt rechecks hostname ownership so an old withdrawal cannot delete a newly registered lease's DNS.
+
 | Operation | Response | Publisher behavior |
 | --- | --- | --- |
 | Register, awaiting manual approval | `503 lease_rejected` with `Retry-After` (5–60 seconds) | Repeat the signed registration exchange after the delay |
