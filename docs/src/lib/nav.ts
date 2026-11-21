@@ -66,6 +66,7 @@ export const guidesNavigation: NavSection[] = [
 			{ title: 'Application Authentication', href: '/siwe-authentication' },
 			{ title: 'Deployment', href: '/deployment' },
 			{ title: 'Kubernetes', href: '/kubernetes' },
+			{ title: 'Unprivileged Sandboxes', href: '/unprivileged-sandboxes' },
 			{ title: 'Relay Replacement', href: '/relay-replacement' },
 			{ title: 'Configuration', href: '/configuration' }
 		]
