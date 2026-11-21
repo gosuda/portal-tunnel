@@ -62,6 +62,15 @@ func requestedLeaseTTL(seconds int) (time.Duration, error) {
 const approvalRequestTTL = 15 * time.Minute
 const maxApprovalRequests = 256
 
+// Pending publishers back off from approvalRetryMin to approvalRetryMax
+// seconds. One retry spends ChallengeCost+RegisterCost (6) pre-auth units
+// against a default refill of 10 per minute, so a shorter cap would drain the
+// source budget of a single waiting publisher and turn approval into 429s.
+const (
+	approvalRetryMin = 5
+	approvalRetryMax = 60
+)
+
 type approvalRequest struct {
 	source      netip.Addr
 	first, last time.Time
@@ -665,7 +674,7 @@ func (r *leaseRegistry) requestApproval(key types.ServiceIdentityKey, source net
 	p, found := r.pending[key]
 	if (!found && len(r.pending) >= maxApprovalRequests) ||
 		((!found || utils.SourcePrefix(p.source) != prefix) && r.unapprovedPerSource > 0 && fromSource >= r.unapprovedPerSource) {
-		return 60, &apiError{types.APIErrorCodeApprovalQueueFull, "approval request budget exhausted", http.StatusServiceUnavailable}
+		return approvalRetryMax, &apiError{types.APIErrorCodeApprovalQueueFull, "approval request budget exhausted", http.StatusServiceUnavailable}
 	}
 	if !found {
 		p.first = now
@@ -673,7 +682,7 @@ func (r *leaseRegistry) requestApproval(key types.ServiceIdentityKey, source net
 	p.source = source
 	p.last = now
 	r.pending[key] = p
-	return min(60, 5+int(now.Sub(p.first).Seconds())), nil
+	return min(approvalRetryMax, approvalRetryMin+int(now.Sub(p.first).Seconds())), nil
 }
 
 func (r *leaseRegistry) PendingApprovals(now time.Time) []types.PendingApproval {
