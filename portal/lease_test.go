@@ -2273,14 +2273,54 @@ func TestPendingApprovalBudgetsAndExpiry(t *testing.T) {
 	if _, err := r.requestApproval(other, source.Next(), now); err == nil {
 		t.Fatal("global limit exceeded")
 	}
-	if _, err := r.requestApproval(first, source, now.Add(time.Minute)); err != nil {
+	if _, err := r.requestApproval(first, netip.MustParseAddr("192.0.2.1"), now.Add(time.Minute)); err != nil {
 		t.Fatal("refresh of existing request refused:", err)
+	}
+	if _, err := r.requestApproval(first, source.Next(), now.Add(time.Minute)); err != nil {
+		t.Fatal("moving an existing request at the global limit refused:", err)
 	}
 	now = now.Add(approvalRequestTTL)
 	if got := r.PendingApprovals(now); len(got) != 1 || got[0].IdentityKey != first.String() {
 		t.Fatalf("unexpired requests: %+v", got)
 	}
-	if _, err := r.requestApproval(other, source.Next(), now); err != nil {
+	if _, err := r.requestApproval(other, netip.MustParseAddr("192.0.2.1"), now); err != nil {
 		t.Fatal("expired capacity was not reusable:", err)
+	}
+}
+
+func TestPendingApprovalSourceMigration(t *testing.T) {
+	r := &leaseRegistry{pending: make(map[types.ServiceIdentityKey]approvalRequest), unapprovedPerSource: 1}
+	now := time.Unix(1700000000, 0)
+	source := netip.MustParseAddr("192.0.2.1")
+	destination := source.Next()
+	first := types.NewServiceIdentityKey("demo", "one")
+	second := types.NewServiceIdentityKey("demo", "two")
+	if _, err := r.requestApproval(first, source, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.requestApproval(second, destination, now); err != nil {
+		t.Fatal(err)
+	}
+	before := r.pending[first]
+	if _, err := r.requestApproval(first, destination, now.Add(time.Minute)); err == nil {
+		t.Fatal("migration exceeded destination source budget")
+	}
+	if r.pending[first] != before {
+		t.Fatal("rejected migration changed source or request lifetime")
+	}
+	destination = destination.Next()
+	refreshed := now.Add(2 * time.Minute)
+	if _, err := r.requestApproval(first, destination, refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.pending[first]; got.source != destination || got.first != now || got.last != refreshed {
+		t.Fatalf("migrated request: %+v", got)
+	}
+	third := types.NewServiceIdentityKey("demo", "three")
+	if _, err := r.requestApproval(third, destination, refreshed); err == nil {
+		t.Fatal("migrated request did not consume destination budget")
+	}
+	if _, err := r.requestApproval(third, source, refreshed); err != nil {
+		t.Fatal("migration did not release previous source budget:", err)
 	}
 }

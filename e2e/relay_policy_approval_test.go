@@ -115,6 +115,43 @@ func TestAutoRefusesDeniedPublishersBeforeAllocatingResources(t *testing.T) {
 	}
 }
 
+func TestAutoBlockingReleasesRegisteredResources(t *testing.T) {
+	for _, action := range []string{"ban", "deny"} {
+		t.Run(action, func(t *testing.T) {
+			port := strconv.Itoa(harnessPort(t, "127.0.0.1"))
+			ctx, base, client := startPolicyRelay(t, t.TempDir(), "--approval-mode=auto", "--tcp-enabled=true", "--min-port="+port, "--max-port="+port)
+			ids := generatePolicyIdentities(t, "reclaimed", "reclaimed")
+			registered, err := tryRegisterLease(ctx, client, base, types.RegisterChallengeRequest{Identity: ids[0], TCPEnabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: ids[0].Key(), IsApproved: ptr(true)})
+			setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: ids[0].Key(), IsApproved: ptr(false)})
+			if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRenew, types.RenewRequest{AccessToken: registered.AccessToken}, nil, new(types.RenewResponse)); err != nil {
+				t.Fatal("revoking approval in auto mode removed a routable lease:", err)
+			}
+			update := types.LeasePolicyUpdate{IdentityKey: ids[0].Key()}
+			if action == "ban" {
+				update.IsBanned = ptr(true)
+			} else {
+				update.IsDenied = ptr(true)
+			}
+			setLeasePolicy(t, ctx, client, base, update)
+			if err := dialReverseWithCapability(t, ctx, client, base, registered.ReverseEndpoint.Capability); err == nil {
+				t.Fatal("blocked publisher retained a usable capability")
+			}
+			err = utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRenew, types.RenewRequest{AccessToken: registered.AccessToken}, nil, new(types.RenewResponse))
+			if !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
+				t.Fatalf("renew after blocking: %v", err)
+			}
+			replacement, err := tryRegisterLease(ctx, client, base, types.RegisterChallengeRequest{Identity: ids[1], TCPEnabled: true})
+			if err != nil || replacement.Hostname != "reclaimed.localhost" || replacement.TCPAddr == "" || replacement.TCPAddr != registered.TCPAddr {
+				t.Fatalf("blocked publisher retained alias or port: old=%+v new=%+v err=%v", registered, replacement, err)
+			}
+		})
+	}
+}
+
 func waitRelayStatus(t *testing.T, exposure *sdk.Exposure, name string, match func(sdk.RelayStatus) bool) sdk.RelayStatus {
 	t.Helper()
 	deadline := time.After(20 * time.Second)

@@ -387,7 +387,7 @@ func (api *RelayAPI) commitPolicy(next policy.State) error {
 		keys[key] = struct{}{}
 	}
 	for key := range keys {
-		api.server.ApplyServicePolicy(key, committed.Access(key), committed.Revision(), committed.Mode() == policy.ModeManual)
+		api.server.ApplyServicePolicy(key, committed.Access(key), committed.Revision())
 	}
 	return nil
 }

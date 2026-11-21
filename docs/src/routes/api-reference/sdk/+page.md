@@ -349,6 +349,10 @@ tenant bytes between the browser side and the SDK side.
 
 A manual relay verifies the registration signature before accepting an approval request. The request never receives a token or endpoint. A full queue returns `503 approval_queue_full` with retry guidance. Pre-auth budgets can independently return `429 rate_limited`.
 
+An authenticated retry from a different source IP moves the pending request to that source's budget only if capacity is available. A rejected retry leaves the existing request and its expiry unchanged.
+
+Denying or banning an identity in either mode removes its existing leases and releases alias and port reservations. Revoking approval does the same in manual mode; in auto mode, revoking approval alone keeps the lease routable.
+
 | Operation | Response | Publisher behavior |
 | --- | --- | --- |
 | Register, awaiting manual approval | `503 lease_rejected` with `Retry-After` (5–60 seconds) | Repeat the signed registration exchange after the delay |

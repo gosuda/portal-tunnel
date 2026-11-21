@@ -655,12 +655,14 @@ func (r *leaseRegistry) requestApproval(key types.ServiceIdentityKey, source net
 		}
 	}
 	p, found := r.pending[key]
-	if !found {
-		if len(r.pending) >= maxApprovalRequests || (r.unapprovedPerSource > 0 && fromSource >= r.unapprovedPerSource) {
-			return 60, &apiError{types.APIErrorCodeApprovalQueueFull, "approval request budget exhausted", http.StatusServiceUnavailable}
-		}
-		p = approvalRequest{source: source, first: now}
+	if (!found && len(r.pending) >= maxApprovalRequests) ||
+		((!found || p.source != source) && r.unapprovedPerSource > 0 && fromSource >= r.unapprovedPerSource) {
+		return 60, &apiError{types.APIErrorCodeApprovalQueueFull, "approval request budget exhausted", http.StatusServiceUnavailable}
 	}
+	if !found {
+		p.first = now
+	}
+	p.source = source
 	p.last = now
 	r.pending[key] = p
 	return min(60, 5+int(now.Sub(p.first).Seconds())), nil

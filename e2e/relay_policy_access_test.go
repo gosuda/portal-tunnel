@@ -50,28 +50,17 @@ func postPolicyLeases(t *testing.T, ctx context.Context, client *http.Client, ba
 	}
 }
 
-func assertReverseBlocked(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, leaseIdentity types.Identity, capability string) {
+func assertIdentityBlocked(t *testing.T, ctx context.Context, client *http.Client, base *url.URL, leaseIdentity types.Identity, capability string) {
 	t.Helper()
-	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{Identity: leaseIdentity}, nil, &challenge); err != nil {
-		t.Fatal(err)
+	if _, err := tryRegisterLease(ctx, client, base, types.RegisterChallengeRequest{Identity: leaseIdentity}); !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}) {
+		t.Fatalf("blocked identity registration: %v", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+types.PathSDKConnect, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set(types.HeaderReverseCapability, capability)
-	response, err := client.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("connect status = %d, want forbidden", response.StatusCode)
+	if err := dialReverseWithCapability(t, ctx, client, base, capability); err == nil {
+		t.Fatal("blocked identity retained a usable capability")
 	}
 }
 
-func updateGlobalPolicyLimits(t *testing.T, ctx context.Context, client *http.Client, base *url.URL) (http.Header, types.PolicyStateResponse) {
+func updateGlobalPolicyLimits(t *testing.T, ctx context.Context, client *http.Client, base *url.URL) http.Header {
 	t.Helper()
 	headers := http.Header{"Authorization": {"Bearer admin-test"}}
 	var settings types.PolicySettings
@@ -87,10 +76,10 @@ func updateGlobalPolicyLimits(t *testing.T, ctx context.Context, client *http.Cl
 		t.Fatal(err)
 	}
 	if afterSettings.Policy.UDP.MaxLeases != 1 || afterSettings.Policy.TCPPort.MaxLeases != 2 ||
-		len(afterSettings.Leases) != 1 || !afterSettings.Leases[0].IsDenied || afterSettings.Leases[0].BPS != 10000 {
+		len(afterSettings.Leases) != 0 {
 		t.Fatalf("global policy update lost identity decisions or limits: %+v", afterSettings)
 	}
-	return headers, afterSettings
+	return headers
 }
 
 func breakPolicyPersistence(t *testing.T, policyPath string) {
@@ -109,7 +98,7 @@ func assertFailedSavePreserved(t *testing.T, ctx context.Context, client *http.C
 	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Leases) != 1 || state.Leases[0].IsBanned || !state.Leases[0].IsDenied || state.Leases[0].BPS != 10000 {
+	if len(state.Leases) != 0 {
 		t.Fatalf("failed save changed committed policy: %+v", state.Leases)
 	}
 	proposed := state.Policy
@@ -144,14 +133,29 @@ func TestRelayAccessPolicyTransaction(t *testing.T) {
 	registered := registerRawLease(t, ctx, client, base, leaseIdentity)
 	postPolicyLeases(t, ctx, client, base, `{"identity_key":"`+leaseIdentity.Key()+`","is_banned":true}`, http.StatusOK)
 
-	assertReverseBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
+	assertIdentityBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
 	postPolicyLeases(t, ctx, client, base, `{"identity_key":"`+leaseIdentity.Key()+`","is_banned":false,"is_denied":true,"bps":10000}`, http.StatusOK)
-	assertReverseBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
-	headers, _ := updateGlobalPolicyLimits(t, ctx, client, base)
-	assertReverseBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
+	assertIdentityBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
+	headers := updateGlobalPolicyLimits(t, ctx, client, base)
+	assertIdentityBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
 
 	breakPolicyPersistence(t, policyPath)
 	postPolicyLeases(t, ctx, client, base, `{"identity_key":"`+leaseIdentity.Key()+`","is_denied":false,"bps":20000}`, http.StatusInternalServerError)
-	assertReverseBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
+	assertIdentityBlocked(t, ctx, client, base, leaseIdentity, registered.ReverseEndpoint.Capability)
 	assertFailedSavePreserved(t, ctx, client, base, headers)
+	if err := os.Remove(policyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(policyPath+".saved", policyPath); err != nil {
+		t.Fatal(err)
+	}
+	postPolicyLeases(t, ctx, client, base, `{"identity_key":"`+leaseIdentity.Key()+`","is_denied":false}`, http.StatusOK)
+	registerRawLease(t, ctx, client, base, leaseIdentity)
+	var restored types.PolicyStateResponse
+	if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Leases) != 1 || restored.Leases[0].BPS != 10000 || restored.Leases[0].IsBanned || restored.Leases[0].IsDenied {
+		t.Fatalf("identity policy was lost while no lease existed: %+v", restored.Leases)
+	}
 }

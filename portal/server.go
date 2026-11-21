@@ -939,7 +939,7 @@ func (s *Server) emitStartLog(cfg ServerConfig) {
 
 // ApplyServicePolicy updates routing and reconciles lease-owned resources as
 // one operator transaction. The caller serializes it with verified registration.
-func (s *Server) ApplyServicePolicy(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64, manual bool) {
+func (s *Server) ApplyServicePolicy(key types.ServiceIdentityKey, access types.LeaseAccess, revision uint64) {
 	if s == nil || s.registry == nil || !s.SetServiceIdentityAccess(key, access, revision) {
 		return
 	}
@@ -948,7 +948,7 @@ func (s *Server) ApplyServicePolicy(key types.ServiceIdentityKey, access types.L
 	if access != types.LeasePending {
 		delete(r.pending, key)
 	}
-	if !manual || access == types.LeaseRoutable {
+	if access == types.LeaseRoutable {
 		r.mu.Unlock()
 		return
 	}
