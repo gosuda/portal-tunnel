@@ -1,29 +1,97 @@
 import { useEffect, useState } from "react";
 import { apiClient, APIClientError } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import type { ServiceDiscoveryResponse } from "@/types/api";
+import type { DiscoveredService, ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
 
-const REFRESH_MS = 25_000;
+const REFRESH_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 7_000;
 
-function pruneExpiredLocations(response: ServiceDiscoveryResponse, now: number) {
-  let nextExpiry = Infinity;
-  let stale = false;
-  const services = response.services.flatMap((service) => {
-    const locations = service.locations.filter((location) => {
-      const expires = Date.parse(location.expires_at);
-      if (!Number.isFinite(expires) || expires <= now) {
-        stale = true;
-        return false;
+export type DiscoveredLocationEvent = {
+  serviceName: string;
+  serviceAddress: string;
+  location: ServiceLocation;
+};
+
+export function mergeDiscoveryResponses(
+  previous?: ServiceDiscoveryResponse,
+  incoming?: ServiceDiscoveryResponse,
+): { response: ServiceDiscoveryResponse; newLocations: DiscoveredLocationEvent[] } {
+  if (!previous) {
+    const newLocations: DiscoveredLocationEvent[] = [];
+    for (const service of incoming?.services ?? []) {
+      for (const location of service.locations) {
+        newLocations.push({
+          serviceName: service.name,
+          serviceAddress: service.address,
+          location,
+        });
       }
-      nextExpiry = Math.min(nextExpiry, expires);
-      return true;
-    });
-    return locations.length ? [{ ...service, locations }] : [];
-  });
+    }
+    return {
+      response: incoming ?? { services: [], partial: false, relays_checked: 0, relays_skipped: 0 },
+      newLocations,
+    };
+  }
+  if (!incoming) {
+    return { response: previous, newLocations: [] };
+  }
+
+  const newLocations: DiscoveredLocationEvent[] = [];
+  const servicesMap = new Map<string, DiscoveredService>();
+
+  for (const s of previous.services) {
+    const key = `${s.name.toLowerCase()}:${s.address.toLowerCase()}`;
+    servicesMap.set(key, { ...s, locations: [...s.locations] });
+  }
+
+  for (const s of incoming.services) {
+    const key = `${s.name.toLowerCase()}:${s.address.toLowerCase()}`;
+    const existing = servicesMap.get(key);
+    if (!existing) {
+      servicesMap.set(key, s);
+      for (const loc of s.locations) {
+        newLocations.push({
+          serviceName: s.name,
+          serviceAddress: s.address,
+          location: loc,
+        });
+      }
+    } else {
+      const locMap = new Map<string, ServiceLocation>();
+      for (const l of existing.locations) {
+        locMap.set(l.relay_url, l);
+      }
+      for (const l of s.locations) {
+        if (!locMap.has(l.relay_url)) {
+          locMap.set(l.relay_url, l);
+          newLocations.push({
+            serviceName: s.name,
+            serviceAddress: s.address,
+            location: l,
+          });
+        } else {
+          const prev = locMap.get(l.relay_url)!;
+          locMap.set(l.relay_url, {
+            ...prev,
+            ...l,
+            url: l.url || prev.url,
+            reported_ready: l.reported_ready ?? prev.reported_ready,
+            reputation: l.reputation ?? prev.reputation,
+          });
+        }
+      }
+      existing.locations = Array.from(locMap.values());
+    }
+  }
+
   return {
-    response: stale ? { ...response, services, partial: true } : response,
-    nextExpiry,
+    response: {
+      ...incoming,
+      services: Array.from(servicesMap.values()),
+      relays_checked: Math.max(previous.relays_checked, incoming.relays_checked),
+      relays_skipped: Math.min(previous.relays_skipped, incoming.relays_skipped),
+    },
+    newLocations,
   };
 }
 
@@ -44,38 +112,40 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
     let controller: AbortController | undefined;
     const path = key ? `${RELAY_API_PATHS.public.services}?${key}` : RELAY_API_PATHS.public.services;
     async function load() {
-      let refreshDelay = REFRESH_MS;
       if (refresh) {
         controller = new AbortController();
         deadline = window.setTimeout(() => controller?.abort(), REQUEST_TIMEOUT_MS);
       }
       try {
-        const response = refresh && controller
+        const incoming = refresh && controller
           ? await apiClient.get<ServiceDiscoveryResponse>(path, controller.signal)
           : await apiClient.get<ServiceDiscoveryResponse>(path);
-        const snapshot = pruneExpiredLocations(response, Date.now());
-        // A poll can return a cached observation about to expire. Recheck just
-        // after expiry so the backend can fetch it again instead of waiting
-        // another full polling interval with no locations.
-        refreshDelay = Math.min(REFRESH_MS, Math.max(1, snapshot.nextExpiry - Date.now() + 1));
-        if (!cancelled) setState({ key, request, response: snapshot.response });
+        if (!cancelled) {
+          setState((previous) => {
+            const prevResponse = previous?.key === key ? previous.response : undefined;
+            const { response: merged, newLocations } = mergeDiscoveryResponses(prevResponse, incoming);
+            if (newLocations.length > 0 && typeof window !== "undefined") {
+              window.dispatchEvent(
+                new CustomEvent("portal:relay-discovered", { detail: { newLocations } }),
+              );
+            }
+            return { key, request, response: merged };
+          });
+        }
       } catch (error) {
         if (cancelled) return;
         const unsupported = error instanceof APIClientError && error.status === 404;
-        const now = Date.now();
         setState((previous) => ({
           key,
           request,
-          response: previous?.key === key && previous.response
-            ? pruneExpiredLocations(previous.response, now).response
-            : undefined,
+          response: previous?.key === key ? previous.response : undefined,
           error: unsupported
             ? "This relay does not support service discovery. The local directory is still available."
             : "Other relay locations could not be checked. The local directory is still available.",
         }));
       } finally {
         window.clearTimeout(deadline);
-        if (refresh && !cancelled) timer = window.setTimeout(() => void load(), refreshDelay);
+        if (refresh && !cancelled) timer = window.setTimeout(() => void load(), REFRESH_MS);
       }
     }
     void load();
@@ -86,24 +156,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
       window.clearTimeout(timer);
     };
   }, [key, request, enabled, refresh, valid]);
-  // Keep expiry independent of fetching and scope changes. A new HTTP response
-  // can still contain cached locations with only a few seconds left to live.
-  useEffect(() => {
-    if (!state?.response) return;
-    const { key: snapshotKey, response: snapshot } = state;
-    const now = Date.now();
-    const { response, nextExpiry } = pruneExpiredLocations(snapshot, now);
-    if (snapshot === response && !Number.isFinite(nextExpiry)) return;
-    const timer = window.setTimeout(() => {
-      const now = Date.now();
-      // A same-key failure may have updated the error while keeping this
-      // snapshot. Prune the latest response without undoing that error.
-      setState((current) => current?.key === snapshotKey && current.response
-        ? { ...current, response: pruneExpiredLocations(current.response, now).response }
-        : current);
-    }, snapshot === response ? nextExpiry - now : 0);
-    return () => window.clearTimeout(timer);
-  }, [state]);
+
   const current = enabled && valid && state?.key === key ? state : undefined;
   return {
     response: current?.response,

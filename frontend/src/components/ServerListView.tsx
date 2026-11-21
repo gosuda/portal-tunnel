@@ -208,7 +208,6 @@ function CategoryFilterRow({
   onToggleThisRelay,
   discoveryLoading,
   discoveryError,
-  discoveryCheckMore,
   searchQuery,
 }: {
   selectedTags: string[];
@@ -219,7 +218,6 @@ function CategoryFilterRow({
   onToggleThisRelay?: () => void;
   discoveryLoading?: boolean;
   discoveryError?: string;
-  discoveryCheckMore?: () => void;
   searchQuery?: string;
 }): JSX.Element {
   const isAllActive = !thisRelayActive && selectedTags.length === 0 && (!searchQuery || searchQuery.trim() === "");
@@ -266,16 +264,6 @@ function CategoryFilterRow({
           <span role="alert" className="shrink-0 text-xs text-destructive">
             {discoveryError}
           </span>
-        )}
-        {discoveryCheckMore && (
-          <button
-            type="button"
-            disabled={discoveryLoading}
-            onClick={discoveryCheckMore}
-            className="shrink-0 rounded-lg bg-secondary px-3 py-1 text-xs disabled:opacity-50"
-          >
-            Check more relays
-          </button>
         )}
       </div>
     </div>
@@ -338,7 +326,6 @@ interface ServerListViewProps {
   onToggleThisRelay?: () => void;
   discoveryLoading?: boolean;
   discoveryError?: string;
-  discoveryCheckMore?: () => void;
   onOpenRelays?: (server: BaseServer) => void;
   relayCounts?: Record<string, number>;
   browseView: BrowseView;
@@ -370,7 +357,6 @@ export function ServerListView({
   onToggleThisRelay,
   discoveryLoading,
   discoveryError,
-  discoveryCheckMore,
   onOpenRelays,
   relayCounts,
   browseView,
@@ -452,7 +438,6 @@ export function ServerListView({
               onToggleThisRelay={onToggleThisRelay}
               discoveryLoading={discoveryLoading}
               discoveryError={discoveryError}
-              discoveryCheckMore={discoveryCheckMore}
               searchQuery={searchQuery}
             />
             <div className="px-4 lg:px-8">

@@ -116,11 +116,6 @@ export function ServerList(): JSX.Element {
         onToggleThisRelay={() => setNetworkScope(!networkScope)}
         discoveryLoading={identityDiscovery.loading}
         discoveryError={identityDiscovery.error}
-        discoveryCheckMore={
-          (identityDiscovery.response?.partial || identityDiscovery.error)
-            ? identityDiscovery.checkMore
-            : undefined
-        }
         browseView={browseView}
         sidebarOpen={sidebarOpen}
         onSidebarOpenChange={setSidebarOpen}
@@ -146,7 +141,7 @@ export function ServerList(): JSX.Element {
         onOpenComments={toggleComments}
         onVote={onVote}
       />
-      {relayServer && <ServiceRelaysPanel server={relayServer} {...relayPanel} onCheckMore={hasCatalogLocations ? identityDiscovery.checkMore : relayDiscovery.checkMore} onClose={() => setRelayServerId(null)} />}
+      {relayServer && <ServiceRelaysPanel server={relayServer} {...relayPanel} onClose={() => setRelayServerId(null)} />}
       {commentServer && (
         <CommentsThread
           key={commentServer.id}

@@ -31,6 +31,31 @@ export interface BaseServer {
   observedReputation?: ObservedReputation;
 }
 
+export function mergeLocations(
+  existing: ServiceLocation[],
+  incoming: ServiceLocation[]
+): ServiceLocation[] {
+  const map = new Map<string, ServiceLocation>();
+  for (const loc of existing) {
+    map.set(loc.relay_url, loc);
+  }
+  for (const loc of incoming) {
+    const prev = map.get(loc.relay_url);
+    if (!prev) {
+      map.set(loc.relay_url, loc);
+    } else {
+      map.set(loc.relay_url, {
+        ...prev,
+        ...loc,
+        url: loc.url || prev.url,
+        reported_ready: loc.reported_ready ?? prev.reported_ready,
+        reputation: loc.reputation ?? prev.reputation,
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
 // The directory groups observations by name and owner. Prefer local card data
 // when available so its link, thumbnail, community actions, and status stay intact.
 export function mergeDiscoveredServices(
@@ -56,7 +81,8 @@ export function mergeDiscoveredServices(
     const key = identityKey(service.name, service.address);
     const existing = byIdentity.get(key);
     if (existing) {
-      byIdentity.set(key, { ...existing, locations: service.locations });
+      const mergedLocations = mergeLocations(existing.locations ?? [], service.locations);
+      byIdentity.set(key, { ...existing, locations: mergedLocations });
       continue;
     }
     // A local-only snapshot is not a substitute for the live local card list.

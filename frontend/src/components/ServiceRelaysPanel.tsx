@@ -4,12 +4,11 @@ import { ExternalLink, X } from "lucide-react";
 import type { BaseServer } from "@/lib/server";
 import type { ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
 
-export function ServiceRelaysPanel({ server, response, loading, error, onCheckMore, onClose }: {
+export function ServiceRelaysPanel({ server, response, loading, error, onClose }: {
   server: BaseServer;
   response?: ServiceDiscoveryResponse;
   loading: boolean;
   error?: string;
-  onCheckMore: () => void;
   onClose: () => void;
 }): JSX.Element {
   const discoveredLocations = server.locations?.length ? server.locations
@@ -109,17 +108,6 @@ export function ServiceRelaysPanel({ server, response, loading, error, onCheckMo
               </p>
             )}
           </div>
-
-          {(response?.partial || error) && (
-            <button
-              type="button"
-              disabled={loading}
-              onClick={onCheckMore}
-              className="mt-4 w-full rounded-lg bg-secondary py-2 text-sm font-medium hover:bg-secondary/80 disabled:opacity-50"
-            >
-              Check more relays
-            </button>
-          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

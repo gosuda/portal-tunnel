@@ -24,20 +24,16 @@ const observation: ServiceLocation = {
 describe("relay selection", () => {
   it("shows other relay origins as explicit external links", () => {
     const address = "0x1111111111111111111111111111111111111111";
-    const checkMore = vi.fn();
     render(<ServiceRelaysPanel
       server={{ id: "blog.local.example", name: "blog", serviceName: "blog", address, description: "", tags: [], thumbnail: "", owner: "", online: true, dns: "blog.local.example", link: "https://blog.local.example/" }}
       loading={false}
-      onCheckMore={checkMore}
       onClose={vi.fn()}
       response={{ partial: true, relays_checked: 3, relays_skipped: 1, services: [{ name: "blog", address, metadata: {}, locations: [
         { relay_url: "https://remote.example", url: "https://blog.remote.example/", current_relay: false, reported_ready: true, verification: "relay-reported", observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z" },
         { relay_url: "https://older.example", current_relay: false, reported_ready: true, verification: "relay-reported", observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z" },
       ] }] }}
     />);
-    expect(checkMore).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Check more relays" }));
-    expect(checkMore).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Check more relays" })).toBeNull();
     const remote = screen.getByRole("link", { name: /blog\.remote\.example/ });
     expect(remote.getAttribute("href")).toBe("https://blog.remote.example/");
     expect(remote.getAttribute("target")).toBe("_blank");
@@ -53,7 +49,6 @@ describe("relay selection", () => {
     render(<ServiceRelaysPanel
       server={{ ...server, locations }}
       loading={false}
-      onCheckMore={vi.fn()}
       onClose={vi.fn()}
     />);
 
@@ -70,7 +65,6 @@ describe("relay selection", () => {
     render(<ServiceRelaysPanel
       server={{ ...server, remoteOnly: true, link: "", locations: [] }}
       loading={false}
-      onCheckMore={vi.fn()}
       onClose={vi.fn()}
     />);
 
@@ -87,7 +81,6 @@ describe("relay selection", () => {
         ],
       }}
       loading={false}
-      onCheckMore={vi.fn()}
       onClose={vi.fn()}
     />);
 
