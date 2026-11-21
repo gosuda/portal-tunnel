@@ -43,10 +43,17 @@ Visitor -> Relay -> established outbound tunnel -> Portal on trusted host
 **Host terminal 1:** Run the application in the foreground, forwarding only to host loopback:
 
 ```bash
-rungv run -net=nat -p 127.0.0.1:8080:80 nginx:alpine
+rungv run \
+  -net=nat \
+  -isolate-lan \
+  -privileged=false \
+  -p 127.0.0.1:8080:80 \
+  nginx:alpine
 ```
 
-`rungv` has no background daemon and does not support `run -d`. Keep this terminal running. The sample does not mount host directories or pass host secrets to the guest. For your own workload, expose only its application port and review gvx's guest-to-host network access controls; a loopback listener alone is not a guest egress policy.
+`rungv` has no background daemon and does not support `run -d`. Keep this terminal running. The sample does not mount host directories or pass host secrets to the guest.
+
+`-privileged=false` disables guest raw sockets, packet socket writes and SUID handling; it does not describe host root access. `-isolate-lan` restricts private-network and loopback destinations in NAT mode, while the explicit application port forward remains available. It is not a complete egress allowlist. For arbitrary code execution, enforce a separate network policy for the destinations the workload needs; host loopback binding alone is not an egress policy.
 
 **Host terminal 2:** Verify the local application, then start Portal with an identity outside the repository and guest mounts:
 

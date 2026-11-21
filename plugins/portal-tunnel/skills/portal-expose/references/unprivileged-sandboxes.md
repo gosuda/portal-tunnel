@@ -17,10 +17,17 @@ Follow the main skill's installation, exposure, authentication and lifecycle rul
 Host terminal 1, with the application in the foreground and only a loopback port published:
 
 ```bash
-rungv run -net=nat -p 127.0.0.1:8080:80 nginx:alpine
+rungv run \
+  -net=nat \
+  -isolate-lan \
+  -privileged=false \
+  -p 127.0.0.1:8080:80 \
+  nginx:alpine
 ```
 
-`rungv run -d` is unsupported: there is no background daemon. Retain this terminal or its managed process handle. This sample mounts no host files and passes no secrets. Review guest-to-host network access controls for the chosen workload; loopback binding is not an egress policy.
+`rungv run -d` is unsupported: there is no background daemon. Retain this terminal or its managed process handle. This sample mounts no host files and passes no secrets.
+
+Keep `-privileged=false` and `-isolate-lan` in the untrusted-workload example. The former disables guest raw sockets, packet socket writes and SUID handling, not host root access. The latter restricts private-network and loopback destinations in NAT mode while allowing the explicit application port forward. It is not a complete egress allowlist: arbitrary code execution also needs a separate network policy based on the workload's required destinations. Loopback binding alone does not provide that policy.
 
 Host terminal 2, with Portal already installed on the trusted host:
 
