@@ -146,7 +146,7 @@ export function ServerList(): JSX.Element {
         onOpenComments={toggleComments}
         onVote={onVote}
       />
-      {relayServer && <ServiceRelaysPanel server={relayServer} {...relayPanel} onCheckMore={hasCatalogLocations ? identityDiscovery.checkMore : relayDiscovery.checkMore} localReputation={leases === null ? undefined : relayServer.observedLocalReputation} onClose={() => setRelayServerId(null)} />}
+      {relayServer && <ServiceRelaysPanel server={relayServer} {...relayPanel} onCheckMore={hasCatalogLocations ? identityDiscovery.checkMore : relayDiscovery.checkMore} onClose={() => setRelayServerId(null)} />}
       {commentServer && (
         <CommentsThread
           key={commentServer.id}
