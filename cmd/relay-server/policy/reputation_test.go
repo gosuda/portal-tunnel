@@ -217,7 +217,7 @@ func castReputationRotatingNewVoters(t *testing.T, store *ReputationStore, ident
 	t.Helper()
 	var firstCookie string
 	for i := 1; i <= 3; i++ {
-		source := netip.MustParseAddr("2001:db8::" + strconv.Itoa(i))
+		source := netip.MustParseAddr("2001:db8:" + strconv.Itoa(i) + "::1")
 		if retry := store.AllowVote(source, false); retry != 0 {
 			t.Fatalf("request %d rejected before mint admission: %v", i, retry)
 		}
@@ -234,7 +234,7 @@ func castReputationRotatingNewVoters(t *testing.T, store *ReputationStore, ident
 
 func checkRotatingMintCapacity(t *testing.T, store *ReputationStore, identity string) {
 	t.Helper()
-	fourthSource := netip.MustParseAddr("2001:db8::4")
+	fourthSource := netip.MustParseAddr("2001:db8:4::1")
 	if retry := store.AllowVote(fourthSource, false); retry != 0 {
 		t.Fatalf("ordinary vote request unexpectedly exhausted: %v", retry)
 	}
@@ -246,7 +246,7 @@ func checkRotatingMintCapacity(t *testing.T, store *ReputationStore, identity st
 
 func checkRotatingExistingVoter(t *testing.T, store *ReputationStore, identity, firstCookie string) {
 	t.Helper()
-	firstSource := netip.MustParseAddr("2001:db8::1")
+	firstSource := netip.MustParseAddr("2001:db8:1::1")
 	if retry := store.AllowVote(firstSource, false); retry != 0 {
 		t.Fatalf("existing source cannot afford an update: %v", retry)
 	}
@@ -254,7 +254,7 @@ func checkRotatingExistingVoter(t *testing.T, store *ReputationStore, identity, 
 	if err != nil || updated.Total != 3 || updated.Down != 1 || cookie != firstCookie {
 		t.Fatalf("existing cookieless voter = %+v, cookie=%q, err=%v", updated, cookie, err)
 	}
-	fourthSource := netip.MustParseAddr("2001:db8::4")
+	fourthSource := netip.MustParseAddr("2001:db8:4::1")
 	if retry := store.AllowVote(fourthSource, false); retry != 0 {
 		t.Fatalf("existing cookie cannot afford an update: %v", retry)
 	}
