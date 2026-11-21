@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
@@ -200,7 +198,7 @@ func (m *Manager) syncRetryTickAttempt(ctx context.Context, state *maintenanceLo
 	state.consecutiveDNSFailures = 0
 	m.maintenanceLoopRearmRetryTimer(state)
 	if m.cfg.ENSGaslessEnabled {
-		publicIPs, err := utils.ResolvePublicIPs(ctx)
+		publicIPs, err := m.publicIPs(ctx)
 		return publicIPs, pendingDNSAddress, err
 	}
 	return nil, pendingDNSAddress, nil

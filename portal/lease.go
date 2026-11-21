@@ -425,6 +425,13 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	if r == nil {
 		return types.RegisterChallengeResponse{}, errFeatureUnavailable
 	}
+	if req.ProtocolVersion != "" && req.ProtocolVersion != types.SDKVersion {
+		return types.RegisterChallengeResponse{}, &apiError{
+			status: http.StatusUpgradeRequired,
+			code:   types.APIErrorCodeProtocolIncompatible,
+			msg:    fmt.Sprintf("SDK protocol %q is unsupported; this relay supports %q; upgrade the SDK or choose a compatible relay", req.ProtocolVersion, types.SDKVersion),
+		}
+	}
 	if _, err := requestedLeaseTTL(req.TTL); err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}

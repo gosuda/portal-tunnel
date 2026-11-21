@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,6 +42,7 @@ type RelayAPI struct {
 	adminToken           string
 	policyStatePath      string
 	frontendFS           fs.FS
+	frontendRoot         *os.Root
 	frontendCache        sync.Map
 	frontendCacheEnabled bool
 	reputation           *policy.ReputationStore
@@ -62,16 +64,19 @@ func applyNewRelayAPIInitialPolicy(api *RelayAPI, initialSettings types.PolicySe
 	return nil
 }
 
-func openNewRelayAPIStores(frontendDir, policyStatePath string) (fs.FS, *policy.ReputationStore, error) {
-	frontendFS, err := resolveFrontendFS(frontendDir)
+func openNewRelayAPIStores(frontendDir, policyStatePath string) (fs.FS, *os.Root, *policy.ReputationStore, error) {
+	frontendFS, frontendRoot, err := resolveFrontendFS(frontendDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	reputationStore, err := policy.NewReputationStore(filepath.Join(filepath.Dir(policyStatePath), reputationFilename))
 	if err != nil {
-		return nil, nil, err
+		if frontendRoot != nil {
+			_ = frontendRoot.Close()
+		}
+		return nil, nil, nil, err
 	}
-	return frontendFS, reputationStore, nil
+	return frontendFS, frontendRoot, reputationStore, nil
 }
 
 func NewRelayAPI(server *portal.Server, policies *policy.Store, ingress *policy.Ingress, policyStatePath, adminToken, frontendDir string, initialSettings types.PolicySettings) (*RelayAPI, error) {
@@ -85,7 +90,7 @@ func NewRelayAPI(server *portal.Server, policies *policy.Store, ingress *policy.
 	if policyStatePath == "" {
 		return nil, errRelayAPIRequiresPolicyStatePath
 	}
-	frontendFS, reputationStore, err := openNewRelayAPIStores(frontendDir, policyStatePath)
+	frontendFS, frontendRoot, reputationStore, err := openNewRelayAPIStores(frontendDir, policyStatePath)
 	if err != nil {
 		return nil, err
 	}
@@ -98,14 +103,23 @@ func NewRelayAPI(server *portal.Server, policies *policy.Store, ingress *policy.
 		adminToken:           strings.TrimSpace(adminToken),
 		policyStatePath:      policyStatePath,
 		frontendFS:           frontendFS,
+		frontendRoot:         frontendRoot,
 		frontendCacheEnabled: strings.TrimSpace(frontendDir) == "",
 		reputation:           reputationStore,
 	}
 	if err := applyNewRelayAPIInitialPolicy(api, initialSettings); err != nil {
+		_ = api.close()
 		return nil, err
 	}
 
 	return api, nil
+}
+
+func (api *RelayAPI) close() error {
+	if api.frontendRoot == nil {
+		return nil
+	}
+	return api.frontendRoot.Close()
 }
 
 func registerRelayHandlerPolicyRoutes(mux *http.ServeMux, api *RelayAPI) {

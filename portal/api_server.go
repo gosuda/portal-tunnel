@@ -295,6 +295,7 @@ func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescr
 func (s *Server) DomainReport() types.DomainResponse {
 	issuance := s.config().TenantCertificates && s.acmeManager.TenantIssuanceConfigured()
 	return types.DomainResponse{
+		SupportedProtocolVersions: []string{types.SDKVersion},
 		Replicas:                  true,
 		TenantCertificateIssuance: &issuance,
 		Namespaces:                []string{types.LocalTLSNamespaceV1},

@@ -6,6 +6,7 @@ package types
 const KeylessUnknownCertificateMessage = "relay does not hold the key of the presented certificate"
 
 const (
+	APIErrorCodeProtocolIncompatible      = "protocol_incompatible"
 	APIErrorCodeTenantIssuanceDisabled    = "tenant_issuance_disabled"
 	APIErrorCodeTenantIssuanceNotApproved = "tenant_issuance_not_approved"
 	APIErrorCodeFeatureUnavailable        = "feature_unavailable"

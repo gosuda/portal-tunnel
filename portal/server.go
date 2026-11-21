@@ -140,6 +140,9 @@ func applyValidateServerConfigACME(cfg ServerConfig) (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 	cfg.ACME.CADirURL = caDirURL
+	if cfg.ACME.PublicIPs, err = acme.NormalizePublicIPs(cfg.ACME.PublicIPs); err != nil {
+		return ServerConfig{}, err
+	}
 	if err := cfg.Cache.Validate(); err != nil {
 		return ServerConfig{}, err
 	}

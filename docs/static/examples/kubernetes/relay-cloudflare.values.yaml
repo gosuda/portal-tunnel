@@ -10,5 +10,9 @@
 env:
   PORTAL_URL: https://portal.example.com
   ACME_DNS_PROVIDER: cloudflare
+  # The Service address, published in A/AAAA records. Reserve a static address
+  # with your load balancer. Without it, the relay publishes the address of its
+  # outbound connections.
+  PUBLIC_IPS: 203.0.113.10
 
 existingSecret: portal-relay

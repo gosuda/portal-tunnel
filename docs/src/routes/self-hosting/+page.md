@@ -176,6 +176,9 @@ IPv6-only deployments publish AAAA glue; dual-stack deployments publish both.
 Allow TCP and UDP port 53, the public relay ports, and enabled raw TCP/UDP ranges
 through the host, container network, and upstream firewall for every published
 family. Discovering a public address does not verify inbound reachability.
+When clients reach the relay on another address than its outbound one, such
+as a load balancer, a floating IP, or a DNAT rule, set `PUBLIC_IPS` to that
+address.
 A client needs a reachable relay address in a family it can use; see
 [IPv4 and IPv6 configuration](/configuration#ipv4-and-ipv6).
 

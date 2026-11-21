@@ -173,7 +173,7 @@ function resolveDetailPath(server: BaseServer, serverId: string, isWarning: bool
   if (isWarning && serverId) {
     return `/server/${encodeURIComponent(serverId)}`;
   }
-  return server.link || "#";
+  return server.link;
 }
 
 function AppLink({
@@ -483,7 +483,7 @@ export function ServerCard({
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
   const endpoints = buildEndpoints(tcpAddr, udpAddr);
   const isTransportService = endpoints.length > 0;
-  const isNavigable = navigable && !isTransportService && !server.remoteOnly;
+  const isNavigable = navigable && !isTransportService && !server.remoteOnly && Boolean(server.link);
   const observedRelayCount = relayCount ?? server.locations?.length ?? (server.remoteOnly ? 0 : 1);
   const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
   const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
@@ -568,6 +568,11 @@ export function ServerCard({
             </div>
           );
         })()}
+        {server.remoteOnly && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Relay-reported · {server.locations?.some((location) => location.url) ? "Choose a relay to open" : "No HTTP URL available"}
+          </p>
+        )}
         {children && (
           <div className="pointer-events-auto relative z-30 mt-3 border-t border-border pt-3">
             {children}

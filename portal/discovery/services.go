@@ -215,8 +215,14 @@ func (s *ServiceLookup) lookup(ctx context.Context, self string, local []types.L
 				response.Services = append(response.Services, types.DiscoveredService{Name: id.Name, Address: id.Address, Metadata: metadata, Locations: []types.ServiceLocation{}})
 			}
 			locations := response.Services[index].Locations
-			if !slices.ContainsFunc(locations, func(existing types.ServiceLocation) bool { return existing.RelayURL == relay }) {
+			relayIndex := slices.IndexFunc(locations, func(existing types.ServiceLocation) bool { return existing.RelayURL == relay })
+			if relayIndex < 0 {
 				response.Services[index].Locations = append(locations, location)
+				if commentSources != nil && !location.CurrentRelay {
+					commentSources[relay] = commentSource{hostname: publicServiceCanonicalHostname(relay, lease, id), expiresAt: location.ExpiresAt}
+				}
+			} else if locations[relayIndex].URL == "" && location.URL != "" {
+				locations[relayIndex] = location
 				if commentSources != nil && !location.CurrentRelay {
 					commentSources[relay] = commentSource{hostname: publicServiceCanonicalHostname(relay, lease, id), expiresAt: location.ExpiresAt}
 				}
@@ -444,12 +450,13 @@ func serviceLocation(relay string, lease types.Lease, id types.Identity, observe
 	} else if lease.Namespace != "" {
 		return types.ServiceLocation{}, false
 	}
-	// Older one-label canonicals are intentionally not promoted to links.
+	// A public lease still identifies a service when an older relay reports
+	// only a retired canonical hostname or no hostname at all.
 	location.URL = location.CanonicalURL
 	if location.URL == "" {
 		location.URL = location.AliasURL
 	}
-	return location, location.AliasURL != "" || lease.Namespace == types.LocalTLSNamespaceV1 || lease.TCPEnabled || lease.UDPEnabled
+	return location, true
 }
 
 // readServiceResponse applies the same bound to fixed-length and streamed bodies.
