@@ -108,12 +108,13 @@ func (api *RelayAPI) routePolicyRequest(w http.ResponseWriter, r *http.Request, 
 		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return settings, update, false
 		}
-		api.policies.Lifecycle.RLock()
-		state := api.policies.Snapshot()
-		view := types.PolicyStateResponse{
-			Policy: policySettings(state), Leases: api.policyLeases(state), Pending: api.server.PendingApprovals(),
-		}
-		api.policies.Lifecycle.RUnlock()
+		var view types.PolicyStateResponse
+		api.policies.WithRead(func() {
+			state := api.policies.Snapshot()
+			view = types.PolicyStateResponse{
+				Policy: policySettings(state), Leases: api.policyLeases(state), Pending: api.server.PendingApprovals(),
+			}
+		})
 		utils.WriteAPIData(w, http.StatusOK, view)
 		return settings, update, false
 	case types.PathPolicyLeases:
@@ -228,8 +229,10 @@ func (api *RelayAPI) servePolicy(w http.ResponseWriter, r *http.Request) {
 	if !proceed {
 		return
 	}
-	api.policies.Lifecycle.Lock()
-	defer api.policies.Lifecycle.Unlock()
+	api.policies.WithWrite(func() { api.applyPolicyRequestLocked(w, path, settings, update) })
+}
+
+func (api *RelayAPI) applyPolicyRequestLocked(w http.ResponseWriter, path string, settings types.PolicySettings, update types.LeasePolicyUpdate) {
 	next := api.policies.Snapshot()
 	var applied bool
 	if path == types.PathPolicy {

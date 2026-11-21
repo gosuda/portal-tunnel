@@ -29,9 +29,9 @@ func ParseMode(raw string) (Mode, error) {
 // Store owns committed relay operator policy. Transactions edit a detached
 // Snapshot that Commit installs with a new revision.
 type Store struct {
-	// Lifecycle orders verified registrations against durable policy publication
+	// lifecycle orders verified registrations against durable policy publication
 	// and resource removal. Challenge and request body reads take no lock.
-	Lifecycle sync.RWMutex
+	lifecycle sync.RWMutex
 	state     *utils.Snapshot[State]
 }
 
@@ -74,9 +74,24 @@ func (a *Store) beginRegistration(key types.ServiceIdentityKey) (types.LeaseAcce
 	if a == nil {
 		return types.LeaseRoutable, func() {}
 	}
-	a.Lifecycle.RLock()
+	a.lifecycle.RLock()
 	state := a.state.Load()
-	return state.Access(key), a.Lifecycle.RUnlock
+	return state.Access(key), a.lifecycle.RUnlock
+}
+
+// WithWrite runs one policy transaction while no verified registration is
+// between its access decision and resource allocation.
+func (a *Store) WithWrite(fn func()) {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	fn()
+}
+
+// WithRead runs fn against a policy view that no transaction changes meanwhile.
+func (a *Store) WithRead(fn func()) {
+	a.lifecycle.RLock()
+	defer a.lifecycle.RUnlock()
+	fn()
 }
 
 // Commit installs a durably saved candidate as one immutable revision.
