@@ -315,8 +315,8 @@ export function AdminServerList({
               try {
                 if (identityAction === "ban" || identityAction === "unban") {
                   await onBanStatusChange(key, identityAction === "ban");
-                } else if (identityAction === "deny") {
-                  await onDenyStatusChange(key, true);
+                } else if (identityAction === "deny" || identityAction === "undeny") {
+                  await onDenyStatusChange(key, identityAction === "deny");
                 } else {
                   await onApproveStatusChange(key, identityAction === "approve");
                 }
@@ -330,7 +330,8 @@ export function AdminServerList({
               <Input className="max-w-sm" aria-label="Service identity key" placeholder="Service identity key (name:address)" required value={identityKey} onChange={(e) => setIdentityKey(e.target.value)} />
               <select aria-label="Identity policy action" value={identityAction} onChange={(e) => setIdentityAction(e.target.value)}>
                 <option value="approve">Pre-approve</option><option value="revoke">Revoke approval</option>
-                <option value="deny">Deny</option><option value="ban">Ban</option><option value="unban">Unban</option>
+                <option value="deny">Deny</option><option value="undeny">Undeny</option>
+                <option value="ban">Ban</option><option value="unban">Unban</option>
               </select>
               <button disabled={editingIdentity} type="submit" className="rounded bg-secondary px-3 py-2">Apply</button>
               <span role="status">{policyMessage}</span>
