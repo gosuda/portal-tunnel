@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ServiceRelaysPanel } from "./ServiceRelaysPanel";
 import type { BaseServer } from "@/lib/server";
