@@ -133,6 +133,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
     let controller: AbortController | undefined;
     const path = key ? `${RELAY_API_PATHS.public.services}?${key}` : RELAY_API_PATHS.public.services;
     async function load() {
+      let refreshDelay = REFRESH_MS;
       if (refresh) {
         controller = new AbortController();
         deadline = window.setTimeout(() => controller?.abort(), REQUEST_TIMEOUT_MS);
@@ -141,6 +142,11 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
         const incoming = refresh && controller
           ? await apiClient.get<ServiceDiscoveryResponse>(path, controller.signal)
           : await apiClient.get<ServiceDiscoveryResponse>(path);
+        // A poll can return a cached observation about to expire. Recheck just
+        // after expiry so the backend can fetch it again instead of waiting
+        // another full polling interval with no locations.
+        const { nextExpiry } = pruneExpiredLocations(incoming, Date.now());
+        refreshDelay = Math.min(REFRESH_MS, Math.max(1, nextExpiry - Date.now() + 1));
         if (!cancelled) {
           setState((previous) => {
             const prevResponse = previous?.key === key ? previous.response : undefined;
@@ -169,7 +175,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
         }));
       } finally {
         window.clearTimeout(deadline);
-        if (refresh && !cancelled) timer = window.setTimeout(() => void load(), REFRESH_MS);
+        if (refresh && !cancelled) timer = window.setTimeout(() => void load(), refreshDelay);
       }
     }
     void load();

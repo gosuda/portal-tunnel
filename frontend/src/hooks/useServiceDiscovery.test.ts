@@ -13,7 +13,7 @@ beforeEach(() => {
 });
 
 describe("service discovery", () => {
-  it("refreshes cached locations periodically and keeps existing observations", async () => {
+  it("refreshes cached locations at expiry instead of waiting a full polling interval", async () => {
     vi.useFakeTimers();
     try {
       const observedAt = Date.now();
@@ -27,7 +27,8 @@ describe("service discovery", () => {
             current_relay: false,
             reported_ready: true,
             observed_at: new Date(observedAt).toISOString(),
-            expires_at: new Date(Date.now() + 30_000).toISOString(),
+            expires_at: new Date(Date.now() < observedAt + 30_000
+              ? observedAt + 30_000 : Date.now() + 30_000).toISOString(),
             verification: "relay-reported",
           }],
         }],
@@ -37,9 +38,11 @@ describe("service discovery", () => {
       }));
       const { result, unmount } = renderHook(() => useServiceDiscovery(undefined, undefined, true, true));
       await act(async () => {});
+      await act(async () => { await vi.advanceTimersByTimeAsync(25_000); });
       expect(result.current.response?.services).toHaveLength(1);
-      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_001); });
       expect(result.current.response?.services).toHaveLength(1);
+      expect(Date.parse(result.current.response!.services[0].locations[0].expires_at)).toBeGreaterThan(Date.now());
       unmount();
     } finally {
       vi.useRealTimers();
