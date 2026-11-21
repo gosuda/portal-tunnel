@@ -2,14 +2,13 @@ import type { JSX } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ExternalLink, X } from "lucide-react";
 import type { BaseServer } from "@/lib/server";
-import type { ObservedReputation, ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
+import type { ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
 
-export function ServiceRelaysPanel({ server, response, loading, error, localReputation, onCheckMore, onClose }: {
+export function ServiceRelaysPanel({ server, response, loading, error, onCheckMore, onClose }: {
   server: BaseServer;
   response?: ServiceDiscoveryResponse;
   loading: boolean;
   error?: string;
-  localReputation?: ObservedReputation;
   onCheckMore: () => void;
   onClose: () => void;
 }): JSX.Element {
@@ -55,11 +54,6 @@ export function ServiceRelaysPanel({ server, response, loading, error, localRepu
 
           <div className="mt-4 space-y-2">
             {resolvedLocations.map((loc) => {
-              const rep = loc.current_relay
-                ? localReputation
-                : loc.reputation;
-              const repText = rep ? `+${rep.up}/-${rep.down}` : "Unknown";
-
               if (loc.url) {
                 const displayText = loc.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
                 return (
@@ -78,12 +72,7 @@ export function ServiceRelaysPanel({ server, response, loading, error, localRepu
                         </span>
                       )}
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {repText}
-                      </span>
-                      <ExternalLink className="size-4 text-muted-foreground" />
-                    </div>
+                    <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
                   </a>
                 );
               }
@@ -102,12 +91,7 @@ export function ServiceRelaysPanel({ server, response, loading, error, localRepu
                       </span>
                     )}
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {repText}
-                    </span>
-                    <span className="text-xs text-muted-foreground">Unavailable</span>
-                  </div>
+                  <span className="shrink-0 text-xs text-muted-foreground">Unavailable</span>
                 </div>
               );
             })}

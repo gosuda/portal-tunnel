@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ServiceRelaysPanel } from "./ServiceRelaysPanel";
 import type { BaseServer } from "@/lib/server";
@@ -43,15 +43,14 @@ describe("relay selection", () => {
     expect(remote.getAttribute("rel")).toContain("noreferrer");
   });
 
-  it("displays both current and remote relays with badges and reputation", () => {
+  it("displays both current and remote relays with badges", () => {
     const locations = [
       { ...observation, relay_url: "https://local.example", url: "https://blog.local.example/", current_relay: true },
-      { ...observation, relay_url: "https://remote2.example", url: "https://blog.remote2.example/", reputation: { up: 10, down: 2 } },
-      { ...observation, relay_url: "https://remote3.example", url: "", reputation: { up: 0, down: 0 } },
+      { ...observation, relay_url: "https://remote2.example", url: "https://blog.remote2.example/" },
+      { ...observation, relay_url: "https://remote3.example", url: "" },
     ];
     render(<ServiceRelaysPanel
       server={{ ...server, locations }}
-      localReputation={{ up: 5, down: 1 }}
       loading={false}
       onCheckMore={vi.fn()}
       onClose={vi.fn()}
@@ -59,41 +58,10 @@ describe("relay selection", () => {
 
     expect(screen.getByText("blog.local.example")).toBeDefined();
     expect(screen.getByText("Current")).toBeDefined();
-    expect(within(screen.getByRole("link", { name: /blog\.local\.example/ })).getByText("+5/-1")).toBeDefined();
     expect(screen.getByText("blog.remote2.example")).toBeDefined();
-    expect(within(screen.getByRole("link", { name: /blog\.remote2\.example/ })).getByText("+10/-2")).toBeDefined();
     expect(screen.getByText("remote3.example")).toBeDefined();
-    expect(screen.getByText("+0/-0")).toBeDefined();
     expect(screen.getByText("Unavailable")).toBeDefined();
-  });
-
-  it("shows unknown for missing local and remote observations despite a local vote fallback", () => {
-    render(<ServiceRelaysPanel
-      server={{
-        ...server,
-        reputation: { hostname: server.id, up: 0, down: 0, total: 0, viewer_vote: "" },
-        locations: [observation],
-      }}
-      loading={false}
-      onCheckMore={vi.fn()}
-      onClose={vi.fn()}
-    />);
-
-    expect(within(screen.getByRole("link", { name: /blog\.local\.example/ })).getByText("Unknown")).toBeDefined();
-    expect(within(screen.getByRole("link", { name: /blog\.remote\.example/ })).getByText("Unknown")).toBeDefined();
     expect(screen.queryByText("+0/-0")).toBeNull();
-  });
-
-  it("shows an observed local zero tally", () => {
-    render(<ServiceRelaysPanel
-      server={server}
-      localReputation={{ up: 0, down: 0 }}
-      loading={false}
-      onCheckMore={vi.fn()}
-      onClose={vi.fn()}
-    />);
-
-    expect(within(screen.getByRole("link", { name: /blog\.local\.example/ })).getByText("+0/-0")).toBeDefined();
     expect(screen.queryByText("Unknown")).toBeNull();
   });
 
