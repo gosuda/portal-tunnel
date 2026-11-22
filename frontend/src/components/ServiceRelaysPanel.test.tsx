@@ -89,7 +89,7 @@ describe("relay selection", () => {
       onClose={vi.fn()}
     />);
 
-    expect(screen.getByText("No relays connected.")).toBeDefined();
+    expect(screen.getByText("No relays found.")).toBeDefined();
   });
 
   it("disables links for TCP/UDP transport services in relays panel", () => {

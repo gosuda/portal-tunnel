@@ -106,7 +106,7 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
 
             {!loading && !resolvedLocations.length && (
               <p className="py-4 text-center text-sm text-muted-foreground">
-                No relays connected.
+                No relays found.
               </p>
             )}
           </div>

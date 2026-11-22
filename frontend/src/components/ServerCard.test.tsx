@@ -266,7 +266,7 @@ describe("ServerCard comments interaction", () => {
 
     expect(screen.getByRole("heading", { name: "blog" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Open blog" })).toBeNull();
-    expect(screen.getByRole("button", { name: /1 relay connected/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^1 known relay$/ })).toBeTruthy();
   });
 
   it("shows an unnamed remote service with only a relay observation", () => {
@@ -283,7 +283,7 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByRole("heading", { name: "(unnamed)" })).toBeTruthy();
     expect(screen.getByText(/No HTTP URL available/)).toBeTruthy();
     expect(screen.queryByRole("link", { name: /^Open / })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /1 relay connected/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^1 known relay$/ }));
     expect(openRelays).toHaveBeenCalledWith(server);
   });
 
@@ -447,7 +447,7 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByRole("heading", { name: "remote-app" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Open remote-app" })).toBeNull();
     expect(screen.getByText(/No relay available now/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: /2 relays connected/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^2 known relays$/ })).toBeTruthy();
   });
 
   it("uses relay hostname for endpoint address when host is localhost or empty", () => {

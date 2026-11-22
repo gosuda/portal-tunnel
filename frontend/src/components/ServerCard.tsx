@@ -430,8 +430,10 @@ function VoteControls({ server, isVoting, onVote, onSelect }: { server: BaseServ
   );
 }
 
+// The count is every relay that has reported this service, live or not.
+// Availability is shown by the card link and the relays panel, not here.
 function RelaysTrigger({ count, onClick }: { count: number; onClick: () => void }): JSX.Element {
-  const countLabel = count === 1 ? "1 relay" : `${count} relays`;
+  const countLabel = count === 1 ? "1 known relay" : `${count} known relays`;
   return (
     <button
       type="button"
@@ -440,9 +442,9 @@ function RelaysTrigger({ count, onClick }: { count: number; onClick: () => void 
         event.stopPropagation();
         onClick();
       }}
-      aria-label={`${countLabel} connected`}
+      aria-label={countLabel}
       aria-haspopup="dialog"
-      title={`${countLabel} connected`}
+      title={countLabel}
       className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
     >
       <Globe className="size-3.5 shrink-0" />
