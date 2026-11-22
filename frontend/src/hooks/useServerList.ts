@@ -26,7 +26,6 @@ function normalizeHostname(hostname: string): string {
 type PublicState = {
   leases: Lease[];
   stale: boolean;
-  observedSummaries: Record<string, ReputationSummary>;
 };
 
 function collectReputation(
@@ -93,7 +92,7 @@ function storePublicTransition(transition: { leases: Lease[]; snapshot: string; 
   }
   snapshotRef.current = transition.snapshot;
   setSummaries(transition.summaries);
-  setPublicState({ leases: transition.leases, stale: false, observedSummaries: transition.summaries });
+  setPublicState({ leases: transition.leases, stale: false });
 }
 
 function storePublicLoadError(isCancelled: () => boolean, setPublicState: Dispatch<SetStateAction<PublicState>>, error: unknown): void {
@@ -233,11 +232,9 @@ function mergeVoteSummary(
 function attachReputation(
   leases: Lease[],
   summaries: Record<string, ReputationSummary>,
-  observedSummaries: Record<string, ReputationSummary>,
 ): BaseServer[] {
   return leases.map(leaseToServer).map((server) => ({
     ...server,
-    observedLocalReputation: observedSummaries[normalizeHostname(server.id)],
     reputation: summaries[normalizeHostname(server.id)] ?? {
       hostname: normalizeHostname(server.id),
       up: 0,
@@ -267,7 +264,6 @@ export function useServerList(identityAddress = "", networkScope = false): UseLi
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     stale: true,
-    observedSummaries: {},
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
 
@@ -286,12 +282,12 @@ export function useServerList(identityAddress = "", networkScope = false): UseLi
   const identityDiscovery = useServiceDiscovery(identityAddress || undefined, undefined, networkEnabled, true);
   const servers: BaseServer[] = useMemo(
     () => {
-      const local = attachReputation(publicState.leases, summaries, publicState.observedSummaries);
+      const local = attachReputation(publicState.leases, summaries);
       return identityAddress || networkEnabled
         ? mergeDiscoveredServices(local, identityDiscovery.response?.services ?? [], identityAddress)
         : local;
     },
-    [publicState.leases, publicState.observedSummaries, summaries, identityAddress, networkEnabled, identityDiscovery.response]
+    [publicState.leases, summaries, identityAddress, networkEnabled, identityDiscovery.response]
   );
 
   const hiddenCount = countHidden(servers);

@@ -26,7 +26,6 @@ export interface BaseServer {
   paymentEnabled?: boolean;
   paymentLabel?: string;
   reputation?: ReputationSummary;
-  observedLocalReputation?: ObservedReputation;
   // Display-only totals; local moderation and viewer votes use reputation.
   observedReputation?: ObservedReputation;
 }
