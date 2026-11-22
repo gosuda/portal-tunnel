@@ -98,7 +98,7 @@ review window before opening the tunnel. Use a fresh preview identity where
 practical, stored outside the project, and an explicit non-empty allowlist:
 
 ```bash
-portal expose 127.0.0.1:3000 --name private-review \
+portal expose 127.0.0.1:3000 --name review-3f9k2a \
   --relays https://<selected-relay> --discovery=false --ban-mitm \
   --identity-path /absolute/path/outside-project/private-review.json \
   --auth credential --auth-allow alice-review --hide
@@ -111,7 +111,8 @@ Use a distinct subject for each reviewer and a short explicit TTL within the
 remaining approved window. Credential links are reusable bearer secrets; deliver
 only the redeem URL once through an approved private channel, with subject and
 absolute expiry. Keep credentials out of commits, issues, logs, and public output.
-Pin one relay so only one host needs checks. `--ban-mitm` closes a relay whose
+Pin one relay so only one host needs checks, and use a unique name for each
+preview: a name another identity owns on that relay fails registration. `--ban-mitm` closes a relay whose
 TLS termination the self-probe detects; it does not catch every malicious relay.
 `--hide` removes listing, not authentication or network visibility. Never fall
 back to unauthenticated exposure.

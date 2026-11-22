@@ -43,13 +43,13 @@ Use a fresh preview-specific identity and tunnel where practical. Keep the ident
 For example, after approval for `127.0.0.1:3000`, reviewer `alice-review`, and a one-hour review, run this in a tracked foreground session. Choose a new, absolute identity path outside the repository; reuse it for issuance:
 
 ```sh
-portal expose 127.0.0.1:3000 --name private-review \
+portal expose 127.0.0.1:3000 --name review-3f9k2a \
   --relays https://<selected-relay> --discovery=false --ban-mitm \
   --identity-path /absolute/path/outside-project/private-review.json \
   --auth credential --auth-allow alice-review --hide
 ```
 
-Pin one relay with `--relays <https-url> --discovery=false`. With discovery on, the tunnel also runs on auto-selected relays, each with its own host, and a check on one host proves nothing about the others. If the user explicitly asks for several relays, run every check below on each host that will be handed over. Add `--ban-mitm`: the redeem POST, the credential header, and the session cookie are protected only by end-to-end TLS, and without it a suspected TLS termination is only logged. With it, the self-probe closes a suspect relay's listener; report that relay as failed, and do not drop the flag to work around it. The self-probe detects TLS termination it can observe, not every malicious relay.
+Pin one relay with `--relays <https-url> --discovery=false`. With discovery on, the tunnel also runs on auto-selected relays, each with its own host, and a check on one host proves nothing about the others. If the user explicitly asks for several relays, run every check below on each host that will be handed over. Add `--ban-mitm`: the redeem POST, the credential header, and the session cookie are protected only by end-to-end TLS, and without it a suspected TLS termination is only logged. With it, the self-probe closes a suspect relay's listener; report that relay as failed, and do not drop the flag to work around it. The self-probe detects TLS termination it can observe, not every malicious relay. Generate a unique DNS-safe `--name` for each preview, such as `review-` plus a short random suffix: a fixed name fails registration when another identity already owns it on that relay, and an alias-only HTTP lease has no fallback host.
 
 After the ready event of that relay, set `url` to the exact granted `alias_url`, or `public_url` if there is no alias. Issue only for that host, with an explicit short TTL no longer than the remaining approved review window. `1h` below assumes the full hour remains; the CLI default of 30 days is inappropriate for this review. The credential TTL is not a tunnel lifetime flag.
 
