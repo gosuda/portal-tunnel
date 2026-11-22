@@ -22,6 +22,23 @@ const observation: ServiceLocation = {
 };
 
 describe("relay selection", () => {
+  it.each([true, false])("uses local service readiness for transport availability (online=%s)", (online) => {
+    render(<ServiceRelaysPanel
+      server={{ ...server, online, tcpAddr: "relay.local.example:50000" }}
+      loading={false}
+      onClose={vi.fn()}
+    />);
+
+    expect(screen.getByText("Current")).toBeDefined();
+    if (online) {
+      expect(screen.getByText("TCP")).toBeDefined();
+      expect(screen.queryByText("Unavailable")).toBeNull();
+    } else {
+      expect(screen.getByText("Unavailable")).toBeDefined();
+      expect(screen.queryByText("TCP")).toBeNull();
+    }
+  });
+
   it("shows other relay origins as explicit external links", () => {
     const address = "0x1111111111111111111111111111111111111111";
     render(<ServiceRelaysPanel

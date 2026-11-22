@@ -1,7 +1,8 @@
 import type { JSX } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import clsx from "clsx";
 import { ExternalLink, X } from "lucide-react";
-import { isLocationAvailable, type BaseServer } from "@/lib/server";
+import { isLocationAvailable, isLocationLive, type BaseServer } from "@/lib/server";
 import type { ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
 
 export function ServiceRelaysPanel({ server, response, loading, error, onClose }: {
@@ -54,53 +55,43 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
 
           <div className="mt-4 space-y-2">
             {resolvedLocations.map((loc) => {
+              // Transport rows name the relay; HTTP rows name the service URL.
               // This relay's own row comes from the local lease; remote rows must be available.
-              if (loc.url && !isTransportService && (loc.current_relay || isLocationAvailable(loc))) {
-                const displayText = loc.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
-                return (
-                  <a
-                    key={loc.relay_url}
-                    href={loc.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm font-medium transition-colors hover:bg-secondary hover:text-primary"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="truncate font-mono">{displayText}</span>
-                      {loc.current_relay && (
-                        <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                          Current
-                        </span>
-                      )}
-                    </div>
-                    <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
-                  </a>
-                );
-              }
-
-              // A transport service is not reachable over the HTTP URL, so name the relay.
-              const displayText = (isTransportService ? loc.relay_url : loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
+              const live = isTransportService
+                ? (loc.current_relay ? server.online : isLocationLive(loc))
+                : Boolean(loc.url) && (loc.current_relay || isLocationAvailable(loc));
+              const href = !isTransportService && live ? loc.url : "";
+              const label = (isTransportService ? loc.relay_url : loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
+              const Row = href ? "a" : "div";
               return (
-                <div
+                <Row
                   key={loc.relay_url}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-secondary/30 p-3 text-sm font-medium text-muted-foreground"
+                  {...(href ? { href, target: "_blank", rel: "noopener noreferrer" } : {})}
+                  className={clsx(
+                    "flex items-center justify-between gap-3 rounded-lg border p-3 text-sm font-medium",
+                    href && "border-border transition-colors hover:bg-secondary hover:text-primary",
+                    !href && live && "border-border bg-card text-foreground",
+                    !live && "border-border/60 bg-secondary/30 text-muted-foreground",
+                  )}
                 >
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate font-mono">{displayText}</span>
+                    <span className="truncate font-mono">{label}</span>
                     {loc.current_relay && (
                       <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
                         Current
                       </span>
                     )}
                   </div>
-                  {isTransportService ? (
-                    <span className="shrink-0 text-xs font-mono text-muted-foreground">
+                  {!live ? (
+                    <span className="shrink-0 text-xs text-muted-foreground">Unavailable</span>
+                  ) : href ? (
+                    <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <span className="shrink-0 rounded bg-secondary px-2 py-0.5 text-xs font-mono font-medium text-muted-foreground">
                       {[server.tcpAddr && "TCP", server.udpAddr && "UDP"].filter(Boolean).join("/")}
                     </span>
-                  ) : (
-                    <span className="shrink-0 text-xs text-muted-foreground">Unavailable</span>
                   )}
-                </div>
+                </Row>
               );
             })}
 
