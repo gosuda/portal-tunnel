@@ -257,11 +257,15 @@ key is unchanged.
 | Endpoint | Hostname | TLS and cache policy |
 |---|---|---|
 | Friendly alias, if granted | `<name>.<relay-root>` | Live Keyless; explicit opt-in relay static cache |
+| Unnamed service alias | `default--<40-lowercase-hex-address>.<relay-root>` | Same as a friendly alias; assigned automatically |
 | Local TLS canonical | `<service>.<40-lowercase-hex-address>.<relay-root>` | Exact tunnel-owned certificate; never relay cached |
 
 Local TLS uses reserved `default` for an unnamed service. A canonical URL does
 not depend on receiving an alias. Old one-label canonical URLs are removed;
-there are no redirects. Unnamed HTTP services need Local TLS. Clients requiring
+there are no redirects. An unnamed HTTP service receives the automatic Keyless
+alias `default--<address>.<relay-root>` without a tenant certificate order. Only
+the unnamed service of that identity holds it, an explicit `--name` cannot
+claim it, and it stays the same on reconnect. Clients requiring
 the removed URLs must upgrade; alias-capable older clients retain live aliases.
 
 ### Tunnel-owned Local TLS

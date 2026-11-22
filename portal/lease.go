@@ -975,13 +975,9 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 }
 
 func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, namespaceID string) (string, string, error) {
-	var publicHostname string
-	if leaseIdentity.Name != "" {
-		var err error
-		publicHostname, err = namespace.AliasHostname(leaseIdentity.Name, r.rootHostname)
-		if err != nil {
-			return "", "", err
-		}
+	publicHostname, err := namespace.ServiceAliasHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
+	if err != nil {
+		return "", "", err
 	}
 	if namespaceID == "" {
 		return publicHostname, "", nil
@@ -1024,8 +1020,9 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	if err != nil {
 		return nil, "", err
 	}
-	if publicHostname == "" && canonicalHostname == "" && !req.UDPEnabled && !req.TCPEnabled {
-		return nil, "", errUnnamedHTTPNeedsLocalTLS
+	if leaseIdentity.Name == "" && (req.UDPEnabled || req.TCPEnabled) {
+		// Raw endpoints use <root>:<port>; only unnamed HTTP needs the automatic alias.
+		publicHostname = ""
 	}
 	udpEnabled, _ := r.udpPolicy()
 	tcpPortEnabled, _ := r.tcpPortPolicy()

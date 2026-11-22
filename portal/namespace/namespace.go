@@ -35,12 +35,27 @@ func AliasHostname(name, rootHost string) (string, error) {
 	return label + "." + rootHost, nil
 }
 
-// MatchesAlias checks an optional alias against its service name and relay root. An empty hostname means the alias was not granted.
-func MatchesAlias(hostname, name, rootHost string) bool {
+// ServiceAliasHostname derives the Keyless alias of a service: <name>.<root>,
+// or default--<address>.<root> for an unnamed service. NormalizeServiceName
+// rejects the unnamed label's canonical shape, so no chosen name can claim it,
+// and the removed one-label canonical formats never produced it.
+func ServiceAliasHostname(name, address, rootHost string) (string, error) {
+	if strings.TrimSpace(name) != "" {
+		return AliasHostname(name, rootHost)
+	}
+	address = strings.ToLower(utils.TrimHexPrefix(strings.TrimSpace(address)))
+	if !isHexAddress(address) {
+		return "", errAddressMustContain40HexadecimalCharacters
+	}
+	return AliasHostname(types.UnnamedServiceLabel+"--"+address, rootHost)
+}
+
+// MatchesAlias checks an optional alias against its service identity and relay root. An empty hostname means the alias was not granted.
+func MatchesAlias(hostname, name, address, rootHost string) bool {
 	if hostname == "" {
 		return true
 	}
-	expected, err := AliasHostname(name, rootHost)
+	expected, err := ServiceAliasHostname(name, address, rootHost)
 	return err == nil && hostname == expected
 }
 

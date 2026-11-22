@@ -9,8 +9,7 @@ only an alias. They pass protocol negotiation but cannot complete registration
 with the current response contract. Keeping protocol 10 preserves main's
 version negotiation behavior; it does not repair this existing limitation. See
 [the compatibility matrix and rollout](maintainer/sdk-compatibility.md).
-Unnamed HTTP services require Local TLS. Dedicated raw TCP/UDP addresses use
-the relay control hostname.
+Dedicated raw TCP/UDP addresses use the relay control hostname.
 
 `--cache` / `--cache-ttl` now target the currently granted friendly alias and
 can coexist with canonical Local TLS. An absent alias makes caching unavailable.
@@ -21,6 +20,17 @@ when offline and never fall back to cached content.
 # Release notes
 
 ## Unreleased
+
+### Unnamed HTTP services get a Keyless URL by default
+
+`portal expose 3000` without `--name` or Local TLS flags is ready at
+`https://default--<40-lowercase-hex-address>.<relay-root>/`. The relay assigns
+this Keyless alias to the unnamed service of each identity; no explicit
+`--name` can claim it, and it stays the same across reconnects. It makes no
+tenant certificate order, so disabled or exhausted tenant issuance does not
+block it. With `--tls-auto` or `--tls-cert` the canonical
+`default.<address>.<relay-root>` stays independent and fail-closed. Raw TCP/UDP
+leases are unchanged.
 
 ### Relay: a per-source budget for ClientHello inspection
 

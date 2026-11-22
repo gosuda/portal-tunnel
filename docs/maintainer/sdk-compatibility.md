@@ -57,9 +57,9 @@ report.
 New optional fields must preserve the current meanings when omitted:
 
 - No namespace means Keyless registration using a granted friendly alias.
-  `canonical_hostname` is empty. An unnamed HTTP exposure therefore needs Local
-  TLS to obtain a usable public hostname. Never infer Local TLS from a protocol,
-  SDK release, discovery result, or missing field.
+  `canonical_hostname` is empty. An unnamed HTTP exposure receives the
+  automatic alias `default--<address>.<root>`. Never infer Local TLS from a
+  protocol, SDK release, discovery result, or missing field.
 - `local-tls-v1` requires explicit namespace support and confirmation. Its
   `canonical_hostname` is identity bound. The removed
   `legacy_canonical_hostname` field is not used or fabricated. Automatic TLS with
@@ -88,7 +88,7 @@ SDK and relay combinations can complete their lifecycle.
 For SDK v2.7.3/v2.7.4 deployments, retain a relay that provides their required
 canonical response and routing behavior until the clients can be upgraded.
 Named HTTP services can use a granted friendly alias with the current SDK;
-unnamed HTTP services need explicit Local TLS and usable certificate material.
+unnamed HTTP services use their automatic `default--<address>` alias.
 Move traffic after replacement clients have registered and are ready, then
 drain old connections before retiring the previous relay.
 

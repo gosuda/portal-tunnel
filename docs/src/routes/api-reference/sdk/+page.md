@@ -142,7 +142,9 @@ peers must negotiate `local-tls-v1` before using
 on acquiring a friendly alias. Its exact-host certificate and TLS endpoint
 belong to the tunnel; there is no Keyless or relay cache fallback.
 
-An absent namespace grants only a friendly alias. Negotiating `local-tls-v1`
+An absent namespace grants only a friendly alias. For an unnamed service the
+alias is `default--<40-lowercase-hex-address>.<relay-root>`; the SDK accepts it
+only for its own address. Negotiating `local-tls-v1`
 adds the independent canonical Local TLS endpoint. Old one-label canonical
 URLs and `legacy_canonical_hostname` / `LegacyURL` have been removed, without
 redirects. SDK v2.7.3 and v2.7.4 require the removed canonical field even when

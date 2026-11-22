@@ -352,7 +352,7 @@ func TestUnnamedNamespaceReservesDefaultService(t *testing.T) {
 	_, ready := namespaceService(t, h, id, "unnamed", sdk.WithAutomaticTLS(t.TempDir(), true))
 	parsed, _ := url.Parse(ready.PublicURL)
 	address := strings.ToLower(strings.TrimPrefix(id.Address, "0x"))
-	if parsed.Hostname() != "default."+address+".localhost" || ready.AliasURL != "" {
+	if parsed.Hostname() != "default."+address+".localhost" || ready.AliasURL != "https://default--"+address+".localhost:"+parsed.Port() {
 		t.Fatalf("unnamed canonical=%+v", ready)
 	}
 	namespaceResponse(t, h, ready.PublicURL, "unnamed", true)

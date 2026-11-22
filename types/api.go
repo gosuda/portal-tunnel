@@ -75,7 +75,8 @@ type RegisterRequest struct {
 // hostnames. An absent namespace uses only a granted friendly alias.
 const LocalTLSNamespaceV1 = "local-tls-v1"
 
-// UnnamedServiceLabel is reserved only in the new Local TLS namespace.
+// UnnamedServiceLabel names an unnamed service: its Local TLS label and the
+// prefix of its automatic default--<address> Keyless alias.
 const UnnamedServiceLabel = "default"
 
 type RegisterChallengeRequest struct {

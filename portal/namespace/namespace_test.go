@@ -142,23 +142,43 @@ func TestMatchesAlias(t *testing.T) {
 	t.Parallel()
 
 	const root = "relay.example"
+	owner := "0x" + strings.Repeat("a", 40)
+	unnamed := "default--" + strings.Repeat("a", 40) + ".relay.example"
 	tests := []struct {
-		name, hostname, service string
-		want                    bool
+		name, hostname, service, address string
+		want                             bool
 	}{
-		{"no alias", "", "demo", true},
-		{"own alias", "demo.relay.example", "demo", true},
-		{"normalized name", "demo.relay.example", "Demo", true},
-		{"other name", "other.relay.example", "demo", false},
-		{"other root", "demo.other.example", "demo", false},
-		{"unnamed service", "demo.relay.example", "", false},
+		{"no alias", "", "demo", owner, true},
+		{"own alias", "demo.relay.example", "demo", owner, true},
+		{"normalized name", "demo.relay.example", "Demo", owner, true},
+		{"other name", "other.relay.example", "demo", owner, false},
+		{"other root", "demo.other.example", "demo", owner, false},
+		{"unnamed service", "demo.relay.example", "", owner, false},
+		{"unnamed alias", unnamed, "", owner, true},
+		{"unnamed alias of another address", unnamed, "", "0x" + strings.Repeat("b", 40), false},
+		{"named service on unnamed alias", unnamed, "demo", owner, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := MatchesAlias(tc.hostname, tc.service, root); got != tc.want {
-				t.Fatalf("MatchesAlias(%q, %q) = %v, want %v", tc.hostname, tc.service, got, tc.want)
+			if got := MatchesAlias(tc.hostname, tc.service, tc.address, root); got != tc.want {
+				t.Fatalf("MatchesAlias(%q, %q, %q) = %v, want %v", tc.hostname, tc.service, tc.address, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestUnnamedAliasCannotBeChosen(t *testing.T) {
+	t.Parallel()
+	alias, err := ServiceAliasHostname("", "0x"+strings.Repeat("A", 40), "relay.example")
+	if err != nil || alias != "default--"+strings.Repeat("a", 40)+".relay.example" {
+		t.Fatalf("ServiceAliasHostname() = %q, %v", alias, err)
+	}
+	label, _, _ := strings.Cut(alias, ".")
+	if _, err := NormalizeServiceName(label); err == nil {
+		t.Fatalf("service name %q may claim the automatic unnamed alias", label)
+	}
+	if IsLocalTLSHostname(alias, "relay.example") {
+		t.Fatal("automatic Keyless alias is classified as a Local TLS canonical")
 	}
 }

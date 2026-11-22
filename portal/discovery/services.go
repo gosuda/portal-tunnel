@@ -417,7 +417,7 @@ func publicServiceCanonicalHostname(relay string, lease types.Lease, id types.Id
 		}
 	}
 	if lease.Hostname != "" {
-		expected, err := namespace.AliasHostname(id.Name, base.Hostname())
+		expected, err := namespace.ServiceAliasHostname(id.Name, id.Address, base.Hostname())
 		if err == nil && expected == lease.Hostname {
 			return expected
 		}
@@ -458,8 +458,8 @@ func serviceLocation(relay string, lease types.Lease, id types.Identity, observe
 		return (&url.URL{Scheme: "https", Host: authority, Path: "/"}).String()
 	}
 	if lease.Hostname != "" {
-		expected, err := namespace.AliasHostname(id.Name, base.Hostname())
-		if id.Name == "" || err != nil || expected != lease.Hostname {
+		expected, err := namespace.ServiceAliasHostname(id.Name, id.Address, base.Hostname())
+		if err != nil || expected != lease.Hostname {
 			return types.ServiceLocation{}, false
 		}
 		location.AliasURL = endpoint(expected)

@@ -1124,43 +1124,72 @@ func TestLeaseRegistryUnnamedHostnameContract(t *testing.T) {
 	checkUnnamedListing(t, registry, leasedIdentity, expectedCanonical)
 }
 
-func TestUnnamedHTTPRegistrationRequiresLocalTLS(t *testing.T) {
+func TestUnnamedRegistrationEndpoints(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		request types.RegisterChallengeRequest
-		allowed bool
+		alias   bool
 	}{
-		{name: "HTTP"},
-		{name: "cached HTTP", request: types.RegisterChallengeRequest{Cache: true}},
-		{name: "overlay HTTP", request: types.RegisterChallengeRequest{Overlay: true}},
-		{name: "HTTP replica", request: types.RegisterChallengeRequest{Replica: true}},
-		{name: "Local TLS", request: types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1}, allowed: true},
-		{name: "raw UDP", request: types.RegisterChallengeRequest{UDPEnabled: true}, allowed: true},
-		{name: "raw TCP", request: types.RegisterChallengeRequest{TCPEnabled: true}, allowed: true},
+		{name: "HTTP", alias: true},
+		{name: "cached HTTP", request: types.RegisterChallengeRequest{Cache: true}, alias: true},
+		{name: "overlay HTTP", request: types.RegisterChallengeRequest{Overlay: true}, alias: true},
+		{name: "HTTP replica", request: types.RegisterChallengeRequest{Replica: true}, alias: true},
+		{name: "Local TLS", request: types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1}, alias: true},
+		{name: "raw UDP", request: types.RegisterChallengeRequest{UDPEnabled: true}},
+		{name: "raw TCP", request: types.RegisterChallengeRequest{TCPEnabled: true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			registry := newTestRegistry(t, true, true)
 			request := test.request
 			request.Identity = newTestLeaseIdentity(t, "")
-			record, _, response, err := registry.Register(request, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
-			if !test.allowed {
-				var apiErr *apiError
-				if !errors.Is(err, errUnnamedHTTPNeedsLocalTLS) || !errors.As(err, &apiErr) || apiErr.code != types.APIErrorCodeInvalidRequest || apiErr.status != http.StatusBadRequest {
-					t.Fatalf("Register() = %v, want invalid-request rejection for unnamed HTTP", err)
-				}
-				if record != nil || response.AccessToken != "" {
-					t.Fatal("rejected unnamed HTTP registration returned a lease or token")
-				}
-				return
-			}
+			_, _, response, err := registry.Register(request, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 			if err != nil {
-				t.Fatalf("Register() = %v, want unnamed Local TLS or raw transport accepted", err)
+				t.Fatalf("Register() = %v, want unnamed service accepted", err)
 			}
-			if response.CanonicalHostname == "" && response.UDPAddr == "" && response.TCPAddr == "" {
-				t.Fatal("accepted unnamed service has no endpoint")
+			wantAlias := ""
+			if test.alias {
+				wantAlias = "default--" + strings.ToLower(strings.TrimPrefix(request.Identity.Address, "0x")) + ".example.com"
+			}
+			if response.Hostname != wantAlias || (wantAlias != "" && response.AliasEpoch == "") {
+				t.Fatalf("unnamed alias = %q (epoch %q), want %q", response.Hostname, response.AliasEpoch, wantAlias)
+			}
+			if wantLocal := request.Namespace == types.LocalTLSNamespaceV1; wantLocal != (response.CanonicalHostname != "") {
+				t.Fatalf("canonical hostname = %q, want Local TLS canonical only when negotiated", response.CanonicalHostname)
 			}
 		})
+	}
+}
+
+func TestUnnamedAliasIsStableAndOwnedByAddress(t *testing.T) {
+	t.Parallel()
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "")
+	register := func(id types.Identity) types.RegisterResponse {
+		t.Helper()
+		_, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: id}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	first := register(owner)
+	reconnect := register(owner)
+	if reconnect.Hostname == "" || reconnect.Hostname != first.Hostname || reconnect.AliasEpoch != first.AliasEpoch {
+		t.Fatalf("reconnect alias = %q/%q, want stable %q/%q", reconnect.Hostname, reconnect.AliasEpoch, first.Hostname, first.AliasEpoch)
+	}
+	other := register(newTestLeaseIdentity(t, ""))
+	if other.Hostname == "" || other.Hostname == first.Hostname {
+		t.Fatalf("another identity received alias %q, want a distinct automatic alias", other.Hostname)
+	}
+	label, _, _ := strings.Cut(first.Hostname, ".")
+	squatter := owner
+	squatter.Name = label
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: squatter}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil); err == nil {
+		t.Fatalf("explicit name %q claimed an automatic unnamed alias", label)
+	}
+	if lookup, ok := registry.Lookup(first.Hostname); !ok || lookup.Name != "" || lookup.Address != owner.Address {
+		t.Fatalf("Lookup(%q) = %+v, %v; want the unnamed owner", first.Hostname, lookup, ok)
 	}
 }
 
@@ -1182,8 +1211,8 @@ func checkUnnamedHostnames(t *testing.T, leasedIdentity types.Identity, resp typ
 	if err != nil {
 		t.Fatalf("LocalTLSHostname error = %v", err)
 	}
-	if resp.Hostname != "" {
-		t.Fatalf("RegisterResponse hostname = %q, want empty friendly hostname for unnamed service", resp.Hostname)
+	if want := "default--" + strings.ToLower(strings.TrimPrefix(leasedIdentity.Address, "0x")) + ".example.com"; resp.Hostname != want {
+		t.Fatalf("RegisterResponse hostname = %q, want automatic Keyless alias %q", resp.Hostname, want)
 	}
 	if resp.CanonicalHostname != expectedCanonical {
 		t.Fatalf("RegisterResponse canonical hostname = %q, want %q", resp.CanonicalHostname, expectedCanonical)
@@ -1194,7 +1223,7 @@ func checkUnnamedHostnames(t *testing.T, leasedIdentity types.Identity, resp typ
 func checkUnnamedListing(t *testing.T, registry *leaseRegistry, leasedIdentity types.Identity, expectedCanonical string) {
 	t.Helper()
 	leases := registry.PublicLeases(time.Now())
-	if len(leases) != 1 || leases[0].Hostname != "" || leases[0].CanonicalHostname != expectedCanonical || leases[0].Address != leasedIdentity.Address {
+	if len(leases) != 1 || leases[0].Hostname == "" || leases[0].CanonicalHostname != expectedCanonical || leases[0].Address != leasedIdentity.Address {
 		t.Fatalf("PublicLeases() = %+v, want the registered unnamed lease", leases)
 	}
 	if _, ok := registry.Lookup(expectedCanonical); !ok {
@@ -2215,8 +2244,8 @@ func TestNamespaceNegotiationRejectsUnknownAndReservedNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Name != "" || response.Hostname != "" {
-		t.Fatal("unnamed service acquired a named identity or friendly alias")
+	if record.Name != "" || !strings.HasPrefix(response.Hostname, "default--") {
+		t.Fatal("unnamed service acquired a named identity or lost its automatic alias")
 	}
 	if _, err := registry.tenantCertificateNames(record); err != nil {
 		t.Fatal(err)

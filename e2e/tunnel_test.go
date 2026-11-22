@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,14 +84,44 @@ func assertUnnamedCanonicalTunnel(t *testing.T, h *harness, publicURL string) {
 	if len(leases) != 1 || publicOrigin.Hostname() != leases[0].CanonicalHostname {
 		t.Fatalf("public URL hostname = %q, leases = %+v; want returned canonical hostname", publicOrigin.Hostname(), leases)
 	}
-	if leases[0].Hostname != "" {
-		t.Fatalf("unnamed lease hostname = %q, want empty", leases[0].Hostname)
-	}
-	if relays := h.exposure.Relays(); len(relays) != 1 || relays[0].AliasURL != "" {
-		t.Fatalf("relay status = %+v, want no AliasURL", relays)
-	}
 	if got := h.get(publicURL); got != marker {
 		t.Fatalf("canonical tenant response = %q, want %q", got, marker)
+	}
+	assertFriendlyCanonical(t, h, publicOrigin, leases)
+}
+
+// TestUnnamedKeylessDefault protects the one-command default: an unnamed HTTP
+// exposure without Local TLS receives a reachable Keyless URL, never enters
+// the Local TLS namespace, and keeps the same URL after it reconnects.
+func TestUnnamedKeylessDefault(t *testing.T) {
+	h := newHarness(t)
+	h.waitForPublicURL()
+	id, err := identity.Generate("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "default--" + strings.ToLower(strings.TrimPrefix(id.Address, "0x")) + ".localhost"
+	var first string
+	for attempt := range 2 {
+		exposure, ready := namespaceService(t, h, id, "unnamed-keyless")
+		parsed, err := url.Parse(ready.PublicURL)
+		if err != nil || parsed.Hostname() != want || ready.AliasURL != ready.PublicURL || ready.CertificateError != nil {
+			t.Fatalf("attempt %d: unnamed readiness = %+v, want Keyless %s", attempt, ready, want)
+		}
+		for _, lease := range h.server.PublicLeases() {
+			if lease.Address == id.Address && (lease.Namespace != "" || lease.CanonicalHostname != "") {
+				t.Fatalf("unnamed Keyless lease entered Local TLS: %+v", lease)
+			}
+		}
+		if body, ok := tenantGet(h.sniAddr, h.certificate, ready.PublicURL); !ok || body != "unnamed-keyless" {
+			t.Fatalf("attempt %d: Keyless response = %q, %v", attempt, body, ok)
+		}
+		if attempt == 0 {
+			first = ready.PublicURL
+		} else if ready.PublicURL != first {
+			t.Fatalf("reconnect URL = %q, want stable %q", ready.PublicURL, first)
+		}
+		_ = exposure.Close()
 	}
 }
 

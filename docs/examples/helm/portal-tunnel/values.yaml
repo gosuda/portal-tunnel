@@ -14,8 +14,7 @@ fullnameOverride: ""
 target: ""
 
 # Service name for a short URL such as https://my-app.<relay domain>/ (--name).
-# Required for HTTP services: the relay rejects an unnamed one unless args
-# select --tcp, --udp, --tls-auto or --tls-cert.
+# Optional: an unnamed HTTP service gets https://default--<address>.<relay domain>/.
 name: ""
 
 # Relay URLs (--relays). Add --discovery=false to args to use only these.
