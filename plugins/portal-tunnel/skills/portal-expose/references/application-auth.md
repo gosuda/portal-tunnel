@@ -38,17 +38,20 @@ portal auth issue <host> --subject alice --expires 720h --identity-path /absolut
 
 This is an opt-in workflow for an explicitly private review, using the existing tunnel-local gate. Confirm owner consent for the exact local app/port, named reviewers, and review window before exposing it. A generic public preview does not opt in. Default to `credential` unless the owner chooses another provider; never remove authentication to work around a failure.
 
-Use a fresh preview-specific identity and tunnel where practical. Keep the identity and any provider account secrets outside the project, use an explicit non-empty reviewer allowlist, and give each credential reviewer a distinct subject. `--hide` suppresses public listing, not authentication or network visibility. Do not use `--cache`: protected traffic must pass through the local gate.
+Use a fresh preview-specific identity and tunnel where practical. Keep the identity and any provider account secrets outside the project, use an explicit non-empty reviewer allowlist, and give each credential reviewer a distinct subject. `--hide` suppresses public listing, not authentication or network visibility.
 
 For example, after approval for `127.0.0.1:3000`, reviewer `alice-review`, and a one-hour review, run this in a tracked foreground session. Choose a new, absolute identity path outside the repository; reuse it for issuance:
 
 ```sh
 portal expose 127.0.0.1:3000 --name private-review \
+  --relays https://<selected-relay> --discovery=false --ban-mitm \
   --identity-path /absolute/path/outside-project/private-review.json \
   --auth credential --auth-allow alice-review --hide
 ```
 
-After the ready event, set `url` to the exact granted `alias_url`, or `public_url` if there is no alias. Issue only for that host, with an explicit short TTL no longer than the remaining approved review window. `1h` below assumes the full hour remains; the CLI default of 30 days is inappropriate for this review. The credential TTL is not a tunnel lifetime flag.
+Pin one relay with `--relays <https-url> --discovery=false`. With discovery on, the tunnel also runs on auto-selected relays, each with its own host, and a check on one host proves nothing about the others. If the user explicitly asks for several relays, run every check below on each host that will be handed over. Add `--ban-mitm`: the redeem POST, the credential header, and the session cookie are protected only by end-to-end TLS, and without it a suspected TLS termination is only logged. With it, the self-probe closes a suspect relay's listener; report that relay as failed, and do not drop the flag to work around it. The self-probe detects TLS termination it can observe, not every malicious relay.
+
+After the ready event of that relay, set `url` to the exact granted `alias_url`, or `public_url` if there is no alias. Issue only for that host, with an explicit short TTL no longer than the remaining approved review window. `1h` below assumes the full hour remains; the CLI default of 30 days is inappropriate for this review. The credential TTL is not a tunnel lifetime flag.
 
 The following Bash example fails closed: it issues a credential only after both anonymous checks pass, and it prints the redeem URL only after the authorized request reaches the app. Each check stops the function with `return`, so a failure never closes the shell. Disable shell tracing and command/output recording before issuance; do not paste expanded commands, headers, or raw issuance output into an agent transcript. Use a known read-only app path in place of `/` if needed, and set `want` to that path's known app status:
 

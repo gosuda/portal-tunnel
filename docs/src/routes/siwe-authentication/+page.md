@@ -99,6 +99,7 @@ practical, stored outside the project, and an explicit non-empty allowlist:
 
 ```bash
 portal expose 127.0.0.1:3000 --name private-review \
+  --relays https://<selected-relay> --discovery=false --ban-mitm \
   --identity-path /absolute/path/outside-project/private-review.json \
   --auth credential --auth-allow alice-review --hide
 # After readiness, issue for the exact granted host, in a private terminal:
@@ -110,8 +111,10 @@ Use a distinct subject for each reviewer and a short explicit TTL within the
 remaining approved window. Credential links are reusable bearer secrets; deliver
 only the redeem URL once through an approved private channel, with subject and
 absolute expiry. Keep credentials out of commits, issues, logs, and public output.
-`--hide` removes listing, not authentication or network visibility; do not use
-relay `--cache` for protected previews. Never fall back to unauthenticated exposure.
+Pin one relay so only one host needs checks. `--ban-mitm` closes a relay whose
+TLS termination the self-probe detects; it does not catch every malicious relay.
+`--hide` removes listing, not authentication or network visibility. Never fall
+back to unauthenticated exposure.
 
 Before handoff, require anonymous GET/HEAD to redirect to login (`303`) and POST
 to return `401`; where the local harness supports it, assert zero anonymous
