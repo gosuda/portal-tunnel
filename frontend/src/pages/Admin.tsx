@@ -80,7 +80,6 @@ export function Admin(): JSX.Element {
     <SsgoiTransition id="admin">
       {error && <p role="alert" className="p-4 text-red-500">Error: {error}</p>}
       <AdminServerList
-        title="PORTAL ADMIN"
         pending={pending}
         onRefresh={refresh}
         searchQuery={searchQuery}

@@ -26,7 +26,6 @@ function normalizeHostname(hostname: string): string {
 type PublicState = {
   leases: Lease[];
   stale: boolean;
-  observedSummaries: Record<string, ReputationSummary>;
 };
 
 function collectReputation(
@@ -93,7 +92,7 @@ function storePublicTransition(transition: { leases: Lease[]; snapshot: string; 
   }
   snapshotRef.current = transition.snapshot;
   setSummaries(transition.summaries);
-  setPublicState({ leases: transition.leases, stale: false, observedSummaries: transition.summaries });
+  setPublicState({ leases: transition.leases, stale: false });
 }
 
 function storePublicLoadError(isCancelled: () => boolean, setPublicState: Dispatch<SetStateAction<PublicState>>, error: unknown): void {
@@ -173,15 +172,19 @@ async function postVoteAndMerge(hostname: string, vote: ReputationVoteAction, sn
   setSummaries((current) => mergeVoteSummary(key, response, current));
 }
 
-function countHidden(servers: BaseServer[]): number {
-  return servers.filter((server) => isHiddenByVotes(server.reputation?.up ?? 0, server.reputation?.down ?? 0)).length;
+function isHiddenServer(server: BaseServer): boolean {
+  return isHiddenByVotes(server.reputation?.up ?? 0, server.reputation?.down ?? 0);
+}
+
+function isFavoriteServer(server: BaseServer): boolean {
+  return server.reputation?.viewer_vote === "up";
 }
 
 function selectFilteredServers(browseView: BrowseView, filteredServers: BaseServer[]): BaseServer[] {
   if (browseView !== "favorites") {
     return filteredServers;
   }
-  return filteredServers.filter((server) => server.reputation?.viewer_vote === "up");
+  return filteredServers.filter(isFavoriteServer);
 }
 
 function selectLeases(publicState: PublicState): Lease[] | null {
@@ -233,11 +236,9 @@ function mergeVoteSummary(
 function attachReputation(
   leases: Lease[],
   summaries: Record<string, ReputationSummary>,
-  observedSummaries: Record<string, ReputationSummary>,
 ): BaseServer[] {
   return leases.map(leaseToServer).map((server) => ({
     ...server,
-    observedLocalReputation: observedSummaries[normalizeHostname(server.id)],
     reputation: summaries[normalizeHostname(server.id)] ?? {
       hostname: normalizeHostname(server.id),
       up: 0,
@@ -250,12 +251,7 @@ function attachReputation(
 }
 
 function selectVisibleServers(servers: BaseServer[], showHidden: boolean): BaseServer[] {
-  if (showHidden) {
-    return servers;
-  }
-  return servers.filter(
-    (server) => !isHiddenByVotes(server.reputation?.up ?? 0, server.reputation?.down ?? 0)
-  );
+  return showHidden ? servers : servers.filter((server) => !isHiddenServer(server));
 }
 
 export function useServerList(identityAddress = "", networkScope = false): UseListReturn<BaseServer> & { identityDiscovery: ReturnType<typeof useServiceDiscovery>; commentServer: BaseServer | null; toggleComments: (server: BaseServer) => void; closeComments: () => void; browseView: BrowseView; favorites: number; showHidden: boolean; setShowHidden: (value: boolean) => void; hiddenCount: number; sidebarOpen: boolean; setSidebarOpen: (value: boolean) => void; filteredServers: BaseServer[]; handleBrowseViewChange: (view: BrowseView) => void; leases: Lease[] | null; onVote: (hostname: string, vote: ReputationVoteAction) => Promise<void> } {
@@ -267,7 +263,6 @@ export function useServerList(identityAddress = "", networkScope = false): UseLi
   const [publicState, setPublicState] = useState<PublicState>({
     leases: [],
     stale: true,
-    observedSummaries: {},
   });
   const [summaries, setSummaries] = useState<Record<string, ReputationSummary>>({});
 
@@ -286,21 +281,21 @@ export function useServerList(identityAddress = "", networkScope = false): UseLi
   const identityDiscovery = useServiceDiscovery(identityAddress || undefined, undefined, networkEnabled, true);
   const servers: BaseServer[] = useMemo(
     () => {
-      const local = attachReputation(publicState.leases, summaries, publicState.observedSummaries);
+      const local = attachReputation(publicState.leases, summaries);
       return identityAddress || networkEnabled
         ? mergeDiscoveredServices(local, identityDiscovery.response?.services ?? [], identityAddress)
         : local;
     },
-    [publicState.leases, publicState.observedSummaries, summaries, identityAddress, networkEnabled, identityDiscovery.response]
+    [publicState.leases, summaries, identityAddress, networkEnabled, identityDiscovery.response]
   );
 
-  const hiddenCount = countHidden(servers);
+  const hiddenCount = servers.filter(isHiddenServer).length;
   const visibleServers = useMemo(
     () => selectVisibleServers(servers, showHidden),
     [servers, showHidden]
   );
   const list = useList({ servers: visibleServers });
-  const favorites = visibleServers.filter((server) => server.reputation?.viewer_vote === "up").length;
+  const favorites = visibleServers.filter(isFavoriteServer).length;
 
   return {
     ...list,

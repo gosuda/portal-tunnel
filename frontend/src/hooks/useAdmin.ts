@@ -210,11 +210,7 @@ async function persistServerBPS(
   normalizedBPS: number,
   updateLeasePolicy: (identityKey: string, policy: Omit<LeasePolicyUpdate, "identity_key">) => Promise<void>
 ): Promise<void> {
-  if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
-    await updateLeasePolicy(identityKey, { bps: 0 });
-    return;
-  }
-  await updateLeasePolicy(identityKey, { bps: normalizedBPS });
+  await updateLeasePolicy(identityKey, { bps: Number.isFinite(normalizedBPS) ? normalizedBPS : 0 });
 }
 
 function reportAdminActionError(err: unknown, setError: (message: string) => void): void {
@@ -274,14 +270,14 @@ function throwOnBulkLeaseFailure(results: PromiseSettledResult<unknown>[]): void
     : new Error(`bulk lease action failed: ${String(failed.reason)}`);
 }
 
-async function executeBulkLeaseAction(identityKeys: string[], action: LeaseAction, post: (identityKey: string, policy: LeasePolicyUpdate) => Promise<unknown>): Promise<void> {
+async function executeBulkLeaseAction(identityKeys: string[], action: LeaseAction, post: (policy: LeasePolicyUpdate) => Promise<unknown>): Promise<void> {
   const normalizedIdentityKeys = normalizeBulkLeaseKeys(identityKeys);
   if (normalizedIdentityKeys.length === 0) {
     throw new Error("No valid leases selected");
   }
   const results = await Promise.allSettled(
     normalizedIdentityKeys.map((identityKey) =>
-      post(identityKey, toBulkLeasePolicy(identityKey, action))
+      post(toBulkLeasePolicy(identityKey, action))
     )
   );
   throwOnBulkLeaseFailure(results);
@@ -467,7 +463,7 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     runAdminAction(() => updateLeasePolicy(identityKey, { is_denied: deny }));
 
   const runBulkLeaseAction = async (identityKeys: string[], action: LeaseAction) => {
-    await executeBulkLeaseAction(identityKeys, action, (_identityKey, policy) =>
+    await executeBulkLeaseAction(identityKeys, action, (policy) =>
       apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, policy)
     );
   };
@@ -481,7 +477,7 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
 
   const handleBulkBan = (identityKeys: string[]) => handleBulkAction(identityKeys, "ban");
 
-  const approvalMode = normalizeApprovalMode(policySettings.approval_mode);
+  const approvalMode = policySettings.approval_mode;
   const udpSettings = toPortSettings(policySettings.udp);
   const tcpPortSettings = toPortSettings(policySettings.tcp_port);
 

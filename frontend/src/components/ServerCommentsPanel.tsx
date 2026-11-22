@@ -310,7 +310,7 @@ export function ServerCommentsPanel({
   setDraft,
   loading,
   pending,
-  votingCommentId,
+  busy,
   error,
   refresh,
   submit,
@@ -319,7 +319,6 @@ export function ServerCommentsPanel({
   federation,
   onVoteApp,
 }: ServerCommentsPanelProps): JSX.Element {
-  const busy = loading || pending !== null || votingCommentId !== null;
   const [isAppVoting, setIsAppVoting] = useState(false);
   const [appVoteError, setAppVoteError] = useState("");
 

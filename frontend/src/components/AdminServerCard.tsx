@@ -271,17 +271,10 @@ export function AdminServerCard({
   const { identityKey, bps } = server;
   const [showBPSModal, setShowBPSModal] = useState(false);
   const [bpsInput, setBpsInput] = useState(bps.toString());
-
-  const [sliderIndex, setSliderIndex] = useState(sliderIndexForBPS(bps));
+  const sliderIndex = sliderIndexForBPS(parseBPSInput(bpsInput));
 
   const handleSliderChange = (idx: number) => {
-    setSliderIndex(idx);
     setBpsInput(BPS_STEPS[idx].toString());
-  };
-
-  const syncSliderFromInput = (value: number) => {
-    const idx = sliderIndexForBPS(value);
-    setSliderIndex(idx);
   };
 
   const handleSelectClick = (event: React.MouseEvent) => {
@@ -306,7 +299,6 @@ export function AdminServerCard({
 
   const handleBPSSettingsClick = (event: React.MouseEvent) => {
     swallowCardClick(event);
-    setSliderIndex(sliderIndexForBPS(bps));
     setBpsInput(bps.toString());
     setShowBPSModal(true);
   };
@@ -318,7 +310,6 @@ export function AdminServerCard({
 
   const handleBPSInputChange = (value: string) => {
     setBpsInput(value);
-    syncSliderFromInput(parseBPSInput(value));
   };
 
   const handleBPSUseDefault = () => {

@@ -19,6 +19,7 @@ function props(): ComponentProps<typeof ServerCommentsPanel> {
     loading: false,
     pending: null,
     votingCommentId: null,
+    busy: false,
     error: "",
     refresh: vi.fn(async () => {}),
     submit: vi.fn(async () => {}),
