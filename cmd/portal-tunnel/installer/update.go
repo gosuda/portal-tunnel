@@ -232,13 +232,14 @@ func digestVerifyUpdateChecksumFile(tmpPath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Update installs a release, the latest when version is empty, over the
-// running CLI. When Portal Desktop is installed with the CLI, it updates the
+// Update replaces the running CLI with the one of version, the latest when
+// empty. When Portal Desktop is installed with the CLI, it updates the
 // desktop to the same release, so the two stay compatible; a CLI-only
 // installation stays CLI-only. It downloads and verifies everything before it
 // replaces anything, replaces the desktop first, and puts the desktop back
-// when the CLI cannot be replaced. It returns the desktop it updated, or "".
-func Update(version string) (string, error) {
+// when the CLI cannot be replaced. With cliOnly, it replaces the CLI alone and
+// leaves the desktop at its release. It returns the installed desktop, or "".
+func Update(version string, cliOnly bool) (string, error) {
 	if _, _, ok := assetURLs(version); !ok {
 		return "", fmt.Errorf("unsupported platform: %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
@@ -247,7 +248,7 @@ func Update(version string) (string, error) {
 		return "", err
 	}
 	desktop, hasDesktop := Desktop(execPath)
-	if hasDesktop && strings.TrimSpace(version) == "" {
+	if hasDesktop && !cliOnly && strings.TrimSpace(version) == "" {
 		// Pin "latest" once, so a release published meanwhile cannot split
 		// the pair.
 		latestURL, _, _ := assetURLs("")
@@ -265,11 +266,11 @@ func Update(version string) (string, error) {
 	if err := verifyUpdateChecksum(tmpPath, checksumURL); err != nil {
 		return "", err
 	}
-	if !hasDesktop {
+	if !hasDesktop || cliOnly {
 		if err := replaceBinary(tmpPath, execPath); err != nil {
 			return "", fmt.Errorf("failed to replace binary: %w", err)
 		}
-		return "", nil
+		return desktop, nil
 	}
 
 	staged, stageDir, err := stageDesktop(version, desktop)
@@ -277,11 +278,11 @@ func Update(version string) (string, error) {
 		defer func() { _ = os.RemoveAll(stageDir) }()
 	}
 	if err != nil {
-		return "", fmt.Errorf("update Portal Desktop: %w", err)
+		return "", fmt.Errorf("update Portal Desktop: %w; %s", err, cliOnlyHint)
 	}
 	restore, commit, err := swapIn(staged, desktop)
 	if err != nil {
-		return "", fmt.Errorf("update Portal Desktop: %w", err)
+		return "", fmt.Errorf("update Portal Desktop: %w; %s", err, cliOnlyHint)
 	}
 	if err := replaceBinary(tmpPath, execPath); err != nil {
 		if restoreErr := restore(); restoreErr != nil {
@@ -292,6 +293,10 @@ func Update(version string) (string, error) {
 	commit()
 	return desktop, nil
 }
+
+// cliOnlyHint is how to update the CLI when Portal Desktop cannot be updated
+// with it.
+const cliOnlyHint = "the CLI was not changed. To update the CLI alone and keep Portal Desktop at its release, add --cli-only"
 
 func assetURLs(version string) (binURL, checksumURL string, ok bool) {
 	slug := runtime.GOOS + "-" + runtime.GOARCH

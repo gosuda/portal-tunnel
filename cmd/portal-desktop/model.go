@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"os/exec"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -18,8 +21,10 @@ import (
 )
 
 const (
-	pollInterval   = 2 * time.Second
-	requestTimeout = 15 * time.Second
+	pollInterval = 2 * time.Second
+	// requestTimeout covers portal agent run, which waits up to 30 s for the
+	// agent it starts to answer.
+	requestTimeout = 45 * time.Second
 	startCommand   = "portal agent run"
 )
 
@@ -38,12 +43,20 @@ const (
 // their results back.
 type model struct {
 	stateDir string
+	// configPath is the agent config that the setup creates when it is
+	// missing and gives to portal agent run.
+	configPath string
+	// cli is the portal CLI that starts the agent, or "" when the desktop
+	// found none.
+	cli string
 
 	Status     *ggui.StateValue[agent.AgentStatusResponse]
 	Connection *ggui.StateValue[connection]
 	AgentError *ggui.StateValue[string]
 	Busy       *ggui.StateValue[bool]
 	Problem    *ggui.StateValue[string]
+
+	SettingUp *ggui.StateValue[bool]
 
 	Adding    *ggui.StateValue[bool]
 	Draft     *ggui.StateValue[tunnelDraft]
@@ -54,15 +67,18 @@ type model struct {
 	Deleting *ggui.StateValue[string]
 }
 
-func newModel(stateDir string) *model {
+func newModel(stateDir, configPath, cli string) *model {
 	return &model{
-		stateDir: stateDir,
+		stateDir:   stateDir,
+		configPath: configPath,
+		cli:        cli,
 		// Polls repeat the same answer; only a different one repaints.
 		Status:     ggui.State(agent.AgentStatusResponse{}).WithEqual(sameStatus),
 		Connection: ggui.State(connecting),
 		AgentError: ggui.State(""),
 		Busy:       ggui.State(false),
 		Problem:    ggui.State(""),
+		SettingUp:  ggui.State(false),
 		Adding:     ggui.State(false),
 		Draft:      ggui.State(newTunnelDraft()),
 		FormError:  ggui.State(""),
@@ -137,6 +153,9 @@ func notify(h ggui.Host, n ggui.Notification) {
 func agentErrorText(err error) string {
 	if errors.Is(err, agent.ErrNotRunning) {
 		return notRunningText
+	}
+	if runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission) {
+		return adminText
 	}
 	return err.Error()
 }
@@ -227,6 +246,30 @@ func (m *model) fail(action string) func(error) {
 }
 
 func (m *model) failForm(err error) { m.FormError.Set(agentErrorText(err)) }
+
+func (m *model) openSetup() {
+	m.FormError.Set("")
+	m.SettingUp.Set(true)
+}
+
+// startAgent sets up and starts the agent after the user agreed to it in the
+// setup dialog. It creates the config when there is none, then runs
+// portal agent run, which installs the agent as a service of the OS and waits
+// until it answers. The service runs the agent, so the agent and its tunnels
+// outlive the desktop.
+func (m *model) startAgent(h ggui.Host) {
+	m.FormError.Set("")
+	m.request(h, func(ctx context.Context) error {
+		if err := agent.CreateConfig(m.configPath); err != nil {
+			return fmt.Errorf("create the agent config: %w", err)
+		}
+		out, err := exec.CommandContext(ctx, m.cli, "agent", "run", "--config", m.configPath).CombinedOutput()
+		if msg := strings.TrimSpace(string(out)); err != nil && msg != "" {
+			return fmt.Errorf("%s: %s", startCommand, msg)
+		}
+		return err
+	}, m.failForm, func() { m.SettingUp.Set(false) })
+}
 
 func (m *model) openAdd() {
 	m.FormError.Set("")

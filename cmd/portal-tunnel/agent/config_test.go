@@ -479,3 +479,33 @@ tls_monitor_dns_resolver = "9.9.9.9:53"
 		t.Fatalf("persisted monitoring configuration = %+v", monitor)
 	}
 }
+
+// Portal Desktop creates the config of a first agent; the agent must load it,
+// and an existing config must never be replaced.
+func TestCreateConfigKeepsAnExistingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent", "config.toml")
+	if err := CreateConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tunnels) != 0 || cfg.Agent.ControlAddr != DefaultControlAddr {
+		t.Fatalf("created config = %+v", cfg)
+	}
+	if info, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+		t.Fatalf("created config: %v, %v", info, err)
+	}
+
+	existing := []byte("[agent]\ncontrol_addr = '127.0.0.1:4100'\n")
+	if err := os.WriteFile(path, existing, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); !bytes.Equal(data, existing) {
+		t.Fatalf("an existing config was replaced: %q", data)
+	}
+}

@@ -32,15 +32,20 @@ URLs in the browser. It sends desktop notifications. On macOS and Windows, it
 stays in the tray. Closing or quitting it leaves the agent and its tunnels
 running.
 
+If the agent is not running, Portal Desktop offers to set it up. After you
+agree, it creates an agent config without tunnels when there is none, and runs
+`portal agent run`, which installs the agent as a service of the OS.
+
 Portal Desktop is opt-in. `install.sh --with-gui` and
 `PORTAL_WITH_GUI=1` for `install.ps1` install it with the CLI from one release,
 and verify each download with its own SHA-256 sidecar. `portal gui` opens it.
 `portal update` updates it with the CLI, and a CLI-only installation stays
-CLI-only. The install script of a relay installs only the CLI. Releases publish
-`portal-desktop-*` assets for macOS, Windows, and Linux on amd64 and arm64. The
-desktop is a Go module of its own, so the CLI, the SDK, the relay, and the
-container images do not depend on its GUI libraries. See
-[Portal Desktop](/portal-desktop).
+CLI-only. `portal update --cli-only` updates the CLI alone. The install script
+of a relay installs only the CLI. Releases publish `portal-desktop-*` assets
+for macOS, Windows, and Linux on amd64 and arm64, in a job after the CLI
+assets, so a failed desktop build does not hold back the CLI. The desktop is a
+Go module of its own, so the CLI, the SDK, the relay, and the container images
+do not depend on its GUI libraries. See [Portal Desktop](/portal-desktop).
 
 The terminal dashboard now keeps the port of a relay URL that it opens.
 `portal agent dashboard` without `--config` reads the state directory from the

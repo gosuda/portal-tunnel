@@ -400,8 +400,10 @@ func issueRunAuthCommandCredential(tunnelIdentity types.Identity, host, subject 
 
 func runUpdateCommand(args []string) error {
 	var version string
+	var cliOnly bool
 	fs := cli.NewFlagSet("update", printUpdateUsage)
 	fs.StringVar(&version, "version", "", "Release version to install; defaults to latest")
+	fs.BoolVar(&cliOnly, "cli-only", false, "Update the CLI alone and leave an installed Portal Desktop at its release")
 
 	if err := cli.ParseFlagSet(fs, args, printUpdateUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -414,15 +416,17 @@ func runUpdateCommand(args []string) error {
 		return err
 	}
 
-	desktop, err := installer.Update(version)
-	if err != nil {
+	desktop, err := installer.Update(version, cliOnly)
+	switch {
+	case err != nil:
 		return err
-	}
-	if desktop == "" {
+	case desktop == "":
 		fmt.Fprintln(os.Stderr, "Updated portal.")
-		return nil
+	case cliOnly:
+		fmt.Fprintf(os.Stderr, "Updated portal. Portal Desktop at %s keeps its release; run 'portal update' to move both to one release.\n", desktop)
+	default:
+		fmt.Fprintf(os.Stderr, "Updated portal and Portal Desktop at %s. Reopen Portal Desktop if it is running; the agent and its tunnels keep running.\n", desktop)
 	}
-	fmt.Fprintf(os.Stderr, "Updated portal and Portal Desktop at %s. Reopen Portal Desktop if it is running; the agent and its tunnels keep running.\n", desktop)
 	return nil
 }
 
@@ -629,6 +633,7 @@ func printUpdateUsage(w io.Writer) {
 		[]string{
 			"portal update",
 			"portal update --version v2.1.9",
+			"portal update --cli-only",
 		},
 	)
 }

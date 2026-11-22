@@ -5,6 +5,7 @@
 package main
 
 import (
+	"cmp"
 	_ "embed"
 	"errors"
 	"flag"
@@ -18,6 +19,8 @@ import (
 	uitheme "github.com/ironpark/ggui/ui/theme"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent/service"
+	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/installer"
 )
 
 // appID names the app to the desktop: its bundle, its single instance, its
@@ -44,7 +47,11 @@ func run(configPath, stateDir string, hidden bool) error {
 	if stateDir == "" {
 		stateDir, configErr = agent.StateDir(configPath)
 	}
-	m := newModel(stateDir)
+	var cli string
+	if exe, err := os.Executable(); err == nil {
+		cli, _ = installer.CLI(exe)
+	}
+	m := newModel(stateDir, cmp.Or(configPath, service.DefaultConfigPath()), cli)
 	if configErr != nil {
 		m.Connection.Set(unreachable)
 		m.AgentError.Set(fmt.Sprintf("Could not read the agent config: %v", configErr))

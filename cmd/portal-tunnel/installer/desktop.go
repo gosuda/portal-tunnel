@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -42,6 +43,30 @@ func Desktop(cliPath string) (string, bool) {
 	}
 	for _, candidate := range candidates {
 		if _, err := os.Stat(candidate); err == nil {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// CLI is the portal CLI for Portal Desktop at desktopPath, as the installers
+// put them: beside the desktop on Linux and Windows. The macOS app bundle is
+// in an Applications folder, so there it is the portal on PATH, or one in a
+// directory where the shell installer puts it.
+func CLI(desktopPath string) (string, bool) {
+	name := "portal"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	candidates := []string{filepath.Join(filepath.Dir(desktopPath), name)}
+	if path, err := exec.LookPath(name); err == nil {
+		candidates = append(candidates, path)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".local", "bin", name), filepath.Join(home, "bin", name))
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
 			return candidate, true
 		}
 	}
@@ -120,12 +145,12 @@ func stageDesktop(version, dst string) (string, string, error) {
 }
 
 // desktopMissingError says why an update to a release without Portal Desktop,
-// such as one older than it, stops before it changes anything: the CLI and the
-// installed desktop move only together.
+// such as one older than it or one whose desktop is not published yet, stops
+// before it changes anything: by default the CLI and the installed desktop
+// move only together.
 func desktopMissingError(version, desktop string) error {
-	return fmt.Errorf("release %s has no Portal Desktop for %s/%s, and Portal Desktop is installed at %s; "+
-		"portal update keeps the CLI and the desktop at one release, so choose a release with Portal Desktop, "+
-		"or remove %s to update the CLI alone", version, runtime.GOOS, runtime.GOARCH, desktop, desktop)
+	return fmt.Errorf("release %s has no Portal Desktop for %s/%s, and Portal Desktop is installed at %s. "+
+		"portal update keeps the CLI and the desktop at one release, so choose a release with Portal Desktop", version, runtime.GOOS, runtime.GOARCH, desktop)
 }
 
 // swapIn renames src over dst and keeps the old dst beside it, as dst.old,

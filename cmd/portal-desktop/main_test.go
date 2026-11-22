@@ -50,7 +50,7 @@ func hasText(p *ggui.Probe, text string) bool {
 // copy, never handed to a browser.
 func TestDesktopShowsEndpointsByTransport(t *testing.T) {
 	t.Parallel()
-	m := newModel(t.TempDir())
+	m := newModel(t.TempDir(), "", "")
 	p := newProbe(t, m)
 	m.apply(p, sampleStatus(), nil)
 
@@ -76,7 +76,7 @@ func TestDesktopShowsEndpointsByTransport(t *testing.T) {
 
 func TestDesktopShowsTunnelAndRelayErrors(t *testing.T) {
 	t.Parallel()
-	m := newModel(t.TempDir())
+	m := newModel(t.TempDir(), "", "")
 	p := newProbe(t, m)
 	m.apply(p, agent.AgentStatusResponse{Tunnels: []agent.AgentTunnelStatus{{
 		ID: "web", State: "error", LastError: "dial tcp 127.0.0.1:3000: connection refused",
@@ -103,7 +103,7 @@ func notificationIDs(p *ggui.Probe) []string {
 // agent going away, are notified, and a recovery withdraws the outage.
 func TestDesktopNotifiesStateChanges(t *testing.T) {
 	t.Parallel()
-	m := newModel(t.TempDir())
+	m := newModel(t.TempDir(), "", "")
 	p := newProbe(t, m)
 	quiet := agent.AgentStatusResponse{Tunnels: []agent.AgentTunnelStatus{{
 		ID: "web", State: "running",
@@ -139,7 +139,7 @@ func TestDesktopNotifiesStateChanges(t *testing.T) {
 // requests, and says how to start the agent again.
 func TestDesktopKeepsContextWhileTheAgentIsAway(t *testing.T) {
 	t.Parallel()
-	m := newModel(t.TempDir())
+	m := newModel(t.TempDir(), "", "")
 	p := newProbe(t, m)
 	m.apply(p, sampleStatus(), nil)
 	p.Tap("Expose a service")
@@ -168,6 +168,44 @@ func TestDesktopKeepsContextWhileTheAgentIsAway(t *testing.T) {
 	p.Tap("Copy command")
 	if got := p.Clipboard().Read(); got != startCommand {
 		t.Fatalf("clipboard = %q, want %q", got, startCommand)
+	}
+}
+
+// Setting up the agent creates its config and installs it as a service only
+// after the user agrees, and keeps the dialog open with the reason when
+// portal agent run fails.
+func TestDesktopAsksBeforeItSetsUpTheAgent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent", "config.toml")
+	m := newModel(dir, configPath, filepath.Join(dir, "missing", "portal"))
+	p := newProbe(t, m)
+	m.apply(p, agent.AgentStatusResponse{}, agent.ErrNotRunning)
+
+	p.Tap("Set up and start")
+	p.Advance(time.Second)
+	p.Tap("Cancel")
+	p.Advance(time.Second)
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("the config was created without consent: %v", err)
+	}
+
+	p.Tap("Set up and start")
+	p.Advance(time.Second)
+	p.Tap("Install and start")
+	waitFor(t, p, "the failure of portal agent run", func() bool { return ggui.Peek(m.FormError) != "" })
+	if _, err := agent.LoadExistingConfig(configPath); err != nil {
+		t.Fatalf("the agreed config was not created: %v", err)
+	}
+	if !ggui.Peek(m.SettingUp) {
+		t.Fatal("the setup dialog closed though the agent did not start")
+	}
+
+	without := newModel(dir, configPath, "")
+	q := newProbe(t, without)
+	without.apply(q, agent.AgentStatusResponse{}, agent.ErrNotRunning)
+	if _, ok := q.Find("Set up and start"); ok {
+		t.Fatal("setup was offered without a portal CLI to run")
 	}
 }
 
@@ -254,7 +292,7 @@ func waitFor(t *testing.T, p *ggui.Probe, what string, cond func() bool) {
 // and closing it leaves the agent running.
 func TestDesktopManagesTunnelsThroughTheAgent(t *testing.T) {
 	stateDir := startAgent(t)
-	m := newModel(stateDir)
+	m := newModel(stateDir, "", "")
 	p := ggui.ProbeBuilder(func() ggui.Widget { return build(m) }, ggui.Sz(probeWidth, 1400))
 	p.Setup(func() { m.start(p) })
 	waitFor(t, p, "the agent", func() bool { return ggui.Peek(m.Connection) == connected })

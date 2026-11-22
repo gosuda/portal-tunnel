@@ -1,7 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"runtime"
 
 	"github.com/ironpark/ggui"
 	gguiruntime "github.com/ironpark/ggui/runtime"
@@ -14,7 +17,10 @@ import (
 
 const (
 	notRunningText = "The Portal agent is not running."
-	agentGuideURL  = "https://gosuda.github.io/portal-tunnel/portal-agent#create-a-config"
+	// adminText is why a desktop that is not elevated cannot read the control
+	// endpoint of an agent that runs as a Windows service.
+	adminText     = "Only administrators can connect to the Portal agent when it runs as a Windows service. Run Portal Desktop as an administrator."
+	agentGuideURL = "https://gosuda.github.io/portal-tunnel/portal-agent"
 )
 
 // view builds the window from the model. The forms live in dialogs above the
@@ -41,6 +47,7 @@ func build(m *model) ggui.Widget {
 	).Space(1.5).Stretch()
 	return widget.Stack(
 		widget.Box(page).Pad(24),
+		ggui.View(m.SettingUp, v.setupDialog),
 		v.addDialog(),
 		v.settingsDialog(),
 		ggui.View(m.Deleting, v.deleteDialog),
@@ -77,16 +84,57 @@ func (v *view) agentNotice(msg string) ggui.Widget {
 	if msg != notRunningText {
 		return alert
 	}
-	return widget.Column(
-		alert,
-		widget.Row(
-			ui.Caption("Start it in a terminal:"),
-			ui.Mono(startCommand),
-			ui.Button("Copy command", func() { v.copy(startCommand) }).Outline().Size(ui.ButtonSmall),
-			ui.Button("Agent guide", func() { v.open(agentGuideURL) }).Ghost().Size(ui.ButtonSmall),
-		).Space(1).Align(widget.AlignCenter),
-		ui.Caption("The agent reads its config file; the guide shows how to create one."),
-	).Space(0.75).Stretch()
+	var actions []ggui.Widget
+	hint := "Portal Desktop did not find the portal CLI. Start the agent in a terminal:"
+	if v.m.cli != "" {
+		actions = append(actions, ui.Button("Set up and start", v.m.openSetup).Size(ui.ButtonSmall).BindDisabled(v.m.Busy))
+		hint = "Or start it in a terminal:"
+	}
+	actions = append(actions,
+		ui.Caption(hint),
+		ui.Mono(startCommand),
+		ui.Button("Copy command", func() { v.copy(startCommand) }).Outline().Size(ui.ButtonSmall),
+		ui.Button("Agent guide", func() { v.open(agentGuideURL) }).Ghost().Size(ui.ButtonSmall),
+	)
+	return widget.Column(alert, widget.Row(actions...).Space(1).Align(widget.AlignCenter)).Space(0.75).Stretch()
+}
+
+// setupDialog asks before the desktop creates the agent config or installs
+// the agent as a service of the OS, and says what each step does.
+func (v *view) setupDialog(open bool) ggui.Widget {
+	if !open {
+		return widget.Box()
+	}
+	config := "Portal Desktop uses the agent config at " + v.m.configPath + "."
+	if _, err := os.Stat(v.m.configPath); errors.Is(err, os.ErrNotExist) {
+		config = "Portal Desktop creates an agent config without tunnels at " + v.m.configPath + ". The agent keeps the tunnels that you add there."
+	}
+	body := widget.Column(
+		widget.Text(config),
+		widget.Text("Then Portal Desktop runs "+startCommand+". "+serviceScope()),
+		widget.Text("The agent and its tunnels keep running after you quit Portal Desktop. To stop the agent and keep it from starting again, run portal agent stop."),
+		ggui.View(v.m.FormError, formError),
+	).Space(1).Stretch()
+	return ui.Dialog(v.m.SettingUp, body).
+		Title("Set up the Portal agent").
+		Footer(
+			ui.Button("Cancel", func() { v.m.SettingUp.Set(false) }).Outline(),
+			ui.Button("Install and start", func() { v.m.startAgent(v.h) }).BindDisabled(v.m.Busy),
+		).
+		Width(520)
+}
+
+// serviceScope is what portal agent run installs on this OS, and the rights
+// that it needs.
+func serviceScope() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "It installs the agent as a launchd agent of your user, which starts when you log in and restarts the agent if it stops."
+	case "windows":
+		return "It installs the agent as a Windows service, which starts with Windows. This needs administrator rights. " + adminText
+	default:
+		return "It installs the agent as a systemd service of your user, which starts when you log in. As root, it installs a system service."
+	}
 }
 
 func (v *view) problemNotice(msg string) ggui.Widget {

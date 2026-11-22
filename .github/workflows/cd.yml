@@ -140,15 +140,6 @@ jobs:
           cp cmd/portal-tunnel/installer/install.sh release/install.sh
           cp cmd/portal-tunnel/installer/install.ps1 release/install.ps1
 
-      # Portal Desktop ships beside the CLI at the same version; the installers
-      # and portal update fetch it only for installations that opted in.
-      - name: Build desktop packages
-        shell: bash
-        run: |
-          make install-ggui
-          make build-desktop
-          cp bin/desktop/portal-desktop-* release/
-
       - name: Generate SHA256 checksums
         shell: bash
         run: |
@@ -170,3 +161,43 @@ jobs:
               --generate-notes \
               --title "${GITHUB_REF_NAME}"
           fi
+
+  # Portal Desktop joins the release that release-binaries published, so a
+  # desktop build that fails cannot hold back the CLI. Until its assets are
+  # uploaded, the installers with --with-gui and portal update with a desktop
+  # installed stop before they change anything.
+  release-desktop:
+    name: Build and Release Portal Desktop
+    needs: release-binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: depot-ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build desktop packages
+        shell: bash
+        run: |
+          make install-ggui
+          make build-desktop
+          mkdir -p release
+          cp bin/desktop/portal-desktop-* release/
+          cd release
+          for file in portal-desktop-*; do
+            sha256sum "$file" > "${file}.sha256"
+          done
+
+      - name: Upload desktop release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "${GITHUB_REF_NAME}" release/* --clobber

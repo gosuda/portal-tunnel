@@ -44,6 +44,7 @@ try {
     }
     # The CLI and the desktop must come from one release. Pin "latest" once,
     # so a release published between the two downloads cannot split the pair.
+    $Release = $null
     if ($WithGui -and $BaseUrl -eq $OfficialBaseUrl -and -not $env:BIN_URL) {
         $Request = [System.Net.WebRequest]::Create("$BaseUrl/portal-windows-$PortalArch.exe")
         $Request.Method = "HEAD"
@@ -55,6 +56,7 @@ try {
             throw "Could not find the latest release."
         }
         $BaseUrl = $Location.Substring(0, $Location.LastIndexOf('/'))
+        $Release = $BaseUrl.Substring($BaseUrl.LastIndexOf('/') + 1)
     }
 
     if ($env:BIN_URL) {
@@ -80,7 +82,11 @@ try {
     # Everything is downloaded and verified before anything is installed.
     if ($WithGui) {
         Write-Host "Downloading Portal Desktop (windows/$PortalArch)..."
-        Invoke-WebRequest -UseBasicParsing -Uri $DesktopUrl -OutFile $DesktopDownload
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri $DesktopUrl -OutFile $DesktopDownload
+        } catch {
+            throw "Could not download Portal Desktop from $DesktopUrl. Nothing was installed. A release publishes Portal Desktop shortly after the CLI. Try again later, or install the CLI alone without PORTAL_WITH_GUI."
+        }
 
         Write-Host "Verifying SHA256 checksum..."
         Assert-Checksum $DesktopDownload "$DesktopUrl.sha256" "Portal Desktop"
@@ -95,6 +101,11 @@ try {
     # The desktop goes in first, beside the CLI; the one it replaces, which
     # may be running, is moved aside until the CLI is installed too.
     if ($WithGui) {
+        # Portal Desktop needs the CLI of its own release, so an older CLI is
+        # updated with it.
+        if ($Release -and (Test-Path $InstallPath)) {
+            Write-Host "Replacing portal at $InstallPath with portal $Release, the release of Portal Desktop."
+        }
         if (Test-Path $DesktopPath) {
             $DesktopBackup = "$DesktopPath.old"
             Remove-Item -Force -ErrorAction SilentlyContinue $DesktopBackup

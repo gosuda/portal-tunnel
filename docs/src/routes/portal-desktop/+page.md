@@ -48,10 +48,17 @@ Portal Desktop back.
 | Linux | `portal-desktop` in the directory of `portal`, a menu entry in `~/.local/share/applications`, and icons in `~/.local/share/icons` |
 | Windows | `portal-desktop.exe` in `%LOCALAPPDATA%\portal\bin`, and a Start menu shortcut |
 
+If the release does not have Portal Desktop yet, the installer stops and
+changes nothing. A release publishes Portal Desktop shortly after the CLI.
+
+To add Portal Desktop to an installed CLI, run the same command. The installer
+gets both from the latest release, so it also replaces an older CLI, and it
+says so. Use Portal Desktop with the CLI and the agent of its own release.
+
 The install script of a relay installs only the CLI. If you give `--with-gui`
-to the script of a relay, it stops and shows the official command. Portal
-Desktop always comes from the official release, so a relay does not become a
-source of programs that you run on your desktop.
+to the script of a relay, it stops and shows the official command. A relay
+distributes only the CLI, and Portal Desktop always comes from the official
+release.
 
 ## Open Portal Desktop
 
@@ -74,6 +81,35 @@ path to Portal Desktop:
 ```bash
 portal gui --config ./agent.toml
 ```
+
+## Start The Agent
+
+Portal Desktop needs a running Portal agent. If the agent is not running,
+Portal Desktop shows "Set up and start". Select it to see what Portal Desktop
+will do. Nothing changes until you select "Install and start".
+
+1. If the agent config does not exist, Portal Desktop creates it without
+   tunnels. The agent keeps the tunnels that you add in this file.
+2. Portal Desktop runs `portal agent run`, the same command that you can run in
+   a terminal. The command installs the agent as a service and starts it.
+
+| OS | What `portal agent run` installs |
+|----|----------------------------------|
+| macOS | A launchd agent of your user in `~/Library/LaunchAgents`, which starts when you log in |
+| Linux | A systemd service of your user, which starts when you log in. As root, a system service. |
+| Windows | A Windows service that starts with Windows. It needs administrator rights. |
+
+The service runs the agent, not Portal Desktop. The agent and its tunnels keep
+running after you quit Portal Desktop. To stop the agent and keep it from
+starting again, run `portal agent stop`.
+
+Portal Desktop looks for the `portal` CLI in its own directory, on `PATH`, and
+in `~/.local/bin` and `~/bin`. If it does not find the CLI, it shows the command
+to run in a terminal.
+
+On Windows, only administrators can connect to an agent that runs as a Windows
+service. Run Portal Desktop as an administrator to start the agent and to
+manage its tunnels.
 
 ## Use Portal Desktop
 
@@ -103,8 +139,7 @@ tunnel shows its address with "Copy" only, because a browser cannot open it.
 If the agent stops or cannot be reached, Portal Desktop says why and keeps the
 last list that the agent sent. It disables the actions until the agent answers
 again. Open forms keep what you typed. If the agent is not running, Portal
-Desktop shows the command that starts it, `portal agent run`, which reads the
-agent config. See [Create A Config](/portal-agent#create-a-config).
+Desktop offers to start it. See [Start The Agent](#start-the-agent).
 
 Portal Desktop sends a desktop notification when a tunnel fails or recovers,
 when a relay waits for approval or refuses a tunnel, and when the agent stops
@@ -127,6 +162,20 @@ replaces Portal Desktop first, and it puts the old Portal Desktop back if it
 cannot replace the CLI. An installation without Portal Desktop stays CLI-only.
 A Portal Desktop that is open keeps the old version until you open it again.
 The agent and its tunnels keep running.
+
+If `portal update` cannot update Portal Desktop, it changes nothing and says
+why. For example, a new release publishes Portal Desktop shortly after the CLI,
+and a release older than Portal Desktop does not have it. To update the CLI
+alone, add `--cli-only`:
+
+```bash
+portal update --cli-only
+portal update --cli-only --version v2.1.9
+```
+
+Portal Desktop then keeps its release. Use Portal Desktop with the CLI and the
+agent of its own release. Later, run `portal update` to move both to one
+release.
 
 ## Platform Support
 

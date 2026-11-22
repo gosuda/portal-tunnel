@@ -33,7 +33,8 @@ configured local target.
 ## Create A Config
 
 `portal agent run` requires an existing config file. The installer does not
-create one.
+create one. [Portal Desktop](/portal-desktop#start-the-agent) can create a
+config without tunnels and start the agent for you.
 
 Default config paths:
 

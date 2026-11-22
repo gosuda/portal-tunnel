@@ -47,7 +47,8 @@ curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/inst
 $env:PORTAL_WITH_GUI = '1'; irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
 ```
 
-The install script of a relay installs only the CLI. See
+The installer gets the CLI and Portal Desktop from one release, so it also
+replaces an older CLI. The install script of a relay installs only the CLI. See
 [Portal Desktop](/portal-desktop#install).
 
 ## Command Overview
@@ -714,6 +715,15 @@ If Portal Desktop is installed with the CLI, the updater updates it to the same
 release. It verifies both downloads before it replaces either, and it puts the
 old Portal Desktop back if it cannot replace the CLI. An installation without
 Portal Desktop stays CLI-only.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--version` | latest | Release to install, such as `v2.1.9` |
+| `--cli-only` | `false` | Update the CLI alone and leave an installed Portal Desktop at its release |
+
+If Portal Desktop cannot be updated, the updater changes nothing and says why.
+Use `--cli-only` to update the CLI alone. See
+[Portal Desktop](/portal-desktop#update).
 
 ## `portal version`
 

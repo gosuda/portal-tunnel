@@ -187,3 +187,33 @@ func TestDesktopIsFoundWhereTheInstallersPutIt(t *testing.T) {
 		t.Fatalf("Desktop = %q, %v; want %q", got, ok, installed)
 	}
 }
+
+// Portal Desktop starts the agent with the CLI that the installers put
+// beside it, or on macOS where the shell installer puts the CLI.
+func TestCLIIsFoundWhereTheInstallersPutIt(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("PATH", t.TempDir())
+	desktop := filepath.Join(dir, "bin", "portal-desktop")
+	cli := filepath.Join(dir, "bin", "portal")
+	switch runtime.GOOS {
+	case "darwin":
+		desktop = filepath.Join(dir, "Applications", desktopApp, "Contents", "MacOS", "portal-desktop")
+		cli = filepath.Join(dir, ".local", "bin", "portal")
+	case "windows":
+		desktop += ".exe"
+		cli += ".exe"
+	}
+	if _, ok := CLI(desktop); ok {
+		t.Fatal("a CLI was found where there is none")
+	}
+	if err := os.MkdirAll(filepath.Dir(cli), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cli, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := CLI(desktop); !ok || got != cli {
+		t.Fatalf("CLI = %q, %v; want %q", got, ok, cli)
+	}
+}

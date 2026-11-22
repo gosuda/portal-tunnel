@@ -53,11 +53,13 @@ fi
 
 # The CLI and the desktop must come from one release. Pin "latest" once, so a
 # release published between the two downloads cannot split the pair.
+RELEASE=""
 if [ -n "$WITH_GUI" ] && [ "$BASE_URL" = "$OFFICIAL_BASE_URL" ] && [ -z "${BIN_URL:-}" ]; then
   RELEASE_URL="$(curl -fsSI "$BASE_URL/$BIN_SUFFIX" | tr -d '\r' | awk 'tolower($1) == "location:" { print $2; exit }')"
   case "$RELEASE_URL" in
     https://github.com/gosuda/portal-tunnel/releases/download/v*/"$BIN_SUFFIX")
       BASE_URL="${RELEASE_URL%/*}"
+      RELEASE="${BASE_URL##*/}"
       ;;
     *)
       echo "Could not find the latest release. Aborting." >&2
@@ -184,7 +186,11 @@ verify_sha256 "$BIN_PATH" "$CHECKSUM_URL" "portal binary"
 # Everything is downloaded and verified before anything is installed.
 if [ -n "$WITH_GUI" ]; then
   echo "Downloading Portal Desktop ($PORTAL_OS/$PORTAL_ARCH)..." >&2
-  download_url "$DESKTOP_URL" "$DESKTOP_ARCHIVE"
+  download_url "$DESKTOP_URL" "$DESKTOP_ARCHIVE" || {
+    echo "Could not download Portal Desktop from $DESKTOP_URL. Nothing was installed." >&2
+    echo "A release publishes Portal Desktop shortly after the CLI. Try again later, or install the CLI alone without --with-gui." >&2
+    exit 1
+  }
 
   echo "Verifying SHA256 checksum..." >&2
   verify_sha256 "$DESKTOP_ARCHIVE" "${DESKTOP_URL}.sha256" "Portal Desktop"
@@ -264,6 +270,11 @@ install_desktop() {
 }
 
 if [ -n "$WITH_GUI" ]; then
+  # Portal Desktop needs the CLI of its own release, so an older CLI is
+  # updated with it.
+  if [ -n "$RELEASE" ] && [ -e "$INSTALL_PATH" ]; then
+    echo "Replacing portal at $INSTALL_PATH with portal $RELEASE, the release of Portal Desktop." >&2
+  fi
   install_desktop
 fi
 
