@@ -76,10 +76,13 @@ private_preview_handoff() {
   [ -n "$redeem_url" ] || { echo "no redeem URL in issuance output" >&2; return 1; }
   printf 'Redeem URL: %s\n' "$redeem_url"
 }
-(set +x; private_preview_handoff) || echo "private preview check failed: stop the preview and deliver nothing" >&2
+(set +x; private_preview_handoff) || {
+  echo "private preview check failed: stop the preview and deliver nothing" >&2
+  false
+}
 ```
 
-A failed check prints which step failed and no link. Then stop the owned preview, report the failure, and do not retry without authentication. A credential issued before a failed authorized check is never printed, so it is not delivered. If the app has a local request counter or a controlled access-log harness, record its baseline after the local health check, with other traffic paused. The two anonymous probes must leave origin hits unchanged; the authorized GET must add exactly one hit. This distinguishes a gate response from an app that happens to redirect. Without such instrumentation, report origin isolation as unverified.
+A failed check prints which step failed and no link, and the command exits nonzero, so an agent that reads only the exit status still sees the failure; the shell itself stays open. Then stop the owned preview through its tracked session, report the failure, and do not retry without authentication. A credential issued before a failed authorized check is never printed, so it is not delivered. If the app has a local request counter or a controlled access-log harness, record its baseline after the local health check, with other traffic paused. The two anonymous probes must leave origin hits unchanged; the authorized GET must add exactly one hit. This distinguishes a gate response from an app that happens to redirect. Without such instrumentation, report origin isolation as unverified.
 
 The printed `Redeem URL:` line is the only output that carries the secret, and the variables end with the function, so nothing depends on shell state between tool calls. Deliver that link once in the final answer, or through another channel only on the user's own explicit instruction, with subject, absolute expiry, exact host, and the warning that anyone holding the link can reuse it until expiry. Do not deliver the raw credential as well. For another provider, use its allowlist and Verify steps below; do not sign in on the reviewer's behalf or claim authorized access was tested when it was not.
 
