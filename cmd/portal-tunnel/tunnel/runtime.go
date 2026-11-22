@@ -368,7 +368,7 @@ func resolveStartRuntimeIdentityRelays(spec Spec) (types.Identity, []string, err
 	if err != nil {
 		return types.Identity{}, nil, fmt.Errorf("resolve identity: %w", err)
 	}
-	explicitRelayURLs, err := types.NormalizeRelayURLs(spec.Relays.URLs...)
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(spec.Relays.URLs...)
 	if err != nil {
 		return types.Identity{}, nil, err
 	}

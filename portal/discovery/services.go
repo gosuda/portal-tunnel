@@ -369,7 +369,7 @@ func parseObservedReputation(raw json.RawMessage) map[string]*types.ObservedServ
 			uint64(*report.Up)+uint64(*report.Down) != uint64(*report.Total) {
 			continue
 		}
-		hostname := types.NormalizeHostname(report.Hostname)
+		hostname := utils.NormalizeHostname(report.Hostname)
 		if hostname == "" {
 			continue
 		}

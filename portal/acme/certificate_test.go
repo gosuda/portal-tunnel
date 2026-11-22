@@ -422,7 +422,7 @@ func TestNormalizeCADirURLIsCanonical(t *testing.T) {
 func TestRegistrationFilePathIsScopedToCADirectory(t *testing.T) {
 	t.Parallel()
 
-	const keyDir = "/state"
+	keyDir := filepath.FromSlash("/state")
 	legacy := filepath.Join(keyDir, registrationFileName)
 
 	production := registrationFilePath(keyDir, lego.LEDirectoryProduction)
@@ -450,7 +450,7 @@ func TestRegistrationFilePathIsScopedToCADirectory(t *testing.T) {
 func TestCertificateFilePathsAreScopedToCADirectory(t *testing.T) {
 	t.Parallel()
 
-	const keyDir = "/state"
+	keyDir := filepath.FromSlash("/state")
 	productionCert, productionKey := certificateFilePaths(keyDir, lego.LEDirectoryProduction)
 	if productionCert != filepath.Join(keyDir, fullChainFileName) || productionKey != filepath.Join(keyDir, keyFileName) {
 		t.Fatalf("production certificate files = %q, %q; want the legacy names so existing installations and manual files keep working", productionCert, productionKey)

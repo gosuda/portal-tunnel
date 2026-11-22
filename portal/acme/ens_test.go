@@ -15,7 +15,6 @@ import (
 	"github.com/go-acme/lego/v4/challenge"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -98,7 +97,7 @@ func (z *fakeZone) EnsureDNSSEC(context.Context, string) (string, string, string
 }
 
 func newTestENSManager(cfg Config, dns dnsProvider) *Manager {
-	cfg.BaseDomain = types.NormalizeBaseDomain(cfg.BaseDomain)
+	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
 	return &Manager{
 		cfg:         cfg,
 		dns:         dns,

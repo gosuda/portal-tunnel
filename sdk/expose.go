@@ -23,6 +23,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -336,7 +337,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 	if err != nil {
 		return nil, err
 	}
-	relayURLs, err := types.NormalizeRelayURLs(relays...)
+	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +475,7 @@ func (e *Exposure) runDiscoveryLoop(exposureCtx context.Context) {
 }
 
 func (e *Exposure) applyRelays(relays []string) error {
-	relayURLs, err := types.NormalizeRelayURLs(relays...)
+	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return err
 	}
@@ -507,7 +508,7 @@ func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 // selectable) as one atomic unit; re-selection republishes membership
 // through the selection loop.
 func (e *Exposure) AddRelay(relayURL string) error {
-	relayURL, err := types.NormalizeRelayURL(relayURL)
+	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}
@@ -534,7 +535,7 @@ func (e *Exposure) AddRelay(relayURL string) error {
 // as one atomic unit; re-selection republishes membership through the
 // selection loop.
 func (e *Exposure) RemoveRelay(relayURL string) error {
-	relayURL, err := types.NormalizeRelayURL(relayURL)
+	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}

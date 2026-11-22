@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -16,7 +15,7 @@ var (
 )
 
 func RecordName(raw string) (string, error) {
-	name := types.NormalizeHostname(raw)
+	name := utils.NormalizeHostname(raw)
 	if name == "" {
 		return "", errRecordNameIsRequired
 	}
@@ -24,7 +23,7 @@ func RecordName(raw string) (string, error) {
 }
 
 func BaseDomain(raw string) (string, error) {
-	name := types.NormalizeBaseDomain(raw)
+	name := utils.NormalizeBaseDomain(raw)
 	if name == "" {
 		return "", errBaseDomainIsRequired
 	}
@@ -104,8 +103,8 @@ func required(raw, label string) (string, error) {
 }
 
 func RelativeName(provider, fqdn, zone string) (string, error) {
-	fqdn = types.NormalizeHostname(fqdn)
-	zone = types.NormalizeBaseDomain(zone)
+	fqdn = utils.NormalizeHostname(fqdn)
+	zone = utils.NormalizeBaseDomain(zone)
 	if fqdn == "" {
 		return "", errRecordNameIsRequired
 	}
@@ -123,10 +122,10 @@ func RelativeName(provider, fqdn, zone string) (string, error) {
 }
 
 func NameMatches(recordName, expected, fqdn, zone string) bool {
-	recordName = types.NormalizeHostname(recordName)
+	recordName = utils.NormalizeHostname(recordName)
 	expected = strings.TrimSpace(strings.ToLower(expected))
-	fqdn = types.NormalizeHostname(fqdn)
-	zone = types.NormalizeBaseDomain(zone)
+	fqdn = utils.NormalizeHostname(fqdn)
+	zone = utils.NormalizeBaseDomain(zone)
 
 	if recordName == expected {
 		return true

@@ -41,7 +41,7 @@ func newENSStatus(cfg Config, dns dnsProvider) types.ENSStatus {
 		provider = dns.Name()
 	}
 	return types.ENSStatus{
-		Enabled:  cfg.ENSGaslessEnabled && !types.IsLocalRelayHost(cfg.BaseDomain),
+		Enabled:  cfg.ENSGaslessEnabled && !utils.IsLocalRelayHost(cfg.BaseDomain),
 		Provider: provider,
 		Address:  strings.TrimSpace(cfg.ENSGaslessAddress),
 	}
@@ -91,7 +91,7 @@ func ensDNSSECVerified(state string) bool {
 }
 
 func (m *Manager) syncENSGasless(ctx context.Context) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
@@ -122,18 +122,18 @@ func (m *Manager) syncENSDNSSEC(ctx context.Context) error {
 // SyncLeaseHostname maintains exact canonical address records even without ENS.
 // It shares the serialized DNS lifecycle and durable tracking used by ENS aliases.
 func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address string) error {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
 	if !m.cfg.ENSGaslessEnabled && !namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
-	hostname = types.NormalizeHostname(hostname)
+	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" {
 		return errHostnameIsRequired
 	}
-	if !types.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
 	}
 
@@ -145,18 +145,18 @@ func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address strin
 }
 
 func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) error {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
-	hostname = types.NormalizeHostname(hostname)
+	hostname = utils.NormalizeHostname(hostname)
 	if !m.cfg.ENSGaslessEnabled && !namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
 	if hostname == "" {
 		return nil
 	}
-	if !types.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
 	if hostname == m.cfg.BaseDomain {
@@ -306,7 +306,7 @@ func (m *Manager) applyENSCommandStoreGaslessTXT(ctx context.Context, command en
 	})
 }
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 	var cleanupErr error
@@ -390,12 +390,12 @@ func normalizeChildHostnames(inputs []string, baseDomain string) []string {
 	if len(inputs) == 0 {
 		return nil
 	}
-	baseDomain = types.NormalizeBaseDomain(baseDomain)
+	baseDomain = utils.NormalizeBaseDomain(baseDomain)
 	var out []string
 	seen := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
-		hostname := types.NormalizeHostname(input)
-		if hostname == "" || hostname == baseDomain || !types.HostnameMatchesBaseDomain(hostname, baseDomain) {
+		hostname := utils.NormalizeHostname(input)
+		if hostname == "" || hostname == baseDomain || !utils.HostnameMatchesBaseDomain(hostname, baseDomain) {
 			continue
 		}
 		if _, ok := seen[hostname]; ok {

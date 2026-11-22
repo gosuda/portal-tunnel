@@ -25,7 +25,6 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -674,8 +673,8 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 	if service == nil {
 		return nil, errGcloudDNSServiceIsNil
 	}
-	domain = types.NormalizeHostname(domain)
-	candidates := types.DomainCandidates(domain)
+	domain = utils.NormalizeHostname(domain)
+	candidates := utils.DomainCandidates(domain)
 
 	if trimmed := strings.TrimSpace(explicit); trimmed != "" {
 		zone, err := service.ManagedZones.Get(projectID, trimmed).Context(ctx).Do()
@@ -685,7 +684,7 @@ func (p *Provider) findManagedZone(ctx context.Context, service *dns.Service, pr
 		if err := validateManagedZone(zone, domain, trimmed, allowPrivate); err != nil {
 			return nil, err
 		}
-		if zoneDomain := types.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" && isPublicZone(zone) {
+		if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain != "" && zone.Name != "" && isPublicZone(zone) {
 			p.cacheFindManagedZoneEntry(zoneDomain, zone.Name)
 		}
 		return zone, nil
@@ -701,7 +700,7 @@ func validateManagedZone(zone *dns.ManagedZone, domain, explicit string, allowPr
 	if !isPublicZone(zone) && !allowPrivate {
 		return fmt.Errorf("gcloud managed zone %q is not public", explicit)
 	}
-	if zoneDomain := types.NormalizeHostname(zone.DnsName); zoneDomain == "" || !types.HostnameMatchesBaseDomain(domain, zoneDomain) {
+	if zoneDomain := utils.NormalizeHostname(zone.DnsName); zoneDomain == "" || !utils.HostnameMatchesBaseDomain(domain, zoneDomain) {
 		return fmt.Errorf("gcloud managed zone %q does not cover %s", explicit, domain)
 	}
 	return nil
@@ -717,7 +716,7 @@ func isPublicZone(zone *dns.ManagedZone) bool {
 
 func matchFindManagedZoneCandidate(zoneList []*dns.ManagedZone, candidate string, allowPrivate bool) *dns.ManagedZone {
 	for _, zone := range zoneList {
-		if (!isPublicZone(zone) && !allowPrivate) || types.NormalizeHostname(zone.DnsName) != candidate {
+		if (!isPublicZone(zone) && !allowPrivate) || utils.NormalizeHostname(zone.DnsName) != candidate {
 			continue
 		}
 		return zone
@@ -870,7 +869,7 @@ func recordTTL(recordSets []*dns.ResourceRecordSet) int64 {
 }
 
 func fqdn(name string) string {
-	normalized := types.NormalizeHostname(name)
+	normalized := utils.NormalizeHostname(name)
 	if normalized == "" {
 		return ""
 	}
