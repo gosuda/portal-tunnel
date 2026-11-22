@@ -25,6 +25,22 @@ func exposeConfig(t *testing.T, args ...string) (tunnel.Config, error) {
 	return cfg.Resolve()
 }
 
+func TestExposeFlagsRejectInvalidModeBeforeStart(t *testing.T) {
+	for _, args := range [][]string{{"--tcp", "--auth", "siwe", "3000"}, {"--tls-cert", "a.pem", "3000"}} {
+		var cfg tunnel.Config
+		var flags exposeFlags
+		fs := cli.NewFlagSet("expose", printExposeUsage)
+		registerExposeFlags(fs, &cfg, &flags)
+		if err := cli.ParseFlagSet(fs, args, printExposeUsage); err != nil {
+			t.Fatalf("parse portal expose %v: %v", args, err)
+		}
+		cfg.TargetAddr = fs.Arg(0)
+		if _, err := tunnelConfigFromExposeFlags(fs, cfg, flags); err == nil {
+			t.Errorf("portal expose %v passed flag checks; it must fail before any side effect", args)
+		}
+	}
+}
+
 func setOIDCEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("AUTH_OIDC_ISSUER", "https://issuer.example.com")

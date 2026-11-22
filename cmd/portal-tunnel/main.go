@@ -325,6 +325,9 @@ func tunnelConfigFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expo
 	if len(cfg.StripRequestHeaders) > 0 && !hasHTTPSource && auth.IsZero() && cfg.Cache == nil {
 		return tunnel.Config{}, errStripRequestHeaderRequiresHTTPRoute
 	}
+	if _, err := cfg.Resolve(); err != nil {
+		return tunnel.Config{}, err
+	}
 	return cfg, nil
 }
 
