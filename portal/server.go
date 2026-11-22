@@ -1635,7 +1635,7 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 	serverName := utils.NormalizeHostname(clientHello.ServerName)
 	localTLS := namespace.IsLocalTLSHostname(serverName, s.registry.rootHostname)
 	relayAPI := serverName == "" || serverName == s.identity.Name
-	if !localTLS && (relayAPI || s.servesTransportFallback(serverName, clientHello.ALPNProtocols) || s.registry.cache.Has(serverName)) {
+	if !localTLS && (relayAPI || s.registry.cache.Has(serverName)) {
 		select {
 		case s.apiHandoff.conns <- wrappedConn:
 		case <-s.apiHandoff.done:
