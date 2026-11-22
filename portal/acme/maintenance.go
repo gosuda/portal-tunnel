@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"time"
 
 	"github.com/rs/zerolog/log"
-
-	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
-	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
@@ -37,7 +35,6 @@ func nextSyncDelay(consecutiveFailures int) time.Duration {
 }
 
 type maintenanceLoopState struct {
-	pendingENS             map[string]ensDNSCommand
 	lastPublicIPs          map[bool]string
 	consecutiveDNSFailures int
 	renewTimer             *time.Timer
@@ -55,7 +52,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 		select {
 		case <-m.stopCh:
 			syncCtx, cancel := context.WithTimeout(m.stopCtx, defaultSyncTimeout)
-			m.stopErr = m.maintenanceLoopFlushCommands(syncCtx, state)
+			m.stopErr = m.maintenanceLoopApplyPendingENS(syncCtx, state, true)
 			cancel()
 			if m.stopErr != nil {
 				log.Warn().Err(m.stopErr).Str("base_domain", m.cfg.BaseDomain).Msg("flush dns records")
@@ -86,7 +83,6 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 
 func (m *Manager) maintenanceLoopNewState() *maintenanceLoopState {
 	state := &maintenanceLoopState{
-		pendingENS:    make(map[string]ensDNSCommand),
 		lastPublicIPs: make(map[bool]string),
 	}
 	m.commandMu.RLock()
@@ -118,37 +114,23 @@ func (m *Manager) syncChangedAddressRecords(ctx context.Context, state *maintena
 	return syncErr
 }
 
-func (m *Manager) maintenanceLoopDrainENSCommands(state *maintenanceLoopState) {
-drainENS:
-	for {
-		select {
-		case command := <-m.ensCommands:
-			if command.ready != nil {
-				command.ready <- errLeaseDNSPending
-			} else {
-				state.pendingENS[command.hostname] = command
-			}
-		default:
-			break drainENS
-		}
-	}
-}
-
-func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *maintenanceLoopState) error {
+func (m *Manager) maintenanceLoopApplyPendingENS(ctx context.Context, state *maintenanceLoopState, retry bool) error {
+	m.commandMu.RLock()
+	pending := maps.Clone(m.pendingENS)
+	m.commandMu.RUnlock()
 	var err error
-	for _, command := range state.pendingENS {
-		if commandErr := m.applyENSCommand(ctx, command); commandErr != nil {
+	for _, command := range pending {
+		if command.failed && !retry {
+			continue
+		}
+		if ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		if commandErr := m.maintenanceLoopApplyENS(ctx, state, command); commandErr != nil {
 			err = errors.Join(err, commandErr)
-		} else {
-			m.finishENSCommand(state, command)
 		}
 	}
 	return err
-}
-
-func (m *Manager) maintenanceLoopFlushCommands(ctx context.Context, state *maintenanceLoopState) error {
-	m.maintenanceLoopDrainENSCommands(state)
-	return m.maintenanceLoopApplyPendingENS(ctx, state)
 }
 
 func (m *Manager) maintenanceLoopRearmRetryTimer(state *maintenanceLoopState) {
@@ -195,7 +177,7 @@ func (m *Manager) syncRetryTickAttempt(ctx context.Context, state *maintenanceLo
 	state.consecutiveDNSFailures = 0
 	m.maintenanceLoopRearmRetryTimer(state)
 	if m.cfg.ENSGaslessEnabled {
-		publicIPs, err := utils.ResolvePublicIPs(ctx)
+		publicIPs, err := m.publicIPs(ctx)
 		return publicIPs, pendingDNSAddress, err
 	}
 	return nil, pendingDNSAddress, nil
@@ -210,7 +192,7 @@ func (m *Manager) maintenanceLoopSyncRetryTick(ctx context.Context, state *maint
 	if m.cfg.ENSGaslessEnabled && !m.ENSStatus().Verified {
 		err = errors.Join(err, m.syncENSDNSSEC(ctx))
 	}
-	return errors.Join(err, m.maintenanceLoopFlushCommands(ctx, state))
+	return errors.Join(err, m.maintenanceLoopApplyPendingENS(ctx, state, true))
 }
 
 func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
@@ -232,33 +214,50 @@ func (m *Manager) maintenanceLoopRenewTick(ctx context.Context) time.Duration {
 }
 
 func (m *Manager) maintenanceLoopHandleENSCommand(ctx context.Context, state *maintenanceLoopState, command ensDNSCommand) {
+	var err error
 	if command.ready != nil {
-		command.ready <- m.checkLeaseDNS(state, command.hostname)
-		return
-	}
-	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-	err := m.applyENSCommand(syncCtx, command)
-	cancel()
-	if err != nil {
-		state.pendingENS[command.hostname] = command
-		log.Warn().Err(err).Str("hostname", command.hostname).Msg("apply ENS dns command")
+		m.commandMu.RLock()
+		pending, exists := m.pendingENS[command.hostname]
+		m.commandMu.RUnlock()
+		if exists && !pending.failed {
+			err = m.maintenanceLoopApplyENS(ctx, state, pending)
+		}
 	} else {
-		m.finishENSCommand(state, command)
+		err = m.maintenanceLoopApplyPendingENS(ctx, state, false)
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("apply lease dns commands")
+	}
+	if command.ready != nil {
+		command.ready <- m.checkLeaseDNS(command.hostname)
+		// A readiness request may have occupied the notification slot while
+		// another hostname was admitted. Let fresh work make progress after
+		// replying, without applying unrelated hosts in the readiness check.
+		select {
+		case m.ensCommands <- ensDNSCommand{}:
+		default:
+		}
 	}
 }
 
-func (m *Manager) finishENSCommand(state *maintenanceLoopState, command ensDNSCommand) {
-	delete(state.pendingENS, command.hostname)
-	if command.remove {
-		return
-	}
-	clear(state.lastPublicIPs)
-	if namespace.IsLocalTLSHostname(command.hostname, m.cfg.BaseDomain) {
-		parent := namespace.AddressParent(command.hostname)
-		// The new child republished the shared parent. An old withdrawal
-		// intent must not outlive the newly registered DNS owner.
-		if state.pendingENS[parent].remove {
-			delete(state.pendingENS, parent)
+func (m *Manager) maintenanceLoopApplyENS(ctx context.Context, state *maintenanceLoopState, command ensDNSCommand) error {
+	syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+	err := m.applyENSCommand(syncCtx, command)
+	cancel()
+	m.commandMu.Lock()
+	// A policy change or registration may have replaced the intent while DNS
+	// I/O was running. Completing old work must not discard that newer work.
+	if current, exists := m.pendingENS[command.hostname]; exists && current == command {
+		if err == nil {
+			delete(m.pendingENS, command.hostname)
+		} else {
+			command.failed = true
+			m.pendingENS[command.hostname] = command
 		}
 	}
+	m.commandMu.Unlock()
+	if err == nil && !command.remove {
+		clear(state.lastPublicIPs)
+	}
+	return err
 }

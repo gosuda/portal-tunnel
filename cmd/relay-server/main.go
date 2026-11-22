@@ -108,7 +108,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.Bool(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
 	env.String(fs, &cfg.ApprovalMode, "approval-mode", string(policy.ModeAuto), "initial lease approval mode (auto|manual); a mode saved in policy.json wins", "APPROVAL_MODE")
 	env.Int(fs, &cfg.Relay.DefaultIdentityBPS, "default-identity-bps", types.DefaultIdentityBPS, nil, "default stream bytes per second per service identity; individual admin limits override it (0=unlimited)", "DEFAULT_IDENTITY_BPS")
-	env.Int(fs, &cfg.Relay.UnapprovedLeasesPerSource, "unapproved-leases-per-source", 64, nil, "leases one source IP can hold while they are not routable (0=unlimited)", "UNAPPROVED_LEASES_PER_SOURCE")
+	env.Int(fs, &cfg.Relay.UnapprovedLeasesPerSource, "unapproved-leases-per-source", 64, nil, "Per-source unapproved lease or pending request budget (0 disables the per-source limit)", "UNAPPROVED_LEASES_PER_SOURCE")
 	env.Int(fs, &cfg.Relay.InspectionsPerSource, "inspections-per-source", 16, nil, "public sockets one IPv4 address or IPv6 /64 can hold while the relay reads their TLS ClientHello (0=only the 128-socket server-wide budget)", "INSPECTIONS_PER_SOURCE")
 	env.Int(fs, &cfg.Relay.MinPort, "min-port", 0, parseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	env.Int(fs, &cfg.Relay.MaxPort, "max-port", 0, parseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
@@ -126,6 +126,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.String(fs, &cfg.Relay.ACME.EABKID, "acme-eab-kid", "", "external account binding key ID for new ACME accounts; pair with ACME_EAB_HMAC", "ACME_EAB_KID")
 	env.String(fs, &cfg.Relay.ACME.EABHMAC, "acme-eab-hmac", "", "external account binding base64url HMAC secret for new ACME accounts; pair with ACME_EAB_KID", "ACME_EAB_HMAC")
 	env.String(fs, &cfg.Relay.ACME.DNSProvider, "acme-dns-provider", "", "DNS provider for managed DNS-01 and ENS gasless DNSSEC/TXT automation (embedded|cloudflare|gcloud|hetzner|njalla|route53|vultr); defaults to embedded without API credentials", "ACME_DNS_PROVIDER")
+	env.CSV(fs, &cfg.Relay.ACME.PublicIPs, "public-ips", "", "public IPv4 and/or IPv6 address to publish in A/AAAA records, comma-separated, at most one per family; empty discovers them from outbound connections", "PUBLIC_IPS")
 	env.Bool(fs, &cfg.Relay.ACME.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
 	env.Int(fs, &cfg.Relay.ACME.EmbeddedDNSPort, "embedded-dns-port", 53, parsePortNumber, "listen port for the embedded authoritative DNS server (the default DNS provider); requires a one-time NS delegation of the base domain and open 53/tcp+udp", "EMBEDDED_DNS_PORT")
 	env.String(fs, &cfg.Relay.ACME.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token for DNS automation (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
@@ -208,6 +209,7 @@ func runServeCommand(args []string) error {
 		Str("state_dir", cfg.Relay.StateDir).
 		Int("sni_port", cfg.Relay.SNIPort).
 		Str("tunnel_source_cidrs", cfg.TunnelSourceCIDRs).
+		Str("public_ips", strings.Join(cfg.Relay.ACME.PublicIPs, ",")).
 		Msg("starting relay server")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
@@ -233,9 +235,11 @@ func openRelayServer(cfg appConfig, ingress *policy.Ingress) (*portal.Server, *p
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create relay api: %w", err)
 	}
-	if policy.Mode(cfg.ApprovalMode) == policy.ModeManual && policies.Snapshot().Mode() == policy.ModeAuto {
-		log.Warn().Str("policy_path", policyPath).Msg("approval mode manual is ignored: policy.json saves auto, so every lease is approved; set the mode with the admin API")
+	effective := policies.Snapshot().Mode()
+	if effective != policy.Mode(cfg.ApprovalMode) {
+		log.Warn().Str("requested", cfg.ApprovalMode).Str("effective", string(effective)).Str("policy_path", policyPath).Msg("saved approval mode overrides startup setting")
 	}
+	log.Info().Str("approval_mode", string(effective)).Msg("effective relay admission policy")
 	return server, policies, relayAPI, nil
 }
 
@@ -271,9 +275,10 @@ func runServer(ctx context.Context, cfg appConfig, ingress *policy.Ingress, x402
 	if err != nil {
 		return err
 	}
+	defer relayAPI.close()
 
 	appRoutes := relayAPI.Handler()
-	if err := mountRelayRoutes(x402Settings, server, appRoutes); err != nil {
+	if err := mountRelayRoutes(x402Settings, server, policies, appRoutes); err != nil {
 		return err
 	}
 	base := policy.ControlBodyHandler(appRoutes)

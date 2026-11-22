@@ -1,4 +1,4 @@
-import type { DiscoveryResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
+import type { ApprovalMode, DiscoveryResponse, RelayDescriptor, IncompatibleRelayEntry } from "@/types/api";
 
 export interface RelayReleases {
   versions: Record<string, string>;
@@ -9,6 +9,7 @@ export interface KnownRelay {
   relayURL: string;
   isCurrent: boolean;
   protocolVersion?: string;
+  approvalMode?: ApprovalMode;
 }
 
 export function normalizeRelayURL(relayURL: string | undefined): string {

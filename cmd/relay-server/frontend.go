@@ -25,37 +25,48 @@ type frontendAsset struct {
 	gzipData    []byte
 }
 
-func resolveFrontendFS(frontendDir string) (fs.FS, error) {
+func resolveFrontendFS(frontendDir string) (fs.FS, *os.Root, error) {
 	frontendDir = strings.TrimSpace(frontendDir)
 	var frontendFS fs.FS
+	var frontendRoot *os.Root
 	frontendSource := "embedded frontend"
 
 	if frontendDir == "" {
 		var err error
 		frontendFS, err = fs.Sub(embeddedDistFS, embeddedFrontendRoot)
 		if err != nil {
-			return nil, fmt.Errorf("open embedded frontend: %w", err)
+			return nil, nil, fmt.Errorf("open embedded frontend: %w", err)
 		}
 	} else {
 		absDir, err := filepath.Abs(frontendDir)
 		if err != nil {
-			return nil, fmt.Errorf("resolve frontend directory %q: %w", frontendDir, err)
+			return nil, nil, fmt.Errorf("resolve frontend directory %q: %w", frontendDir, err)
 		}
-		frontendFS = os.DirFS(absDir)
+		frontendRoot, err = os.OpenRoot(absDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open frontend directory %q: %w", absDir, err)
+		}
+		frontendFS = frontendRoot.FS()
 		frontendSource = fmt.Sprintf("frontend directory %q", absDir)
 	}
 
 	entry, err := fs.Stat(frontendFS, "index.html")
 	if err != nil {
-		if frontendDir == "" {
-			return nil, fmt.Errorf("embedded frontend is missing index.html; run 'make build-frontend' first: %w", err)
+		if frontendRoot != nil {
+			_ = frontendRoot.Close()
 		}
-		return nil, fmt.Errorf("%s requires index.html: %w", frontendSource, err)
+		if frontendDir == "" {
+			return nil, nil, fmt.Errorf("embedded frontend is missing index.html; run 'make build-frontend' first: %w", err)
+		}
+		return nil, nil, fmt.Errorf("%s requires index.html: %w", frontendSource, err)
 	}
 	if !entry.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s requires a regular index.html", frontendSource)
+		if frontendRoot != nil {
+			_ = frontendRoot.Close()
+		}
+		return nil, nil, fmt.Errorf("%s requires a regular index.html", frontendSource)
 	}
-	return frontendFS, nil
+	return frontendFS, frontendRoot, nil
 }
 
 func isServeFrontendReservedPath(requestPath string) bool {

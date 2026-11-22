@@ -49,6 +49,7 @@ export interface PolicyLease extends Lease {
   bps: number;
   client_ip: string;
   reported_ip?: string;
+  explicitly_approved?: boolean;
   is_approved: boolean;
   is_banned: boolean;
   is_denied: boolean;
@@ -84,11 +85,10 @@ export interface DiscoveredService {
   locations: ServiceLocation[];
 }
 
+// The backend also reports partial and relay coverage counts. The UI keeps
+// every location it has seen, so one snapshot's coverage is not shown.
 export interface ServiceDiscoveryResponse {
   services: DiscoveredService[];
-  partial: boolean;
-  relays_checked: number;
-  relays_skipped: number;
 }
 
 export interface PolicyPortSettings {
@@ -99,6 +99,7 @@ export interface PolicyPortSettings {
 export interface PolicyStateResponse {
   policy: PolicySettings;
   leases?: PolicyLease[];
+  pending?: { identity_key: string; expires_at: string }[];
 }
 
 export interface PolicySettings {
@@ -140,6 +141,7 @@ export interface X402FacilitatorInfo {
 }
 
 export interface DomainResponse {
+  approval_mode?: ApprovalMode;
   protocol_version: string;
   release_version: string;
   ens: ENSStatus;

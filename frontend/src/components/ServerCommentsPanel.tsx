@@ -230,20 +230,9 @@ function CommentsBody({ server, loading, comments, error, busy, onRemove, onVote
   ].sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0) || a.key.localeCompare(b.key));
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5" aria-busy={loading || federation.loading}>
-      {loading && <p role="status" className="text-sm text-muted-foreground">Loading comments from this relay…</p>}
-      {federation.loading && <p role="status" className="text-sm text-muted-foreground">Checking other relay comments…</p>}
+      {(loading || federation.loading) && <p role="status" className="text-sm text-muted-foreground">Loading comments…</p>}
       {federation.error && <p role="status" className="text-sm text-muted-foreground">{federation.error}</p>}
-      {federation.response && (
-        <p className="text-xs text-muted-foreground">
-          {federation.response.relays_checked} other relays checked; {federation.response.relays_skipped} unavailable or skipped.
-          {federation.response.partial ? " Partial coverage." : ""}
-        </p>
-      )}
-      {(server.remoteOnly || remote.length > 0) && (
-        <p className="text-xs text-muted-foreground">
-          Remote comments are read-only here. Times are reported by their originating relays. Refresh to recheck this snapshot. To post or manage a remote comment, open its source relay.
-        </p>
-      )}
+      {federation.response?.partial && <p role="status" className="text-xs text-muted-foreground">Some comments may be missing.</p>}
       {entries.length > 0 ? (
         <ol className="space-y-6">
           {entries.map((entry) => "local" in entry
@@ -253,7 +242,7 @@ function CommentsBody({ server, loading, comments, error, busy, onRemove, onVote
       ) : !loading && !federation.loading && !error && !federation.error && (
         <div className="py-12 text-center">
           <MessageSquare className="mx-auto mb-3 size-8 text-muted-foreground" />
-          <p className="text-sm font-semibold">{server.remoteOnly ? "No comments observed" : "Start the conversation"}</p>
+          <p className="text-sm font-semibold">{server.remoteOnly ? "No comments yet" : "Start the conversation"}</p>
           {!server.remoteOnly && <p className="mt-2 text-xs text-muted-foreground">Share feedback or ask a question about this app.</p>}
         </div>
       )}
@@ -321,7 +310,7 @@ export function ServerCommentsPanel({
   setDraft,
   loading,
   pending,
-  votingCommentId,
+  busy,
   error,
   refresh,
   submit,
@@ -330,7 +319,6 @@ export function ServerCommentsPanel({
   federation,
   onVoteApp,
 }: ServerCommentsPanelProps): JSX.Element {
-  const busy = loading || pending !== null || votingCommentId !== null;
   const [isAppVoting, setIsAppVoting] = useState(false);
   const [appVoteError, setAppVoteError] = useState("");
 

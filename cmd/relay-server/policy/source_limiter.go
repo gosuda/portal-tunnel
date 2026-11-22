@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"sync"
 	"time"
+
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
@@ -19,7 +21,7 @@ const (
 // bounded, expires on demand, and never becomes durable authorization policy.
 type SourceLimiter struct {
 	mu                      sync.Mutex
-	buckets                 map[netip.Addr]*sourceBucket
+	buckets                 map[netip.Prefix]*sourceBucket
 	ratePerMinute, burst    float64
 	globalRate, globalBurst float64
 	global                  sourceBucket
@@ -38,7 +40,7 @@ type sourceBucket struct {
 // the global bucket for callers that already have a separate capacity boundary.
 func NewSourceLimiter(ratePerMinute, burst, globalRate, globalBurst int) *SourceLimiter {
 	return &SourceLimiter{
-		buckets: make(map[netip.Addr]*sourceBucket), ratePerMinute: float64(ratePerMinute), burst: float64(burst),
+		buckets: make(map[netip.Prefix]*sourceBucket), ratePerMinute: float64(ratePerMinute), burst: float64(burst),
 		globalRate: float64(globalRate), globalBurst: float64(globalBurst),
 		global: sourceBucket{tokens: float64(globalBurst)}, clock: time.Now, maxBucketCount: 65536,
 	}
@@ -68,13 +70,14 @@ func (l *SourceLimiter) Allow(source netip.Addr, cost int) (time.Duration, strin
 			return retry, preAuthLayerGlobal
 		}
 	}
-	bucket := l.buckets[source]
+	prefix := utils.SourcePrefix(source)
+	bucket := l.buckets[prefix]
 	if bucket == nil {
 		if len(l.buckets) >= l.maxBucketCount {
 			return sourceLimiterPruneInterval, preAuthLayerSource
 		}
 		bucket = &sourceBucket{tokens: l.burst, updatedAt: now}
-		l.buckets[source] = bucket
+		l.buckets[prefix] = bucket
 	}
 	bucket.lastUsedAt = now
 	if retry := bucket.retry(now, l.ratePerMinute, l.burst, cost); retry > 0 {

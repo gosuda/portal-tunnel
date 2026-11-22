@@ -47,7 +47,6 @@ jobs:
               - '**'
               - '!frontend/**'
               - '!docs/**'
-              - '!deploy/**'
               - '!extensions/**'
               - '!*.md'
             # Shared JSON fixtures are also inputs to sdk/appauth's Go tests.
@@ -58,7 +57,7 @@ jobs:
               - 'Makefile'
               - '.github/workflows/ci.yml'
             charts:
-              - 'deploy/helm/**'
+              - 'docs/examples/helm/**'
               - 'docs/static/examples/kubernetes/**'
               - 'Makefile'
               - '.github/workflows/ci.yml'

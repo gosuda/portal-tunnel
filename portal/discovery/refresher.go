@@ -127,7 +127,7 @@ func (r *Refresher) refreshOneHTTPSClient(ctx context.Context, state relayState,
 		}
 		return r.publicHTTPClient, nil, nil
 	}
-	if !types.IsLocalRelayHost(baseURL.Hostname()) {
+	if !utils.IsLocalRelayHost(baseURL.Hostname()) {
 		return r.httpClient, nil, nil
 	}
 	_, localClient, transport, err := utils.NewHTTPTLSClient(ctx, baseURL, defaultRequestTimeout)

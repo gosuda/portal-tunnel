@@ -112,7 +112,10 @@ function normalizePolicySettings(settings: PolicySettings | undefined): PolicySe
   };
 }
 
+type PendingApprovals = NonNullable<PolicyStateResponse["pending"]>;
+
 interface PolicyViewState {
+  pending: PendingApprovals;
   serverData: PolicyLease[];
   settings: PolicySettings;
 }
@@ -123,18 +126,22 @@ async function loadPolicyState(): Promise<PolicyViewState> {
 
   return {
     serverData: normalizedLeases,
+    pending: state.pending ?? [],
     settings: normalizePolicySettings(state?.policy),
   };
 }
 interface UseAdminResult extends UseListReturn<AdminServer> {
+  pending: PendingApprovals;
   servers: AdminServer[];
   banFilter: BanFilter;
   approvalMode: ApprovalMode;
   udpSettings: PortSettings;
   tcpPortSettings: PortSettings;
   policySaving: boolean;
+  loaded: boolean;
   loading: boolean;
   error: string;
+  refresh: () => Promise<void>;
   handleBanFilterChange: (value: BanFilter) => void;
   handleBanStatus: (identityKey: string, isBan: boolean) => Promise<void>;
   handleBPSChange: (identityKey: string, bps: number | null) => Promise<void>;
@@ -203,11 +210,7 @@ async function persistServerBPS(
   normalizedBPS: number,
   updateLeasePolicy: (identityKey: string, policy: Omit<LeasePolicyUpdate, "identity_key">) => Promise<void>
 ): Promise<void> {
-  if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
-    await updateLeasePolicy(identityKey, { bps: 0 });
-    return;
-  }
-  await updateLeasePolicy(identityKey, { bps: normalizedBPS });
+  await updateLeasePolicy(identityKey, { bps: Number.isFinite(normalizedBPS) ? normalizedBPS : 0 });
 }
 
 function reportAdminActionError(err: unknown, setError: (message: string) => void): void {
@@ -267,14 +270,14 @@ function throwOnBulkLeaseFailure(results: PromiseSettledResult<unknown>[]): void
     : new Error(`bulk lease action failed: ${String(failed.reason)}`);
 }
 
-async function executeBulkLeaseAction(identityKeys: string[], action: LeaseAction, post: (identityKey: string, policy: LeasePolicyUpdate) => Promise<unknown>): Promise<void> {
+async function executeBulkLeaseAction(identityKeys: string[], action: LeaseAction, post: (policy: LeasePolicyUpdate) => Promise<unknown>): Promise<void> {
   const normalizedIdentityKeys = normalizeBulkLeaseKeys(identityKeys);
   if (normalizedIdentityKeys.length === 0) {
     throw new Error("No valid leases selected");
   }
   const results = await Promise.allSettled(
     normalizedIdentityKeys.map((identityKey) =>
-      post(identityKey, toBulkLeasePolicy(identityKey, action))
+      post(toBulkLeasePolicy(identityKey, action))
     )
   );
   throwOnBulkLeaseFailure(results);
@@ -326,8 +329,10 @@ async function saveGuardedPolicySettings(current: PolicySettings, overrides: Par
 }
 
 export function useAdmin(enabled: boolean = true): UseAdminResult {
+  const [pending, setPending] = useState<PendingApprovals>([]);
   const [serverData, setServerData] = useState<PolicyLease[]>([]);
-  const [policySettings, setPolicySettings] = useState<PolicySettings>(DEFAULT_POLICY_SETTINGS);
+  const [loadedSettings, setPolicySettings] = useState<PolicySettings>();
+  const policySettings = loadedSettings ?? DEFAULT_POLICY_SETTINGS;
   const policyUpdatePending = useRef(false);
   const [policySaving, setPolicySaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -336,11 +341,13 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
   const [banFilter, setBanFilter] = useState<BanFilter>("all");
 
   const applyPolicyState = (state: PolicyViewState) => {
+    setPending(state.pending);
     setServerData(state.serverData);
     setPolicySettings(state.settings);
   };
 
   const loadGeneration = useRef(0);
+  const activeActions = useRef(0);
 
   const reload = async (showLoading: boolean) => {
     const generation = ++loadGeneration.current;
@@ -352,9 +359,28 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     applyEnabledState(enabled, reload, setError, setLoading);
   });
 
+  const refresh = async () => {
+    if (!enabled || activeActions.current > 0) return;
+    await reload(loadedSettings === undefined);
+  };
+
+  const poll = useEffectEvent(async () => {
+    if (!document.hidden) await refresh();
+  });
+
   useEffect(() => {
     loadOnEnable();
+    let cancelled = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        void poll().finally(() => { if (!cancelled) schedule(); });
+      }, 10_000);
+    };
+    if (enabled) schedule();
     return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
       loadGeneration.current += 1;
     };
   }, [enabled]);
@@ -372,6 +398,10 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
   });
 
   const runAdminAction = async (action: () => Promise<void>) => {
+    activeActions.current++;
+    // A read started before this write must not replace its result or an
+    // optimistic bandwidth edit. Polling resumes after the action's reload.
+    loadGeneration.current++;
     setError("");
     try {
       await action();
@@ -379,6 +409,8 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     } catch (err: unknown) {
       reportAdminActionError(err, setError);
       throw err;
+    } finally {
+      activeActions.current--;
     }
   };
 
@@ -410,8 +442,14 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     await applyServerBPSChange(identityKey, bps, { serverData, setServerData, runAdminAction, updateLeasePolicy });
   };
 
-  const handleApprovalModeChange = (mode: ApprovalMode) =>
-    updatePolicySettings({ approval_mode: mode });
+  const handleApprovalModeChange = async (mode: ApprovalMode) => {
+    if (mode === policySettings.approval_mode) return;
+    const count = mode === "manual" ? serverData.filter((s) => !s.explicitly_approved || s.is_banned || s.is_denied).length : pending.length;
+    if (count && !window.confirm(mode === "manual"
+      ? `${count} current lease(s) will lose their aliases, ports and cache. Switch to manual?`
+      : `${count} pending publisher(s) may register on their next attempt. Switch to auto?`)) return;
+    await updatePolicySettings({approval_mode: mode});
+  };
 
   const handleUDPSettingsChange = (settings: PortSettings) =>
     updatePolicySettings({ udp: { enabled: settings.enabled, max_leases: settings.maxLeases } });
@@ -425,7 +463,7 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
     runAdminAction(() => updateLeasePolicy(identityKey, { is_denied: deny }));
 
   const runBulkLeaseAction = async (identityKeys: string[], action: LeaseAction) => {
-    await executeBulkLeaseAction(identityKeys, action, (_identityKey, policy) =>
+    await executeBulkLeaseAction(identityKeys, action, (policy) =>
       apiClient.post<unknown>(RELAY_API_PATHS.policy.leases, policy)
     );
   };
@@ -439,20 +477,23 @@ export function useAdmin(enabled: boolean = true): UseAdminResult {
 
   const handleBulkBan = (identityKeys: string[]) => handleBulkAction(identityKeys, "ban");
 
-  const approvalMode = normalizeApprovalMode(policySettings.approval_mode);
+  const approvalMode = policySettings.approval_mode;
   const udpSettings = toPortSettings(policySettings.udp);
   const tcpPortSettings = toPortSettings(policySettings.tcp_port);
 
   return {
     servers,
+    pending,
     ...listState,
     banFilter,
     approvalMode,
     udpSettings,
     tcpPortSettings,
     policySaving,
+    loaded: loadedSettings !== undefined,
     loading,
     error,
+    refresh,
     handleBanFilterChange,
     handleBanStatus,
     handleBPSChange,

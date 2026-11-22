@@ -1,5 +1,5 @@
 # Build-time manifest, embedded into the binary via go:embed.
-# Bump protocol versions only when wire-level behavior changes.
+# Additive optional features do not bump protocols. See docs/maintainer/sdk-compatibility.md.
 
 [release]
 version  = "v2.8.0"

@@ -1,6 +1,7 @@
 import type { JSX } from "react";
 import { useMemo, useState } from "react";
 import { Check, Copy, ExternalLink, Globe, Search } from "lucide-react";
+import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import { relayReleaseLabel, type KnownRelay, type RelayReleases } from "@/lib/relays";
 
 const OFFICIAL_REGISTRY_SOURCE_URL =
@@ -59,6 +60,9 @@ function PublicRelayCard({ relay, releases, copiedURL, onCopyURL }: {
       >
         {relay.relayURL}
       </a>
+      <a href={relay.relayURL.replace(/\/$/, "") + RELAY_API_PATHS.sdk.domain} target="_blank" rel="noopener noreferrer" className="text-xs underline">
+        {relay.approvalMode ? `Admission: ${relay.approvalMode}` : "Check relay admission policy"}
+      </a>
       <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
           {relay.isCurrent ? "Current relay" : "Public relay"}
@@ -96,7 +100,7 @@ export function PublicRelaysSection({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 id="public-relays-title" className="text-2xl font-bold">Public relays</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Explore other relays and the apps they host.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Each relay sets its own policy. Manual relays require operator approval before allocating a lease.</p>
         </div>
         <a
           href={OFFICIAL_REGISTRY_SOURCE_URL}

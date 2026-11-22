@@ -21,11 +21,11 @@ var (
 
 // AliasHostname composes a single DNS label under the relay root.
 func AliasHostname(name, rootHost string) (string, error) {
-	label, err := types.NormalizeDNSLabel(name)
+	label, err := utils.NormalizeDNSLabel(name)
 	if err != nil {
 		return "", err
 	}
-	rootHost = types.NormalizeHostname(rootHost)
+	rootHost = utils.NormalizeHostname(rootHost)
 	if rootHost == "" {
 		return "", errRootHostIsRequired
 	}
@@ -44,19 +44,11 @@ func MatchesAlias(hostname, name, rootHost string) bool {
 	return err == nil && hostname == expected
 }
 
-// AddressParent returns the address.<root> DNS parent of a Local TLS hostname.
-// Callers must first validate the hostname with IsLocalTLSHostname or use a
-// canonical hostname derived for a negotiated Local TLS lease.
-func AddressParent(hostname string) string {
-	_, parent, _ := strings.Cut(hostname, ".")
-	return parent
-}
-
 // NormalizeServiceName normalizes a service name to a DNS label that cannot
 // be mistaken for a canonical label, so a friendly hostname never collides
 // with an identity-bound one.
 func NormalizeServiceName(raw string) (string, error) {
-	label, err := types.NormalizeDNSLabel(raw)
+	label, err := utils.NormalizeDNSLabel(raw)
 	if err != nil {
 		return "", err
 	}
@@ -70,7 +62,7 @@ func NormalizeServiceName(raw string) (string, error) {
 // address from the second label of a service.address.root hostname, with a lowercase 0x prefix.
 // Routing must additionally validate depth relative to its configured root.
 func CanonicalAddress(hostname string) (string, error) {
-	label, rest, ok := strings.Cut(types.NormalizeHostWithoutPort(hostname), ".")
+	label, rest, ok := strings.Cut(utils.NormalizeHostWithoutPort(hostname), ".")
 	if !ok || label == "" || rest == "" {
 		return "", errHostnameDoesNotContainCanonicalLease
 	}
@@ -114,11 +106,11 @@ func LocalTLSHostname(name, address, rootHost string) (string, error) {
 // IsLocalTLSHostname recognizes the exact two-label namespace relative to the
 // configured root, never by an absolute DNS depth.
 func IsLocalTLSHostname(hostname, rootHost string) bool {
-	root := types.NormalizeHostWithoutPort(rootHost)
+	root := utils.NormalizeHostWithoutPort(rootHost)
 	if ip := net.ParseIP(root); ip != nil && ip.IsLoopback() {
 		root = "localhost"
 	}
-	relative, ok := strings.CutSuffix(types.NormalizeHostWithoutPort(hostname), "."+root)
+	relative, ok := strings.CutSuffix(utils.NormalizeHostWithoutPort(hostname), "."+root)
 	if !ok || root == "" {
 		return false
 	}

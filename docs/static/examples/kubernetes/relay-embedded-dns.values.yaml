@@ -10,6 +10,9 @@
 # record for the Service address.
 env:
   PORTAL_URL: https://portal.example.com
+  # The Service address, published in A/AAAA records. Without it, the relay
+  # publishes the address of its outbound connections.
+  PUBLIC_IPS: 203.0.113.10
   # Raw TCP and UDP leases. Each port in the range becomes a Service port.
   # TCP_ENABLED: "true"
   # UDP_ENABLED: "true"

@@ -165,7 +165,7 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `IVNP_CONFIG` | `""` | path | Optional IVNP `RouterConfig` JSON file; enables the IVNP overlay and requires `DISCOVERY=true`; empty disables the overlay |
 | `APPROVAL_MODE` | `auto` | string | Initial lease approval mode (`auto` \| `manual`). A mode saved in `policy.json` wins; see [Private relay](/self-hosting#private-relay) |
 | `DEFAULT_IDENTITY_BPS` | `1048576` | int | Stream bytes/second per service identity without an individual admin override (`--default-identity-bps`); shared across all connections and both directions; `0` is unlimited |
-| `UNAPPROVED_LEASES_PER_SOURCE` | `64` | int | Leases one source IP can hold while they are not routable; `0` is unlimited; see [Private relay](/self-hosting#private-relay) |
+| `UNAPPROVED_LEASES_PER_SOURCE` | `64` | int | Per-source unapproved lease or pending request budget (0 disables the per-source limit); see [Private relay](/self-hosting#private-relay) |
 | `INSPECTIONS_PER_SOURCE` | `16` | int | Public sockets one IPv4 address or IPv6 /64 can hold while the relay reads their TLS ClientHello; `0` leaves only the 128-socket server-wide budget. Behind a TCP proxy every visitor shares the proxy's address; see [Source addresses](/relay-replacement#source-addresses-and-operational-verification) |
 | `TUNNEL_SOURCE_CIDRS` | `""` | string | Networks that may register tunnels (comma-separated CIDRs); a tunnel from anywhere else gets `403 source_not_allowed`; empty allows every network, and a value that names no network is a startup error; see [Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks) |
 
@@ -254,6 +254,7 @@ is the proxy when one sits in front. The trusted proxy must overwrite
 | `ACME_EAB_KID` | `""` | string | External Account Binding key ID for new ACME accounts. Provide together with `ACME_EAB_HMAC` when the CA requires EAB or you want to bind a new account. Existing CA-specific registrations are reused without EAB credentials. |
 | `ACME_EAB_HMAC` | `""` | secret | Base64url HMAC secret paired with `ACME_EAB_KID`. Unpadded and padded URL encoding are accepted by lego. Credentials are checked when registering a new account; missing, incomplete, malformed, or rejected credentials fail registration without CA fallback. Both EAB values are redacted from config reports. |
 | `ACME_DNS_PROVIDER` | `""` | string | DNS provider for managed DNS-01 challenges, A/AAAA sync, and ENS gasless DNSSEC/TXT automation (`embedded` \| `cloudflare` \| `gcloud` \| `hetzner` \| `njalla` \| `route53` \| `vultr`); unset defaults to `embedded`; valid manual `fullchain.pem`/`privatekey.pem` in `IDENTITY_PATH` overrides issuance only when neither `acme-account.key` nor `acme-registration.json` exists |
+| `PUBLIC_IPS` | `""` | string | The relay's public IPv4 and/or IPv6 address for A/AAAA records, comma-separated, at most one per family; empty discovers them from outbound connections. When set, the list replaces discovery for both families; see [IPv4 and IPv6](#ipv4-and-ipv6) |
 | `ENS_GASLESS_ENABLED` | `false` | bool | Enable ENS gasless DNS import automation for a public relay domain and lease hostnames through the selected DNS provider. With `embedded`, local records are signed and the operator publishes the DS at the parent zone; Cloudflare, Google Cloud DNS, Route53, and Vultr use their provider APIs. Hetzner and Njalla do not support ENS DNSSEC automation |
 
 ACME cancellation is cooperative, not an end-to-end issuance deadline. ACME HTTP
@@ -309,6 +310,21 @@ request to withdraw them. Explicit ENS hostname cleanup removes both A
 and AAAA records on external providers. Embedded DNS continues its zone-wide
 address synthesis and removes the hostname's ENS TXT association.
 
+Discovery finds the address of the relay's outbound connections. Set
+`PUBLIC_IPS` when clients reach the relay on another address, such as a cloud
+load balancer, a NAT gateway, a floating IP, or a DNAT rule, or when the relay
+cannot reach the discovery services. List at most one IPv4 and one IPv6
+address. The list is authoritative for both families: the relay publishes
+exactly these addresses for the apex, the wildcard, and tracked ENS hostnames,
+and sends no discovery requests. A family left out is neither discovered nor
+published. Embedded DNS stops answering for it after the restart; external
+providers keep that family's existing records, so remove them by hand when you
+drop a family. Entries must be bare IP addresses. Unspecified, loopback,
+link-local, and multicast addresses are rejected; private and special-use
+addresses start with a warning. The relay reads the list at startup, so a
+change needs a restart, and it logs the addresses it publishes with
+`source=PUBLIC_IPS` or `source=discovery`.
+
 IPv6-only and dual-stack relays require reachable published addresses. Public
 address discovery observes outbound connections; it does not prove that clients
 can reach the relay through host, container, or network firewalls. Allow the
@@ -320,7 +336,8 @@ routing between disconnected IPv4 and IPv6 networks.
 
 With a manual certificate and embedded DNS, startup continues when neither
 public address family can be discovered. Address initialization is deferred
-and retries are scheduled.
+and retries are scheduled. With `PUBLIC_IPS`, the addresses are known at
+startup and nothing is deferred.
 Existing addresses remain available during later discovery failures. Errors
 applying DNS updates still propagate. Manual certificates with an external
 provider bypass automatic apex/wildcard address management; manage those
@@ -330,7 +347,7 @@ records separately. Opt-in ENS automation still uses the selected provider.
 
 > This section is the canonical reference for embedded DNS configuration. The deployment and self-hosting guides link here rather than restating the details.
 
-Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` and/or `AAAA` pointing at reachable relay addresses) and open `53/tcp` + `53/udp` for each published family. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A and AAAA answers for the apex and every covered name are synthesized from the independently discovered relay addresses; ACME DNS-01 TXT records are served directly. DNSSEC signing is always enabled; ENS TXT automation remains opt-in with `ENS_GASLESS_ENABLED=true`.
+Serves the relay base domain from an authoritative DNS server embedded in the relay process, so no DNS provider API credentials are required. It is the default provider when `ACME_DNS_PROVIDER` is unset. Delegate the base domain once at the parent zone (`NS portal.example.com -> ns.portal.example.com` with glue `A` and/or `AAAA` pointing at reachable relay addresses) and open `53/tcp` + `53/udp` for each published family. Containers running without root need `CAP_NET_BIND_SERVICE` to bind the default port. A and AAAA answers for the apex and every covered name are synthesized from `PUBLIC_IPS`, or from the independently discovered relay addresses when it is unset; ACME DNS-01 TXT records are served directly. DNSSEC signing is always enabled; ENS TXT automation remains opt-in with `ENS_GASLESS_ENABLED=true`.
 
 The relay automatically generates a single ECDSA P-256 CSK (DNSSEC algorithm 13) in `IDENTITY_PATH/dnssec-csk.json`. Preserve and back up this file with the identity volume across restarts, container replacement, and migration: deleting or replacing it changes the DNSKEY and breaks validation against an existing parent DS. Portal uses Go's standard filesystem operations; on Unix a new key is created with mode `0600` and directories created by Portal use mode `0700`. Existing operator-provided directories and key files are loaded without ownership, mode, or ACL policy checks and are not modified. Securing the identity volume, including its Windows ACLs, is the operator's responsibility. Malformed keys and keys for another zone still fail startup rather than triggering automatic replacement.
 

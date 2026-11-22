@@ -103,8 +103,9 @@ contains `relay_url`, optional preferred `url`, `alias_url`, `canonical_url`,
 `verification: "relay-reported"`. A remote location may include
 `reputation: {up, down}`; absence is unknown, not zero. Repeated voters across
 relays are not deduplicated. Readiness is a relay claim, not a live probe.
-Unavailable canonical certificates do not produce canonical links. A service
-without an available HTTP URL can still have a location (for example raw TCP).
+Unavailable canonical certificates do not produce canonical links. A location
+can still appear without an HTTP URL, for example for a raw TCP service or an
+older HTTP lease with only a retired canonical hostname or no hostname at all.
 
 Results are observed public services, never an exhaustive address inventory or
 cryptographic proof of ownership. Remote metadata is relay-reported; remote
@@ -136,6 +137,25 @@ are not promoted to links. A failed remote directory does not change Discovery
 health or block the existing local `/api/state` endpoint.
 
 ### SDK
+
+`GET /sdk/domain` keeps `protocol_version` as the default SDK tunnel contract
+for shipped clients with exact-version checks. The optional
+`supported_protocol_versions` array is authoritative for newer SDKs: an absent
+or null list falls back to exact equality; an empty list accepts no protocols.
+Feature support remains separate (`namespaces`, `replicas`, `cache`, and
+`tenant_certificate_issuance`). Additive fields do not change old defaults.
+
+New SDKs send their selected `protocol_version` in
+`POST /sdk/register/challenge`; omission retains the default contract.
+Unsupported explicit selections return HTTP 426 with `protocol_incompatible`
+and instructions to upgrade the SDK or choose a compatible relay. A requested
+Local TLS namespace requires explicit support and is never silently downgraded.
+The current relay reports default `10` and supported `["10"]`, preserving
+main's protocol negotiation behavior. SDK v2.7.3 and v2.7.4 pass the version
+check but require the removed canonical response field during registration.
+Their registration limitation remains; see
+[the rollout instructions](/deployment#upgrading).
+Discovery protocol versions and signed descriptors have separate contracts.
 
 | Method | Path | Auth | Body | Response |
 |--------|------|------|------|----------|
@@ -278,6 +298,7 @@ their endpoints are unavailable.
 | `bps` | `number` |
 | `client_ip`, `reported_ip` | `string` |
 | `is_approved`, `is_banned`, `is_denied` | `boolean` |
+| `explicitly_approved` | `boolean` (saved identity decision, independent of auto approval) |
 
 `PublicStateResponse`:
 
@@ -291,6 +312,7 @@ their endpoints are unavailable.
 |-------|------|
 | `policy` | `PolicySettings` |
 | `leases` | `PolicyLease[]` |
+| `pending` | Optional array of authenticated requests. Each contains `identity_key`, `first_seen_at`, `last_seen_at`, and `expires_at`. |
 
 `PolicyPortSettings`:
 
@@ -340,6 +362,7 @@ their endpoints are unavailable.
 | `method_not_allowed` | endpoint does not accept the method |
 | `unauthorized` | credential is missing, expired, or invalid |
 | `feature_unavailable` | feature is unavailable; automatic tenant ACME errors may be temporary |
+| `protocol_incompatible` | explicit SDK protocol selection is unsupported; HTTP 426, upgrade the SDK or choose a compatible relay |
 | `tenant_issuance_disabled` | the relay does not offer automatic tenant certificate issuance |
 | `tenant_issuance_not_approved` | the service lacks explicit approval for automatic tenant certificate issuance |
 | `rate_limited` | request was throttled |
@@ -347,6 +370,7 @@ their endpoints are unavailable.
 | `replica_conflict` | a replica cannot join a live exclusive lease or retained cache entry; retryable |
 | `lease_not_found` | lease token or identity has no active lease |
 | `lease_rejected` | lease is not approved to route yet |
+| `approval_queue_full` | signed registration could not be queued; retry after the supplied delay |
 | `lease_denied` | relay denied or banned the lease |
 | `source_not_allowed` | relay does not accept tunnels from the caller's network |
 | `invalid_address` | address path or body value is invalid |
@@ -364,9 +388,9 @@ their endpoints are unavailable.
 CSR issuance, persistence, and renewal. `stateDir` is required at the SDK level;
 the CLI/agent resolve their identity-based defaults before calling it. Private
 leaf keys stay in that directory and are reused across restarts and renewals.
-With `requireLocal = false`, an older relay may provide legacy URLs. With it
-enabled, legacy-only relays are rejected and `WaitReady` waits for a usable
-canonical certificate. Public issuance needs relay opt-in, explicit service
+Both automatic TLS modes require a namespace-capable relay. With
+`requireLocal = false`, a granted alias can satisfy `WaitReady` while issuance
+is pending. With it enabled, `WaitReady` waits for a usable canonical certificate. Public issuance needs relay opt-in, explicit service
 approval, and durable shared budgets; see the
 [issuance endpoint contract](/api-reference/sdk#tenant-certificate).
 
@@ -377,8 +401,8 @@ or unsupported certificate material returns an error immediately. It never
 falls back to relay-backed signing.
 
 Automatic and manual modes are mutually exclusive, require the native runtime,
-and reject raw TCP. The CLI/agent additionally reject UDP and relay cache with
-Local TLS. At the lease-protocol level any cache opt-in remains on the separate
+and reject raw TCP. The CLI/agent additionally reject UDP with Local TLS.
+At the lease-protocol level any cache opt-in remains on the separate
 friendly alias; the canonical is never cache eligible. Manual mode requires
 a namespace-capable relay. `sdk.RunHTTP` enables canonical HTTP/2 with an actual
 HTTP consumer; raw `Expose`/`Proxy` callers retain HTTP/1.1 and do not gain h2
@@ -392,7 +416,7 @@ covered relays remain usable. Ordinary network failures remain retryable. Discov
 backoff policy and can select other relays.
 
 `Exposure.WaitReady` reports when a relay can route traffic. With automatic TLS
-and no require-local option, an granted alias can be ready while the new
+and no require-local option, a granted alias can be ready while the new
 canonical `PublicURL` remains empty. With require-local, `WaitReady` requires a
 usable canonical certificate. If every selected relay has failed terminally or
 refuses the required issuance, it returns the current errors. Issuance policy
@@ -402,7 +426,7 @@ open for policy recovery or another compatible relay.
 
 Certificate installation and expiry update the same SDK status used by
 `Relays()`, `Updates()`, `WaitReady()`, and JSON lifecycle records. The records
-include `legacy_url` separately from the usable canonical `public_url`.
+include `alias_url` separately from the usable canonical `public_url`.
 For `local-tls-v1` public leases, `canonical_ready` reports usable local material;
 `ready` continues to count reverse transport connections. The tunnel reports
 `local_tls_not_after` through authenticated lease renewal on certificate changes,

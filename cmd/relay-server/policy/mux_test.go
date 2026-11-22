@@ -87,7 +87,7 @@ func completeBudgetRegistration(t *testing.T, relay *httptest.Server, asking, si
 		t.Fatal(err)
 	}
 	request := types.RegisterRequest{ChallengeID: challenge.Data.ChallengeID, SIWEMessage: challenge.Data.SIWEMessage, SIWESignature: signature}
-	if registered, answer := postMuxJSON(t, relay, types.PathSDKRegister, signing, request); registered.StatusCode != http.StatusCreated {
+	if registered, answer := postMuxJSON(t, relay, types.PathSDKRegister, signing, request); registered.StatusCode != http.StatusServiceUnavailable || !bytes.Contains(answer, []byte(types.APIErrorCodeLeaseRejected)) {
 		t.Fatalf("%s register = %d: %s", name, registered.StatusCode, answer)
 	}
 }

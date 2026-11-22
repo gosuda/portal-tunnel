@@ -32,6 +32,7 @@ type ensDNSCommand struct {
 	address  string
 	remove   bool
 	ready    chan error
+	failed   bool // only the retry timer or shutdown retries failed work
 }
 
 func newENSStatus(cfg Config, dns dnsProvider) types.ENSStatus {
@@ -40,7 +41,7 @@ func newENSStatus(cfg Config, dns dnsProvider) types.ENSStatus {
 		provider = dns.Name()
 	}
 	return types.ENSStatus{
-		Enabled:  cfg.ENSGaslessEnabled && !types.IsLocalRelayHost(cfg.BaseDomain),
+		Enabled:  cfg.ENSGaslessEnabled && !utils.IsLocalRelayHost(cfg.BaseDomain),
 		Provider: provider,
 		Address:  strings.TrimSpace(cfg.ENSGaslessAddress),
 	}
@@ -90,7 +91,7 @@ func ensDNSSECVerified(state string) bool {
 }
 
 func (m *Manager) syncENSGasless(ctx context.Context) error {
-	if m == nil || !m.cfg.ENSGaslessEnabled || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
@@ -121,18 +122,18 @@ func (m *Manager) syncENSDNSSEC(ctx context.Context) error {
 // SyncLeaseHostname maintains exact canonical address records even without ENS.
 // It shares the serialized DNS lifecycle and durable tracking used by ENS aliases.
 func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address string) error {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
 	if !m.cfg.ENSGaslessEnabled && !namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
-	hostname = types.NormalizeHostname(hostname)
+	hostname = utils.NormalizeHostname(hostname)
 	if hostname == "" {
 		return errHostnameIsRequired
 	}
-	if !types.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
 	}
 
@@ -144,18 +145,18 @@ func (m *Manager) SyncLeaseHostname(ctx context.Context, hostname, address strin
 }
 
 func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) error {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 
-	hostname = types.NormalizeHostname(hostname)
+	hostname = utils.NormalizeHostname(hostname)
 	if !m.cfg.ENSGaslessEnabled && !namespace.IsLocalTLSHostname(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
 	if hostname == "" {
 		return nil
 	}
-	if !types.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
 	if hostname == m.cfg.BaseDomain {
@@ -164,8 +165,8 @@ func (m *Manager) DeleteLeaseHostname(ctx context.Context, hostname string) erro
 	return m.queueENSCommand(ctx, ensDNSCommand{hostname: hostname, remove: true})
 }
 
-// waitLeaseDNS gates external DNS-01 on the existing serialized address owner.
-// The queued check follows registration's address command without writing DNS.
+// waitLeaseDNS asks the serialized DNS worker to apply outstanding intents
+// before checking whether an external DNS-01 challenge may proceed.
 func (m *Manager) waitLeaseDNS(ctx context.Context, hostname string) error {
 	if m.dns == nil || m.dns.Name() == TypeEmbedded {
 		return nil
@@ -184,8 +185,11 @@ func (m *Manager) waitLeaseDNS(ctx context.Context, hostname string) error {
 	}
 }
 
-func (m *Manager) checkLeaseDNS(state *maintenanceLoopState, hostname string) error {
-	if _, pending := state.pendingENS[hostname]; pending {
+func (m *Manager) checkLeaseDNS(hostname string) error {
+	m.commandMu.RLock()
+	_, pending := m.pendingENS[hostname]
+	m.commandMu.RUnlock()
+	if pending {
 		return errLeaseDNSPending
 	}
 	tracked, err := m.trackedENSGaslessHostnames()
@@ -199,16 +203,44 @@ func (m *Manager) checkLeaseDNS(state *maintenanceLoopState, hostname string) er
 }
 
 func (m *Manager) queueENSCommand(ctx context.Context, command ensDNSCommand) error {
-	m.commandMu.RLock()
-	defer m.commandMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.commandMu.Lock()
 	select {
 	case <-m.stopCh:
+		m.commandMu.Unlock()
 		return errACMEManagerIsStopped
 	default:
 	}
+	if command.ready == nil {
+		if m.pendingENS == nil {
+			m.pendingENS = make(map[string]ensDNSCommand)
+		}
+		if previous, exists := m.pendingENS[command.hostname]; exists && previous.address == command.address && previous.remove == command.remove {
+			// Repeated registration must not bypass a failed intent's retry
+			// schedule. A changed desired state is admitted as fresh work.
+			m.commandMu.Unlock()
+			return nil
+		}
+		m.pendingENS[command.hostname] = command
+		// The map retains work, including failures. The channel only wakes the
+		// worker, so a busy DNS provider never blocks lease or policy changes.
+		select {
+		case m.ensCommands <- ensDNSCommand{}:
+		default:
+		}
+		m.commandMu.Unlock()
+		return nil
+	}
+	m.commandMu.Unlock()
+	// Only DNS-readiness checks wait for the worker; no registry or policy
+	// lock is held while sending them.
 	select {
 	case m.ensCommands <- command:
 		return nil
+	case <-m.stopCh:
+		return errACMEManagerIsStopped
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -219,7 +251,7 @@ func (m *Manager) applyENSCommand(ctx context.Context, command ensDNSCommand) er
 		return m.applyENSCommandRemove(ctx, command)
 	}
 	if command.hostname != m.cfg.BaseDomain {
-		publicIPs, err := utils.ResolvePublicIPs(ctx)
+		publicIPs, err := m.publicIPs(ctx)
 		if err != nil {
 			return fmt.Errorf("detect public ip: %w", err)
 		}
@@ -274,7 +306,7 @@ func (m *Manager) applyENSCommandStoreGaslessTXT(ctx context.Context, command en
 	})
 }
 func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 	var cleanupErr error
@@ -358,12 +390,12 @@ func normalizeChildHostnames(inputs []string, baseDomain string) []string {
 	if len(inputs) == 0 {
 		return nil
 	}
-	baseDomain = types.NormalizeBaseDomain(baseDomain)
+	baseDomain = utils.NormalizeBaseDomain(baseDomain)
 	var out []string
 	seen := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
-		hostname := types.NormalizeHostname(input)
-		if hostname == "" || hostname == baseDomain || !types.HostnameMatchesBaseDomain(hostname, baseDomain) {
+		hostname := utils.NormalizeHostname(input)
+		if hostname == "" || hostname == baseDomain || !utils.HostnameMatchesBaseDomain(hostname, baseDomain) {
 			continue
 		}
 		if _, ok := seen[hostname]; ok {

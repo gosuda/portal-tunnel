@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -125,8 +126,8 @@ func (s *Server) apiHandler(base http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := types.NormalizeHostWithoutPort(r.Host)
-		if r.TLS != nil && r.TLS.ServerName != "" && types.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
+		host := utils.NormalizeHostWithoutPort(r.Host)
+		if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
 			s.serveCachedSite(w, r, host)
 			return
 		}
@@ -245,7 +246,7 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
-	host := types.NormalizeHostname(announceURL.Hostname())
+	host := utils.NormalizeHostname(announceURL.Hostname())
 	if s.rejectAnnounceSelf(w, desc, host) {
 		return
 	}
@@ -273,12 +274,12 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 
 func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescriptor, host string) bool {
 	cfg := s.config()
-	if selfURL, err := types.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
+	if selfURL, err := utils.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
 			fmt.Sprintf("self-announce rejected: %q matches receiving relay url", desc.APIHTTPSAddr))
 		return true
 	}
-	if host != "" && host == types.NormalizeHostname(s.identity.Name) {
+	if host != "" && host == utils.NormalizeHostname(s.identity.Name) {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
 			fmt.Sprintf("self-announce rejected: host %q matches receiving relay host", host))
 		return true
@@ -294,6 +295,7 @@ func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescr
 func (s *Server) DomainReport() types.DomainResponse {
 	issuance := s.config().TenantCertificates && s.acmeManager.TenantIssuanceConfigured()
 	return types.DomainResponse{
+		SupportedProtocolVersions: []string{types.SDKVersion},
 		Replicas:                  true,
 		TenantCertificateIssuance: &issuance,
 		Namespaces:                []string{types.LocalTLSNamespaceV1},
@@ -331,7 +333,7 @@ func (s *Server) HandleCertificateChain(w http.ResponseWriter, r *http.Request) 
 // decision, then writes the response so the lease cannot become observable
 // before its routability is known.
 
-func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.ServiceIdentityKey, types.RegisterResponse, bool) {
+func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request, begin func(types.ServiceIdentityKey) (types.LeaseAccess, func())) (types.ServiceIdentityKey, types.RegisterResponse, bool) {
 	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
 	if !ok {
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
@@ -348,6 +350,22 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) (types.S
 		return types.ServiceIdentityKey{}, types.RegisterResponse{}, false
 	}
 	identityKey := challenge.Request.Identity.ServiceKey()
+	decision, done := begin(identityKey)
+	defer done()
+	switch decision {
+	case types.LeasePending:
+		delay, err := s.registry.requestApproval(identityKey, sourceAddr, time.Now())
+		w.Header().Set("Retry-After", strconv.Itoa(delay))
+		if err != nil {
+			writeAPIErrorResponse(w, err)
+		} else {
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeLeaseRejected, "waiting for relay approval: "+identityKey.String())
+		}
+		return identityKey, types.RegisterResponse{}, false
+	case types.LeaseDenied:
+		writeAPIErrorResponse(w, errLeaseDenied)
+		return identityKey, types.RegisterResponse{}, false
+	}
 	// Exclusive registration starts fail-closed. Replicas keep the existing
 	// identity decision so joining a service cannot interrupt its siblings.
 	// Mux publishes the current decision before returning either kind of token.
@@ -686,7 +704,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 		http.Error(w, "local TLS hostnames require tunnel termination", http.StatusMisdirectedRequest)
 		return
 	}
-	if req.TLS == nil || types.NormalizeHostname(req.TLS.ServerName) != host {
+	if req.TLS == nil || utils.NormalizeHostname(req.TLS.ServerName) != host {
 		http.Error(w, "TLS name and request host must match", http.StatusMisdirectedRequest)
 		return
 	}
@@ -737,4 +755,73 @@ func (s *Server) serveCachedSiteFallbackTransport(host string, record *leaseReco
 			return conn, nil
 		},
 	}
+}
+
+// HandleServices serves bounded network browsing and identity lookup without
+// changing the relay descriptor contract at /discovery.
+func (s *Server) HandleServices(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	query := r.URL.Query()
+	var address string
+	if query.Has("address") || query.Has("name") {
+		var err error
+		address, err = identity.NormalizeEVMAddress(query.Get("address"))
+		if err != nil {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "a valid identity address is required for identity lookup")
+			return
+		}
+	}
+	var name *string
+	if query.Has("name") {
+		value := query.Get("name")
+		if value != "" {
+			var err error
+			value, err = namespace.NormalizeServiceName(value)
+			if err != nil {
+				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid service name")
+				return
+			}
+		}
+		name = &value
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response, err := s.services.Lookup(r.Context(), s.PortalURL(), s.PublicLeases(), address, name)
+	if err != nil {
+		w.Header().Set("Retry-After", "1")
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeRateLimited, err.Error())
+		return
+	}
+	utils.WriteAPIData(w, http.StatusOK, response)
+}
+
+// HandleServiceComments exposes anonymous, read-only remote observations.
+// Local comments continue to use the relay's own comment API.
+func (s *Server) HandleServiceComments(w http.ResponseWriter, r *http.Request) {
+	if !utils.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	query := r.URL.Query()
+	address, err := identity.NormalizeEVMAddress(query.Get("address"))
+	if err != nil || !query.Has("name") {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "a valid service identity is required")
+		return
+	}
+	name := query.Get("name")
+	if name != "" {
+		name, err = namespace.NormalizeServiceName(name)
+		if err != nil {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid service name")
+			return
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response, err := s.services.Comments(r.Context(), s.PortalURL(), address, name)
+	if err != nil {
+		w.Header().Set("Retry-After", "1")
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeRateLimited, err.Error())
+		return
+	}
+	utils.WriteAPIData(w, http.StatusOK, response)
 }

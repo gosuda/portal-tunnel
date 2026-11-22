@@ -999,3 +999,37 @@ func newConnectTestRelay(t *testing.T) (*Server, *url.URL, string) {
 func wsURL(relayURL *url.URL) string {
 	return strings.Replace(relayURL.String(), "http://", "ws://", 1)
 }
+
+// A crashed client keeps its replica lease until expiry. Waiting on it must
+// not hold an incoming connection while a sibling refills a stream.
+func TestReplicaWaitMovesToSiblingThatRefills(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	server := &Server{registry: registry}
+	identity := newTestLeaseIdentity(t, "refill")
+	dead, _ := registerHTTPReplica(t, registry, identity)
+	healthy, _ := registerHTTPReplica(t, registry, identity)
+	// The dead replica is the least recently selected, so it is waited on first.
+	healthy.lastSelected = 1
+	inbound, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	result := make(chan error, 1)
+	go func() { result <- server.bridgeLeaseConn(t.Context(), inbound, dead, nil) }()
+
+	<-time.After(50 * time.Millisecond)
+	stream, origin := net.Pipe()
+	t.Cleanup(func() { _ = origin.Close() })
+	if err := healthy.reverse.Offer(stream); err != nil {
+		t.Fatal(err)
+	}
+	// The claim frame reaches the healthy replica long before the 10 s deadline.
+	_ = origin.SetReadDeadline(time.Now().Add(3 * time.Second))
+	frame := make([]byte, 1+types.TLSBindingSize)
+	if _, err := io.ReadFull(origin, frame); err != nil || frame[0] != types.ReverseMarkerTLSStart {
+		t.Fatalf("connection did not move to the refilled replica: %v", err)
+	}
+	_ = client.Close()
+	_ = origin.Close()
+	if err := <-result; err != nil {
+		t.Fatalf("bridge: %v", err)
+	}
+}

@@ -26,8 +26,8 @@ optional for clients. The examples live in
 
 Release tags publish both charts to `oci://ghcr.io/gosuda/charts`, with the
 chart version equal to the Portal release. Pin `--version` to the release you
-run. From a checkout, install `deploy/helm/portal-relay` or
-`deploy/helm/portal-tunnel` instead.
+run. From a checkout, install `docs/examples/helm/portal-relay` or
+`docs/examples/helm/portal-tunnel` instead.
 
 ## Prerequisites
 
@@ -40,30 +40,33 @@ run. From a checkout, install `deploy/helm/portal-relay` or
     embedded DNS needs `53/tcp` and `53/udp` on the address its NS delegation
     points at. Without a load balancer, set `service.type: NodePort` and route
     the public ports to the node ports yourself.
-  - A static public address for that Service.
+  - A static public address for that Service, set as `env.PUBLIC_IPS`. See
+    the next section.
   - A StorageClass that provides `ReadWriteOnce` volumes.
-  - A cluster whose outbound traffic leaves from that same public address.
-    See the next section.
 
 ### The relay's public address
 
-The relay learns its public address by asking external services which address
-its outbound connections come from. It then publishes A and AAAA records for
-that address, both from the embedded DNS and through an external DNS provider.
-There is no setting that overrides the detected address yet;
-[#819](https://github.com/gosuda/portal-tunnel/issues/819) proposes one.
+The relay publishes A and AAAA records for its public address, both from the
+embedded DNS and through an external DNS provider. Set that address to the
+Service address with `env.PUBLIC_IPS`: at most one IPv4 and one IPv6 address,
+comma-separated. A family you leave out is not published.
 
-On many clusters, outbound traffic leaves through a node address or a NAT
-gateway, not through the load balancer. DNS then sends visitors and tunnel
-clients to the wrong address. The two match on a single-node cluster whose
-load balancer publishes the node's own public address, such as k3s with its
-built-in ServiceLB. Compare the address a pod sees with the address the
-Service gets before you rely on a cluster:
-
-```bash
-kubectl run egress-check --rm -it --restart=Never --image=curlimages/curl -- \
-  curl -s https://api4.ipify.org
+```yaml
+env:
+  PUBLIC_IPS: 203.0.113.10
 ```
+
+Without `PUBLIC_IPS`, the relay asks external services which address its
+outbound connections come from. On many clusters, outbound traffic leaves
+through a node address or a NAT gateway, not through the load balancer, and
+DNS then sends visitors and tunnel clients to the wrong address. Discovery also
+needs outbound access to those services.
+
+The chart does not copy `service.loadBalancerIP` into `PUBLIC_IPS`. That field
+is deprecated, some load balancers ignore it, and behind a DNAT it is not the
+public address. A change of `PUBLIC_IPS` takes effect when `helm upgrade`
+restarts the pod. See [IPv4 and IPv6](/configuration#ipv4-and-ipv6) for the
+full rules, including the cleanup when you drop a family.
 
 ## Install the relay
 
@@ -82,6 +85,7 @@ with a values file based on one of the relay examples:
 # relay.values.yaml
 env:
   PORTAL_URL: https://portal.example.com
+  PUBLIC_IPS: 203.0.113.10
 existingSecret: portal-relay
 service:
   loadBalancerIP: 203.0.113.10
@@ -307,8 +311,10 @@ for the first certificate. Check the log for DNS-01 errors, check the NS
 delegation with `dig NS portal.example.com`, and check that `53/udp` and
 `53/tcp` reach the pod.
 
-**Names resolve to the wrong address.** The relay publishes the address it
-detects on outbound connections; see [The relay's public address](#the-relays-public-address).
+**Names resolve to the wrong address.** Set `env.PUBLIC_IPS` to the Service
+address; see [The relay's public address](#the-relays-public-address). The
+relay logs the addresses it publishes, and whether they come from
+`PUBLIC_IPS` or from discovery, on the line `published relay address records`.
 
 **The Service has no address, or lacks the UDP ports.** Some load balancers
 cannot mix TCP and UDP on one Service, or need an annotation for it. Check

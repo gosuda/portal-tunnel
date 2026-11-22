@@ -3,6 +3,7 @@ package types
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -71,19 +72,20 @@ type RegisterRequest struct {
 }
 
 // LocalTLSNamespaceV1 is explicitly negotiated before issuing two-label tenant
-// hostnames. An absent namespace retains the legacy URL and TLS contract.
+// hostnames. An absent namespace uses only a granted friendly alias.
 const LocalTLSNamespaceV1 = "local-tls-v1"
 
 // UnnamedServiceLabel is reserved only in the new Local TLS namespace.
 const UnnamedServiceLabel = "default"
 
 type RegisterChallengeRequest struct {
-	Namespace string `json:"namespace,omitempty"`
+	// Omission selects the default SDK contract identified by /sdk/domain.
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	Namespace       string `json:"namespace,omitempty"`
 	// Replica joins concurrent HTTP leases of the same service identity.
-	Replica  bool `json:"replica,omitempty"`
-	Cache    bool `json:"cache,omitempty"`
-	CacheTTL int  `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
-	// AllowCanonicalFallback permits registration to continue without the friendly alias.
+	Replica    bool          `json:"replica,omitempty"`
+	Cache      bool          `json:"cache,omitempty"`
+	CacheTTL   int           `json:"cache_ttl,omitempty"` // Requested offline seconds; clamped by the relay.
 	Identity   Identity      `json:"identity"`
 	Metadata   LeaseMetadata `json:"metadata"`
 	Overlay    bool          `json:"overlay,omitempty"`
@@ -201,9 +203,22 @@ type UnregisterRequest struct {
 	AccessToken string `json:"access_token"`
 }
 
+// TenantCertificateRequest contains a CSR whose private key stays on the tunnel.
+type TenantCertificateRequest struct {
+	CSRPEM string `json:"csr_pem"`
+}
+
+type TenantCertificateResponse struct {
+	CertificatePEM string `json:"certificate_pem"`
+}
+
 type DomainResponse struct {
-	Replicas   bool     `json:"replicas,omitempty"`
-	Namespaces []string `json:"namespaces,omitempty"`
+	ApprovalMode string `json:"approval_mode,omitempty"`
+	// SupportedProtocolVersions is authoritative when present. Omission means
+	// that only ProtocolVersion is supported, as on older relays.
+	SupportedProtocolVersions []string `json:"supported_protocol_versions,omitzero"`
+	Replicas                  bool     `json:"replicas,omitempty"`
+	Namespaces                []string `json:"namespaces,omitempty"`
 	// TenantCertificateIssuance is independent of manual Local TLS support.
 	// Nil means that the relay predates issuance capability reporting.
 	TenantCertificateIssuance *bool              `json:"tenant_certificate_issuance,omitempty"`
@@ -211,6 +226,19 @@ type DomainResponse struct {
 	ProtocolVersion           string             `json:"protocol_version"`
 	ReleaseVersion            string             `json:"release_version"`
 	ENS                       ENSStatus          `json:"ens"`
+}
+
+// SupportsProtocol separates SDK wire compatibility from release and feature
+// reporting. A present empty list supports no protocols; it is not a fallback.
+func (d DomainResponse) SupportsProtocol(version string) bool {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return false
+	}
+	if d.SupportedProtocolVersions == nil {
+		return strings.TrimSpace(d.ProtocolVersion) == version
+	}
+	return slices.Contains(d.SupportedProtocolVersions, version)
 }
 
 type ENSStatus struct {
@@ -266,9 +294,17 @@ type WalletAuthStatusResponse struct {
 	WalletAddress string `json:"wallet_address,omitempty"`
 }
 
+type PendingApproval struct {
+	IdentityKey string    `json:"identity_key"`
+	FirstSeenAt time.Time `json:"first_seen_at"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
 type PolicyStateResponse struct {
-	Policy PolicySettings `json:"policy"`
-	Leases []PolicyLease  `json:"leases,omitempty"`
+	Pending []PendingApproval `json:"pending,omitempty"`
+	Policy  PolicySettings    `json:"policy"`
+	Leases  []PolicyLease     `json:"leases,omitempty"`
 }
 
 // LeaseAccess is a relay's routing decision for one service identity.

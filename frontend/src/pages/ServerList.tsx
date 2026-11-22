@@ -6,17 +6,15 @@ import { ServerListView } from "@/components/ServerListView";
 import { ServerCommentsPanel } from "@/components/ServerCommentsPanel";
 import { useServerComments } from "@/hooks/useServerComments";
 import { useFederatedComments } from "@/hooks/useFederatedComments";
-import type { BaseServer } from "@/lib/server";
+import { isIdentityAddress, type BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useServiceDiscovery } from "@/hooks/useServiceDiscovery";
 import { ServiceRelaysPanel } from "@/components/ServiceRelaysPanel";
 
-const isHexAddress = (val: string) => /^0x[0-9a-fA-F]{40}$/i.test(val.trim());
-
 export function ServerList(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const identityParam = params.get("identity")?.trim() ?? "";
-  const activeIdentity = isHexAddress(identityParam) ? identityParam : "";
+  const activeIdentity = isIdentityAddress(identityParam) ? identityParam : "";
   const lastSetIdentityParamRef = useRef<string | null>(null);
   const [networkScope, setNetworkScope] = useState(true);
   const [relayServerId, setRelayServerId] = useState<string | null>(null);
@@ -60,7 +58,7 @@ export function ServerList(): JSX.Element {
       clearTags();
     }
     handleSearchChange(value);
-    if (isHexAddress(trimmed)) {
+    if (isIdentityAddress(trimmed)) {
       setNetworkScope(true);
       if (activeIdentity.toLowerCase() !== trimmed.toLowerCase()) {
         lastSetIdentityParamRef.current = trimmed;
@@ -116,11 +114,6 @@ export function ServerList(): JSX.Element {
         onToggleThisRelay={() => setNetworkScope(!networkScope)}
         discoveryLoading={identityDiscovery.loading}
         discoveryError={identityDiscovery.error}
-        discoveryCheckMore={
-          (identityDiscovery.response?.partial || identityDiscovery.error)
-            ? identityDiscovery.checkMore
-            : undefined
-        }
         browseView={browseView}
         sidebarOpen={sidebarOpen}
         onSidebarOpenChange={setSidebarOpen}
@@ -146,7 +139,7 @@ export function ServerList(): JSX.Element {
         onOpenComments={toggleComments}
         onVote={onVote}
       />
-      {relayServer && <ServiceRelaysPanel server={relayServer} {...relayPanel} onCheckMore={hasCatalogLocations ? identityDiscovery.checkMore : relayDiscovery.checkMore} localReputation={leases === null ? undefined : relayServer.observedLocalReputation} onClose={() => setRelayServerId(null)} />}
+      {relayServer && <ServiceRelaysPanel server={relayServer} {...relayPanel} onClose={() => setRelayServerId(null)} />}
       {commentServer && (
         <CommentsThread
           key={commentServer.id}

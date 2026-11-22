@@ -32,9 +32,6 @@ describe("service discovery", () => {
             verification: "relay-reported",
           }],
         }],
-        partial: false,
-        relays_checked: 2,
-        relays_skipped: 0,
       }));
       const { result, unmount } = renderHook(() => useServiceDiscovery(undefined, undefined, true, true));
       await act(async () => {});
@@ -49,67 +46,104 @@ describe("service discovery", () => {
     }
   });
 
-  it("checks the next relay window only when requested and keeps existing observations while loading", async () => {
-    vi.mocked(apiClient.get).mockResolvedValueOnce({ services: [], partial: true, relays_checked: 9, relays_skipped: 3 });
-    const { result } = renderHook(() => useServiceDiscovery(address));
+  it("keeps earlier relay locations when a later poll reports another relay", async () => {
+    vi.useFakeTimers();
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      services: [{
+        name: "blog",
+        address,
+        metadata: {},
+        locations: [{
+          relay_url: "https://relay-1.example",
+          current_relay: false,
+          reported_ready: true,
+          observed_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 30_000).toISOString(),
+          verification: "relay-reported",
+        }],
+      }],
+    });
+
+    const { result, unmount } = renderHook(() => useServiceDiscovery(address, undefined, true, true));
     await act(async () => {});
-    expect(result.current.response?.relays_checked).toBe(9);
-    expect(apiClient.get).toHaveBeenCalledTimes(1);
-    vi.mocked(apiClient.get).mockResolvedValueOnce({ services: [], partial: false, relays_checked: 12, relays_skipped: 0 });
-    act(() => result.current.checkMore());
-    expect(result.current.loading).toBe(true);
-    expect(result.current.response?.relays_checked).toBe(9);
-    await act(async () => {});
-    expect(result.current.loading).toBe(false);
-    expect(result.current.response?.relays_checked).toBe(12);
+
+    expect(result.current.response?.services[0].locations).toHaveLength(1);
+
+    // Second response has a new relay location for the same service
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      services: [{
+        name: "blog",
+        address,
+        metadata: {},
+        locations: [
+          {
+            relay_url: "https://relay-2.example",
+            current_relay: false,
+            reported_ready: true,
+            observed_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 30_000).toISOString(),
+            verification: "relay-reported",
+          },
+        ],
+      }],
+    });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(25_000); });
+
     expect(apiClient.get).toHaveBeenCalledTimes(2);
+    // Both relay locations must be retained
+    expect(result.current.response?.services[0].locations).toHaveLength(2);
+    const urls = result.current.response?.services[0].locations.map((l) => l.relay_url);
+    expect(urls).toContain("https://relay-1.example");
+    expect(urls).toContain("https://relay-2.example");
+    unmount();
+    vi.useRealTimers();
   });
 
   it("queries the current backend only after the relay selector is opened", async () => {
-    vi.mocked(apiClient.get).mockResolvedValue({ services: [], partial: false, relays_checked: 1, relays_skipped: 0 });
+    vi.mocked(apiClient.get).mockResolvedValue({ services: [] });
     const { result, rerender } = renderHook(({ open }) => useServiceDiscovery(address, "blog", open), { initialProps: { open: false } });
     expect(apiClient.get).not.toHaveBeenCalled();
     rerender({ open: true });
     await act(async () => {});
     expect(apiClient.get).toHaveBeenCalledWith(`/api/services?address=${address}&name=blog`);
-    expect(result.current.response?.relays_checked).toBe(1);
+    expect(result.current.response?.services).toEqual([]);
   });
 
-  it("drops expired locations even if no new directory snapshot has arrived", async () => {
+  it("does not drop previously discovered locations when a later poll does not contain them", async () => {
     vi.useFakeTimers();
-    try {
-      vi.mocked(apiClient.get).mockResolvedValue({
-        services: [{
-          name: "blog",
-          address,
-          metadata: {},
-          locations: [{
-            relay_url: "https://remote.example",
-            current_relay: false,
-            reported_ready: true,
-            observed_at: new Date().toISOString(),
-            expires_at: new Date(Date.now() + 1000).toISOString(),
-            verification: "relay-reported",
-          }],
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      services: [{
+        name: "blog",
+        address,
+        metadata: {},
+        locations: [{
+          relay_url: "https://remote.example",
+          current_relay: false,
+          reported_ready: true,
+          observed_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 30_000).toISOString(),
+          verification: "relay-reported",
         }],
-        partial: false,
-        relays_checked: 2,
-        relays_skipped: 0,
-      });
-      const { result, unmount } = renderHook(() => useServiceDiscovery(undefined));
-      await act(async () => {});
-      expect(result.current.response?.services).toHaveLength(1);
-      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-      expect(result.current.response?.services).toEqual([]);
-      expect(result.current.response?.partial).toBe(true);
-      unmount();
-    } finally {
-      vi.useRealTimers();
-    }
+      }],
+    });
+    const { result, unmount } = renderHook(() => useServiceDiscovery(undefined, undefined, true, true));
+    await act(async () => {});
+    expect(result.current.response?.services).toHaveLength(1);
+
+    // Later poll returns empty (e.g. backend rotated away), previous observation remains
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      services: [],
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(25_000); });
+    expect(apiClient.get).toHaveBeenCalledTimes(2);
+    expect(result.current.response?.services).toHaveLength(1);
+    unmount();
+    vi.useRealTimers();
   });
 
   it("does not carry another identity's response into a new filter", async () => {
-    vi.mocked(apiClient.get).mockResolvedValueOnce({ services: [], partial: false, relays_checked: 1, relays_skipped: 0 });
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ services: [] });
     const { result, rerender } = renderHook(({ owner }) => useServiceDiscovery(owner), { initialProps: { owner: address } });
     await act(async () => {});
     expect(result.current.response).toBeDefined();

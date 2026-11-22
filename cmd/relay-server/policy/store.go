@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"strings"
+	"sync"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -28,7 +29,10 @@ func ParseMode(raw string) (Mode, error) {
 // Store owns committed relay operator policy. Transactions edit a detached
 // Snapshot that Commit installs with a new revision.
 type Store struct {
-	state *utils.Snapshot[State]
+	// lifecycle orders verified registrations against durable policy publication
+	// and resource removal. Challenge and request body reads take no lock.
+	lifecycle sync.RWMutex
+	state     *utils.Snapshot[State]
 }
 
 // State is a detached operator policy: editing it never changes live policy.
@@ -52,7 +56,7 @@ func (s State) snapshot() State {
 }
 
 func NewStore() *Store {
-	return &Store{state: utils.NewSnapshot(State{}, State.snapshot)}
+	return &Store{state: utils.NewSnapshot(State{})}
 }
 
 // Snapshot returns an independent copy for readers or a proposed transaction.
@@ -60,15 +64,42 @@ func (a *Store) Snapshot() State {
 	if a == nil {
 		return State{}
 	}
-	return a.state.Load()
+	return a.state.Load().snapshot()
+}
+
+// Mode serves public capability reports without copying private identity maps.
+func (a *Store) Mode() Mode { return a.state.Load().Mode() }
+
+func (a *Store) beginRegistration(key types.ServiceIdentityKey) (types.LeaseAccess, func()) {
+	if a == nil {
+		return types.LeaseRoutable, func() {}
+	}
+	a.lifecycle.RLock()
+	state := a.state.Load()
+	return state.Access(key), a.lifecycle.RUnlock
+}
+
+// WithWrite runs one policy transaction while no verified registration is
+// between its access decision and resource allocation.
+func (a *Store) WithWrite(fn func()) {
+	a.lifecycle.Lock()
+	defer a.lifecycle.Unlock()
+	fn()
+}
+
+// WithRead runs fn against a policy view that no transaction changes meanwhile.
+func (a *Store) WithRead(fn func()) {
+	a.lifecycle.RLock()
+	defer a.lifecycle.RUnlock()
+	fn()
 }
 
 // Commit installs a durably saved candidate as one immutable revision.
 func (a *Store) Commit(next State) State {
 	return a.state.Update(func(previous State) State {
 		next.revision = previous.revision + 1
-		return next
-	})
+		return next.snapshot()
+	}).snapshot()
 }
 
 func (s State) Revision() uint64 {
@@ -103,6 +134,10 @@ func (s State) EffectiveApproval(key types.ServiceIdentityKey) bool {
 	if s.Mode() == ModeAuto {
 		return true
 	}
+	return s.ExplicitlyApproved(key)
+}
+
+func (s State) ExplicitlyApproved(key types.ServiceIdentityKey) bool {
 	_, ok := s.approved[key]
 	return ok
 }

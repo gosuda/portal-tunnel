@@ -194,7 +194,7 @@ type listener struct {
 func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*listener, error) {
 	listenerCtx, cancel := context.WithCancel(ctx)
 
-	entryRelayURL, err := types.NormalizeRelayURL(relayURL)
+	entryRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -356,7 +356,9 @@ func (l *listener) reportAvailable() {
 func (l *listener) run(ctx context.Context) {
 	var retries int
 	for {
-		l.report(listenerStatus{state: RelayConnecting})
+		if retries == 0 {
+			l.report(listenerStatus{state: RelayConnecting})
+		}
 		err := l.registerAndConfigure(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
@@ -364,6 +366,9 @@ func (l *listener) run(ctx context.Context) {
 			}
 			if l.closeForTerminalRelayError(err) {
 				return
+			}
+			if approval := relayApprovalFromError(err); approval != "" {
+				l.report(listenerStatus{state: RelayConnecting, approval: approval, version: l.api.relayReleaseVersion()})
 			}
 			retries++
 			if !l.waitRetry(ctx, "lease registration", err, retries, 0) {
@@ -1527,7 +1532,7 @@ func (c *namespaceTLS) TerminateConn(ctx context.Context, conn net.Conn, binding
 		_ = conn.Close()
 		return nil, err
 	}
-	hostname := types.NormalizeHostname(hello.ServerName)
+	hostname := utils.NormalizeHostname(hello.ServerName)
 	if hostname == c.hostname {
 		return c.local.TerminateConn(ctx, buffered, binding)
 	}
@@ -1653,7 +1658,7 @@ func reverseMuxEnded(mux *transport.ReverseMux) bool {
 }
 
 func validatePublicReverseHostname(host string) error {
-	if types.IsLocalOnlyRelayHost(host) {
+	if utils.IsLocalOnlyRelayHost(host) {
 		return fmt.Errorf("overlay gateway host %q is local-only", host)
 	}
 	if addr, err := netip.ParseAddr(host); err == nil && !utils.IsPublicIP(addr) {

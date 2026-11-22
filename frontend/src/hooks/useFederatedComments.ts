@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import type { BaseServer } from "@/lib/server";
+import { isIdentityAddress, type BaseServer } from "@/lib/server";
 import type { FederatedCommentsResponse } from "@/types/api";
 
 // Leave enough time for the backend to return partial results at its deadline.
@@ -19,7 +19,7 @@ type LoadedSample = {
 // deleted or removed comments do not linger and no rows are appended twice.
 export function useFederatedComments(server: BaseServer) {
   const address = server.address?.trim() ?? "";
-  const valid = /^0x[0-9a-f]{40}$/i.test(address);
+  const valid = isIdentityAddress(address);
   const key = new URLSearchParams({ address, name: server.serviceName ?? "" }).toString();
   const [generation, setGeneration] = useState(0);
   const [sample, setSample] = useState<LoadedSample>();

@@ -135,7 +135,11 @@ func openPolicyRelayControl(t *testing.T, stateDir string, base *url.URL, serveR
 
 func startPolicyRelay(t *testing.T, stateDir string, args ...string) (context.Context, *url.URL, *http.Client) {
 	t.Helper()
-	bin := buildRelayBinary(t)
+	return startPolicyRelayBinary(t, stateDir, buildRelayBinary(t), args...)
+}
+
+func startPolicyRelayBinary(t *testing.T, stateDir, bin string, args ...string) (context.Context, *url.URL, *http.Client) {
+	t.Helper()
 	frontend := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
 		t.Fatal(err)
@@ -276,7 +280,7 @@ func TestRelayIdentityBandwidthDefaultsAndOverrides(t *testing.T) {
 
 func ptr[T any](value T) *T { return &value }
 
-func waitPolicyLease(t *testing.T, ctx context.Context, client *http.Client, base *url.URL) types.PolicyLease {
+func waitPendingApproval(t *testing.T, ctx context.Context, client *http.Client, base *url.URL) types.PendingApproval {
 	t.Helper()
 	headers := http.Header{"Authorization": {"Bearer admin-test"}}
 	deadline := time.After(15 * time.Second)
@@ -285,8 +289,11 @@ func waitPolicyLease(t *testing.T, ctx context.Context, client *http.Client, bas
 		if err := utils.HTTPDoAPIPath(ctx, client, base, http.MethodGet, types.PathPolicyState, nil, headers, &state); err != nil {
 			t.Fatal(err)
 		}
-		if len(state.Leases) > 0 {
-			return state.Leases[0]
+		if len(state.Leases) != 0 {
+			t.Fatal("pending publisher acquired an active lease")
+		}
+		if len(state.Pending) > 0 {
+			return state.Pending[0]
 		}
 		select {
 		case <-deadline:
