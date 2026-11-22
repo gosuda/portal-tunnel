@@ -388,25 +388,17 @@ export function ServerListView({
     searchQuery.trim() !== "" || selectedTags.length > 0;
   const showConnecting = leases === null && !hasActiveFilters;
 
-  const handleTagToggle = (tag: string) =>
-    animateReorder(() => onTagToggle(tag), leases?.length ?? Infinity);
+  const reorderCardLimit = leases?.length ?? Infinity;
+  const reordered = <A extends unknown[]>(handler: (...args: A) => void) =>
+    (...args: A) => animateReorder(() => handler(...args), reorderCardLimit);
 
-  const handleClearTags = () =>
-    animateReorder(() => onClearTags(), leases?.length ?? Infinity);
+  const handleTagToggle = reordered(onTagToggle);
+  const handleClearTags = reordered(onClearTags);
+  const handleToggleThisRelay = onToggleThisRelay ? reordered(onToggleThisRelay) : undefined;
+  const handleSearchChange = reordered(onSearchChange);
+  const handleSortByChange = reordered(onSortByChange);
+  const handleSelectIdentity = onSelectIdentity ? reordered(onSelectIdentity) : handleSearchChange;
 
-  const handleToggleThisRelay = onToggleThisRelay
-    ? () => animateReorder(() => onToggleThisRelay(), leases?.length ?? Infinity)
-    : undefined;
-
-  const handleSearchChange = (value: string) =>
-    animateReorder(() => onSearchChange(value), leases?.length ?? Infinity);
-
-  const handleSortByChange = (value: SortOption) =>
-    animateReorder(() => onSortByChange(value), leases?.length ?? Infinity);
-
-  const handleSelectIdentity = onSelectIdentity
-    ? (identity: string) => animateReorder(() => onSelectIdentity(identity), leases?.length ?? Infinity)
-    : handleSearchChange;
 
   const paymentAppCount = filteredServers.filter((server) => server.paymentEnabled).length;
 
