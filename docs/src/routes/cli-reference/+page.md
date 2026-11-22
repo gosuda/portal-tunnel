@@ -163,6 +163,59 @@ accepted in the same command; advanced flags do not require a configuration file
 | `--exit-on-stdin-eof` | bool | `false` | Bind the tunnel lifetime to a caller-owned stdin pipe or socket; closing its last writer requests normal shutdown |
 | `--udp-addr` | string | | Local UDP target; defaults to the primary target when `--udp` is enabled |
 | `--metrics-addr` | string | | Optional `host:port` for Prometheus `/metrics` |
+| `--inspect` | bool | `false` | Enable the local HTTP traffic inspector on an ephemeral `127.0.0.1` port; no body capture by default; excludes TCP, UDP, and relay cache |
+| `--inspect-bodies` | bool | `false` | Capture request/response body previews up to 8 KiB each; may expose secrets; requires `--inspect` |
+
+### Local HTTP traffic inspector
+
+```bash
+portal expose 3000 --inspect
+# The log's inspector_url points to http://127.0.0.1:<assigned-port>.
+
+# Explicitly opt in to body previews when needed:
+portal expose 3000 --inspect --inspect-bodies
+```
+
+Open the logged `inspector_url` locally. The bundled UI refreshes every second
+and shows the latest 100 completed requests: time, method, path/query, selected
+headers, response status, duration, and optional body previews. Capture runs at
+the local HTTP gateway after Portal's sign-in/payment gates; denied requests do
+not reach this capture point. No relay protocol or TLS-decryption change is
+needed. Inspection is independent of `--metrics-addr` and disabled by default.
+
+Captures stay in memory and disappear when the tunnel stops or restarts. Header
+values are retained only for `Accept`, `Accept-Encoding`, `Accept-Language`,
+`Content-Type`, `Content-Length`, `Content-Encoding`, `User-Agent`, and
+`X-Request-ID`. Other values, including authorization, cookies, API keys, webhook
+signatures, and Portal identity proofs, are redacted and omitted from replay.
+Header storage is bounded to 8 KiB per side; request URI storage is limited to
+4 KiB. Credential-like query names are redacted and make that request ineligible
+for replay. Paths and other query values may still contain private data.
+
+Body capture requires a separate opt-in because payloads can contain secrets;
+Portal does not sanitize body content. Each preview retains at most 8 KiB,
+without buffering the entire request or response. Binary/compressed previews
+are not decoded. Incomplete, uncaptured, or oversized request bodies cannot be
+replayed. At most 16 transactions are captured concurrently; when busy, normal
+traffic continues without capture. Streaming responses continue to flush, SSE
+body previews are skipped, and upgrades/CONNECT and SSE transactions cannot be
+replayed. Long-lived transactions appear only after they finish.
+
+Select a transaction and choose **Replay to local upstream**, then confirm.
+Replay uses the saved method, path/query, eligible headers and complete captured
+body through the same configured router, without returning through the public
+relay or sign-in/payment gates. The API accepts no target URL or request edits,
+does not follow upstream redirects, permits one replay at a time, and bounds it
+to 10 seconds. The result appears as a new transaction linked to its original.
+**Replay can repeat non-idempotent actions**, such as purchases, messages, and
+data changes. Webhook signature/timestamp checks may reject it: redacted headers
+are omitted and signed payloads/timestamps are not regenerated.
+
+The UI/API binds only IPv4 loopback and rejects foreign Host/Origin requests;
+replay additionally requires the exact local Origin and an explicit action
+header. It is a local developer tool, not a multi-user access boundary against
+other processes on the machine. Do not expose its listener as a tunnel target,
+reverse-proxy it, or publish captures containing private data.
 
 ### IVNP-backed overlay networking
 

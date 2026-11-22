@@ -37,6 +37,29 @@ func TestParseHTTPRoute(t *testing.T) {
 	}
 }
 
+func TestInspectorRequiresLocalHTTPHandling(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config Config
+		valid  bool
+	}{
+		{"http target", Config{TargetAddr: "3000", Inspect: true}, true},
+		{"http routes", Config{HTTPRoutes: []HTTPRoute{{Prefix: "/hooks", Upstream: "3000"}}, Inspect: true}, true},
+		{"explicit bodies", Config{TargetAddr: "3000", Inspect: true, InspectBodies: true}, true},
+		{"bodies without inspector", Config{TargetAddr: "3000", InspectBodies: true}, false},
+		{"raw tcp", Config{TargetAddr: "3000", Inspect: true, TCPEnabled: true}, false},
+		{"raw udp", Config{TargetAddr: "3000", Inspect: true, UDPEnabled: true}, false},
+		{"relay cache", Config{Serve: ".", Inspect: true, Cache: &CacheConfig{}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.config.Resolve()
+			if (err == nil) != tc.valid {
+				t.Fatalf("Resolve() error = %v; valid = %t", err, tc.valid)
+			}
+		})
+	}
+}
+
 func TestConfigResolveRejectsBlankPaymentMethods(t *testing.T) {
 	for _, methods := range [][]string{{""}, {" "}, {"GET", " "}} {
 		cfg := Config{HTTPRoutes: []HTTPRoute{{

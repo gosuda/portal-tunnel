@@ -43,6 +43,8 @@ type Config struct {
 	UDPAddr             string      `toml:"udp_addr,omitempty"`
 	TCPEnabled          bool        `toml:"tcp,omitempty"`
 	Replica             bool        `toml:"replica,omitempty"`
+	Inspect             bool        `toml:"inspect,omitempty"`
+	InspectBodies       bool        `toml:"inspect_bodies,omitempty"`
 	// Cache comes from portal expose --cache; the agent config has no key for it.
 	Cache *CacheConfig `toml:"-"`
 
@@ -149,7 +151,7 @@ func (c Config) Resolve() (Config, error) {
 }
 
 func (c Config) usesHTTP() bool {
-	return c.TLSAuto || c.TLSCert != "" || c.Replica || c.Serve != "" || len(c.HTTPRoutes) > 0 ||
+	return c.Inspect || c.TLSAuto || c.TLSCert != "" || c.Replica || c.Serve != "" || len(c.HTTPRoutes) > 0 ||
 		!c.IsZero() || c.Cache != nil || len(c.StripRequestHeaders) > 0
 }
 
@@ -176,6 +178,12 @@ var (
 )
 
 func (c Config) validate() error {
+	if c.InspectBodies && !c.Inspect {
+		return fmt.Errorf("inspect_bodies requires inspect")
+	}
+	if c.Inspect && c.Cache != nil {
+		return fmt.Errorf("HTTP inspection cannot be combined with relay cache")
+	}
 	if c.Replica {
 		if c.Cache != nil || c.Overlay || c.TCPEnabled || c.UDPEnabled {
 			return errReplicaRequiresHTTP

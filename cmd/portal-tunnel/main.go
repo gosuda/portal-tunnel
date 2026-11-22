@@ -134,6 +134,8 @@ func registerPaymentTransportFlags(fs *flag.FlagSet, cfg *tunnel.Config, flags *
 	env.Bool(fs, &cfg.TCPEnabled, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
 	env.Int(fs, &cfg.MaxActiveRelays, "max-active-relays", discovery.DefaultMaxActiveRelays, nil, "Maximum auto-selected public relays to keep connected", "MAX_ACTIVE_RELAYS")
 	fs.StringVar(&flags.metricsAddr, "metrics-addr", "", "Optional address (host:port) to serve Prometheus /metrics. Empty = disabled.")
+	fs.BoolVar(&cfg.Inspect, "inspect", false, "Inspect HTTP traffic using an ephemeral localhost-only UI; selected headers only, no bodies by default")
+	fs.BoolVar(&cfg.InspectBodies, "inspect-bodies", false, "Capture up to 8 KiB of each HTTP request/response body in memory; bodies may contain secrets (requires --inspect)")
 	fs.StringVar(&flags.logFormat, "log-format", "text", "Log output format: text (default human-readable console) or json (one structured JSON log record per line on stdout; integrations filter relay lifecycle records by event=relay_status)")
 	fs.BoolVar(&flags.exitOnStdinEOF, "exit-on-stdin-eof", false, "Stop when the caller-owned stdin pipe closes; requires a pipe or socket, ignores bytes, and uses normal tunnel shutdown")
 }

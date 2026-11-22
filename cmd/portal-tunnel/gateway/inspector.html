@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Portal HTTP Inspector</title>
+<style>
+:root{color-scheme:light dark;font:15px system-ui,sans-serif}body{max-width:1200px;margin:24px auto;padding:0 16px}h1{font-size:24px}h2{font-size:18px}p{line-height:1.5}.notice{padding:12px;border:1px solid #888;border-radius:8px}main{display:grid;grid-template-columns:minmax(260px,1fr) minmax(0,2fr);gap:24px;margin-top:20px}button{font:inherit;padding:8px;cursor:pointer}button:disabled{cursor:default}#requests{display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow:auto}#requests button{text-align:left;overflow-wrap:anywhere}#requests button[aria-pressed=true]{outline:2px solid #637cf1}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:light-dark(#f2f3f5,#20232b);padding:12px;border-radius:6px;font-size:13px}#error{color:light-dark(#a40000,#ff9e9e)}#detail{min-width:0}@media(max-width:700px){main{grid-template-columns:1fr}#requests{max-height:35vh}}
+</style>
+<h1>Portal HTTP Inspector</h1>
+<p class="notice">Local, in-memory debugging only. The latest 100 completed transactions are retained.
+Bodies are off by default; <code>--inspect-bodies</code> / <code>inspect_bodies = true</code> captures up to 8 KiB per body and may expose secrets.
+Only selected header values are retained. Query values with credential-like names are redacted; paths and other query values may still contain private data.</p>
+<p>Replay sends a request directly to the configured upstream through the local router, bypassing public sign-in and payment gates.
+It can repeat purchases, send messages, or modify data. Redacted headers are omitted; webhook signature or timestamp checks may reject it.</p>
+<p id="connection" role="status">Connecting…</p><p id="error" role="alert"></p>
+<main><section aria-label="Recent requests"><div id="requests"></div></section>
+<section id="detail" aria-label="Selected transaction"><p>Select a request to inspect it.</p></section></main>
+<script>
+'use strict';
+const requests=document.getElementById('requests'), detail=document.getElementById('detail');
+const connection=document.getElementById('connection'), error=document.getElementById('error');
+let selected=null, revision='', replayBusy=false;
+function element(tag,text){const node=document.createElement(tag);node.textContent=text;return node;}
+async function api(path,options){const response=await fetch(path,{cache:'no-store',...options});if(!response.ok)throw new Error(await response.text());return response.json();}
+function section(title,text){detail.append(element('h2',title),element('pre',text));}
+function headers(value){return Object.entries(value||{}).map(([key,values])=>key+': '+values.join(', ')).join('\n')||'(none)';}
+async function select(id){
+  try{
+    const t=await api('/transactions/'+id);selected=id;revision='';detail.replaceChildren();
+    detail.append(element('h2',t.method+' '+t.path));
+    detail.append(element('p',new Date(t.time).toLocaleString()+' · HTTP '+t.status+' · '+t.duration_ms.toFixed(1)+' ms'+(t.replayed_from?' · Replay of #'+t.replayed_from:'')));
+    const replay=element('button','Replay to local upstream');replay.disabled=!t.replayable||replayBusy;
+    replay.addEventListener('click',async()=>{
+      if(replayBusy||!confirm('Replay this request to the configured upstream? This may repeat non-idempotent actions such as payments or data changes.'))return;
+      replayBusy=true;replay.disabled=true;error.textContent='';
+      try{const result=await api('/transactions/'+id+'/replay',{method:'POST',headers:{'X-Portal-Inspector':'replay'}});await select(result.id);}
+      catch(e){error.textContent=e.message;}
+      finally{replayBusy=false;const current=detail.querySelector('button');if(current)current.disabled=current.dataset.replayable!=='true';}
+    });
+    replay.dataset.replayable=String(t.replayable);detail.append(replay);
+    if(!t.replayable)detail.append(element('p',t.replay_disabled));
+    section('Request headers',headers(t.request_headers));
+    section('Request body',t.bodies_captured?(t.request_body||'(empty)')+(t.request_truncated?'\n[truncated]':''):'Body capture disabled.');
+    section('Response headers',headers(t.response_headers));
+    section('Response body',t.bodies_captured?(t.response_body||'(empty or streaming body skipped)')+(t.response_truncated?'\n[truncated]':''):'Body capture disabled.');
+    error.textContent='';
+  }catch(e){error.textContent=e.message;}
+}
+async function refresh(){
+  try{
+    const list=await api('/transactions');const next=list.map(t=>t.id).join(',')+':'+selected;
+    connection.textContent='Live · refreshes every second · '+list.length+' / 100 completed requests';
+    if(next!==revision){
+      revision=next;requests.replaceChildren();
+      if(!list.length)requests.append(element('p','Waiting for HTTP requests through the tunnel…'));
+      for(const t of list){const button=element('button','#'+t.id+' · '+t.method+' '+t.path+' · '+t.status+' · '+t.duration_ms.toFixed(1)+' ms');button.setAttribute('aria-pressed',String(t.id===selected));button.addEventListener('click',()=>select(t.id));requests.append(button);}
+    }
+  }catch(e){connection.textContent='Inspector unavailable: '+e.message;}
+  setTimeout(refresh,1000);
+}
+refresh();
+</script>
+</html>
