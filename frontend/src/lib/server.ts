@@ -86,17 +86,9 @@ export function mergeDiscoveredServices(
     const key = identityKey(service.name, service.address);
     const existing = byIdentity.get(key);
     if (existing) {
-      const mergedLocations = mergeLocations(existing.locations ?? [], service.locations);
-      // A local lease keeps its own endpoints. Otherwise take the endpoint of a
-      // live relay, so a service that is HTTP here and TCP/UDP elsewhere can
-      // still be copied from its card.
-      const live = mergedLocations.filter((location) => isLocationLive(location));
-      byIdentity.set(key, {
-        ...existing,
-        locations: mergedLocations,
-        tcpAddr: existing.tcpAddr || live.find((location) => location.tcp_addr)?.tcp_addr,
-        udpAddr: existing.udpAddr || live.find((location) => location.udp_addr)?.udp_addr,
-      });
+      // tcpAddr/udpAddr of a local card stay the local lease's own endpoints;
+      // the card reads remote endpoints from these locations.
+      byIdentity.set(key, { ...existing, locations: mergeLocations(existing.locations ?? [], service.locations) });
       continue;
     }
     // A local-only snapshot is not a substitute for the live local card list.

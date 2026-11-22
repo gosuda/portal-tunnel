@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ServiceRelaysPanel } from "./ServiceRelaysPanel";
-import type { BaseServer } from "@/lib/server";
+import { mergeDiscoveredServices, type BaseServer } from "@/lib/server";
 import type { ServiceLocation } from "@/types/api";
 
 const server: BaseServer = {
@@ -137,6 +137,19 @@ describe("relay selection", () => {
     fireEvent.click(udp[0]);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("b.example:40001"));
     expect(await screen.findByText("Copied!")).toBeDefined();
+  });
+
+  it("does not show a remote TCP address on the current relay row", () => {
+    const local = { id: "game.local.example", name: "game", serviceName: "game", address: server.address, description: "", tags: [], thumbnail: "", owner: "", online: true, dns: "game.local.example", link: "https://game.local.example/" };
+    const [merged] = mergeDiscoveredServices([local], [{
+      name: "game", address: server.address!, metadata: {}, locations: [
+        { ...observation, relay_url: "https://b.example", url: undefined, tcp_addr: "b.example:40000" },
+      ],
+    }], server.address);
+    render(<ServiceRelaysPanel server={merged} loading={false} onClose={vi.fn()} />);
+
+    expect(screen.getByRole("link", { name: /game\.local\.example/ }).getAttribute("href")).toBe("https://game.local.example/");
+    expect(screen.getAllByRole("button", { name: /^Copy TCP / }).map((button) => button.getAttribute("aria-label"))).toEqual(["Copy TCP b.example:40000"]);
   });
 
   it("keeps an expired transport relay unavailable and not copyable", () => {

@@ -47,18 +47,17 @@ describe("leaseToServer", () => {
 });
 
 describe("identity discovery cards", () => {
-  it("adds a live remote transport endpoint to a local HTTP card", () => {
+  it("keeps a local card's own endpoints separate from remote locations", () => {
     const local = leaseToServer({ ...lease, name: "game" });
     const live = { current_relay: false, reported_ready: true, observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(), verification: "relay-reported" as const };
     const [card] = mergeDiscoveredServices([local], [{
       name: "game", address: lease.address, metadata: {}, locations: [
-        { ...live, relay_url: "https://a.example", tcp_addr: "a.example:40000", expires_at: new Date(Date.now() - 1).toISOString() },
-        { ...live, relay_url: "https://b.example", tcp_addr: "b.example:40000", udp_addr: "b.example:40001" },
+        { ...live, relay_url: "https://b.example", tcp_addr: "b.example:40000" },
       ],
     }], lease.address);
     expect(card.link).toBe(local.link);
-    expect(card.tcpAddr).toBe("b.example:40000");
-    expect(card.udpAddr).toBe("b.example:40001");
+    expect(card.tcpAddr).toBeUndefined();
+    expect(card.locations?.[0].tcp_addr).toBe("b.example:40000");
   });
 
   it("takes transport endpoints only from live relays", () => {

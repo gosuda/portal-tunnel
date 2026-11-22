@@ -8,7 +8,7 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import { isLocationAvailable, type BaseServer } from "@/lib/server";
+import { isLocationAvailable, isLocationLive, type BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes, isReputationWarning } from "@/utils/reputation";
@@ -215,6 +215,16 @@ function resolveRepresentativeLink(server: BaseServer): string {
   // Navigate only to a relay that is ready, unexpired, and serves HTTPS. A raw
   // TCP lease hostname has no HTTP backend, so its URL is not a link.
   return server.locations?.find((location) => !location.tcp_addr && isLocationAvailable(location))?.url ?? "";
+}
+
+// The card's own endpoints come from its local lease. Without one, take the
+// endpoint of a live remote relay so it can still be copied.
+function resolveTransportAddrs(server: BaseServer): { tcpAddr?: string; udpAddr?: string } {
+  const live = (server.locations ?? []).filter((location) => !location.current_relay && isLocationLive(location));
+  return {
+    tcpAddr: server.tcpAddr || live.find((location) => location.tcp_addr)?.tcp_addr,
+    udpAddr: server.udpAddr || live.find((location) => location.udp_addr)?.udp_addr,
+  };
 }
 
 function buildEndpoints(
@@ -549,8 +559,9 @@ export function ServerCard({
 }: ServerCardProps): JSX.Element {
   const {
     id: serverId, name, description, tags, thumbnail,
-    tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
+    paymentEnabled = false, paymentLabel = "",
   } = server;
+  const { tcpAddr, udpAddr } = resolveTransportAddrs(server);
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const [isVoting, setIsVoting] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);

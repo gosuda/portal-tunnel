@@ -338,6 +338,20 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByText("a.example:40000")).toBeTruthy();
   });
 
+  it("shows a remote TCP endpoint on a local HTTP card and keeps its link", () => {
+    const local = { id: "game.local.example", name: "game", serviceName: "game", address: "0x2222222222222222222222222222222222222222", description: "", tags: [], thumbnail: "", owner: "", online: true, dns: "game.local.example", link: "https://game.local.example/" };
+    const [server] = mergeDiscoveredServices([local], [{
+      name: "game", address: local.address, metadata: {}, locations: [{
+        relay_url: "https://b.example", current_relay: false, reported_ready: true, tcp_addr: "b.example:40000",
+        observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(), verification: "relay-reported",
+      }],
+    }], local.address);
+    render(<MemoryRouter><ServerCard server={server} /></MemoryRouter>);
+
+    expect(screen.getAllByRole("link", { name: /Open game/ })[0].getAttribute("href")).toBe("https://game.local.example/");
+    expect(screen.getByText("b.example:40000")).toBeTruthy();
+  });
+
   it("shows no transport endpoint when every relay is offline", () => {
     const address = "0x2222222222222222222222222222222222222222";
     const [server] = mergeDiscoveredServices([], [{
