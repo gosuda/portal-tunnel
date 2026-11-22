@@ -511,3 +511,28 @@ func TestObservedReputationKeepsUnknownDistinctFromZero(t *testing.T) {
 		t.Fatalf("malformed optional reputation must be unknown: %+v", unknown)
 	}
 }
+
+func TestServiceLocationDropsTransportAddrsOffReportingRelay(t *testing.T) {
+	id := types.Identity{Name: "blog", Address: "0x" + strings.Repeat("1", 40)}
+	now := time.Now().UTC()
+	for _, test := range []struct {
+		name, addr, want string
+	}{
+		{"relay host", "relay.example:40000", "relay.example:40000"},
+		{"relay host case", "RELAY.example:40000", "RELAY.example:40000"},
+		{"other host", "evil.example:22", ""},
+		{"relay subdomain", "x.relay.example:40000", ""},
+		{"ip literal", "203.0.113.7:40000", ""},
+		{"missing port", "relay.example", ""},
+		{"zero port", "relay.example:0", ""},
+		{"port out of range", "relay.example:65536", ""},
+		{"named port", "relay.example:ssh", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			location, valid := serviceLocation("https://relay.example:444", types.Lease{TCPAddr: test.addr, UDPAddr: test.addr}, id, now, now.Add(serviceCacheTTL))
+			if !valid || location.TCPAddr != test.want || location.UDPAddr != test.want {
+				t.Fatalf("location=%+v valid=%v, want tcp/udp %q", location, valid, test.want)
+			}
+		})
+	}
+}

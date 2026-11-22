@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -423,6 +425,20 @@ func publicServiceCanonicalHostname(relay string, lease types.Lease, id types.Id
 	return ""
 }
 
+// relayTransportAddr keeps a reported transport address only when it names
+// the reporting relay host and a valid port. A relay must not point visitors
+// at another host.
+func relayTransportAddr(addr, relayHost string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || !strings.EqualFold(host, relayHost) {
+		return ""
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return ""
+	}
+	return addr
+}
+
 func serviceLocation(relay string, lease types.Lease, id types.Identity, observed, until time.Time) (types.ServiceLocation, bool) {
 	base, err := url.Parse(relay)
 	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil {
@@ -432,12 +448,8 @@ func serviceLocation(relay string, lease types.Lease, id types.Identity, observe
 		until = lease.ExpiresAt
 	}
 	location := types.ServiceLocation{RelayURL: relay, ObservedAt: observed, ExpiresAt: until, ReportedReady: lease.Ready > 0, Verification: "relay-reported"}
-	if lease.TCPAddr != "" {
-		location.TCPAddr = lease.TCPAddr
-	}
-	if lease.UDPAddr != "" {
-		location.UDPAddr = lease.UDPAddr
-	}
+	location.TCPAddr = relayTransportAddr(lease.TCPAddr, base.Hostname())
+	location.UDPAddr = relayTransportAddr(lease.UDPAddr, base.Hostname())
 	endpoint := func(host string) string {
 		authority := host
 		if base.Port() != "" {
