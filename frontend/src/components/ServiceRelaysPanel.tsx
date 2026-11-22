@@ -69,7 +69,7 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
                     return loc.relay_url.replace(/^https?:\/\//, "").replace(/\/$/, "");
                   }
                 })();
-                const isLive = loc.current_relay || isLocationLive(loc);
+                const isLive = loc.current_relay ? server.online : isLocationLive(loc);
                 return (
                   <div
                     key={loc.relay_url}
