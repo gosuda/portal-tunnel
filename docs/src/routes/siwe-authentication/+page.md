@@ -81,7 +81,7 @@ Credentials contain a subject, tunnel identity, host, and expiry and are signed
 with a key derived locally from the tunnel identity. A session never outlives
 the credential it redeemed. The credential remains redeemable until expiry; operators can pass `--auth-allow <subject>`
 (or `auth_allowed_wallets` in `config.toml`) to restrict allowed credential subjects
-and revoke individual subjects immediately on both active sessions and bearer requests. Keep that list non-empty: with no `--auth-allow`, every unexpired credential is accepted, so removing the last subject reopens access instead of ending it.
+and revoke individual subjects on both active sessions and bearer requests after restarting with the changed list. Keep that list non-empty: with no `--auth-allow`, every unexpired credential is accepted, so removing the last subject reopens access instead of ending it.
 
 API clients can present the same credential on each request:
 
@@ -90,6 +90,44 @@ curl -H "X-Portal-Access-Credential: $PORTAL_CREDENTIAL" https://myapp.example.c
 ```
 
 Portal validates and removes this header before forwarding the request.
+
+## Private Agent Preview
+
+For an explicitly private review, agree on the exact app/port, reviewers, and
+review window before opening the tunnel. Use a fresh preview identity where
+practical, stored outside the project, and an explicit non-empty allowlist:
+
+```bash
+portal expose 127.0.0.1:3000 --name review-3f9k2a \
+  --relays https://<selected-relay> --discovery=false --ban-mitm \
+  --identity-path /absolute/path/outside-project/private-review.json \
+  --auth credential --auth-allow alice-review --hide
+# After readiness, issue for the exact granted host, in a private terminal:
+portal auth issue '<ready-host>' --subject alice-review --expires 1h \
+  --identity-path /absolute/path/outside-project/private-review.json
+```
+
+Use a distinct subject for each reviewer and a short explicit TTL within the
+remaining approved window. Credential links are reusable bearer secrets; deliver
+only the redeem URL once through an approved private channel, with subject and
+absolute expiry. Keep credentials out of commits, issues, logs, and public output.
+Pin one relay so only one host needs checks, and use a unique name for each
+preview: a name another identity owns on that relay fails registration. `--ban-mitm` closes a relay whose
+TLS termination the self-probe detects; it does not catch every malicious relay.
+`--hide` removes listing, not authentication or network visibility. Never fall
+back to unauthenticated exposure.
+
+Before handoff, require anonymous GET/HEAD to redirect to login (`303`) and POST
+to return `401`; where the local harness supports it, assert zero anonymous
+origin hits, then verify the authorized reviewer reaches the app. Report any
+unverified checks. See the
+[Private Agent Preview workflow and testable example](https://github.com/gosuda/portal-tunnel/blob/main/plugins/portal-tunnel/skills/portal-expose/references/application-auth.md#private-agent-preview)
+for secret-safe issuance, verification, handoff, and owned-process cleanup.
+
+Stop the owned preview at review end or cancellation, preserving unrelated
+services. Credential expiry does not stop the tunnel, and links cannot be revoked
+one by one; the linked workflow describes expiry, subject revocation, and cleanup
+limits.
 
 ## SIWE Application Access
 
