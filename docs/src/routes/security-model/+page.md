@@ -180,7 +180,7 @@ The bootstrap is native-only. Browser/WASM clients fetch the chain through
 `http.DefaultClient` under ordinary browser certificate validation, so they
 cannot bootstrap from an untrusted local TLS endpoint: a localhost setup that
 relies on this path still fails in the browser. See the
-[relay TLS bootstrap](https://github.com/gosuda/portal-tunnel/blob/main/utils/tls.go).
+[relay TLS bootstrap](https://github.com/gosuda/portal-tunnel/blob/main/utils/http.go).
 
 A local relay issues itself a self-signed certificate, `fullchain.pem` in its
 `IDENTITY_PATH` directory, valid for 825 days, the longest Apple platforms
