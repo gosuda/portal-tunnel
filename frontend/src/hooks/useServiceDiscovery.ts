@@ -22,7 +22,7 @@ function nextLocationExpiry(response: ServiceDiscoveryResponse, now: number): nu
 
 // Keep every location seen for this filter. expires_at decides only whether a
 // location is available, never whether it is listed. The newest snapshot owns
-// service metadata and coverage counts.
+// service metadata.
 export function mergeDiscoveryResponses(
   previous: ServiceDiscoveryResponse | undefined,
   incoming: ServiceDiscoveryResponse,
@@ -37,7 +37,7 @@ export function mergeDiscoveryResponses(
       ? { ...service, locations: mergeLocations(existing.locations, service.locations) }
       : service);
   }
-  return { ...incoming, services: [...services.values()] };
+  return { services: [...services.values()] };
 }
 
 // Mounted by the public-list page. Card rendering alone never starts a lookup.
@@ -47,8 +47,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
   if (name !== undefined) query.set("name", name);
   const key = query.toString();
   const valid = address === undefined ? name === undefined : /^0x[0-9a-f]{40}$/i.test(address);
-  const [request, setRequest] = useState(0);
-  const [state, setState] = useState<{ key: string; request: number; response?: ServiceDiscoveryResponse; error?: string } | undefined>();
+  const [state, setState] = useState<{ key: string; response?: ServiceDiscoveryResponse; error?: string } | undefined>();
   useEffect(() => {
     if (!enabled || !valid) return;
     let cancelled = false;
@@ -73,7 +72,6 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
         if (!cancelled) {
           setState((previous) => ({
             key,
-            request,
             response: mergeDiscoveryResponses(previous?.key === key ? previous.response : undefined, incoming),
           }));
         }
@@ -82,7 +80,6 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
         const unsupported = error instanceof APIClientError && error.status === 404;
         setState((previous) => ({
           key,
-          request,
           response: previous?.key === key ? previous.response : undefined,
           error: unsupported
             ? "This relay does not support service discovery. The local directory is still available."
@@ -100,7 +97,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
       window.clearTimeout(deadline);
       window.clearTimeout(timer);
     };
-  }, [key, request, enabled, refresh, valid]);
+  }, [key, enabled, refresh, valid]);
 
   // Locations stay listed after expiry. Publish a new services array when one
   // expires so memoized consumers derive availability again.
@@ -123,8 +120,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
   const current = enabled && valid && state?.key === key ? state : undefined;
   return {
     response: current?.response,
-    error: current?.request === request ? current.error : undefined,
-    loading: enabled && valid && (!current || current.request !== request),
-    checkMore: () => setRequest((previous) => previous + 1),
+    error: current?.error,
+    loading: enabled && valid && !current,
   };
 }

@@ -34,9 +34,6 @@ describe("useServerList public snapshot", () => {
 
   it.each(["", lease.address])("keeps the local scope independent of identity %s", async (identity) => {
     const directory: ServiceDiscoveryResponse = {
-      partial: true,
-      relays_checked: 2,
-      relays_skipped: 1,
       services: [{
         name: "remote",
         address: lease.address,
@@ -60,7 +57,6 @@ describe("useServerList public snapshot", () => {
     await act(async () => {});
     expect(result.current.filteredServers).toHaveLength(2);
     expect(result.current.filteredServers.find((server) => server.remoteOnly)?.name).toBe("remote");
-    expect(result.current.identityDiscovery.response?.partial).toBe(true);
 
     rerender({ network: false });
     expect(result.current.filteredServers.map((server) => server.id)).toEqual([lease.canonical_hostname]);
@@ -238,9 +234,6 @@ describe("useServerList public snapshot", () => {
 
   it("does not hide remote-only services even if downvoted", async () => {
     const directory: ServiceDiscoveryResponse = {
-      partial: false,
-      relays_checked: 1,
-      relays_skipped: 0,
       services: [{
         name: "remote-downvoted",
         address: lease.address,

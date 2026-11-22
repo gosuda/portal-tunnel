@@ -28,7 +28,7 @@ describe("relay selection", () => {
       server={{ id: "blog.local.example", name: "blog", serviceName: "blog", address, description: "", tags: [], thumbnail: "", owner: "", online: true, dns: "blog.local.example", link: "https://blog.local.example/" }}
       loading={false}
       onClose={vi.fn()}
-      response={{ partial: true, relays_checked: 3, relays_skipped: 1, services: [{ name: "blog", address, metadata: {}, locations: [
+      response={{ services: [{ name: "blog", address, metadata: {}, locations: [
         { ...observation, relay_url: "https://remote.example", url: "https://blog.remote.example/" },
         { ...observation, relay_url: "https://older.example", url: undefined },
       ] }] }}
