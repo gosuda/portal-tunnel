@@ -644,6 +644,9 @@ func (l *listener) runStaticCache(ctx context.Context) {
 		return
 	}
 	syncer := l.cache.Subscribe(*l.api.relayURL, limits)
+	if syncer == nil {
+		return
+	}
 	defer syncer.Close()
 	for syncer.Next(ctx) {
 		lease, ok := l.leaseSnapshot()

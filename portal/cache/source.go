@@ -42,6 +42,8 @@ type Source struct {
 	changed  chan struct{}
 	wake     chan struct{}
 	done     chan struct{}
+	idle     *sync.Cond
+	closing  bool
 	close    sync.Once
 	closeErr error
 }
@@ -61,7 +63,9 @@ func NewSource(cfg SourceConfig) (*Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relay cache source: %w", err)
 	}
-	return &Source{root: root, index: index, ttl: cfg.TTL, limits: make(map[*Syncer]types.StaticCacheLimits), changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}, nil
+	source := &Source{root: root, index: index, ttl: cfg.TTL, limits: make(map[*Syncer]types.StaticCacheLimits), changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	source.idle = sync.NewCond(&source.mu)
+	return source, nil
 }
 
 // ConfigureRegistration applies this source's cache permission and requested TTL.
@@ -120,13 +124,20 @@ func (s *Source) Wait() {
 	<-s.done
 }
 
-// Close releases the source's pinned static root after Run and all subscribers
-// have stopped. It is safe to call more than once.
+// Close refuses new subscribers, waits until every Syncer is closed, and then
+// releases the pinned static root. Cancel subscribers before calling it. It is
+// safe to call more than once.
 func (s *Source) Close() error {
 	if s == nil {
 		return nil
 	}
 	s.close.Do(func() {
+		s.mu.Lock()
+		s.closing = true
+		for len(s.limits) > 0 {
+			s.idle.Wait()
+		}
+		s.mu.Unlock()
 		if s.root != nil {
 			s.closeErr = s.root.Close()
 		}
