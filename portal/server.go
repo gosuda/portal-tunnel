@@ -289,6 +289,7 @@ type Server struct {
 	ingressClosed     bool
 	ingressConns      map[net.Conn]netip.Prefix
 	ingressSources    map[netip.Prefix]int
+	ingressSourceWarn time.Time
 	ingressInspecting int
 	ingressTenants    int
 	ingressWorkers    sync.WaitGroup
@@ -1250,6 +1251,11 @@ func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 		}
 		source, _ = remoteSourcePrefix(conn.RemoteAddr())
 		if limit := s.config().InspectionsPerSource; limit > 0 && s.ingressSources[source] >= limit {
+			if now := time.Now(); now.Sub(s.ingressSourceWarn) >= time.Minute {
+				s.ingressSourceWarn = now
+				log.Warn().Str("source", source.String()).Int("limit", limit).
+					Msg("public ingress source reached INSPECTIONS_PER_SOURCE; closing new connections until its handshakes finish")
+			}
 			return false
 		}
 	} else if s.ingressTenants >= publicIngressLimit {
