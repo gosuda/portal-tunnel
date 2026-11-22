@@ -1,141 +1,128 @@
 package tunnel
 
 import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/go-jose/go-jose/v4"
 
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 )
 
-func newHTTPFeatureSpec() Spec {
-	return Spec{Transport: TransportSpec{Target: "localhost:3000"}, HTTP: &HTTPConfig{}}
+func startOIDCRuntime(t *testing.T, issuer string) *Runtime {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime, err := Start(ctx, Config{
+		Name: "auth-check", IdentityPath: filepath.Join(t.TempDir(), "identity.json"),
+		RelayURLs: []string{"https://127.0.0.1:1"}, Discovery: new(false),
+		TargetAddr: "127.0.0.1:3000",
+		AuthConfig: appauth.Config{
+			Provider:   appauth.ProviderOIDC,
+			Allow:      []string{"alice@example.com"},
+			OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: issuer, OIDCClientID: "client-123"},
+		},
+	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		_ = runtime.Close()
+	})
+	return runtime
 }
 
-func TestSpecValidateModes(t *testing.T) {
-	tests := []struct {
-		name  string
-		spec  Spec
-		valid bool
-	}{
-		{name: "raw target", spec: Spec{Transport: TransportSpec{Target: "localhost:3000"}}, valid: true},
-		{name: "missing mode", spec: Spec{}},
-		{name: "HTTP target", spec: Spec{Transport: TransportSpec{Target: "localhost:3000"}, HTTP: &HTTPConfig{}}, valid: true},
-		{name: "HTTP route", spec: Spec{HTTP: &HTTPConfig{Routes: []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}}}, valid: true},
-		{name: "static", spec: Spec{HTTP: &HTTPConfig{Serve: "./dist"}}, valid: true},
-		{name: "HTTP with TCP", spec: Spec{Transport: TransportSpec{Target: "localhost:3000", TCP: true}, HTTP: &HTTPConfig{}}},
-		{name: "HTTP with UDP", spec: Spec{Transport: TransportSpec{Target: "localhost:3000", UDP: &UDPConfig{}}, HTTP: &HTTPConfig{}}},
-		{name: "target and route", spec: Spec{Transport: TransportSpec{Target: "localhost:3000"}, HTTP: &HTTPConfig{Routes: []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:4000"}}}}},
+func newOIDCIssuer(t *testing.T, release <-chan struct{}, healthy bool) (*httptest.Server, <-chan struct{}) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if err := test.spec.Validate(); (err == nil) != test.valid {
-				t.Fatalf("Validate() = %v, want valid=%v", err, test.valid)
-			}
-		})
+	jwks := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k", Algorithm: "ES256", Use: "sig"}}}
+	requested := make(chan struct{})
+	var once sync.Once
+	var issuer *httptest.Server
+	issuer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(requested) })
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		switch {
+		case !healthy:
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		case r.URL.Path == "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"issuer":                 issuer.URL,
+				"authorization_endpoint": issuer.URL + "/authorize",
+				"token_endpoint":         issuer.URL + "/token",
+				"jwks_uri":               issuer.URL + "/jwks",
+			})
+		case r.URL.Path == "/jwks":
+			_ = json.NewEncoder(w).Encode(jwks)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(issuer.Close)
+	return issuer, requested
+}
+
+func waitForAuthProviderCheck(t *testing.T, runtime *Runtime) error {
+	t.Helper()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(10 * time.Second)
+	for {
+		if checked, err := runtime.AuthProviderCheck(); checked {
+			return err
+		}
+		select {
+		case <-ticker.C:
+		case <-timeout:
+			t.Fatal("auth provider check did not finish")
+			return nil
+		}
 	}
 }
 
-func TestSpecValidateHTTPFeatures(t *testing.T) {
-	tests := []struct {
-		name  string
-		edit  func(*Spec)
-		valid bool
-	}{
-		{name: "siwe", edit: func(spec *Spec) { spec.HTTP.Auth = &appauth.Config{Provider: "siwe"} }, valid: true},
-		{name: "unknown auth", edit: func(spec *Spec) { spec.HTTP.Auth = &appauth.Config{Provider: "unknown"} }},
-		{name: "missing auth provider", edit: func(spec *Spec) { spec.HTTP.Auth = &appauth.Config{IdentityHeaders: true} }},
-		{name: "credential allowlist", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{Provider: "credential", Allow: []string{"alice"}}
-		}, valid: true},
-		{name: "credential invalid allowlist", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{Provider: "credential", Allow: []string{""}}
-		}},
-		{name: "siwe invalid allowlist", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{Provider: "siwe", Allow: []string{"not-a-wallet"}}
-		}},
-		{name: "oidc valid", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{
-				Provider:   "oidc",
-				OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123"},
-				Allow:      []string{"alice@example.com"},
-			}
-		}, valid: true},
-		{name: "oidc missing client id", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{
-				Provider:   "oidc",
-				OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com"},
-			}
-		}},
-		{name: "oidc non-https issuer", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{
-				Provider:   "oidc",
-				OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "http://idp.example.com", OIDCClientID: "client-123"},
-			}
-		}},
-		{name: "oidc settings with siwe provider", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{
-				Provider:   "siwe",
-				OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com"},
-			}
-		}},
-		{name: "paid route", edit: func(spec *Spec) {
-			spec.Transport.Target = ""
-			spec.HTTP.Payment.PayTo = "recipient"
-			spec.HTTP.Routes = []HTTPRoute{{Prefix: "/paid", Upstream: "http://localhost:4000", Methods: []string{"GET"}, Amount: "1"}}
-		}, valid: true},
-		{name: "payment without recipient", edit: func(spec *Spec) {
-			spec.Transport.Target = ""
-			spec.HTTP.Routes = []HTTPRoute{{Prefix: "/paid", Upstream: "http://localhost:4000", Amount: "1"}}
-		}},
-		{name: "cache static", edit: func(spec *Spec) {
-			spec.Transport.Target = ""
-			spec.HTTP.Serve = "./dist"
-			spec.HTTP.Cache = &CacheConfig{}
-		}, valid: true},
-		{name: "cache target", edit: func(spec *Spec) { spec.HTTP.Cache = &CacheConfig{} }},
-		{name: "strip request headers", edit: func(spec *Spec) {
-			spec.Transport.Target = ""
-			spec.HTTP.Routes = []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:4000"}}
-			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
-		}, valid: true},
-		{name: "strip request headers with auth target", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{Provider: "siwe"}
-			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
-		}, valid: true},
-		{name: "strip request headers on static", edit: func(spec *Spec) {
-			spec.Transport.Target = ""
-			spec.HTTP.Serve = "./dist"
-			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
-		}},
-		{name: "strip request headers on target only", edit: func(spec *Spec) {
-			spec.HTTP.StripRequestHeaders = []string{"X-Tenant-User"}
-		}, valid: true},
-		{name: "strip Host", edit: func(spec *Spec) {
-			spec.HTTP.StripRequestHeaders = []string{"Host"}
-		}},
-		{name: "strip X-Forwarded-Proto", edit: func(spec *Spec) {
-			spec.HTTP.StripRequestHeaders = []string{"X-Forwarded-Proto"}
-		}},
-		{name: "strip X-Portal-User with auth identity headers", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{Provider: "siwe", IdentityHeaders: true}
-			spec.HTTP.StripRequestHeaders = []string{"X-Portal-User"}
-		}, valid: true},
-		{name: "strip X-Portal-Auth without auth identity headers", edit: func(spec *Spec) {
-			spec.HTTP.Auth = &appauth.Config{Provider: "siwe"}
-			spec.HTTP.StripRequestHeaders = []string{"X-Portal-Auth"}
-		}, valid: true},
-		{name: "invalid strip request header name", edit: func(spec *Spec) {
-			spec.Transport.Target = ""
-			spec.HTTP.Routes = []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:4000"}}
-			spec.HTTP.StripRequestHeaders = []string{"X Tenant"}
-		}, valid: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			spec := newHTTPFeatureSpec()
-			test.edit(&spec)
-			if err := spec.Validate(); (err == nil) != test.valid {
-				t.Fatalf("Validate() = %v, want valid=%v", err, test.valid)
-			}
-		})
-	}
+func TestRuntimeAuthProviderCheck(t *testing.T) {
+	t.Run("usable provider", func(t *testing.T) {
+		release := make(chan struct{})
+		issuer, requested := newOIDCIssuer(t, release, true)
+		runtime := startOIDCRuntime(t, issuer.URL)
+		select {
+		case <-requested:
+		case <-time.After(10 * time.Second):
+			t.Fatal("provider was never asked")
+		}
+		if checked, _ := runtime.AuthProviderCheck(); checked {
+			t.Fatal("checked before the provider answered")
+		}
+		close(release)
+		if err := waitForAuthProviderCheck(t, runtime); err != nil {
+			t.Fatalf("usable provider reported %v", err)
+		}
+	})
+
+	t.Run("unusable provider", func(t *testing.T) {
+		release := make(chan struct{})
+		close(release)
+		issuer, _ := newOIDCIssuer(t, release, false)
+		runtime := startOIDCRuntime(t, issuer.URL)
+		if err := waitForAuthProviderCheck(t, runtime); err == nil {
+			t.Fatal("unusable provider reported no error")
+		}
+	})
 }

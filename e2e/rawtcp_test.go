@@ -155,10 +155,9 @@ func startRawTCPTestTunnel(t *testing.T, host, target string) (string, *tunnel.R
 	t.Cleanup(cancel)
 	relayURL := bootRawTCPServer(t, ctx, host)
 
-	runtime, err := tunnel.Start(ctx, tunnel.Spec{
-		Identity:  tunnel.IdentitySpec{Name: "rawtcp"},
-		Relays:    tunnel.RelaySpec{URLs: []string{relayURL}},
-		Transport: tunnel.TransportSpec{Target: target, TCP: true},
+	runtime, err := tunnel.Start(ctx, tunnel.Config{
+		Name: "rawtcp", RelayURLs: []string{relayURL}, Discovery: new(false),
+		TargetAddr: target, TCPEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("start raw TCP tunnel: %v", err)

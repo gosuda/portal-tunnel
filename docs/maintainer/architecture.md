@@ -41,7 +41,7 @@ granted friendly alias. The Local TLS canonical origin remains tunnel-owned.
 - `cmd/portal-tunnel/tunnel`: owns the tunnel configuration of the CLI and the
   agent. `tunnel.Config` holds what the user set through `portal expose` flags, a
   `[[tunnels]]` entry of the agent config, or an Agent API request.
-  `Config.Spec` is the one step from a `Config` to the runtime `Spec`: it
+  `Config.Resolve` prepares an execution copy of the same type: it
   normalizes the values, fills in the defaults, and validates the result. A
   component with settings of its own keeps its type and its keys with its owner:
   `appauth.Config` with `OIDCConfig`, `SAMLConfig`, and `EmailConfig`,
@@ -260,8 +260,8 @@ and application body limits remain enforced at their respective boundaries.
 Relay startup and config diagnostics share one side-effect-free preparation
 path, retaining Portal's normalized settings and rejecting invalid environment
 values. Portal owns static transport-policy validation; a running server also
-checks listener availability before applying changes. Tunnel config-to-spec
-conversion uses explicit settings only. The expose CLI resolves environment
+checks listener availability before applying changes. Tunnel config
+resolution uses explicit settings only. The expose CLI resolves environment
 defaults during flag registration; the agent applies its facilitator-token
 default to a runtime copy without writing that secret into its config file.
 
