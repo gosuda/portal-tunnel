@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
+	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -1031,5 +1032,51 @@ func TestReplicaWaitMovesToSiblingThatRefills(t *testing.T) {
 	_ = origin.Close()
 	if err := <-result; err != nil {
 		t.Fatalf("bridge: %v", err)
+	}
+}
+
+func TestTransportServiceHTTPFallback(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	server := &Server{
+		registry: registry,
+		identity: identity.RelayIdentity{Identity: types.Identity{Name: "relay.example.com"}},
+	}
+	record := &leaseRecord{
+		Identity:  types.Identity{Name: "my-ssh"},
+		Hostname:  "my-ssh.relay.example.com",
+		ExpiresAt: time.Now().Add(time.Hour),
+		tcpPort:   40001,
+		Metadata:  types.LeaseMetadata{Description: "SSH service"},
+	}
+	registry.records = append(registry.records, record)
+
+	// Test HTML fallback
+	recHTML := httptest.NewRecorder()
+	reqHTML := httptest.NewRequest(http.MethodGet, "https://my-ssh.relay.example.com/", nil)
+	reqHTML.Header.Set("Accept", "text/html")
+	if !server.handleTransportFallback(recHTML, reqHTML, "my-ssh.relay.example.com") {
+		t.Fatal("handleTransportFallback returned false for TCP service")
+	}
+	if recHTML.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recHTML.Code)
+	}
+	bodyHTML := recHTML.Body.String()
+	if !strings.Contains(bodyHTML, "relay.example.com:40001") || !strings.Contains(bodyHTML, "TRANSPORT SERVICE") {
+		t.Fatalf("unexpected HTML body: %s", bodyHTML)
+	}
+
+	// Test JSON fallback
+	recJSON := httptest.NewRecorder()
+	reqJSON := httptest.NewRequest(http.MethodGet, "https://my-ssh.relay.example.com/", nil)
+	reqJSON.Header.Set("Accept", "application/json")
+	if !server.handleTransportFallback(recJSON, reqJSON, "my-ssh.relay.example.com") {
+		t.Fatal("handleTransportFallback returned false for TCP service")
+	}
+	if recJSON.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recJSON.Code)
+	}
+	bodyJSON := recJSON.Body.String()
+	if !strings.Contains(bodyJSON, "relay.example.com:40001") || !strings.Contains(bodyJSON, `"transport":true`) {
+		t.Fatalf("unexpected JSON body: %s", bodyJSON)
 	}
 }

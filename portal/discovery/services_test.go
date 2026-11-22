@@ -477,10 +477,11 @@ func TestServiceLocationValidatesNamespaceAndDoesNotPromoteLegacyURLs(t *testing
 		{"spoofed canonical", types.Lease{Namespace: types.LocalTLSNamespaceV1, CanonicalHostname: "blog." + strings.Repeat("2", 40) + ".relay.example", CanonicalReady: true}, false, ""},
 		{"port in alias", types.Lease{Hostname: "blog.relay.example:443"}, false, ""},
 		{"unknown namespace", types.Lease{Namespace: "unknown", Hostname: "blog.relay.example"}, false, ""},
+		{"transport endpoints", types.Lease{TCPAddr: "relay.example:40000", UDPAddr: "relay.example:40001"}, true, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			location, valid := serviceLocation("https://relay.example:444", test.lease, id, now, now.Add(serviceCacheTTL))
-			if valid != test.valid || location.URL != test.want {
+			if valid != test.valid || location.URL != test.want || location.TCPAddr != test.lease.TCPAddr || location.UDPAddr != test.lease.UDPAddr {
 				t.Fatalf("location=%+v valid=%v", location, valid)
 			}
 		})

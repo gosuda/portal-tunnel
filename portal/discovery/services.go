@@ -226,6 +226,13 @@ func (s *ServiceLookup) lookup(ctx context.Context, self string, local []types.L
 				if commentSources != nil && !location.CurrentRelay {
 					commentSources[relay] = commentSource{hostname: publicServiceCanonicalHostname(relay, lease, id), expiresAt: location.ExpiresAt}
 				}
+			} else {
+				if locations[relayIndex].TCPAddr == "" && location.TCPAddr != "" {
+					locations[relayIndex].TCPAddr = location.TCPAddr
+				}
+				if locations[relayIndex].UDPAddr == "" && location.UDPAddr != "" {
+					locations[relayIndex].UDPAddr = location.UDPAddr
+				}
 			}
 		}
 	}
@@ -425,6 +432,12 @@ func serviceLocation(relay string, lease types.Lease, id types.Identity, observe
 		until = lease.ExpiresAt
 	}
 	location := types.ServiceLocation{RelayURL: relay, ObservedAt: observed, ExpiresAt: until, ReportedReady: lease.Ready > 0, Verification: "relay-reported"}
+	if lease.TCPAddr != "" {
+		location.TCPAddr = lease.TCPAddr
+	}
+	if lease.UDPAddr != "" {
+		location.UDPAddr = lease.UDPAddr
+	}
 	endpoint := func(host string) string {
 		authority := host
 		if base.Port() != "" {

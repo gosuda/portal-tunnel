@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -128,10 +129,16 @@ func (s *Server) apiHandler(base http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := utils.NormalizeHostWithoutPort(r.Host)
 		if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
+			if s.handleTransportFallback(w, r, host) {
+				return
+			}
 			s.serveCachedSite(w, r, host)
 			return
 		}
 		if s.registry.cache != nil && host != s.identity.Name && net.ParseIP(host) == nil {
+			if s.handleTransportFallback(w, r, host) {
+				return
+			}
 			s.serveCachedSite(w, r, host)
 			return
 		}
@@ -755,6 +762,77 @@ func (s *Server) serveCachedSiteFallbackTransport(host string, record *leaseReco
 			return conn, nil
 		},
 	}
+}
+
+func (s *Server) handleTransportFallback(w http.ResponseWriter, req *http.Request, host string) bool {
+	record, ok := s.registry.Lookup(host)
+	if !ok || (record.tcpPort <= 0 && record.datagram == nil) {
+		return false
+	}
+	serviceName := record.Name
+	if serviceName == "" {
+		serviceName = host
+	}
+	var tcpAddr, udpAddr string
+	if record.tcpPort > 0 {
+		tcpAddr = net.JoinHostPort(s.identity.Name, strconv.Itoa(record.tcpPort))
+	}
+	if record.datagram != nil {
+		udpAddr = net.JoinHostPort(s.identity.Name, strconv.Itoa(record.datagram.UDPPort()))
+	}
+	accept := req.Header.Get("Accept")
+	if strings.Contains(accept, "application/json") {
+		utils.WriteAPIData(w, http.StatusOK, map[string]any{
+			"service":     serviceName,
+			"transport":   true,
+			"tcp_addr":    tcpAddr,
+			"udp_addr":    udpAddr,
+			"description": record.Metadata.Description,
+		})
+		return true
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	s.renderTransportFallbackHTML(w, serviceName, tcpAddr, udpAddr, record.Metadata.Description)
+	return true
+}
+
+func (s *Server) renderTransportFallbackHTML(w http.ResponseWriter, name, tcpAddr, udpAddr, description string) {
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>%s - Transport Service</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #09090b; color: #f4f4f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1.5rem; box-sizing: border-box; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 2rem; max-width: 480px; width: 100%%; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+    .badge { display: inline-block; background: #27272a; color: #10b981; font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.5rem; border-radius: 4px; margin-bottom: 1rem; letter-spacing: 0.05em; }
+    h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.5rem; color: #ffffff; }
+    p { color: #a1a1aa; font-size: 0.875rem; line-height: 1.5; margin: 0 0 1.25rem; }
+    .endpoints { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; }
+    .endpoint { display: flex; align-items: center; justify-content: space-between; background: #09090b; border: 1px solid #27272a; border-radius: 6px; padding: 0.75rem 1rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.875rem; color: #e4e4e7; }
+    .proto { color: #71717a; font-size: 0.75rem; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">TRANSPORT SERVICE</div>
+    <h1>%s</h1>
+    <p>%s</p>
+    <div class="endpoints">
+`, html.EscapeString(name), html.EscapeString(name), html.EscapeString(cmp.Or(description, "This service is a raw TCP/UDP port mapping and does not host an HTTP website. Connect using a compatible client.")))
+	if tcpAddr != "" {
+		fmt.Fprintf(w, `      <div class="endpoint"><span>%s</span><span class="proto">TCP</span></div>`+"\n", html.EscapeString(tcpAddr))
+	}
+	if udpAddr != "" {
+		fmt.Fprintf(w, `      <div class="endpoint"><span>%s</span><span class="proto">UDP</span></div>`+"\n", html.EscapeString(udpAddr))
+	}
+	fmt.Fprint(w, `    </div>
+  </div>
+</body>
+</html>
+`)
 }
 
 // HandleServices serves bounded network browsing and identity lookup without

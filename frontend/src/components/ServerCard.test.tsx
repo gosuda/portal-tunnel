@@ -304,6 +304,23 @@ describe("ServerCard comments interaction", () => {
     expect(openRelays).toHaveBeenCalledWith(server);
   });
 
+  it("renders transport service badge and does not show No HTTP URL available", () => {
+    const address = "0x2222222222222222222222222222222222222222";
+    const [server] = mergeDiscoveredServices([], [{
+      name: "ssh-box", address, metadata: { description: "SSH Server" }, locations: [{
+        relay_url: "https://relay.example", current_relay: false, reported_ready: true,
+        tcp_addr: "relay.example:40000",
+        observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z", verification: "relay-reported",
+      }],
+    }], address);
+    render(<MemoryRouter><ServerCard server={server} /></MemoryRouter>);
+
+    expect(screen.getByRole("heading", { name: /ssh-box/ })).toBeTruthy();
+    expect(screen.getByText("TCP")).toBeTruthy();
+    expect(screen.getByText(/TCP transport service/)).toBeTruthy();
+    expect(screen.queryByText(/No HTTP URL available/)).toBeNull();
+  });
+
   it("renders description and tags in overlay alongside transport endpoints", () => {
     render(
       <MemoryRouter>

@@ -105,6 +105,8 @@ export function mergeDiscoveredServices(
       },
       { up: 0, down: 0 }
     );
+    const firstTCP = locations.find((location) => location.tcp_addr)?.tcp_addr;
+    const firstUDP = locations.find((location) => location.udp_addr)?.udp_addr;
     byIdentity.set(key, {
       id: `service:${key}`,
       serviceName: service.name,
@@ -119,6 +121,8 @@ export function mergeDiscoveredServices(
       link: "",
       remoteOnly: true,
       locations,
+      tcpAddr: firstTCP,
+      udpAddr: firstUDP,
       observedReputation: reportedLocations.length ? totals : undefined,
     });
   }
