@@ -524,9 +524,6 @@ func TestEmailSignInLegacyAliasAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
-		// Exercise the HTTP authorization burst without saturating the relay's
-		// separate per-source ClientHello inspection budget.
-		MaxConnsPerHost:   4,
 		DisableKeepAlives: true,
 		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true, ServerName: canonical.Hostname(), MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
