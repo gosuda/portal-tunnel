@@ -78,8 +78,8 @@ function CommentsTrigger({ server, onOpenComments }: {
         event.stopPropagation();
         onOpenComments(server);
       }}
-      aria-label={server.remoteOnly ? "View network comments" : "Comments"}
-      title={server.remoteOnly ? "View relay-reported comments" : `Comments: ${server.reputation?.comments ?? 0}`}
+      aria-label="Comments"
+      title={`Comments: ${server.reputation?.comments ?? 0}`}
       className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
     >
       <MessageSquare className="size-3.5 shrink-0" />
@@ -398,7 +398,7 @@ function VoteControls({ server, isVoting, onVote, onSelect }: { server: BaseServ
     return server.observedReputation ? (
       <span
         className="inline-flex h-7 items-center gap-2 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] text-muted-foreground"
-        title="Observed totals across remote relays; voters are not deduplicated. Open Relays for source counts."
+        title="Observed reputation"
       >
         Observed +{server.observedReputation.up}/−{server.observedReputation.down}
       </span>

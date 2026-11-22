@@ -230,8 +230,7 @@ function CommentsBody({ server, loading, comments, error, busy, onRemove, onVote
   ].sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0) || a.key.localeCompare(b.key));
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5" aria-busy={loading || federation.loading}>
-      {loading && <p role="status" className="text-sm text-muted-foreground">Loading comments from this relay…</p>}
-      {federation.loading && <p role="status" className="text-sm text-muted-foreground">Checking other relay comments…</p>}
+      {(loading || federation.loading) && <p role="status" className="text-sm text-muted-foreground">Loading comments…</p>}
       {federation.error && <p role="status" className="text-sm text-muted-foreground">{federation.error}</p>}
       {entries.length > 0 ? (
         <ol className="space-y-6">
@@ -242,7 +241,7 @@ function CommentsBody({ server, loading, comments, error, busy, onRemove, onVote
       ) : !loading && !federation.loading && !error && !federation.error && (
         <div className="py-12 text-center">
           <MessageSquare className="mx-auto mb-3 size-8 text-muted-foreground" />
-          <p className="text-sm font-semibold">{server.remoteOnly ? "No comments observed" : "Start the conversation"}</p>
+          <p className="text-sm font-semibold">{server.remoteOnly ? "No comments yet" : "Start the conversation"}</p>
           {!server.remoteOnly && <p className="mt-2 text-xs text-muted-foreground">Share feedback or ask a question about this app.</p>}
         </div>
       )}
