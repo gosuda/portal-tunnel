@@ -566,7 +566,10 @@ portal expose --serve ./site/index.html
 
 Unknown paths fall back to the entry HTML file. Keep private files outside the
 served directory. Path traversal (`..`) is refused, and a symlink whose target is
-outside the folder answers `404`; a symlink inside the folder is followed. Static serving
+outside the folder answers `404`; a symlink inside the folder is followed. The
+folder is opened once at start: edits inside it are served at once, but after the
+folder itself is replaced (`rm -rf dist` and rebuild, or a moved release symlink),
+restart the exposure to serve the new folder. Static serving
 is available in both `expose` and agent TOML; the agent format supports `serve` but
 not relay cache options (`cache` or `cache_ttl`).
 
