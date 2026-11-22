@@ -43,7 +43,7 @@ async function mutateCommentList(
   }
 }
 
-export function useServerComments(server: BaseServer, enabled = true): { comments: AppComment[]; draft: string; setDraft: Dispatch<SetStateAction<string>>; loading: boolean; pending: "post" | "delete" | null; votingCommentId: string | null; error: string; refresh: () => Promise<void>; submit: () => Promise<void>; remove: (id: string) => Promise<void>; voteComment: (id: string, vote: ReputationVoteAction) => Promise<void> } {
+export function useServerComments(server: BaseServer, enabled = true): { comments: AppComment[]; draft: string; setDraft: Dispatch<SetStateAction<string>>; loading: boolean; pending: "post" | "delete" | null; votingCommentId: string | null; busy: boolean; error: string; refresh: () => Promise<void>; submit: () => Promise<void>; remove: (id: string) => Promise<void>; voteComment: (id: string, vote: ReputationVoteAction) => Promise<void> } {
   const [comments, setComments] = useState<AppComment[]>([]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(enabled);
@@ -54,10 +54,11 @@ export function useServerComments(server: BaseServer, enabled = true): { comment
 
   useEffect(() => enabled ? subscribeInitialComments(path, setComments, setError, setLoading) : undefined, [path, enabled]);
 
-  const busy = !enabled || loading || pending !== null || votingCommentId !== null;
+  const busy = loading || pending !== null || votingCommentId !== null;
+  const blocked = !enabled || busy;
 
   const refresh = async () => {
-    if (busy) return;
+    if (blocked) return;
     setLoading(true);
     setError("");
     await mutateCommentList(
@@ -70,7 +71,7 @@ export function useServerComments(server: BaseServer, enabled = true): { comment
   };
 
   const submit = async () => {
-    if (!draft.trim() || busy) return;
+    if (!draft.trim() || blocked) return;
     setPending("post");
     setError("");
     const posted = await mutateCommentList(
@@ -89,7 +90,7 @@ export function useServerComments(server: BaseServer, enabled = true): { comment
   };
 
   const remove = async (id: string) => {
-    if (busy) return;
+    if (blocked) return;
     setPending("delete");
     setError("");
     await mutateCommentList(
@@ -102,7 +103,7 @@ export function useServerComments(server: BaseServer, enabled = true): { comment
   };
 
   const voteComment = async (id: string, vote: ReputationVoteAction) => {
-    if (busy) return;
+    if (blocked) return;
     setVotingCommentId(id);
     setError("");
     await mutateCommentList(
@@ -121,6 +122,7 @@ export function useServerComments(server: BaseServer, enabled = true): { comment
     loading,
     pending,
     votingCommentId,
+    busy,
     error,
     refresh,
     submit,
