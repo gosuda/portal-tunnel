@@ -9,6 +9,7 @@ replace github.com/gosuda/portal-tunnel/v2 => ../..
 require (
 	github.com/gosuda/portal-tunnel/v2 v2.0.0-00010101000000-000000000000
 	github.com/ironpark/ggui v0.6.2
+	golang.org/x/sys v0.50.0
 )
 
 require (
@@ -49,7 +50,6 @@ require (
 	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
-	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261104224025-d1e00e9f33ab // indirect

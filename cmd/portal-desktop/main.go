@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/ironpark/ggui"
 	gguiruntime "github.com/ironpark/ggui/runtime"
@@ -52,9 +53,12 @@ func run(configPath, stateDir string, hidden bool) error {
 		cli, _ = installer.CLI(exe)
 	}
 	m := newModel(stateDir, cmp.Or(configPath, service.DefaultConfigPath()), cli)
+	// Without its state directory the desktop cannot find the agent, so it
+	// does not poll; it reads the config again only when it is reopened.
 	if configErr != nil {
 		m.Connection.Set(unreachable)
-		m.AgentError.Set(fmt.Sprintf("Could not read the agent config: %v", configErr))
+		m.AgentError.Set(fmt.Sprintf("Could not read the agent config: %s. Quit and reopen Portal Desktop after you fix this.",
+			strings.TrimSuffix(agentErrorText(configErr), ".")))
 	}
 	app := ggui.New(ggui.Config{
 		Title:     "Portal",

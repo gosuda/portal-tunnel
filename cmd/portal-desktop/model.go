@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	pollInterval = 2 * time.Second
-	// requestTimeout covers portal agent run, which waits up to 30 s for the
-	// agent it starts to answer.
-	requestTimeout = 45 * time.Second
-	startCommand   = "portal agent run"
+	pollInterval   = 2 * time.Second
+	requestTimeout = 15 * time.Second
+	// setupTimeout covers portal agent run, which waits up to 30 s for the
+	// agent that it starts to answer.
+	setupTimeout = 45 * time.Second
+	startCommand = "portal agent run"
 )
 
 // connection is what the desktop knows of the agent.
@@ -211,15 +212,16 @@ func findRelay(tunnel agent.AgentTunnelStatus, relayURL string) (agent.AgentRela
 }
 
 // request runs call against the agent off the UI thread and then reads the
-// status again, so the window shows what the call changed. A refused call
-// goes to failed; done runs once the agent accepted it.
-func (m *model) request(h ggui.Host, call func(context.Context) error, failed func(error), done func()) {
+// status again, so the window shows what the call changed, all within
+// timeout. A refused call goes to failed; done runs once the agent accepted
+// it.
+func (m *model) request(h ggui.Host, timeout time.Duration, call func(context.Context) error, failed func(error), done func()) {
 	if ggui.Peek(m.Busy) {
 		return
 	}
 	m.Busy.Set(true)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		err := call(ctx)
 		var status agent.AgentStatusResponse
@@ -259,11 +261,13 @@ func (m *model) openSetup() {
 // outlive the desktop.
 func (m *model) startAgent(h ggui.Host) {
 	m.FormError.Set("")
-	m.request(h, func(ctx context.Context) error {
+	m.request(h, setupTimeout, func(ctx context.Context) error {
 		if err := agent.CreateConfig(m.configPath); err != nil {
 			return fmt.Errorf("create the agent config: %w", err)
 		}
-		out, err := exec.CommandContext(ctx, m.cli, "agent", "run", "--config", m.configPath).CombinedOutput()
+		cmd := exec.CommandContext(ctx, m.cli, "agent", "run", "--config", m.configPath)
+		hideConsole(cmd)
+		out, err := cmd.CombinedOutput()
 		if msg := strings.TrimSpace(string(out)); err != nil && msg != "" {
 			return fmt.Errorf("%s: %s", startCommand, msg)
 		}
@@ -283,7 +287,7 @@ func (m *model) addTunnel(h ggui.Host) {
 		return
 	}
 	m.FormError.Set("")
-	m.request(h, func(ctx context.Context) error { return agent.AddTunnel(ctx, m.stateDir, req) }, m.failForm, func() {
+	m.request(h, requestTimeout, func(ctx context.Context) error { return agent.AddTunnel(ctx, m.stateDir, req) }, m.failForm, func() {
 		m.Adding.Set(false)
 		m.Draft.Set(newTunnelDraft())
 	})
@@ -303,21 +307,21 @@ func (m *model) saveSettings(h ggui.Host) {
 		return
 	}
 	m.FormError.Set("")
-	m.request(h, func(ctx context.Context) error { return agent.UpdateTunnel(ctx, m.stateDir, id, req) }, m.failForm, func() {
+	m.request(h, requestTimeout, func(ctx context.Context) error { return agent.UpdateTunnel(ctx, m.stateDir, id, req) }, m.failForm, func() {
 		m.Editing.Set("")
 	})
 }
 
 func (m *model) deleteTunnel(h ggui.Host, tunnel agent.AgentTunnelStatus) {
-	m.request(h, func(ctx context.Context) error { return agent.DeleteTunnel(ctx, m.stateDir, tunnel.ID) }, m.fail("Could not delete "+tunnel.Label()), nil)
+	m.request(h, requestTimeout, func(ctx context.Context) error { return agent.DeleteTunnel(ctx, m.stateDir, tunnel.ID) }, m.fail("Could not delete "+tunnel.Label()), nil)
 }
 
 func (m *model) connectRelay(h ggui.Host, id, relayURL string) {
-	m.request(h, func(ctx context.Context) error { return agent.ConnectRelay(ctx, m.stateDir, id, relayURL) }, m.fail("Could not connect "+relayURL), nil)
+	m.request(h, requestTimeout, func(ctx context.Context) error { return agent.ConnectRelay(ctx, m.stateDir, id, relayURL) }, m.fail("Could not connect "+relayURL), nil)
 }
 
 func (m *model) disconnectRelay(h ggui.Host, id, relayURL string) {
-	m.request(h, func(ctx context.Context) error { return agent.DisconnectRelay(ctx, m.stateDir, id, relayURL) }, m.fail("Could not disconnect "+relayURL), nil)
+	m.request(h, requestTimeout, func(ctx context.Context) error { return agent.DisconnectRelay(ctx, m.stateDir, id, relayURL) }, m.fail("Could not disconnect "+relayURL), nil)
 }
 
 // tunnelDraft is the form that exposes a local service.
