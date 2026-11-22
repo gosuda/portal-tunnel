@@ -103,21 +103,6 @@ describe("useServerList public snapshot", () => {
     expect(result.current.identityDiscovery.error).toContain("local directory is still available");
     unmount();
   });
-  it("distinguishes local reputation observed in public state from the local action fallback", async () => {
-    const hostname = lease.canonical_hostname ?? lease.hostname;
-    vi.mocked(apiClient.get)
-      .mockResolvedValueOnce({ leases: [lease] })
-      .mockResolvedValueOnce({ leases: [lease], reputation: [{ hostname, up: 0, down: 0, total: 0 }] });
-    const { result, unmount } = renderHook(() => useServerList());
-    await act(async () => {});
-    expect(result.current.filteredServers[0].reputation?.total).toBe(0);
-    expect(result.current.filteredServers[0].observedLocalReputation).toBeUndefined();
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-    expect(result.current.filteredServers[0].observedLocalReputation).toMatchObject({ up: 0, down: 0 });
-    unmount();
-  });
-
   it("refreshes the original leases and directory entries together", async () => {
     vi.mocked(apiClient.get)
       .mockResolvedValueOnce({ leases: [lease] })

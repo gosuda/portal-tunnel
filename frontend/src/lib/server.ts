@@ -26,9 +26,13 @@ export interface BaseServer {
   paymentEnabled?: boolean;
   paymentLabel?: string;
   reputation?: ReputationSummary;
-  observedLocalReputation?: ObservedReputation;
   // Display-only totals; local moderation and viewer votes use reputation.
   observedReputation?: ObservedReputation;
+}
+
+// A service identity address is a 0x-prefixed 20-byte hex string.
+export function isIdentityAddress(value: string): boolean {
+  return /^0x[0-9a-f]{40}$/i.test(value);
 }
 
 // A newer observation from a relay replaces its older one; other relays stay.

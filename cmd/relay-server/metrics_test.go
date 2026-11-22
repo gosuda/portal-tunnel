@@ -11,7 +11,7 @@ import (
 )
 
 func TestRelayMetricsAuthenticatedSnapshotAndHTTPLabels(t *testing.T) {
-	api, _, err := newPolicyAPI(t, "")
+	api, _, err := newTestRelayAPI(t, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,11 +57,11 @@ func TestRelayMetricsAuthenticatedSnapshotAndHTTPLabels(t *testing.T) {
 }
 
 func TestRelayMetricsRegistriesAreIndependent(t *testing.T) {
-	first, _, err := newPolicyAPI(t, "")
+	first, _, err := newTestRelayAPI(t, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := newPolicyAPI(t, "")
+	second, _, err := newTestRelayAPI(t, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func checkConcurrentRequestCount(t *testing.T, handler http.Handler) {
 }
 
 func TestRelayMetricsConcurrentRequestsAndScrapes(t *testing.T) {
-	api, _, err := newPolicyAPI(t, "")
+	api, _, err := newTestRelayAPI(t, "")
 	if err != nil {
 		t.Fatal(err)
 	}

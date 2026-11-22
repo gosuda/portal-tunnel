@@ -84,7 +84,7 @@ func run(args []string) error {
 		printUsage(os.Stderr)
 		return err
 	}
-	normalizedName, err := types.NormalizeDNSLabel(cfg.name)
+	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
 	if err != nil {
 		return fmt.Errorf("invalid --name value: %w", err)
 	}
@@ -167,7 +167,7 @@ func exposeServePaymentExposure(ctx context.Context, cfg paymentConfig, metadata
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
 	}
-	explicitRelayURLs, err := types.NormalizeRelayURLs(cfg.relayURLs)
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.relayURLs)
 	if err != nil {
 		return nil, err
 	}

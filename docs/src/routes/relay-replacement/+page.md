@@ -273,6 +273,15 @@ the entry point or use separately validated transparent forwarding. Keep
 tunnel control source restrictions on the direct endpoints. If your policy
 requires the original address at Portal, this simple example is insufficient.
 
+Portal also keys its pre-ClientHello budget by the socket peer:
+`INSPECTIONS_PER_SOURCE` (default `16`) sockets per IPv4 address or IPv6 /64
+may wait for a ClientHello. Behind this proxy every visitor shares the proxy's
+address, so the sixteenth visitor still in its TLS handshake makes Portal close
+the next new connection, root API connections included. Set
+`INSPECTIONS_PER_SOURCE=0` on the candidate relay to keep only the 128-socket
+server-wide budget, and limit connections per client at the proxy instead, for
+example with nginx `limit_conn` in the `stream` block.
+
 Rehearse delayed responses, uploads, WebSockets, candidate failure, revocation
 during drain, deadline closure, and rollback with trusted certificates and your
 real network path. Observe both relay logs and the entry point's connection

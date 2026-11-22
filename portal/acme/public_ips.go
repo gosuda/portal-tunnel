@@ -9,7 +9,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -72,7 +71,7 @@ func (m *Manager) warnPublicIPs(manual bool) {
 	if len(m.cfg.PublicIPs) == 0 {
 		return
 	}
-	if types.IsLocalRelayHost(m.cfg.BaseDomain) || (manual && m.dns.Name() != TypeEmbedded && !m.cfg.ENSGaslessEnabled) {
+	if utils.IsLocalRelayHost(m.cfg.BaseDomain) || (manual && m.dns.Name() != TypeEmbedded && !m.cfg.ENSGaslessEnabled) {
 		log.Warn().Strs("public_ips", m.cfg.PublicIPs).Str("base_domain", m.cfg.BaseDomain).Msg("PUBLIC_IPS has no effect: the relay manages no address records with these settings")
 		return
 	}

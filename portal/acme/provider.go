@@ -20,6 +20,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/route53"
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/vultr"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const (
@@ -44,7 +45,7 @@ type dnsProvider interface {
 }
 
 func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil, nil
 	}
 	_, _, manual, err := m.manualCertificateOverride()

@@ -2,12 +2,17 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 )
+
+// ErrFileLocked indicates another process owns the file, or the platform does
+// not support file locking. Closing the returned file releases its lock.
+var ErrFileLocked = errors.New("file is locked or file locking is unsupported")
 
 // DefaultStaticIndex is the SPA entry file served for a directory and for any
 // unknown path under a static site.

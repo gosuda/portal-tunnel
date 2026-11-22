@@ -25,7 +25,6 @@ import (
 	"github.com/go-acme/lego/v4/certificate"
 	"golang.org/x/net/publicsuffix"
 
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -58,7 +57,7 @@ func ParseTenantCSR(encoded string, allowed []string) (*x509.CertificateRequest,
 		return nil, errTenantCSRNames
 	}
 	for _, name := range csr.DNSNames {
-		if name == "" || strings.Contains(name, "*") || name != types.NormalizeHostname(name) || !slices.Contains(allowed, name) {
+		if name == "" || strings.Contains(name, "*") || name != utils.NormalizeHostname(name) || !slices.Contains(allowed, name) {
 			return nil, errTenantCSRNames
 		}
 	}
@@ -102,7 +101,7 @@ func (m *Manager) TenantIssuanceConfigured() bool {
 	if m == nil {
 		return false
 	}
-	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return true
 	}
 	_, err := os.Stat(filepath.Join(m.cfg.KeyDir, accountKeyFileName))
@@ -118,7 +117,7 @@ func (m *Manager) ObtainTenantCertificate(ctx context.Context, csr *x509.Certifi
 		return nil, errACMEManagerIsNil
 	}
 
-	if csr != nil && len(csr.DNSNames) == 1 && !types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if csr != nil && len(csr.DNSNames) == 1 && !utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		if err := m.waitLeaseDNS(ctx, csr.DNSNames[0]); err != nil {
 			return nil, err
 		}
@@ -130,7 +129,7 @@ func (m *Manager) ObtainTenantCertificate(ctx context.Context, csr *x509.Certifi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		material := m.TLSMaterial()
 		if material == nil {
 			return nil, errRelayCertificateIsNotLoaded
@@ -229,7 +228,7 @@ type tenantOrderReservation struct {
 // journal. It may create the journal, but never reserves an order or takes the
 // issuance lock: another replica issuing a certificate is not a config error.
 func (cfg Config) ValidateTenantIssuanceState() error {
-	if types.IsLocalRelayHost(cfg.BaseDomain) {
+	if utils.IsLocalRelayHost(cfg.BaseDomain) {
 		return nil
 	}
 	if cfg.TenantIssuanceStateDir == "" {

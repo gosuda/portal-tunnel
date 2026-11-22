@@ -47,7 +47,7 @@ type AgentConfig struct {
 
 // TunnelConfig is one [[tunnels]] entry: the config of a tunnel under the ID the
 // agent manages it by. The file, the Agent API and the dashboard change it, and
-// Spec resolves it for the runtime.
+// the runtime resolves an execution copy.
 type TunnelConfig struct {
 	ID string `toml:"id,omitempty"`
 	tunnel.Config
@@ -250,7 +250,7 @@ func (cfg TunnelConfig) Validate() error {
 	if err := validateAgentPathComponent("tunnel id", cfg.ID); err != nil {
 		return err
 	}
-	if _, err := cfg.Spec(); err != nil {
+	if _, err := cfg.Resolve(); err != nil {
 		return fmt.Errorf("validate tunnel %q: %w", cfg.ID, err)
 	}
 	return nil

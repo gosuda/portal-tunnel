@@ -17,6 +17,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const unreachableRelay = "https://127.0.0.1:1"
@@ -26,6 +27,21 @@ const unreachableIssuer = "http://127.0.0.1:1"
 func testTunnel(id string) TunnelConfig {
 	discovery := false
 	return TunnelConfig{ID: id, Config: tunnel.Config{TargetAddr: "127.0.0.1:3000", RelayURLs: []string{unreachableRelay}, Discovery: &discovery}}
+}
+
+func TestTunnelStatusDoesNotShareStoredMetadataOrRoutes(t *testing.T) {
+	cfg := testTunnel("web")
+	cfg.Tags = []string{"original"}
+	cfg.HTTPRoutes = []tunnel.HTTPRoute{{Prefix: "/", Upstream: "3000", Methods: []string{"GET"}}}
+	cfg.Options = map[string]string{"key": "original"}
+	status := cfg.renderTunnelStatus(nil, nil, "", "")
+	status.Options["key"] = "changed"
+	status.Metadata.Tags[0] = "changed"
+	status.HTTPRoutes[0].Prefix = "/changed"
+	status.HTTPRoutes[0].Methods[0] = "POST"
+	if cfg.Tags[0] != "original" || cfg.HTTPRoutes[0].Prefix != "/" || cfg.HTTPRoutes[0].Methods[0] != "GET" || cfg.Options["key"] != "original" {
+		t.Fatal("editing a status response changed stored tunnel settings")
+	}
 }
 
 func testManager(t *testing.T, tunnels ...TunnelConfig) (*manager, string) {
@@ -556,7 +572,7 @@ func checkUpdateRejectionUnchanged(t *testing.T, m *manager, path, secret string
 }
 
 func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
-	addedRelay, err := types.NormalizeRelayURL("https://127.0.0.1:2")
+	addedRelay, err := utils.NormalizeRelayURL("https://127.0.0.1:2")
 	if err != nil {
 		t.Fatal(err)
 	}

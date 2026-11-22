@@ -63,6 +63,11 @@ type ServerConfig struct {
 	// UnapprovedLeasesPerSource bounds the leases one source can hold without
 	// being routable. Zero disables the bound.
 	UnapprovedLeasesPerSource int
+	// InspectionsPerSource bounds the public sockets one IPv4 address or IPv6
+	// /64 can hold while the relay waits for their ClientHello. Zero leaves
+	// only the server-wide inspection budget, for relays behind a TCP proxy
+	// where every visitor shares the proxy's address.
+	InspectionsPerSource int
 	// DefaultIdentityBPS is the stream budget in bytes/second for identities
 	// without an operator override. Zero permits unlimited traffic.
 	DefaultIdentityBPS int
@@ -90,7 +95,7 @@ func parseRedirectTarget(portalURL string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errHTTPRedirectRequiresPortalURLAbsolute, err)
 	}
-	hasHTTPSOrigin := target.Scheme == "https" && types.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
+	hasHTTPSOrigin := target.Scheme == "https" && utils.NormalizeHostname(target.Hostname()) != "" && target.Opaque == ""
 	if !hasHTTPSOrigin || target.User != nil || strings.HasSuffix(target.Host, ":") {
 		return nil, errHTTPRedirectRequiresPortalURLAbsolute
 	}
@@ -150,14 +155,14 @@ func applyValidateServerConfigACME(cfg ServerConfig) (ServerConfig, error) {
 }
 
 func applyValidateServerConfigRelayURLs(cfg ServerConfig) (ServerConfig, error) {
-	selfRelayURL, err := types.NormalizeRelayURL(cfg.PortalURL)
+	selfRelayURL, err := utils.NormalizeRelayURL(cfg.PortalURL)
 	if err != nil {
 		return ServerConfig{}, fmt.Errorf("normalize portal url: %w", err)
 	}
-	if types.PortalRootHost(selfRelayURL) == "" {
+	if utils.PortalRootHost(selfRelayURL) == "" {
 		return ServerConfig{}, errRootHostIsRequired
 	}
-	bootstraps, err := types.NormalizeRelayURLs(cfg.Bootstraps...)
+	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
 	if err != nil {
 		return ServerConfig{}, fmt.Errorf("normalize bootstraps: %w", err)
 	}
@@ -173,6 +178,9 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	if cfg.UnapprovedLeasesPerSource < 0 {
 		return ServerConfig{}, errUnapprovedLeaseLimitNegative
+	}
+	if cfg.InspectionsPerSource < 0 {
+		return ServerConfig{}, errInspectionsPerSourceNegative
 	}
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
@@ -201,7 +209,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg = next
 	if cfg.TenantCertificates {
 		issuanceConfig := cfg.ACME
-		issuanceConfig.BaseDomain = types.PortalRootHost(cfg.PortalURL)
+		issuanceConfig.BaseDomain = utils.PortalRootHost(cfg.PortalURL)
 		if err := issuanceConfig.ValidateTenantIssuanceState(); err != nil {
 			return ServerConfig{}, fmt.Errorf("TENANT_CERTIFICATES requires usable TENANT_ISSUANCE_STATE_DIR: %w", err)
 		}
@@ -220,7 +228,7 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 // leaves SNI_PORT unset: the explicit PORTAL_URL port when the canonical
 // origin names one, otherwise 443.
 func DefaultSNIPort(portalURL string) int {
-	normalized, err := types.NormalizeRelayURL(portalURL)
+	normalized, err := utils.NormalizeRelayURL(portalURL)
 	if err != nil {
 		return 443
 	}
@@ -267,6 +275,7 @@ var (
 	errRootHostIsRequired                        = errors.New("root host is required")
 	errTransportMaxLeasesMustNonNegative         = errors.New("transport max leases must be non-negative")
 	errUnapprovedLeaseLimitNegative              = errors.New("unapproved leases per source must be non-negative")
+	errInspectionsPerSourceNegative              = errors.New("inspections per source must be non-negative")
 	errTransportEnablementRequiresLeasePortRange = errors.New("transport enablement requires a lease port range")
 	errEnablingUDPRequiresRelayRestart           = errors.New("enabling udp requires a relay restart")
 	errServerAlreadyStarted                      = errors.New("server already started")
@@ -281,7 +290,9 @@ type Server struct {
 	ingressCtx        context.Context
 	ingressMu         sync.Mutex
 	ingressClosed     bool
-	ingressConns      map[net.Conn]struct{}
+	ingressConns      map[net.Conn]netip.Prefix
+	ingressSources    map[netip.Prefix]int
+	ingressSourceWarn time.Time
 	ingressInspecting int
 	ingressTenants    int
 	ingressWorkers    sync.WaitGroup
@@ -413,7 +424,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) prepareAPITLS(ctx context.Context) (*tls.Config, error) {
 	cfg := s.config()
 	acmeCfg := cfg.ACME
-	if baseDomain := types.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
+	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
 		return nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
@@ -494,7 +505,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	identityPath := filepath.Join(validated.StateDir, types.RelayIdentityFilename)
-	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, types.PortalRootHost(validated.PortalURL))
+	relayIdentity, err := identity.LoadOrCreateRelayIdentity(identityPath, utils.PortalRootHost(validated.PortalURL))
 	if err != nil {
 		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
@@ -1158,7 +1169,7 @@ func newBackhaulPendingSources() *backhaulPendingSources {
 func (p *backhaulPendingSources) acquire(remote net.Addr) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	prefix, ok := backhaulSourcePrefix(remote)
+	prefix, ok := remoteSourcePrefix(remote)
 	if !ok {
 		return true
 	}
@@ -1172,7 +1183,7 @@ func (p *backhaulPendingSources) acquire(remote net.Addr) bool {
 func (p *backhaulPendingSources) release(remote net.Addr) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	prefix, ok := backhaulSourcePrefix(remote)
+	prefix, ok := remoteSourcePrefix(remote)
 	if !ok {
 		return
 	}
@@ -1181,7 +1192,10 @@ func (p *backhaulPendingSources) release(remote net.Addr) {
 	}
 }
 
-func backhaulSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
+func remoteSourcePrefix(remote net.Addr) (netip.Prefix, bool) {
+	if remote == nil {
+		return netip.Prefix{}, false
+	}
 	addrPort, err := netip.ParseAddrPort(remote.String())
 	if err != nil {
 		return netip.Prefix{}, false
@@ -1289,18 +1303,32 @@ func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 	if s.ingressClosed {
 		return false
 	}
+	source := netip.Prefix{}
 	if inspecting {
 		if s.ingressInspecting >= publicInspectionLimit {
+			return false
+		}
+		source, _ = remoteSourcePrefix(conn.RemoteAddr())
+		if limit := s.config().InspectionsPerSource; limit > 0 && s.ingressSources[source] >= limit {
+			if now := time.Now(); now.Sub(s.ingressSourceWarn) >= time.Minute {
+				s.ingressSourceWarn = now
+				log.Warn().Str("source", source.String()).Int("limit", limit).
+					Msg("public ingress source reached INSPECTIONS_PER_SOURCE; closing new connections until its handshakes finish")
+			}
 			return false
 		}
 	} else if s.ingressTenants >= publicIngressLimit {
 		return false
 	}
 	if s.ingressConns == nil {
-		s.ingressConns = make(map[net.Conn]struct{})
+		s.ingressConns = make(map[net.Conn]netip.Prefix)
 	}
-	s.ingressConns[conn] = struct{}{}
+	s.ingressConns[conn] = source
 	if inspecting {
+		if s.ingressSources == nil {
+			s.ingressSources = make(map[netip.Prefix]int)
+		}
+		s.ingressSources[source]++
 		s.ingressInspecting++
 	} else {
 		s.ingressTenants++
@@ -1309,27 +1337,36 @@ func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 	return true
 }
 
-func (s *Server) promoteIngress() bool {
+func (s *Server) promoteIngress(conn net.Conn) bool {
 	s.ingressMu.Lock()
 	defer s.ingressMu.Unlock()
 	if s.ingressClosed || s.ingressTenants >= publicIngressLimit {
 		return false
 	}
-	s.ingressInspecting--
+	s.releaseInspectionLocked(s.ingressConns[conn])
+	s.ingressConns[conn] = netip.Prefix{}
 	s.ingressTenants++
 	return true
 }
 
 func (s *Server) releaseIngress(conn net.Conn, inspecting bool) {
 	s.ingressMu.Lock()
+	source := s.ingressConns[conn]
 	delete(s.ingressConns, conn)
 	if inspecting {
-		s.ingressInspecting--
+		s.releaseInspectionLocked(source)
 	} else {
 		s.ingressTenants--
 	}
 	s.ingressMu.Unlock()
 	s.ingressWorkers.Done()
+}
+
+func (s *Server) releaseInspectionLocked(source netip.Prefix) {
+	s.ingressInspecting--
+	if s.ingressSources[source]--; s.ingressSources[source] <= 0 {
+		delete(s.ingressSources, source)
+	}
 }
 
 func (s *Server) closeIngress() {
@@ -1595,7 +1632,7 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	helloSpan := clientHello.HandshakeMessage
-	serverName := types.NormalizeHostname(clientHello.ServerName)
+	serverName := utils.NormalizeHostname(clientHello.ServerName)
 	localTLS := namespace.IsLocalTLSHostname(serverName, s.registry.rootHostname)
 	relayAPI := serverName == "" || serverName == s.identity.Name
 	if !localTLS && (relayAPI || s.registry.cache.Has(serverName)) {
@@ -1608,7 +1645,7 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 		}
 		return
 	}
-	if !s.promoteIngress() {
+	if !s.promoteIngress(conn) {
 		_ = wrappedConn.Close()
 		return
 	}

@@ -166,6 +166,7 @@ TCP 80 in the firewall; binding privileged ports may require OS permissions.
 | `APPROVAL_MODE` | `auto` | string | Initial lease approval mode (`auto` \| `manual`). A mode saved in `policy.json` wins; see [Private relay](/self-hosting#private-relay) |
 | `DEFAULT_IDENTITY_BPS` | `1048576` | int | Stream bytes/second per service identity without an individual admin override (`--default-identity-bps`); shared across all connections and both directions; `0` is unlimited |
 | `UNAPPROVED_LEASES_PER_SOURCE` | `64` | int | Per-source unapproved lease or pending request budget (0 disables the per-source limit); see [Private relay](/self-hosting#private-relay) |
+| `INSPECTIONS_PER_SOURCE` | `16` | int | Public sockets one IPv4 address or IPv6 /64 can hold while the relay reads their TLS ClientHello; `0` leaves only the 128-socket server-wide budget. Behind a TCP proxy every visitor shares the proxy's address; see [Source addresses](/relay-replacement#source-addresses-and-operational-verification) |
 | `TUNNEL_SOURCE_CIDRS` | `""` | string | Networks that may register tunnels (comma-separated CIDRs); a tunnel from anywhere else gets `403 source_not_allowed`; empty allows every network, and a value that names no network is a startup error; see [Accept tunnels only from your networks](/self-hosting#accept-tunnels-only-from-your-networks) |
 
 `TUNNEL_SOURCE_CIDRS` limits tunnel registration and renewal, not discovery

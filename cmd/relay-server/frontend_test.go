@@ -79,3 +79,21 @@ func TestServeFrontendCustomDirectoryConfinesSymlinksAndKeepsLiveFiles(t *testin
 		}
 	}
 }
+
+func TestServeFrontendFallsBackToIndexForClientRoutes(t *testing.T) {
+	api, _, err := newTestRelayAPI(t, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		api.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+	if rec := serve("/app/dashboard"); rec.Code != http.StatusOK || rec.Body.String() != "portal" {
+		t.Fatalf("client route = %d %q, want 200 index", rec.Code, rec.Body.String())
+	}
+	if rec := serve("/missing.css"); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing asset = %d, want 404", rec.Code)
+	}
+}

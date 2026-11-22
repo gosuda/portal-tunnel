@@ -182,7 +182,7 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return err
 	}
-	spec, err := tunnelSpecFromExposeFlags(fs, cfg, flags)
+	cfg, err = tunnelConfigFromExposeFlags(fs, cfg, flags)
 	if err != nil {
 		printExposeUsage(os.Stderr)
 		return err
@@ -210,7 +210,7 @@ func runExposeCommand(args []string) error {
 
 	startRunExposeCommandMetrics(flags.metricsAddr)
 
-	runtime, err := tunnel.Start(ctx, spec)
+	runtime, err := tunnel.Start(ctx, cfg)
 	if err != nil {
 		if flags.exitOnStdinEOF && ctx.Err() != nil {
 			return nil
@@ -220,7 +220,7 @@ func runExposeCommand(args []string) error {
 	defer runtime.Close()
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	if !spec.Relays.Discovery {
+	if !flags.discovery {
 		// Without discovery the relay set never changes, so a failed relay stays
 		// failed. Exit once every relay has failed so a supervisor sees it.
 		go func() { cancel(waitRelaysFailed(runCtx, runtime.Exposure)) }()
@@ -274,21 +274,21 @@ func startRunExposeCommandMetrics(metricsAddr string) {
 	}()
 }
 
-func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags exposeFlags) (tunnel.Spec, error) {
+func tunnelConfigFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags exposeFlags) (tunnel.Config, error) {
 	if !flags.cache && flags.cacheTTL != 0 {
-		return tunnel.Spec{}, errCacheTTLRequiresCache
+		return tunnel.Config{}, errCacheTTLRequiresCache
 	}
 	for _, raw := range flags.httpRoutes {
 		route, err := tunnel.ParseHTTPRoute(raw)
 		if err != nil {
-			return tunnel.Spec{}, fmt.Errorf("--http-route %q: %w", raw, err)
+			return tunnel.Config{}, fmt.Errorf("--http-route %q: %w", raw, err)
 		}
 		cfg.HTTPRoutes = append(cfg.HTTPRoutes, route)
 	}
 	for _, raw := range flags.x402Options {
 		key, value, err := gateway.ParseX402Option(raw)
 		if err != nil {
-			return tunnel.Spec{}, fmt.Errorf("--x402-option: %w", err)
+			return tunnel.Config{}, fmt.Errorf("--x402-option: %w", err)
 		}
 		if cfg.Options == nil {
 			cfg.Options = make(map[string]string)
@@ -309,8 +309,7 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 		emailFlagGiven = emailFlagGiven || strings.HasPrefix(f.Name, "auth-smtp-")
 		proofFlagGiven = proofFlagGiven || f.Name == "auth-identity-proof"
 	})
-	normalized, _ := cfg.AuthConfig.Normalize()
-	provider := normalized.Provider
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	if provider != appauth.ProviderOIDC && !oidcFlagGiven {
 		cfg.OIDCConfig = appauth.OIDCConfig{}
 	}
@@ -326,9 +325,12 @@ func tunnelSpecFromExposeFlags(fs *flag.FlagSet, cfg tunnel.Config, flags expose
 	auth := cfg.AuthConfig
 	hasHTTPSource := strings.TrimSpace(cfg.Serve) != "" || len(cfg.HTTPRoutes) > 0 || strings.TrimSpace(cfg.TargetAddr) != ""
 	if len(cfg.StripRequestHeaders) > 0 && !hasHTTPSource && auth.IsZero() && cfg.Cache == nil {
-		return tunnel.Spec{}, errStripRequestHeaderRequiresHTTPRoute
+		return tunnel.Config{}, errStripRequestHeaderRequiresHTTPRoute
 	}
-	return cfg.Spec()
+	if _, err := cfg.Resolve(); err != nil {
+		return tunnel.Config{}, err
+	}
+	return cfg, nil
 }
 
 func runAuthCommand(args []string) error {

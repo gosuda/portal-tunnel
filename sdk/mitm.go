@@ -300,7 +300,7 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse ingress relay url: %w", err)
 	}
-	if types.IsLocalRelayHost(entryRelayURL.Hostname()) {
+	if utils.IsLocalRelayHost(entryRelayURL.Hostname()) {
 		dialHost = entryRelayURL.Host
 	}
 	return utils.EnsurePort(dialHost), nil
@@ -604,7 +604,7 @@ func readChannelBindingAnswer(ctx context.Context, conn net.Conn) ([]byte, []byt
 // Portal hostname, and enforces identity-bound TLS channel binding (#653)
 // before returning the connection for application traffic.
 func DialCanonicalTLS(ctx context.Context, addr, hostname string, baseTLSConfig *tls.Config) (net.Conn, error) {
-	normalizedHost := types.NormalizeHostWithoutPort(hostname)
+	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
 	if _, err := namespace.CanonicalAddress(normalizedHost); err != nil {
 		return nil, err
 	}
@@ -649,7 +649,7 @@ func dialCanonicalTLSTransport(ctx context.Context, addr string, tlsConf *tls.Co
 }
 
 func tlsChannelBindingPayload(hostname string, nonce, exported []byte) []byte {
-	normalizedHost := types.NormalizeHostWithoutPort(hostname)
+	normalizedHost := utils.NormalizeHostWithoutPort(hostname)
 	buf := make([]byte, 0, len(types.TLSChannelBindingDomain)+1+len(normalizedHost)+1+len(nonce)+len(exported))
 	buf = append(buf, types.TLSChannelBindingDomain...)
 	buf = append(buf, 0)
@@ -680,7 +680,7 @@ func (m *mitmManager) serveChannelBindingHandshake(conn net.Conn, reader *bufio.
 	if lease, ok := l.leaseSnapshot(); ok {
 		hostname = lease.hostname
 		if stateful, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
-			if sni := types.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
+			if sni := utils.NormalizeHostname(stateful.ConnectionState().ServerName); sni != "" {
 				if sni != lease.hostname && sni != lease.aliasHostname {
 					_ = conn.Close()
 					return nil, errListenerCanonicalHostnameUnavailableChannelBinding
@@ -769,7 +769,7 @@ func (m *mitmManager) maybeHandleConn(conn net.Conn) (net.Conn, bool, error) {
 		if lease, ok := m.listener.leaseSnapshot(); ok {
 			if conn, ok := conn.(*tls.Conn); ok {
 				_, canonical := lease.tenantTLS.(*namespaceTLS)
-				canChannelBind = canonical && types.NormalizeHostname(conn.ConnectionState().ServerName) == lease.hostname
+				canChannelBind = canonical && utils.NormalizeHostname(conn.ConnectionState().ServerName) == lease.hostname
 			}
 		}
 	}
