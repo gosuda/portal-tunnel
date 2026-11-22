@@ -382,7 +382,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 
 func (r *httpRoute) baseHandler() (http.Handler, error) {
 	if r.staticRoot != "" {
-		return staticsite.OpenHandler(r.prefix, r.staticRoot, r.staticIndex)
+		return staticsite.NewHandler(r.prefix, r.staticRoot, r.staticIndex)
 	}
 	return &httputil.ReverseProxy{
 		Rewrite:        r.rewriteProxyRequest,

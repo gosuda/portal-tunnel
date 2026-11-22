@@ -27,6 +27,16 @@ func newStaticSite(t *testing.T, files map[string]string) string {
 	return root
 }
 
+func newHandler(t *testing.T, prefix, root, index string) *staticsite.Handler {
+	t.Helper()
+	handler, err := staticsite.NewHandler(prefix, root, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = handler.Close() })
+	return handler
+}
+
 func TestStaticSiteHandlerServesConcreteFile(t *testing.T) {
 	t.Parallel()
 
@@ -34,7 +44,7 @@ func TestStaticSiteHandlerServesConcreteFile(t *testing.T) {
 		"index.html":     "<html>index</html>",
 		"assets/app.css": "body{color:red}",
 	})
-	handler := staticsite.NewHandler("/", root, utils.DefaultStaticIndex)
+	handler := newHandler(t, "/", root, utils.DefaultStaticIndex)
 
 	req := httptest.NewRequest(http.MethodGet, "https://public.example/assets/app.css", nil)
 	rec := httptest.NewRecorder()
@@ -55,7 +65,7 @@ func TestStaticSiteHandlerFallsBackToIndex(t *testing.T) {
 	t.Parallel()
 
 	root := newStaticSite(t, map[string]string{"index.html": "<html>spa</html>"})
-	handler := staticsite.NewHandler("/", root, "")
+	handler := newHandler(t, "/", root, "")
 
 	// The root, an unknown client-side route, and a directory all return the
 	// entry file so client-side routing works and nothing is listed.
@@ -87,7 +97,7 @@ func TestStaticSiteHandlerRejectsTraversal(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Remove(secret) })
 
-	handler := staticsite.NewHandler("/", root, utils.DefaultStaticIndex)
+	handler := newHandler(t, "/", root, utils.DefaultStaticIndex)
 
 	for _, target := range []string{"/../secret.txt", "/../../secret.txt", "/sub/../../secret.txt"} {
 		req := httptest.NewRequest(http.MethodGet, "https://public.example/", nil)
@@ -105,7 +115,7 @@ func TestStaticSiteHandlerRejectsOutOfRootSymlinks(t *testing.T) {
 	t.Parallel()
 
 	root := createStaticOutOfRootFixture(t)
-	handler := staticsite.NewHandler("/", root, utils.DefaultStaticIndex)
+	handler := newHandler(t, "/", root, utils.DefaultStaticIndex)
 	for _, target := range []string{"/direct.txt", "/parent/secret.txt"} {
 		t.Run(target, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://public.example"+target, nil)
@@ -161,18 +171,9 @@ func TestStaticSiteHandlerRejectsOutOfRootIndexSymlink(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 
-	handler := staticsite.NewHandler("/", root, utils.DefaultStaticIndex)
-	for _, target := range []string{"/", "/client/route"} {
-		req := httptest.NewRequest(http.MethodGet, "https://public.example"+target, nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("%s status = %d, want 404; body = %q", target, rec.Code, rec.Body.String())
-		}
-		if strings.Contains(rec.Body.String(), "TOP-SECRET") {
-			t.Fatalf("%s leaked a file outside the static root", target)
-		}
+	if handler, err := staticsite.NewHandler("/", root, utils.DefaultStaticIndex); err == nil {
+		_ = handler.Close()
+		t.Fatal("NewHandler() error = nil, want rejection of an index outside the static root")
 	}
 }
 
@@ -190,7 +191,7 @@ func TestStaticSiteHandlerAllowsInRootSymlinks(t *testing.T) {
 		t.Fatalf("Symlink(assets) error = %v", err)
 	}
 
-	handler := staticsite.NewHandler("/", root, utils.DefaultStaticIndex)
+	handler := newHandler(t, "/", root, utils.DefaultStaticIndex)
 	for _, target := range []string{"/shortcut.css", "/assets-link/app.css"} {
 		req := httptest.NewRequest(http.MethodGet, "https://public.example"+target, nil)
 		rec := httptest.NewRecorder()
@@ -221,7 +222,7 @@ func TestStaticSiteHandlerPinsOpenedRoot(t *testing.T) {
 		}
 	}
 
-	handler, err := staticsite.OpenHandler("/", root, utils.DefaultStaticIndex)
+	handler, err := staticsite.NewHandler("/", root, utils.DefaultStaticIndex)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -240,7 +240,11 @@ func exposeCachedPolicySite(t *testing.T, ctx context.Context, relayPort, siteDi
 	if err != nil {
 		t.Fatal(err)
 	}
-	static := staticsite.NewHandler("/", siteDir, "index.html")
+	static, err := staticsite.NewHandler("/", siteDir, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = static.Close() })
 	go func() { _ = sdk.RunHTTP(ctx, exposure, static, "") }()
 	return exposure
 }

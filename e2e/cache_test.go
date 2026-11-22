@@ -188,7 +188,11 @@ func exposeStaticCache(t *testing.T, ctx context.Context, relayURL, siteDir stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	static := staticsite.NewHandler("/", siteDir, "index.html")
+	static, err := staticsite.NewHandler("/", siteDir, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = static.Close() })
 	go func() {
 		_ = sdk.RunHTTP(ctx, exposure, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			originCalls.Add(1)

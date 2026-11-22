@@ -20,22 +20,11 @@ type Handler struct {
 	close    sync.Once
 }
 
-// NewHandler opens root once and serves it with SPA/CSR fallback. If root or
-// index is invalid, the returned handler fails closed with not-found responses.
-// Call OpenHandler when the caller has an explicit lifecycle for Close.
-func NewHandler(prefix, root, index string) http.Handler {
-	handler, err := OpenHandler(prefix, root, index)
-	if err != nil {
-		return http.NotFoundHandler()
-	}
-	return handler
-}
-
-// OpenHandler opens root once and serves it with SPA/CSR fallback: a concrete
+// NewHandler opens root once and serves it with SPA/CSR fallback: a concrete
 // file is served as-is, while the root and any unknown path return index. File
 // access stays within the opened root even when its pathname is later replaced.
-// The caller must call Close after serving has stopped.
-func OpenHandler(prefix, root, index string) (*Handler, error) {
+// The caller owns the handler and must call Close after serving has stopped.
+func NewHandler(prefix, root, index string) (*Handler, error) {
 	dir, index, err := utils.OpenStaticSite(root, index)
 	if err != nil {
 		return nil, err
