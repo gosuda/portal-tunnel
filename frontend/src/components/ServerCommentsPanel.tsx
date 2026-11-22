@@ -232,6 +232,7 @@ function CommentsBody({ server, loading, comments, error, busy, onRemove, onVote
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5" aria-busy={loading || federation.loading}>
       {(loading || federation.loading) && <p role="status" className="text-sm text-muted-foreground">Loading comments…</p>}
       {federation.error && <p role="status" className="text-sm text-muted-foreground">{federation.error}</p>}
+      {federation.response?.partial && <p role="status" className="text-xs text-muted-foreground">Some relays did not respond.</p>}
       {entries.length > 0 ? (
         <ol className="space-y-6">
           {entries.map((entry) => "local" in entry
