@@ -652,7 +652,7 @@ export function ServerCard({
           <p className="mt-2 text-xs text-muted-foreground">
             {isTransportService
               ? `${endpoints.map((e) => e.protocol).join("/")} transport service`
-              : server.locations?.some((location) => location.url)
+              : server.locations?.some((location) => location.url || location.tcp_addr || location.udp_addr)
               ? "No relay available now"
               : "No HTTP URL available"}
           </p>

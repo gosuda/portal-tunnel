@@ -47,6 +47,31 @@ describe("leaseToServer", () => {
 });
 
 describe("identity discovery cards", () => {
+  it("takes transport endpoints only from live relays", () => {
+    const live = { current_relay: false, reported_ready: true, observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(), verification: "relay-reported" as const };
+    const expired = { ...live, expires_at: new Date(Date.now() - 1).toISOString() };
+    const notReady = { ...live, reported_ready: false };
+    const [card] = mergeDiscoveredServices([], [{
+      name: "game", address: lease.address, metadata: {}, locations: [
+        { ...expired, relay_url: "https://a.example", tcp_addr: "a.example:40000", udp_addr: "a.example:40001" },
+        { ...notReady, relay_url: "https://b.example", tcp_addr: "b.example:40000", udp_addr: "b.example:40001" },
+        { ...live, relay_url: "https://c.example", tcp_addr: "c.example:40000", udp_addr: "c.example:40001" },
+      ],
+    }]);
+    expect(card.tcpAddr).toBe("c.example:40000");
+    expect(card.udpAddr).toBe("c.example:40001");
+
+    const [offline] = mergeDiscoveredServices([], [{
+      name: "game", address: lease.address, metadata: {}, locations: [
+        { ...expired, relay_url: "https://a.example", tcp_addr: "a.example:40000" },
+        { ...notReady, relay_url: "https://b.example", udp_addr: "b.example:40001" },
+      ],
+    }]);
+    expect(offline.online).toBe(false);
+    expect(offline.tcpAddr).toBeUndefined();
+    expect(offline.udpAddr).toBeUndefined();
+  });
+
   it("keeps the local URL and one card per service without merging different owners", () => {
     const local = leaseToServer({ ...lease, name: "blog" });
     const location = { relay_url: "https://remote.example", url: "https://blog.remote.example/", current_relay: false, reported_ready: true, observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z", verification: "relay-reported" as const };

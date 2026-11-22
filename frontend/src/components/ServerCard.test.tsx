@@ -310,7 +310,7 @@ describe("ServerCard comments interaction", () => {
       name: "ssh-box", address, metadata: { description: "SSH Server" }, locations: [{
         relay_url: "https://relay.example", current_relay: false, reported_ready: true,
         tcp_addr: "relay.example:40000",
-        observed_at: "2026-11-16T00:00:00Z", expires_at: "2026-11-16T00:00:30Z", verification: "relay-reported",
+        observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(), verification: "relay-reported",
       }],
     }], address);
     render(<MemoryRouter><ServerCard server={server} /></MemoryRouter>);
@@ -319,6 +319,21 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByText("TCP")).toBeTruthy();
     expect(screen.getByText(/TCP transport service/)).toBeTruthy();
     expect(screen.queryByText(/No HTTP URL available/)).toBeNull();
+  });
+
+  it("shows no transport endpoint when every relay is offline", () => {
+    const address = "0x2222222222222222222222222222222222222222";
+    const [server] = mergeDiscoveredServices([], [{
+      name: "ssh-box", address, metadata: {}, locations: [{
+        relay_url: "https://relay.example", current_relay: false, reported_ready: true,
+        tcp_addr: "relay.example:40000",
+        observed_at: new Date().toISOString(), expires_at: new Date(Date.now() - 1).toISOString(), verification: "relay-reported",
+      }],
+    }], address);
+    render(<MemoryRouter><ServerCard server={server} /></MemoryRouter>);
+
+    expect(screen.queryByText("relay.example:40000")).toBeNull();
+    expect(screen.getByText("No relay available now")).toBeTruthy();
   });
 
   it("renders description and tags in overlay alongside transport endpoints", () => {

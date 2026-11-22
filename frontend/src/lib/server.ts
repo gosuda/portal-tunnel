@@ -105,8 +105,7 @@ export function mergeDiscoveredServices(
       },
       { up: 0, down: 0 }
     );
-    const firstTCP = locations.find((location) => location.tcp_addr)?.tcp_addr;
-    const firstUDP = locations.find((location) => location.udp_addr)?.udp_addr;
+    const live = locations.filter((location) => isLocationLive(location));
     byIdentity.set(key, {
       id: `service:${key}`,
       serviceName: service.name,
@@ -116,13 +115,15 @@ export function mergeDiscoveredServices(
       tags: metadata.tags,
       owner: metadata.owner,
       thumbnail: "",
-      online: locations.some((location) => isLocationLive(location)),
+      online: live.length > 0,
       dns: "",
       link: "",
       remoteOnly: true,
       locations,
-      tcpAddr: firstTCP,
-      udpAddr: firstUDP,
+      // Only a live relay is a connect target. When every relay is offline the
+      // card shows no endpoint instead of an address that cannot answer.
+      tcpAddr: live.find((location) => location.tcp_addr)?.tcp_addr,
+      udpAddr: live.find((location) => location.udp_addr)?.udp_addr,
       observedReputation: reportedLocations.length ? totals : undefined,
     });
   }
