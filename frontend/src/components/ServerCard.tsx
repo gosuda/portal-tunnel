@@ -562,7 +562,9 @@ export function ServerCard({
   const endpoints = buildEndpoints(tcpAddr, udpAddr, fallbackHost);
   const isTransportService = endpoints.length > 0;
   const effectiveLink = resolveRepresentativeLink(server);
-  const isNavigable = navigable && !isTransportService && Boolean(effectiveLink);
+  // server.link is set only for a local HTTP lease, so a card that also has a
+  // remote transport endpoint keeps its local link.
+  const isNavigable = navigable && Boolean(effectiveLink) && (!isTransportService || Boolean(server.link));
   const observedRelayCount = server.locations?.length ?? (server.remoteOnly ? 0 : 1);
   const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
   const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
