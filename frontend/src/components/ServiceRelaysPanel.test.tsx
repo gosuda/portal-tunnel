@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ServiceRelaysPanel } from "./ServiceRelaysPanel";
 import type { BaseServer } from "@/lib/server";
@@ -109,22 +109,49 @@ describe("relay selection", () => {
     expect(screen.getByText("No relays found.")).toBeDefined();
   });
 
-  it("disables links for TCP/UDP transport services in relays panel", () => {
+  it("shows each relay's own protocol and copies its own address", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     render(<ServiceRelaysPanel
       server={{
         ...server,
-        tcpAddr: "relay.local.example:50000",
+        remoteOnly: true,
+        link: "",
+        tcpAddr: "a.example:40000",
         locations: [
-          { ...observation, relay_url: "https://remote.example", url: "https://blog.remote.example/" },
+          { ...observation, relay_url: "https://a.example", url: undefined, tcp_addr: "a.example:40000" },
+          { ...observation, relay_url: "https://b.example", url: undefined, udp_addr: "b.example:40001" },
+          { ...observation, relay_url: "https://c.example", url: "https://blog.c.example/" },
         ],
       }}
       loading={false}
       onClose={vi.fn()}
     />);
 
-    expect(screen.queryByRole("link", { name: /blog\.remote\.example/ })).toBeNull();
-    expect(screen.queryByText("blog.remote.example")).toBeNull();
-    expect(screen.getByText("remote.example")).toBeDefined();
-    expect(screen.getAllByText("TCP").length).toBeGreaterThanOrEqual(1);
+    const tcp = screen.getAllByRole("button", { name: /^Copy TCP / });
+    const udp = screen.getAllByRole("button", { name: /^Copy UDP / });
+    expect(tcp.map((button) => button.getAttribute("aria-label"))).toEqual(["Copy TCP a.example:40000"]);
+    expect(udp.map((button) => button.getAttribute("aria-label"))).toEqual(["Copy UDP b.example:40001"]);
+    expect(screen.getByRole("link", { name: /blog\.c\.example/ }).getAttribute("href")).toBe("https://blog.c.example/");
+
+    fireEvent.click(udp[0]);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("b.example:40001"));
+    expect(await screen.findByText("Copied!")).toBeDefined();
+  });
+
+  it("keeps an expired transport relay unavailable and not copyable", () => {
+    render(<ServiceRelaysPanel
+      server={{
+        ...server,
+        remoteOnly: true,
+        link: "",
+        locations: [{ ...observation, relay_url: "https://a.example", url: undefined, tcp_addr: "a.example:40000", expires_at: new Date(Date.now() - 1).toISOString() }],
+      }}
+      loading={false}
+      onClose={vi.fn()}
+    />);
+
+    expect(screen.getByText("Unavailable")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /^Copy / })).toBeNull();
   });
 });
