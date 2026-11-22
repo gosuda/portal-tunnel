@@ -67,11 +67,12 @@ type inspectedTransaction struct {
 }
 
 func startHTTPInspector(next http.Handler, bodies bool) (*httpInspector, error) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp4", "127.0.0.1:0")
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	i := &httpInspector{next: next, bodies: bodies, cancel: cancel,
 		origin: "http://" + listener.Addr().String(), slots: make(chan struct{}, 16), replaying: make(chan struct{}, 1)}
 	i.server = &http.Server{Handler: http.HandlerFunc(i.serveLocal),
