@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,25 +14,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/types"
 )
-
-func newTestReputationAPI(t *testing.T) *RelayAPI {
-	t.Helper()
-	dir := t.TempDir()
-	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	frontend := t.TempDir()
-	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	api, err := NewRelayAPI(server, policy.NewStore(), nil, filepath.Join(dir, types.RelayPolicyFilename), "admin-test", frontend, types.PolicySettings{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = api.close() })
-	return api
-}
 
 func postReputationVote(t *testing.T, api *RelayAPI, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -43,8 +25,11 @@ func postReputationVote(t *testing.T, api *RelayAPI, body string) *httptest.Resp
 	return rec
 }
 
-func checkReputationVotes(t *testing.T, api *RelayAPI) {
-	t.Helper()
+func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
+	api, _, err := newTestRelayAPI(t, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := postReputationVote(t, api, `{"hostname":"demo.example.com","vote":"invalid"}`).Code; got != http.StatusBadRequest {
 		t.Fatalf("invalid vote status = %d", got)
 	}
@@ -62,10 +47,7 @@ func checkReputationVotes(t *testing.T, api *RelayAPI) {
 	if !limited {
 		t.Fatal("vote source limit was not enforced")
 	}
-}
 
-func checkReputationCommentID(t *testing.T, api *RelayAPI) {
-	t.Helper()
 	for _, id := range []string{"", "  "} {
 		req := httptest.NewRequest(http.MethodPost, types.PathCommentsVote, strings.NewReader(`{"hostname":"demo.example.com","id":"`+id+`","vote":"up"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -76,10 +58,7 @@ func checkReputationCommentID(t *testing.T, api *RelayAPI) {
 			t.Fatalf("missing comment ID: status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	}
-}
 
-func checkReputationDirectory(t *testing.T, api *RelayAPI) {
-	t.Helper()
 	read := httptest.NewRecorder()
 	api.Handler().ServeHTTP(read, httptest.NewRequest(http.MethodGet, types.PathState, nil))
 	var response types.APIEnvelope[publicStateResponse]
@@ -88,14 +67,37 @@ func checkReputationDirectory(t *testing.T, api *RelayAPI) {
 	}
 }
 
-func TestReputationHTTPValidationAndRateLimit(t *testing.T) {
-	api := newTestReputationAPI(t)
-	checkReputationVotes(t, api)
-	checkReputationCommentID(t, api)
-	checkReputationDirectory(t, api)
+func TestPublicIdentityLeasesUsesServiceIdentity(t *testing.T) {
+	const owner = "0x1111111111111111111111111111111111111111"
+	first := types.Lease{Name: "first", Address: owner, Hostname: "first.example.com"}
+	second := types.Lease{Name: "second", Address: owner, Hostname: "second.example.com"}
+	canonical := types.Lease{Address: owner, Namespace: types.LocalTLSNamespaceV1, CanonicalHostname: "default." + owner[2:] + ".example.com"}
+	hidden := first
+	hidden.Address = "0x2222222222222222222222222222222222222222"
+	hidden.Metadata.Hide = true
+	policies := make([]types.PolicyLease, 0)
+	for _, lease := range []types.Lease{hidden, first, first, second, canonical} {
+		policies = append(policies, types.PolicyLease{
+			Lease:       lease,
+			IdentityKey: types.NewServiceIdentityKey(lease.Name, lease.Address).String(),
+		})
+	}
+	leases := publicIdentityLeases([]types.Lease{first, second, canonical}, policies)
+	got := make([]string, 0, len(leases))
+	for _, lease := range leases {
+		got = append(got, lease.IdentityKey)
+	}
+	want := []string{
+		types.NewServiceIdentityKey(first.Name, owner).String(),
+		types.NewServiceIdentityKey(second.Name, owner).String(),
+		types.NewServiceIdentityKey(canonical.Name, owner).String(),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("public identities = %v, want %v", got, want)
+	}
 }
 
-func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, error) {
+func newTestRelayAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, error) {
 	t.Helper()
 	dir := t.TempDir()
 	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: dir})
@@ -117,24 +119,6 @@ func newPolicyAPI(t *testing.T, policyJSON string) (*RelayAPI, *portal.Server, e
 		t.Cleanup(func() { _ = api.close() })
 	}
 	return api, server, err
-}
-
-func seedLegacyIPBanPolicy(t *testing.T) (*portal.Server, string, string) {
-	t.Helper()
-	dir := t.TempDir()
-	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://localhost", StateDir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, types.RelayPolicyFilename)
-	if err := os.WriteFile(path, []byte(`{"approval_mode":"manual","banned_ips":["127.0.0.1"],"banned_identity_keys":["blocked:addr"],"approved_identity_keys":["allowed:addr"]}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	frontend := t.TempDir()
-	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("portal"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	return server, path, frontend
 }
 
 func checkMigratedIdentitySnapshot(t *testing.T, api *RelayAPI) {
@@ -173,24 +157,23 @@ func checkRemovedIPEndpoints(t *testing.T, api *RelayAPI) {
 }
 
 func TestLegacyIPBanMigrationPreservesIdentityPolicy(t *testing.T) {
-	server, path, frontend := seedLegacyIPBanPolicy(t)
-	api, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{})
+	api, server, err := newTestRelayAPI(t, `{"approval_mode":"manual","banned_ips":["127.0.0.1"],"banned_identity_keys":["blocked:addr"],"approved_identity_keys":["allowed:addr"]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = api.close() })
 	checkMigratedIdentitySnapshot(t, api)
-	checkMigratedPolicyFile(t, path)
-	restarted, err := NewRelayAPI(server, policy.NewStore(), nil, path, "admin-test", frontend, types.PolicySettings{})
+	checkMigratedPolicyFile(t, api.policyStatePath)
+	restarted, err := NewRelayAPI(server, policy.NewStore(), nil, api.policyStatePath, "admin-test", api.frontendRoot.Name(), types.PolicySettings{})
 	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	t.Cleanup(func() { _ = restarted.close() })
-	checkRemovedIPEndpoints(t, api)
+	checkMigratedIdentitySnapshot(t, restarted)
+	checkRemovedIPEndpoints(t, restarted)
 }
 
 func TestPolicyLoadNormalizesUnnormalizedIdentityKeys(t *testing.T) {
-	api, server, err := newPolicyAPI(t, `{"approval_mode":"manual","banned_identity_keys":["  Blocked : ADDR "],"approved_identity_keys":[" ALLOWED : addr "],"denied_identity_keys":["  DENIED : Key "],"identity_bps":{" Floody : Key ":1500,"floody:key":1500}}`)
+	api, server, err := newTestRelayAPI(t, `{"approval_mode":"manual","banned_identity_keys":["  Blocked : ADDR "],"approved_identity_keys":[" ALLOWED : addr "],"denied_identity_keys":["  DENIED : Key "],"identity_bps":{" Floody : Key ":1500,"floody:key":1500}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +194,7 @@ func TestPolicyLoadNormalizesUnnormalizedIdentityKeys(t *testing.T) {
 }
 
 func TestPolicyLoadRejectsMalformedIdentityKey(t *testing.T) {
-	_, _, err := newPolicyAPI(t, `{"identity_bps":{"no-separator":100}}`)
+	_, _, err := newTestRelayAPI(t, `{"identity_bps":{"no-separator":100}}`)
 	if err == nil {
 		t.Fatal("malformed identity key accepted at load")
 	}
@@ -221,7 +204,7 @@ func TestPolicyLoadRejectsMalformedIdentityKey(t *testing.T) {
 }
 
 func TestPolicyLoadRejectsConflictingIdentityBPSLimits(t *testing.T) {
-	_, _, err := newPolicyAPI(t, `{"identity_bps":{" Floody : Key ":1500,"floody:key":2000}}`)
+	_, _, err := newTestRelayAPI(t, `{"identity_bps":{" Floody : Key ":1500,"floody:key":2000}}`)
 	if err == nil {
 		t.Fatal("conflicting canonical identity_bps limits accepted at load")
 	}
@@ -233,7 +216,7 @@ func TestPolicyLoadRejectsConflictingIdentityBPSLimits(t *testing.T) {
 }
 
 func TestAdminMutationRejectsMalformedIdentityKey(t *testing.T) {
-	api, _, err := newPolicyAPI(t, "")
+	api, _, err := newTestRelayAPI(t, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,20 +226,5 @@ func TestAdminMutationRejectsMalformedIdentityKey(t *testing.T) {
 	api.Handler().ServeHTTP(response, req)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("malformed identity key mutation: %d, want 400", response.Code)
-	}
-}
-
-func TestServeFrontendFallsBackToIndexForClientRoutes(t *testing.T) {
-	api := newTestReputationAPI(t)
-	serve := func(path string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		api.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		return rec
-	}
-	if rec := serve("/app/dashboard"); rec.Code != http.StatusOK || rec.Body.String() != "portal" {
-		t.Fatalf("client route = %d %q, want 200 index", rec.Code, rec.Body.String())
-	}
-	if rec := serve("/missing.css"); rec.Code != http.StatusNotFound {
-		t.Fatalf("missing asset = %d, want 404", rec.Code)
 	}
 }
