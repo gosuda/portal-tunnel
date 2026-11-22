@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiClient, APIClientError } from "@/lib/apiClient";
 import { RELAY_API_PATHS } from "@/lib/apiPaths";
-import { mergeLocations } from "@/lib/server";
+import { isIdentityAddress, mergeLocations } from "@/lib/server";
 import type { DiscoveredService, ServiceDiscoveryResponse } from "@/types/api";
 
 const REFRESH_MS = 25_000;
@@ -46,7 +46,7 @@ export function useServiceDiscovery(address: string | undefined, name?: string, 
   if (address !== undefined) query.set("address", address);
   if (name !== undefined) query.set("name", name);
   const key = query.toString();
-  const valid = address === undefined ? name === undefined : /^0x[0-9a-f]{40}$/i.test(address);
+  const valid = address === undefined ? name === undefined : isIdentityAddress(address);
   const [state, setState] = useState<{ key: string; response?: ServiceDiscoveryResponse; error?: string } | undefined>();
   useEffect(() => {
     if (!enabled || !valid) return;

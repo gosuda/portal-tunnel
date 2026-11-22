@@ -30,6 +30,11 @@ export interface BaseServer {
   observedReputation?: ObservedReputation;
 }
 
+// A service identity address is a 0x-prefixed 20-byte hex string.
+export function isIdentityAddress(value: string): boolean {
+  return /^0x[0-9a-f]{40}$/i.test(value);
+}
+
 // A newer observation from a relay replaces its older one; other relays stay.
 export function mergeLocations(
   existing: ServiceLocation[],
