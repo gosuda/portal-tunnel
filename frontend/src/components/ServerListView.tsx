@@ -127,8 +127,7 @@ function watchCardReveal(grid: HTMLDivElement | null): () => void {
   return () => observer.disconnect();
 }
 
-function BrowserHeader({ title, releaseVersion, searchQuery, isAppView, sidebarOpen, onSidebarOpenChange, onSearchChange, onBrowseViewChange }: {
-  title: string;
+function BrowserHeader({ releaseVersion, searchQuery, isAppView, sidebarOpen, onSidebarOpenChange, onSearchChange, onBrowseViewChange }: {
   releaseVersion: string;
   searchQuery: string;
   isAppView: boolean;
@@ -146,7 +145,7 @@ function BrowserHeader({ title, releaseVersion, searchQuery, isAppView, sidebarO
         <div className="flex items-center gap-2.5">
           <a href={ROUTE_PATHS.home} aria-label="Portal home" className="inline-flex items-center gap-2 text-xl font-extrabold tracking-tight">
             <svg viewBox="0 0 906.26 1457.543" className="h-8 w-6 text-primary" aria-hidden="true"><path fill="currentColor" d="M254.854 137.158c-34.46 84.407-88.363 149.39-110.934 245.675 90.926-187.569 308.397-483.654 554.729-348.685 135.487 74.216 194.878 270.78 206.058 467.566 21.924 385.996-190.977 853.604-467.585 943.057-174.879 56.543-307.375-86.447-364.527-198.115-176.498-344.82 2.041-910.077 182.259-1109.498zm198.13 7.918C202.61 280.257 4.622 968.542 207.322 1270.414c51.713 77.029 194.535 160.648 285.294 71.318-209.061 31.529-288.389-176.143-301.145-340.765 31.411 147.743 139.396 326.12 309.075 253.588 251.957-107.723 376.778-648.46 269.433-966.817 22.394 134.616 15.572 317.711-47.551 412.087 86.655-230.615 7.903-704.478-269.444-554.749z" /></svg>
-            {title}
+            PORTAL
           </a>
           {releaseVersion && (
             <span className="inline-flex h-6 items-center rounded-md border border-border bg-secondary/85 px-2 font-mono text-[11px] font-semibold text-foreground/80">
@@ -330,7 +329,6 @@ interface ServerListViewProps {
   sidebarOpen: boolean;
   onSidebarOpenChange: (open: boolean) => void;
   onBrowseViewChange: (view: BrowseView) => void;
-  title?: string;
   searchQuery: string;
   sortBy: SortOption;
   selectedTags: string[];
@@ -360,7 +358,6 @@ export function ServerListView({
   sidebarOpen,
   onSidebarOpenChange,
   onBrowseViewChange,
-  title = "PORTAL",
   searchQuery,
   sortBy,
   selectedTags,
@@ -420,7 +417,6 @@ export function ServerListView({
     <div className="portal-browser relative isolate min-h-screen text-foreground" onKeyDown={(event) => { if (event.key === "Escape") onSidebarOpenChange(false); }}>
       <a href="#portal-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[70] focus:rounded-md focus:bg-foreground focus:px-4 focus:py-2 focus:text-background">Skip to content</a>
       <BrowserHeader
-        title={title}
         releaseVersion={releaseVersion}
         searchQuery={searchQuery}
         isAppView={isAppView}

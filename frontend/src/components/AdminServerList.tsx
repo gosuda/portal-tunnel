@@ -17,7 +17,6 @@ import { TransportPolicyControl } from "@/components/TransportPolicyControl";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AdminServerListProps {
-  title?: string;
   searchQuery: string;
   status: StatusFilter;
   sortBy: SortOption;
@@ -76,7 +75,6 @@ function useAdminSelection(filteredServers: AdminServer[]): {
   isAllSelected: boolean;
   allIdentityKeys: string[];
   handleToggleSelect: (identityKey: string) => void;
-  handleClearSelection: () => void;
   handleSelectAll: () => void;
   runBulkAction: (handler: (identityKeys: string[]) => void | Promise<void>) => Promise<void>;
 } {
@@ -139,14 +137,12 @@ function useAdminSelection(filteredServers: AdminServer[]): {
     isAllSelected,
     allIdentityKeys,
     handleToggleSelect,
-    handleClearSelection,
     handleSelectAll,
     runBulkAction,
   };
 }
 
 export function AdminServerList({
-  title = "PORTAL ADMIN",
   pending,
   onRefresh,
   searchQuery,
@@ -304,7 +300,7 @@ export function AdminServerList({
       <div className="flex h-full grow flex-col">
         <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
           <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-            <AdminHeader title={title} auth={auth} />
+            <AdminHeader auth={auth} />
             <button type="button" onClick={() => void onRefresh()} className="self-start rounded bg-secondary px-3 py-2">Refresh policy</button>
             <p className="text-sm">Effective approval mode: <strong>{approvalMode}</strong>. Auto admits public registrations. Manual holds requests for approval before assigning resources. Saved policy overrides the startup setting.</p>
             <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={async (event) => {

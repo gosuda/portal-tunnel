@@ -9,7 +9,6 @@ import { RELAY_API_PATHS } from "@/lib/apiPaths";
 import type { DomainResponse } from "@/types/api";
 
 interface AdminHeaderProps {
-  title?: string;
   auth: AdminAuth;
 }
 
@@ -41,7 +40,6 @@ async function fetchHeaderMetadata(
 }
 
 export function AdminHeader({
-  title = "PORTAL ADMIN",
   auth,
 }: AdminHeaderProps): JSX.Element {
   const [releaseVersion, setReleaseVersion] = useState("");
@@ -100,7 +98,7 @@ export function AdminHeader({
 
         <div className="ml-[19px] flex min-w-0 items-center gap-[12px]">
           <h2 className="min-w-0 text-[21px] leading-none font-extrabold tracking-[0.02em] text-foreground">
-            {title}
+            PORTAL ADMIN
           </h2>
           {releaseVersion && (
             <span className="inline-flex h-[24px] items-center rounded-[6px] border border-border bg-secondary/85 px-[10px] font-mono text-[11px] font-semibold text-foreground/80">
