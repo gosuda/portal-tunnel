@@ -338,7 +338,12 @@ func (d settingsDraft) request() (agent.AgentTunnelUpdateRequest, error) {
 		return agent.AgentTunnelUpdateRequest{}, err
 	}
 	description := strings.TrimSpace(d.Description)
+	// An empty list, not nil: the agent reads a missing list as "keep the
+	// tags", so clearing the field must send [] to clear them.
 	tags := utils.SplitCSV(d.Tags)
+	if tags == nil {
+		tags = []string{}
+	}
 	hide := d.Hide
 	req := agent.AgentTunnelUpdateRequest{Metadata: &agent.AgentMetadataRequest{Description: &description, Tags: &tags, Hide: &hide}}
 	if maxRelays > 0 {

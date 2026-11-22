@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -184,6 +185,27 @@ func TestTunnelDraftRequest(t *testing.T) {
 		if _, err := draft.request(); err == nil {
 			t.Fatalf("draft %+v was accepted", draft)
 		}
+	}
+}
+
+// Clearing the tags field clears the tags: the agent keeps the tags of a
+// request without a list, so the request must carry an empty one.
+func TestSettingsDraftClearsTags(t *testing.T) {
+	t.Parallel()
+	req, err := settingsDraft{Tags: " , "}.request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got agent.AgentTunnelUpdateRequest
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata == nil || got.Metadata.Tags == nil || len(*got.Metadata.Tags) != 0 {
+		t.Fatalf("request %s does not clear the tags", body)
 	}
 }
 
