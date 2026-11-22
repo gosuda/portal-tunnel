@@ -524,7 +524,6 @@ interface ServerCardProps {
   onOpenComments?: (server: BaseServer) => void;
   onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
   onOpenRelays?: (server: BaseServer) => void;
-  relayCount?: number;
   onSelectIdentity?: (identity: string) => void;
 }
 
@@ -536,7 +535,6 @@ export function ServerCard({
   onOpenComments,
   onVote,
   onOpenRelays,
-  relayCount,
   onSelectIdentity,
 }: ServerCardProps): JSX.Element {
   const {
@@ -556,7 +554,7 @@ export function ServerCard({
   const isTransportService = endpoints.length > 0;
   const effectiveLink = resolveRepresentativeLink(server);
   const isNavigable = navigable && !isTransportService && Boolean(effectiveLink);
-  const observedRelayCount = relayCount ?? server.locations?.length ?? (server.remoteOnly ? 0 : 1);
+  const observedRelayCount = server.locations?.length ?? (server.remoteOnly ? 0 : 1);
   const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
   const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
 

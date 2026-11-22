@@ -288,13 +288,12 @@ function ResultsHeader({ title, status, hiddenCount, showHidden, onToggleHidden 
   );
 }
 
-function ServerGrid({ servers, browseView, onOpenComments, onVote, onOpenRelays, relayCounts, onSelectIdentity }: {
+function ServerGrid({ servers, browseView, onOpenComments, onVote, onOpenRelays, onSelectIdentity }: {
   servers: BaseServer[];
   browseView: BrowseView;
   onOpenComments: (server: BaseServer) => void;
   onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
   onOpenRelays?: (server: BaseServer) => void;
-  relayCounts?: Record<string, number>;
   onSelectIdentity?: (identity: string) => void;
 }): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
@@ -302,7 +301,7 @@ function ServerGrid({ servers, browseView, onOpenComments, onVote, onOpenRelays,
   useEffect(() => watchCardReveal(gridRef.current), [renderedServerIds, browseView]);
   return (
     <div ref={gridRef} className="grid grid-cols-1 gap-x-4 gap-y-10 min-[600px]:grid-cols-2 min-[1150px]:grid-cols-3 min-[1600px]:grid-cols-4 min-[2000px]:grid-cols-5">
-      {servers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} onVote={server.remoteOnly ? undefined : onVote} onOpenRelays={onOpenRelays} relayCount={relayCounts?.[server.id]} onSelectIdentity={onSelectIdentity} /></LiveAppCard>)}
+      {servers.map((server) => <LiveAppCard key={server.id} serverId={server.id}><ServerCard server={server} onOpenComments={onOpenComments} onVote={server.remoteOnly ? undefined : onVote} onOpenRelays={onOpenRelays} onSelectIdentity={onSelectIdentity} /></LiveAppCard>)}
     </div>
   );
 }
@@ -327,7 +326,6 @@ interface ServerListViewProps {
   discoveryLoading?: boolean;
   discoveryError?: string;
   onOpenRelays?: (server: BaseServer) => void;
-  relayCounts?: Record<string, number>;
   browseView: BrowseView;
   sidebarOpen: boolean;
   onSidebarOpenChange: (open: boolean) => void;
@@ -358,7 +356,6 @@ export function ServerListView({
   discoveryLoading,
   discoveryError,
   onOpenRelays,
-  relayCounts,
   browseView,
   sidebarOpen,
   onSidebarOpenChange,
@@ -466,7 +463,7 @@ export function ServerListView({
                 onToggleHidden={() => onShowHiddenChange(!showHidden)}
               />
               {filteredServers.length > 0 ? (
-                <ServerGrid servers={filteredServers} browseView={browseView} onOpenComments={onOpenComments} onVote={onVote} onOpenRelays={onOpenRelays} relayCounts={relayCounts} onSelectIdentity={handleSelectIdentity} />
+                <ServerGrid servers={filteredServers} browseView={browseView} onOpenComments={onOpenComments} onVote={onVote} onOpenRelays={onOpenRelays} onSelectIdentity={handleSelectIdentity} />
               ) : (
                 <EmptyResults browseView={browseView} title={emptyMessage.title} body={emptyMessage.body} />
               )}
