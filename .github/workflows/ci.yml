@@ -65,7 +65,7 @@ jobs:
   verify:
     name: Verify
     needs: changes
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -181,7 +181,7 @@ jobs:
   e2e:
     name: E2E Tests
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: ${{ needs.changes.outputs.backend == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
