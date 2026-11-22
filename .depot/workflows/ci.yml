@@ -1,0 +1,176 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Changes
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
+      go: >-
+        ${{ github.event_name == 'workflow_dispatch' ||
+        steps.filter.outputs.backend == 'true' ||
+        steps.filter.outputs.appauth == 'true' }}
+      frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
+      charts: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.charts == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Detect changed inputs
+        if: github.event_name != 'workflow_dispatch'
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            # Keep unknown paths and embedded runtime assets in backend checks.
+            backend:
+              - '**'
+              - '!frontend/**'
+              - '!docs/**'
+              - '!deploy/**'
+              - '!extensions/**'
+              - '!*.md'
+            # Shared JSON fixtures are also inputs to sdk/appauth's Go tests.
+            appauth:
+              - 'frontend/src/lib/*.json'
+            frontend:
+              - 'frontend/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+              - '.depot/workflows/ci.yml'
+            charts:
+              - 'deploy/helm/**'
+              - 'docs/static/examples/kubernetes/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+              - '.depot/workflows/ci.yml'
+
+  verify:
+    name: Verify
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require successful change detection
+        env:
+          CHANGE_DETECTION_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGE_DETECTION_RESULT" = success
+
+      - name: Checkout code
+        if: ${{ !cancelled() && (needs.changes.outputs.go == 'true' || needs.changes.outputs.frontend == 'true') }}
+        id: checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.checkout.outcome == 'success' }}
+        id: go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Check Go module consistency
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.go.outcome == 'success' }}
+        id: go-mod
+        run: go mod tidy
+
+      - name: Check Go module diff
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.go-mod.outcome == 'success' }}
+        id: go-mod-diff
+        run: git diff --exit-code -- go.mod go.sum
+
+      - name: Install CI linter
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.checkout.outcome == 'success' && steps.go.outcome == 'success' }}
+        id: install-lint
+        run: make install-lint
+
+      - name: Run Go vet
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.checkout.outcome == 'success' && steps.go.outcome == 'success' && steps.go-mod-diff.outcome == 'success' && steps.install-lint.outcome == 'success' }}
+        run: make vet
+
+      - name: Run Go lint
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.checkout.outcome == 'success' && steps.go.outcome == 'success' && steps.go-mod-diff.outcome == 'success' && steps.install-lint.outcome == 'success' }}
+        run: make lint
+
+      - name: Run Go unit tests
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.checkout.outcome == 'success' && steps.go.outcome == 'success' && steps.go-mod.outcome == 'success' }}
+        run: make test-go-unit
+
+      - name: Set up Node.js
+        if: ${{ !cancelled() && needs.changes.outputs.frontend == 'true' && steps.checkout.outcome == 'success' }}
+        id: setup-node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install frontend dependencies
+        if: ${{ !cancelled() && needs.changes.outputs.frontend == 'true' && steps.checkout.outcome == 'success' && steps.setup-node.outcome == 'success' }}
+        id: frontend-install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend tests
+        if: ${{ !cancelled() && needs.changes.outputs.frontend == 'true' && steps.checkout.outcome == 'success' && steps.setup-node.outcome == 'success' && steps.frontend-install.outcome == 'success' }}
+        id: frontend-test
+        working-directory: frontend
+        run: npm test
+
+      - name: Run frontend lint
+        if: ${{ !cancelled() && needs.changes.outputs.frontend == 'true' && steps.checkout.outcome == 'success' && steps.setup-node.outcome == 'success' && steps.frontend-install.outcome == 'success' }}
+        id: frontend-lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        if: >-
+          ${{ !cancelled() &&
+          needs.changes.outputs.frontend == 'true' &&
+          steps.checkout.outcome == 'success' &&
+          steps.setup-node.outcome == 'success' &&
+          steps.frontend-install.outcome == 'success' &&
+          steps.frontend-test.outcome == 'success' &&
+          steps.frontend-lint.outcome == 'success' }}
+        working-directory: frontend
+        run: npm run build
+
+  e2e:
+    name: E2E Tests
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Compile browser tunnel WASM
+        run: make build-wasm
+
+      # The full Linux suite includes TestPortalExposeStdinLifetime.
+      - name: Run E2E tests
+        run: make test-e2e
+
