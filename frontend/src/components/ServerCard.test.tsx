@@ -321,6 +321,23 @@ describe("ServerCard comments interaction", () => {
     expect(screen.queryByText(/No HTTP URL available/)).toBeNull();
   });
 
+  it("keeps the HTTP link and shows the remote TCP endpoint when relays differ", () => {
+    const address = "0x2222222222222222222222222222222222222222";
+    const live = { current_relay: false, reported_ready: true, observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(), verification: "relay-reported" as const };
+    const [server] = mergeDiscoveredServices([], [{
+      name: "game", address, metadata: {}, locations: [
+        { ...live, relay_url: "https://a.example", url: "https://game.a.example/", tcp_addr: "a.example:40000" },
+        { ...live, relay_url: "https://b.example", url: "https://game.b.example/" },
+      ],
+    }], address);
+    render(<MemoryRouter><ServerCard server={server} /></MemoryRouter>);
+
+    // Relay A's hostname is a raw TCP lease, so only Relay B's URL is a link.
+    expect(screen.getAllByRole("link", { name: /Open game/ }).map((link) => link.getAttribute("href"))).toContain("https://game.b.example/");
+    expect(screen.queryAllByRole("link").some((link) => link.getAttribute("href") === "https://game.a.example/")).toBe(false);
+    expect(screen.getByText("a.example:40000")).toBeTruthy();
+  });
+
   it("shows no transport endpoint when every relay is offline", () => {
     const address = "0x2222222222222222222222222222222222222222";
     const [server] = mergeDiscoveredServices([], [{

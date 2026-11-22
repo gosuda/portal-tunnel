@@ -212,8 +212,9 @@ function resolveRepresentativeLink(server: BaseServer): string {
   if (server.link) {
     return server.link;
   }
-  // Navigate only to a relay that is ready, unexpired, and serves HTTPS.
-  return server.locations?.find((location) => isLocationAvailable(location))?.url ?? "";
+  // Navigate only to a relay that is ready, unexpired, and serves HTTPS. A raw
+  // TCP lease hostname has no HTTP backend, so its URL is not a link.
+  return server.locations?.find((location) => !location.tcp_addr && isLocationAvailable(location))?.url ?? "";
 }
 
 function buildEndpoints(
@@ -562,9 +563,8 @@ export function ServerCard({
   const endpoints = buildEndpoints(tcpAddr, udpAddr, fallbackHost);
   const isTransportService = endpoints.length > 0;
   const effectiveLink = resolveRepresentativeLink(server);
-  // server.link is set only for a local HTTP lease, so a card that also has a
-  // remote transport endpoint keeps its local link.
-  const isNavigable = navigable && Boolean(effectiveLink) && (!isTransportService || Boolean(server.link));
+  // An HTTP URL stays a link even when another relay serves TCP/UDP.
+  const isNavigable = navigable && Boolean(effectiveLink);
   const observedRelayCount = server.locations?.length ?? (server.remoteOnly ? 0 : 1);
   const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
   const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
