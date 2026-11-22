@@ -338,6 +338,22 @@ describe("ServerCard comments interaction", () => {
     expect(screen.getByText("a.example:40000")).toBeTruthy();
   });
 
+  it("does not link the HTTPS URL of a UDP-only relay", () => {
+    const address = "0x2222222222222222222222222222222222222222";
+    const [server] = mergeDiscoveredServices([], [{
+      name: "voice", address, metadata: {}, locations: [{
+        relay_url: "https://a.example", url: "https://voice.a.example/", udp_addr: "a.example:40001",
+        current_relay: false, reported_ready: true,
+        observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(), verification: "relay-reported",
+      }],
+    }], address);
+    render(<MemoryRouter><ServerCard server={server} /></MemoryRouter>);
+
+    expect(screen.queryAllByRole("link").some((link) => link.getAttribute("href") === "https://voice.a.example/")).toBe(false);
+    expect(screen.getByText("a.example:40001")).toBeTruthy();
+    expect(screen.getByText(/UDP transport service/)).toBeTruthy();
+  });
+
   it("shows a remote TCP endpoint on a local HTTP card and keeps its link", () => {
     const local = { id: "game.local.example", name: "game", serviceName: "game", address: "0x2222222222222222222222222222222222222222", description: "", tags: [], thumbnail: "", owner: "", online: true, dns: "game.local.example", link: "https://game.local.example/" };
     const [server] = mergeDiscoveredServices([local], [{

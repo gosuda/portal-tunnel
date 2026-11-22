@@ -212,9 +212,10 @@ function resolveRepresentativeLink(server: BaseServer): string {
   if (server.link) {
     return server.link;
   }
-  // Navigate only to a relay that is ready, unexpired, and serves HTTPS. A raw
-  // TCP lease hostname has no HTTP backend, so its URL is not a link.
-  return server.locations?.find((location) => !location.tcp_addr && isLocationAvailable(location))?.url ?? "";
+  // Navigate only to a relay that is ready, unexpired, and serves HTTPS. A
+  // TCP/UDP lease hostname is not a web app, as in leaseToServer, so its URL
+  // is not a link.
+  return server.locations?.find((location) => !location.tcp_addr && !location.udp_addr && isLocationAvailable(location))?.url ?? "";
 }
 
 // The card's own endpoints come from its local lease. Without one, take the
