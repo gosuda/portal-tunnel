@@ -172,15 +172,19 @@ async function postVoteAndMerge(hostname: string, vote: ReputationVoteAction, sn
   setSummaries((current) => mergeVoteSummary(key, response, current));
 }
 
-function countHidden(servers: BaseServer[]): number {
-  return servers.filter((server) => isHiddenByVotes(server.reputation?.up ?? 0, server.reputation?.down ?? 0)).length;
+function isHiddenServer(server: BaseServer): boolean {
+  return isHiddenByVotes(server.reputation?.up ?? 0, server.reputation?.down ?? 0);
+}
+
+function isFavoriteServer(server: BaseServer): boolean {
+  return server.reputation?.viewer_vote === "up";
 }
 
 function selectFilteredServers(browseView: BrowseView, filteredServers: BaseServer[]): BaseServer[] {
   if (browseView !== "favorites") {
     return filteredServers;
   }
-  return filteredServers.filter((server) => server.reputation?.viewer_vote === "up");
+  return filteredServers.filter(isFavoriteServer);
 }
 
 function selectLeases(publicState: PublicState): Lease[] | null {
@@ -247,12 +251,7 @@ function attachReputation(
 }
 
 function selectVisibleServers(servers: BaseServer[], showHidden: boolean): BaseServer[] {
-  if (showHidden) {
-    return servers;
-  }
-  return servers.filter(
-    (server) => !isHiddenByVotes(server.reputation?.up ?? 0, server.reputation?.down ?? 0)
-  );
+  return showHidden ? servers : servers.filter((server) => !isHiddenServer(server));
 }
 
 export function useServerList(identityAddress = "", networkScope = false): UseListReturn<BaseServer> & { identityDiscovery: ReturnType<typeof useServiceDiscovery>; commentServer: BaseServer | null; toggleComments: (server: BaseServer) => void; closeComments: () => void; browseView: BrowseView; favorites: number; showHidden: boolean; setShowHidden: (value: boolean) => void; hiddenCount: number; sidebarOpen: boolean; setSidebarOpen: (value: boolean) => void; filteredServers: BaseServer[]; handleBrowseViewChange: (view: BrowseView) => void; leases: Lease[] | null; onVote: (hostname: string, vote: ReputationVoteAction) => Promise<void> } {
@@ -290,13 +289,13 @@ export function useServerList(identityAddress = "", networkScope = false): UseLi
     [publicState.leases, summaries, identityAddress, networkEnabled, identityDiscovery.response]
   );
 
-  const hiddenCount = countHidden(servers);
+  const hiddenCount = servers.filter(isHiddenServer).length;
   const visibleServers = useMemo(
     () => selectVisibleServers(servers, showHidden),
     [servers, showHidden]
   );
   const list = useList({ servers: visibleServers });
-  const favorites = visibleServers.filter((server) => server.reputation?.viewer_vote === "up").length;
+  const favorites = visibleServers.filter(isFavoriteServer).length;
 
   return {
     ...list,
