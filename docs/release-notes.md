@@ -22,6 +22,16 @@ when offline and never fall back to cached content.
 
 ## Unreleased
 
+### Relay: a per-source budget for ClientHello inspection
+
+`--inspections-per-source` (`INSPECTIONS_PER_SOURCE`, default `16`) bounds the
+public sockets one IPv4 address or IPv6 /64 can hold while the relay waits for
+their TLS ClientHello, inside the existing 128-socket budget. Over the budget,
+the relay closes the new connection. Behind a TCP proxy every visitor shares
+the proxy's address: set `0` there and limit clients at the proxy. An embedder
+of `portal.Server` sets `ServerConfig.InspectionsPerSource`; zero keeps the old
+behavior.
+
 ### Kubernetes: Helm charts for the relay and the tunnel client
 
 `docs/examples/helm/portal-relay` runs the relay and `docs/examples/helm/portal-tunnel` runs

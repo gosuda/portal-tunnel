@@ -109,6 +109,7 @@ func registerAppFlags(fs *flag.FlagSet, cfg *appConfig, env *cli.Env) {
 	env.String(fs, &cfg.ApprovalMode, "approval-mode", string(policy.ModeAuto), "initial lease approval mode (auto|manual); a mode saved in policy.json wins", "APPROVAL_MODE")
 	env.Int(fs, &cfg.Relay.DefaultIdentityBPS, "default-identity-bps", types.DefaultIdentityBPS, nil, "default stream bytes per second per service identity; individual admin limits override it (0=unlimited)", "DEFAULT_IDENTITY_BPS")
 	env.Int(fs, &cfg.Relay.UnapprovedLeasesPerSource, "unapproved-leases-per-source", 64, nil, "Per-source unapproved lease or pending request budget (0 disables the per-source limit)", "UNAPPROVED_LEASES_PER_SOURCE")
+	env.Int(fs, &cfg.Relay.InspectionsPerSource, "inspections-per-source", 16, nil, "public sockets one IPv4 address or IPv6 /64 can hold while the relay reads their TLS ClientHello (0=only the 128-socket server-wide budget)", "INSPECTIONS_PER_SOURCE")
 	env.Int(fs, &cfg.Relay.MinPort, "min-port", 0, parseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
 	env.Int(fs, &cfg.Relay.MaxPort, "max-port", 0, parseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
 
