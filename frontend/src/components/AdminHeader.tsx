@@ -46,13 +46,16 @@ export function AdminHeader({
 }: AdminHeaderProps): JSX.Element {
   const [releaseVersion, setReleaseVersion] = useState("");
   const [ensVerified, setENSVerified] = useState(false);
-  const { isAuthenticated, isLoading, login, logout } = auth;
+  const { isAuthenticated, login, logout } = auth;
   const [adminToken, setAdminToken] = useState("");
   const [authError, setAuthError] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const handleAdminLogin = async () => {
+    if (isLoggingIn) return;
     setAuthError("");
-    const result = await login(adminToken);
+    setIsLoggingIn(true);
+    const result = await login(adminToken).finally(() => setIsLoggingIn(false));
     if (!result.success) {
       setAuthError(result.error || "Admin login failed.");
       return;
@@ -137,15 +140,15 @@ export function AdminHeader({
                 placeholder="Admin token"
                 autoComplete="current-password"
                 className="h-10 w-44 rounded-md border border-border/70 bg-background/90 px-4 text-sm text-foreground shadow-sm outline-none transition focus:border-primary/50 sm:w-56"
-                disabled={isLoading}
+                disabled={isLoggingIn}
               />
               <Button
                 type="submit"
                 variant="outline"
-                disabled={isLoading}
+                disabled={isLoggingIn}
                 className="h-10 rounded-md border-border/70 bg-background/90 px-4 text-foreground shadow-sm transition-colors hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed"
               >
-                {isLoading ? (
+                {isLoggingIn ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <KeyRound className="h-4 w-4" />
