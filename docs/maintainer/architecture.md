@@ -306,8 +306,11 @@ server; zero disables the per-source budget); unparseable peer addresses share
 the same fallback budget. This keeps
 one source from occupying every slot until the two-second deadlines expire while
 the aggregate cap continues to bound memory and workers. Root capacity is not
-reserved, so distributed floods or many clients behind one proxy still require
-protection at the deployment boundary when root availability must be guaranteed.
+reserved, and the budget only covers sources with distinct addresses: eight
+IPv4 addresses, or one routed IPv6 /56 split into /64s, still fill all 128 slots.
+Distributed floods, address rotation within one network, and many clients
+behind one proxy still require protection at the deployment boundary when root
+availability must be guaranteed.
 
 A lease independently admits at most 128 pending reverse acquisitions and active
 bridges; the SDK also limits its local TCP proxy workers to 128. Idle established
