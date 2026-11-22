@@ -47,7 +47,7 @@ type AgentConfig struct {
 
 // TunnelConfig is one [[tunnels]] entry: the config of a tunnel under the ID the
 // agent manages it by. The file, the Agent API and the dashboard change it, and
-// The runtime resolves an execution copy.
+// the runtime resolves an execution copy.
 type TunnelConfig struct {
 	ID string `toml:"id,omitempty"`
 	tunnel.Config
