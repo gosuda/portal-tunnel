@@ -241,7 +241,7 @@ func (c Config) validate() error {
 		if c.Serve == "" {
 			return fmt.Errorf("relay cache requires a static site")
 		}
-		if *c.BanMITM {
+		if c.BanMITM != nil && *c.BanMITM {
 			return fmt.Errorf("relay cache permits TLS termination and cannot be combined with MITM protection")
 		}
 		if !c.IsZero() {

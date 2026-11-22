@@ -49,6 +49,14 @@ func TestConfigResolveRejectsBlankPaymentMethods(t *testing.T) {
 	}
 }
 
+func TestUnresolvedConfigDoesNotPanic(t *testing.T) {
+	cfg := Config{Serve: "site", Cache: &CacheConfig{}}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() = %v", err)
+	}
+	_ = buildExposureOptions(cfg)
+}
+
 func TestConfigResolveModes(t *testing.T) {
 	const wallet = "0x0000000000000000000000000000000000000001"
 	routes := []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}

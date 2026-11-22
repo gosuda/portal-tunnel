@@ -58,7 +58,7 @@ func buildExposedRoutes(resolved Config) ([]gateway.ExposedHTTPRoute, error) {
 
 func buildExposureOptions(resolved Config) []sdk.Option {
 	opts := []sdk.Option{
-		sdk.WithMITMProtection(*resolved.BanMITM),
+		sdk.WithMITMProtection(resolved.BanMITM != nil && *resolved.BanMITM),
 		sdk.WithTLSCertificate(resolved.TLSCert, resolved.TLSKey),
 		sdk.WithMetadata(resolved.LeaseMetadata),
 	}
@@ -80,8 +80,8 @@ func buildExposureOptions(resolved Config) []sdk.Option {
 	if resolved.Overlay {
 		opts = append(opts, sdk.WithOverlay())
 	}
-	if *resolved.Discovery {
-		opts = append(opts, sdk.WithDiscovery(resolved.MaxActiveRelays))
+	if resolved.DiscoveryEnabled() {
+		opts = append(opts, sdk.WithDiscovery(resolved.RelayLimit()))
 	}
 	if resolved.Cache != nil {
 		opts = append(opts, sdk.WithStaticRelayCache(resolved.Serve, resolved.Cache.TTL))
