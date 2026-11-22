@@ -162,6 +162,23 @@ describe("ServerCard comments interaction", () => {
     expect(screen.queryByRole("button", { name: "Do not recommend app" })).toBeNull();
   });
 
+  it("does not show a local comment count for remote-only services", () => {
+    render(
+      <MemoryRouter>
+        <ServerCard
+          server={{
+            id: "service:blog:owner", name: "blog", description: "", tags: [],
+            thumbnail: "", owner: "", online: true, dns: "", link: "", remoteOnly: true,
+          }}
+          onOpenComments={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+    const trigger = screen.getByRole("button", { name: "Comments" });
+    expect(trigger.getAttribute("title")).toBe("Comments");
+    expect(screen.queryByTitle(/Comments: \d/)).toBeNull();
+  });
+
   it("opens the app's comments without navigating into the service", () => {
     const { onOpenComments } = renderCardWithComments();
     fireEvent.click(screen.getByRole("button", { name: "Comments" }));

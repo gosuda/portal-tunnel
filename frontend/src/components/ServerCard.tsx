@@ -79,7 +79,7 @@ function CommentsTrigger({ server, onOpenComments }: {
         onOpenComments(server);
       }}
       aria-label="Comments"
-      title={`Comments: ${server.reputation?.comments ?? 0}`}
+      title={server.remoteOnly ? "Comments" : `Comments: ${server.reputation?.comments ?? 0}`}
       className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
     >
       <MessageSquare className="size-3.5 shrink-0" />
