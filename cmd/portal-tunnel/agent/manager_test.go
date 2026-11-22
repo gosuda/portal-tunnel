@@ -33,11 +33,13 @@ func TestTunnelStatusDoesNotShareStoredMetadataOrRoutes(t *testing.T) {
 	cfg := testTunnel("web")
 	cfg.Tags = []string{"original"}
 	cfg.HTTPRoutes = []tunnel.HTTPRoute{{Prefix: "/", Upstream: "3000", Methods: []string{"GET"}}}
+	cfg.Options = map[string]string{"key": "original"}
 	status := cfg.renderTunnelStatus(nil, nil, "", "")
+	status.Options["key"] = "changed"
 	status.Metadata.Tags[0] = "changed"
 	status.HTTPRoutes[0].Prefix = "/changed"
 	status.HTTPRoutes[0].Methods[0] = "POST"
-	if cfg.Tags[0] != "original" || cfg.HTTPRoutes[0].Prefix != "/" || cfg.HTTPRoutes[0].Methods[0] != "GET" {
+	if cfg.Tags[0] != "original" || cfg.HTTPRoutes[0].Prefix != "/" || cfg.HTTPRoutes[0].Methods[0] != "GET" || cfg.Options["key"] != "original" {
 		t.Fatal("editing a status response changed stored tunnel settings")
 	}
 }

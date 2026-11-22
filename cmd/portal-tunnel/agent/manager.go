@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -557,6 +558,7 @@ func (cfg TunnelConfig) renderTunnelStatus(runtime *tunnel.Runtime, done chan st
 		X402Config:              cfg.X402Config,
 	}
 	status.Endpoints = slices.Clone(status.Endpoints)
+	status.Options = maps.Clone(status.Options)
 	status.HTTPRoutes = slices.Clone(cfg.HTTPRoutes)
 	for i := range status.HTTPRoutes {
 		status.HTTPRoutes[i].Methods = slices.Clone(status.HTTPRoutes[i].Methods)
