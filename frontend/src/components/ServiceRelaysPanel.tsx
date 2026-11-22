@@ -2,6 +2,7 @@ import type { JSX } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import clsx from "clsx";
 import { ExternalLink, X } from "lucide-react";
+import { useCopy } from "@/hooks/useCopy";
 import { isLocationAvailable, isLocationLive, type BaseServer } from "@/lib/server";
 import type { ServiceDiscoveryResponse, ServiceLocation } from "@/types/api";
 
@@ -15,11 +16,13 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
   const discoveredLocations = server.locations?.length ? server.locations
     : response?.services.find((service) => service.name === (server.serviceName ?? "") && service.address.toLowerCase() === server.address?.toLowerCase())?.locations;
 
-  const isTransportService = Boolean(server.tcpAddr || server.udpAddr);
+  const { copiedKey, copy } = useCopy(1500);
   const currentOrigin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "https://localhost";
   const defaultLocalLocation: ServiceLocation = {
     relay_url: currentOrigin,
-    url: !isTransportService ? (server.link || (server.dns ? `https://${server.dns}/` : "")) : "",
+    url: server.link || (server.dns ? `https://${server.dns}/` : ""),
+    tcp_addr: server.remoteOnly ? undefined : server.tcpAddr,
+    udp_addr: server.remoteOnly ? undefined : server.udpAddr,
     current_relay: true,
     reported_ready: server.online,
     observed_at: "",
@@ -55,13 +58,19 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
 
           <div className="mt-4 space-y-2">
             {resolvedLocations.map((loc) => {
-              // Transport rows name the relay; HTTP rows name the service URL.
-              // This relay's own row comes from the local lease; remote rows must be available.
-              const live = isTransportService
+              // Each row uses its own relay's endpoints. Transport rows name the
+              // relay and copy its addresses; HTTP rows name and link the service URL.
+              // This relay's own row comes from the local lease; remote rows must be live.
+              const endpoints = [
+                ...(loc.tcp_addr ? [{ protocol: "TCP", address: loc.tcp_addr }] : []),
+                ...(loc.udp_addr ? [{ protocol: "UDP", address: loc.udp_addr }] : []),
+              ];
+              const transport = endpoints.length > 0;
+              const live = transport
                 ? (loc.current_relay ? server.online : isLocationLive(loc))
                 : Boolean(loc.url) && (loc.current_relay || isLocationAvailable(loc));
-              const href = !isTransportService && live ? loc.url : "";
-              const label = (isTransportService ? loc.relay_url : loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
+              const href = !transport && live ? loc.url : "";
+              const label = (transport ? loc.relay_url : loc.url || loc.relay_url).replace(/^https?:\/\//, "").replace(/\/$/, "");
               const Row = href ? "a" : "div";
               return (
                 <Row
@@ -87,9 +96,24 @@ export function ServiceRelaysPanel({ server, response, loading, error, onClose }
                   ) : href ? (
                     <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
                   ) : (
-                    <span className="shrink-0 rounded bg-secondary px-2 py-0.5 text-xs font-mono font-medium text-muted-foreground">
-                      {[server.tcpAddr && "TCP", server.udpAddr && "UDP"].filter(Boolean).join("/")}
-                    </span>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      {endpoints.map((endpoint) => {
+                        const key = `${loc.relay_url}|${endpoint.protocol}`;
+                        return (
+                          <button
+                            key={endpoint.protocol}
+                            type="button"
+                            onClick={() => void copy(endpoint.address, key)}
+                            title={endpoint.address}
+                            aria-label={`Copy ${endpoint.protocol} ${endpoint.address}`}
+                            className="inline-flex items-center gap-1.5 rounded bg-secondary px-2 py-0.5 text-xs font-mono font-medium text-muted-foreground transition-colors hover:bg-primary hover:text-primary-foreground cursor-pointer"
+                          >
+                            <span className="font-semibold">{endpoint.protocol}</span>
+                            <span>{copiedKey === key ? "Copied!" : endpoint.address}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
                 </Row>
               );

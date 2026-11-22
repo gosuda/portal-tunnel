@@ -29,6 +29,8 @@ type ServiceLocation struct {
 	URL           string                     `json:"url,omitempty"`
 	CanonicalURL  string                     `json:"canonical_url,omitempty"`
 	AliasURL      string                     `json:"alias_url,omitempty"`
+	TCPAddr       string                     `json:"tcp_addr,omitempty"`
+	UDPAddr       string                     `json:"udp_addr,omitempty"`
 	CurrentRelay  bool                       `json:"current_relay"`
 	ReportedReady bool                       `json:"reported_ready"`
 	ObservedAt    time.Time                  `json:"observed_at"`
