@@ -186,9 +186,11 @@ needed. Inspection is independent of `--metrics-addr` and disabled by default.
 Captures stay in memory and disappear when the tunnel stops or restarts. Header
 values are retained only for `Accept`, `Accept-Encoding`, `Accept-Language`,
 `Content-Type`, `Content-Length`, `Content-Encoding`, `User-Agent`, and
-`X-Request-ID`. Other values, including authorization, cookies, API keys, webhook
-signatures, and Portal identity proofs, are redacted and omitted from replay.
-Header storage is bounded to 8 KiB per side; request URI storage is limited to
+`X-Request-ID`, and the tunnel's trusted `X-Forwarded-Proto`. Other values,
+including authorization, cookies, API keys, webhook signatures, and Portal
+identity proofs, are redacted and omitted from replay.
+Header storage is bounded to 8 KiB per side, at most 32 names and 16 values per
+name; request URI storage is limited to
 4 KiB. Credential-like query names are redacted and make that request ineligible
 for replay. Paths and other query values may still contain private data.
 

@@ -107,12 +107,20 @@ func (i *httpInspector) capture(w http.ResponseWriter, r *http.Request, replayed
 		RequestHeaders: headers, replayHeaders: replayHeaders, BodiesCaptured: i.bodies,
 		ReplayedFrom: replayedFrom, Replayable: true}
 	t.requestURL = url.URL{Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
-	t.Path = t.requestURL.RequestURI()
-	if len(t.Path) > inspectPathLimit || len(t.host) > 512 || len(t.Method) > 32 {
+	// Bound work before escaping/building a potentially oversized request URI.
+	if len(r.URL.Path) <= inspectPathLimit && len(r.URL.RawPath) <= inspectPathLimit && len(r.URL.RawQuery) <= inspectPathLimit {
+		t.Path = t.requestURL.RequestURI()
+	}
+	if t.Path == "" || len(t.Path) > inspectPathLimit || len(t.host) > 512 || len(t.Method) > 32 {
 		t.Path = "[request metadata exceeds the capture limit]"
 		t.host, t.Method, t.requestURL = "", "", url.URL{}
 		t.ReplayDisabled = "Request metadata exceeds the capture limit."
 	} else {
+		t.Path = strings.Clone(t.Path)
+		t.host, t.Method = strings.Clone(t.host), strings.Clone(t.Method)
+		t.requestURL.Path = strings.Clone(t.requestURL.Path)
+		t.requestURL.RawPath = strings.Clone(t.requestURL.RawPath)
+		t.requestURL.RawQuery = strings.Clone(t.requestURL.RawQuery)
 		query, queryErr := url.ParseQuery(t.requestURL.RawQuery)
 		if queryErr != nil {
 			t.ReplayDisabled = "The query could not be safely parsed."
@@ -177,14 +185,20 @@ func inspectHeaders(source http.Header) (http.Header, http.Header) {
 	visible, eligible := make(http.Header), make(http.Header)
 	remaining := inspectHeaderLimit
 	for name, values := range source {
+		if len(visible) >= 32 {
+			break
+		}
 		if len(name) > 128 || remaining < len(name)+16 {
 			continue
 		}
 		name = strings.Clone(name)
 		remaining -= len(name)
 		switch strings.ToLower(name) {
-		case "accept", "accept-encoding", "accept-language", "content-type", "content-length", "content-encoding", "user-agent", "x-request-id":
-			for _, value := range values {
+		case "accept", "accept-encoding", "accept-language", "content-type", "content-length", "content-encoding", "user-agent", "x-request-id", "x-forwarded-proto":
+			for index, value := range values {
+				if index >= 16 {
+					break
+				}
 				if len(value) > remaining {
 					break
 				}
@@ -224,8 +238,8 @@ func (b *inspectBody) Read(p []byte) (int, error) {
 	defer b.mu.Unlock()
 	b.read += int64(n)
 	b.data = append(b.data, p[:min(n, inspectBodyLimit-len(b.data))]...)
-	b.complete = err == io.EOF || (b.length >= 0 && b.read == b.length)
-	if err != nil && err != io.EOF {
+	b.complete = errors.Is(err, io.EOF) || (b.length >= 0 && b.read == b.length)
+	if err != nil && !errors.Is(err, io.EOF) {
 		b.failed = true
 	}
 	return n, err
@@ -291,14 +305,19 @@ func (i *httpInspector) serveLocal(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 	if r.Host != strings.TrimPrefix(i.origin, "http://") ||
-		(r.Header.Get("Origin") != "" && r.Header.Get("Origin") != i.origin) ||
-		(r.Header.Get("Sec-Fetch-Site") != "" && r.Header.Get("Sec-Fetch-Site") != "same-origin" && r.Header.Get("Sec-Fetch-Site") != "none") {
+		(r.Header.Get("Origin") != "" && r.Header.Get("Origin") != i.origin) {
 		http.Error(w, "local same-origin access required", http.StatusForbidden)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(inspectorPage)
+		return
+	}
+	// A normal link may navigate to the static UI from another local page.
+	// Transaction reads and replay still require same-origin browser requests.
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+		http.Error(w, "local same-origin access required", http.StatusForbidden)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

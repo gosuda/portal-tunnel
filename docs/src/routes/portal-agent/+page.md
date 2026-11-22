@@ -528,7 +528,6 @@ replay limits and side effects.
 
 ## Identity Layout
 
-
 If `identity_path` is omitted:
 
 - a single tunnel uses `<state_dir>/identity.json`

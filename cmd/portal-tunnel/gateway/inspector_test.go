@@ -81,6 +81,7 @@ func TestInspectorCaptureAndReplayStayOnConfiguredRoute(t *testing.T) {
 	request.Header.Set("X-API-Key", "request-secret")
 	request.Header.Set("X-Unrecognized", "request-secret")
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-Proto", "https")
 	forwarded := httptest.NewRecorder()
 	g.ServeHTTP(forwarded, request)
 	if forwarded.Code != http.StatusOK || forwarded.Body.String() != "POST /receiver/event?q=original payload Bearer request-secret" {
@@ -97,6 +98,9 @@ func TestInspectorCaptureAndReplayStayOnConfiguredRoute(t *testing.T) {
 	}
 	if captured.ResponseHeaders.Get("Set-Cookie") != "[redacted]" || captured.ResponseHeaders.Get("X-Custom-Secret") != "[redacted]" {
 		t.Fatalf("response headers = %v", captured.ResponseHeaders)
+	}
+	if captured.RequestHeaders.Get("X-Forwarded-Proto") != "https" {
+		t.Fatal("trusted public scheme was lost")
 	}
 	replayed := readInspection(t, inspectorRequest(t, g.inspector, http.MethodPost, "/transactions/1/replay"))
 	if replayed.ID != 2 || replayed.ReplayedFrom != 1 || replayed.ResponseBody != "POST /receiver/event?q=original payload " {
@@ -139,6 +143,13 @@ func TestInspectorLocalOriginProtection(t *testing.T) {
 	}
 	if response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("inspector must not allow caching or cross-origin reads")
+	}
+	navigation := httptest.NewRequest(http.MethodGet, i.origin+"/", nil)
+	navigation.Header.Set("Sec-Fetch-Site", "same-site")
+	pageResponse := httptest.NewRecorder()
+	i.serveLocal(pageResponse, navigation)
+	if pageResponse.Code != http.StatusOK {
+		t.Fatal("a link from another local page must open the static UI")
 	}
 	req := httptest.NewRequest(http.MethodPost, i.origin+"/transactions/1/replay", strings.NewReader(`{"url":"http://evil.example"}`))
 	req.Header.Set("Origin", i.origin)
@@ -191,10 +202,34 @@ func TestInspectorBoundsAndBodyOptIn(t *testing.T) {
 func TestInspectorRedactsCredentialQueries(t *testing.T) {
 	t.Parallel()
 	i := newTestInspector(t, http.NotFoundHandler(), false)
-	i.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://preview.example/hook?access_token=secret&q=ok", nil))
-	captured := readInspection(t, inspectorRequest(t, i, http.MethodGet, "/transactions/1"))
-	if strings.Contains(captured.Path, "secret") || !strings.Contains(captured.Path, "q=ok") || captured.Replayable {
-		t.Fatalf("credential query capture = %+v", captured)
+	for n, path := range []string{
+		"/hook?access_token=secret&q=ok",
+		"/hook?access_token=secret&invalid=%xx",
+		"/hook?access_token=secret&large=" + strings.Repeat("x", inspectPathLimit),
+	} {
+		i.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://preview.example"+path, nil))
+		captured := readInspection(t, inspectorRequest(t, i, http.MethodGet, fmt.Sprintf("/transactions/%d", n+1)))
+		if strings.Contains(captured.Path, "secret") || captured.Replayable {
+			t.Fatalf("credential query capture = %+v", captured)
+		}
+		if n == 0 && !strings.Contains(captured.Path, "q=ok") {
+			t.Fatal("non-sensitive query was lost")
+		}
+	}
+}
+
+func TestInspectorUIShutdownDoesNotStopForwarding(t *testing.T) {
+	t.Parallel()
+	i := newTestInspector(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "local app still running")
+	}), false)
+	if err := i.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	i.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://preview.example/", nil))
+	if response.Code != http.StatusOK || response.Body.String() != "local app still running" {
+		t.Fatal("stopping the inspector UI affected application forwarding")
 	}
 }
 
