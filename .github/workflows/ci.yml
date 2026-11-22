@@ -75,11 +75,12 @@ jobs:
         run: test "$CHANGE_DETECTION_RESULT" = success
 
       - name: Checkout code
-        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.frontend == 'true'
+        if: ${{ !cancelled() && (needs.changes.outputs.go == 'true' || needs.changes.outputs.frontend == 'true') }}
+        id: checkout
         uses: actions/checkout@v7
 
       - name: Set up Go
-        if: needs.changes.outputs.go == 'true'
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.checkout.outcome == 'success' }}
         id: go
         uses: actions/setup-go@v7
         with:
@@ -87,13 +88,17 @@ jobs:
           cache: true
 
       - name: Check Go module consistency
-        if: needs.changes.outputs.go == 'true'
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.go.outcome == 'success' }}
+        id: go-mod
+        run: go mod tidy
+
+      - name: Check Go module diff
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.go-mod.outcome == 'success' }}
+        id: go-mod-diff
+        run: git diff --exit-code -- go.mod go.sum
 
       - name: Cache CI linter
-        if: needs.changes.outputs.go == 'true'
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.go.outcome == 'success' }}
         id: cache-tools
         uses: actions/cache@v5
         with:
@@ -101,18 +106,36 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-lint-${{ hashFiles('Makefile') }}
 
       - name: Install CI linter
-        if: needs.changes.outputs.go == 'true' && steps.cache-tools.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && needs.changes.outputs.go == 'true' && steps.checkout.outcome == 'success' && steps.go.outcome == 'success' && steps.cache-tools.outputs.cache-hit != 'true' }}
+        id: install-lint
         run: make install-lint
 
-      - name: Run Go checks
-        if: needs.changes.outputs.go == 'true'
-        run: |
-          make vet
-          make lint
-          make test-go-unit
+      - name: Run Go vet
+        if: >-
+          ${{ !cancelled() && needs.changes.outputs.go == 'true' &&
+          steps.checkout.outcome == 'success' && steps.go.outcome == 'success' &&
+          steps.go-mod-diff.outcome == 'success' &&
+          (steps.cache-tools.outputs.cache-hit == 'true' || steps.install-lint.outcome == 'success') }}
+        run: make vet
+
+      - name: Run Go lint
+        if: >-
+          ${{ !cancelled() && needs.changes.outputs.go == 'true' &&
+          steps.checkout.outcome == 'success' && steps.go.outcome == 'success' &&
+          steps.go-mod-diff.outcome == 'success' &&
+          (steps.cache-tools.outputs.cache-hit == 'true' || steps.install-lint.outcome == 'success') }}
+        run: make lint
+
+      - name: Run Go unit tests
+        if: >-
+          ${{ !cancelled() && needs.changes.outputs.go == 'true' &&
+          steps.checkout.outcome == 'success' && steps.go.outcome == 'success' &&
+          steps.go-mod.outcome == 'success' }}
+        run: make test-go-unit
 
       - name: Set up Node.js
-        if: needs.changes.outputs.frontend == 'true'
+        if: ${{ !cancelled() && needs.changes.outputs.frontend == 'true' && steps.checkout.outcome == 'success' }}
+        id: setup-node
         uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -120,17 +143,40 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
-        if: needs.changes.outputs.frontend == 'true'
+        if: ${{ !cancelled() && needs.changes.outputs.frontend == 'true' && steps.checkout.outcome == 'success' && steps.setup-node.outcome == 'success' }}
+        id: frontend-install
         working-directory: frontend
         run: npm ci
 
-      - name: Run frontend checks
-        if: needs.changes.outputs.frontend == 'true'
+      - name: Run frontend tests
+        if: >-
+          ${{ !cancelled() && needs.changes.outputs.frontend == 'true' &&
+          steps.checkout.outcome == 'success' && steps.setup-node.outcome == 'success' &&
+          steps.frontend-install.outcome == 'success' }}
+        id: frontend-test
         working-directory: frontend
-        run: |
-          npm test
-          npm run lint
-          npm run build
+        run: npm test
+
+      - name: Run frontend lint
+        if: >-
+          ${{ !cancelled() && needs.changes.outputs.frontend == 'true' &&
+          steps.checkout.outcome == 'success' && steps.setup-node.outcome == 'success' &&
+          steps.frontend-install.outcome == 'success' }}
+        id: frontend-lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        if: >-
+          ${{ !cancelled() &&
+          needs.changes.outputs.frontend == 'true' &&
+          steps.checkout.outcome == 'success' &&
+          steps.setup-node.outcome == 'success' &&
+          steps.frontend-install.outcome == 'success' &&
+          steps.frontend-test.outcome == 'success' &&
+          steps.frontend-lint.outcome == 'success' }}
+        working-directory: frontend
+        run: npm run build
 
   e2e:
     name: E2E Tests
