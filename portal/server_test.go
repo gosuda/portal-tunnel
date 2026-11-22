@@ -1263,3 +1263,38 @@ func TestTransportFallbackRejectsWriteMethods(t *testing.T) {
 		}
 	}
 }
+
+func TestTransportFallbackHidesBlockedLeases(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	server := &Server{
+		registry: registry,
+		identity: identity.RelayIdentity{Identity: types.Identity{Name: "relay.example.com"}},
+	}
+	record := &leaseRecord{
+		Identity: types.Identity{Name: "my-ssh", Address: "0x" + strings.Repeat("3", 40)}, Hostname: "my-ssh.relay.example.com", ExpiresAt: time.Now().Add(time.Hour), tcpPort: 40001,
+		Metadata: types.LeaseMetadata{Description: "private SSH"},
+	}
+	registry.records = append(registry.records, record)
+	if !record.ServiceKey().Valid() {
+		t.Fatal("test lease needs a valid service key")
+	}
+	for _, access := range []types.LeaseAccess{types.LeasePending, types.LeaseDenied} {
+		registry.mu.Lock()
+		registry.applyIdentityAccessLocked(record.ServiceKey(), access)
+		registry.mu.Unlock()
+		if server.servesTransportFallback("my-ssh.relay.example.com", []string{"http/1.1"}) {
+			t.Errorf("access %v: public ingress routed a blocked lease to the fallback page", access)
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://my-ssh.relay.example.com/", nil)
+		if server.handleTransportFallback(rec, req, "my-ssh.relay.example.com") {
+			t.Errorf("access %v: fallback served a blocked lease: %s", access, rec.Body.String())
+		}
+	}
+	registry.mu.Lock()
+	registry.applyIdentityAccessLocked(record.ServiceKey(), types.LeaseRoutable)
+	registry.mu.Unlock()
+	if !server.servesTransportFallback("my-ssh.relay.example.com", []string{"http/1.1"}) {
+		t.Error("routable lease lost the fallback page")
+	}
+}

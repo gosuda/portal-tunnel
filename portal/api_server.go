@@ -774,13 +774,24 @@ func (s *Server) servesTransportFallback(host string, alpn []string) bool {
 	if !slices.ContainsFunc(alpn, func(proto string) bool { return proto == "http/1.1" || proto == "h2" }) {
 		return false
 	}
+	_, ok := s.transportFallbackRecord(host)
+	return ok
+}
+
+// transportFallbackRecord returns the raw TCP lease for host when the relay
+// may show it. A pending or denied lease is not routable, so the page must not
+// show its addresses or description.
+func (s *Server) transportFallbackRecord(host string) (*leaseRecord, bool) {
 	record, ok := s.registry.Lookup(host)
-	return ok && record.isTransportOnly()
+	if !ok || !record.isTransportOnly() || !s.registry.isRoutable(record.ServiceKey()) {
+		return nil, false
+	}
+	return record, true
 }
 
 func (s *Server) handleTransportFallback(w http.ResponseWriter, req *http.Request, host string) bool {
-	record, ok := s.registry.Lookup(host)
-	if !ok || !record.isTransportOnly() {
+	record, ok := s.transportFallbackRecord(host)
+	if !ok {
 		return false
 	}
 	serviceName := record.Name
