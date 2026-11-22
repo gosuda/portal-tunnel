@@ -67,6 +67,14 @@ func TestConfigResolveModes(t *testing.T) {
 		{name: "routes", edit: func(c *Config) { c.HTTPRoutes = routes }, valid: true},
 		{name: "routes and tcp", edit: func(c *Config) { c.HTTPRoutes, c.TCPEnabled = routes, true }},
 		{name: "routes and udp", edit: func(c *Config) { c.HTTPRoutes, c.UDPEnabled = routes, true }},
+		{name: "paid route", edit: func(c *Config) {
+			c.PayTo, c.HTTPRoutes = "recipient", []HTTPRoute{{Prefix: "/paid", Upstream: "http://localhost:4000", Methods: []string{"GET"}, Amount: "1"}}
+		}, valid: true},
+		{name: "payment without recipient", edit: func(c *Config) {
+			c.HTTPRoutes = []HTTPRoute{{Prefix: "/paid", Upstream: "http://localhost:4000", Amount: "1"}}
+		}},
+		{name: "cache static", edit: func(c *Config) { c.Serve, c.Cache = "./dist", &CacheConfig{} }, valid: true},
+		{name: "cache target", edit: func(c *Config) { c.TargetAddr, c.Cache = "localhost:3000", &CacheConfig{} }},
 		{name: "strip request headers", edit: func(c *Config) { c.HTTPRoutes, c.StripRequestHeaders = routes, []string{"X-Tenant-User"} }, valid: true},
 		{name: "strip Host", edit: func(c *Config) { c.TargetAddr, c.StripRequestHeaders = "3000", []string{"Host"} }},
 		{name: "strip trusted scheme", edit: func(c *Config) { c.TargetAddr, c.StripRequestHeaders = "3000", []string{"X-Forwarded-Proto"} }},
