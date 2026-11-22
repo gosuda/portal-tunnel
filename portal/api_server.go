@@ -794,8 +794,10 @@ func (s *Server) handleTransportFallback(w http.ResponseWriter, req *http.Reques
 	if record.datagram != nil {
 		udpAddr = net.JoinHostPort(s.identity.Name, strconv.Itoa(record.datagram.UDPPort()))
 	}
-	accept := req.Header.Get("Accept")
-	if strings.Contains(accept, "application/json") {
+	w.Header().Set("Vary", "Accept")
+	// Browsers ask for text/html. Other clients, such as curl with its
+	// default "Accept: */*", get the JSON envelope.
+	if !strings.Contains(req.Header.Get("Accept"), "text/html") {
 		utils.WriteAPIData(w, http.StatusOK, map[string]any{
 			"service":     serviceName,
 			"transport":   true,

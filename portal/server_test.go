@@ -1197,3 +1197,39 @@ func TestPublicIngressRoutesTransportFallbackByLeaseAndALPN(t *testing.T) {
 		})
 	}
 }
+
+func TestTransportFallbackServesJSONUnlessHTMLRequested(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	server := &Server{
+		registry: registry,
+		identity: identity.RelayIdentity{Identity: types.Identity{Name: "relay.example.com"}},
+	}
+	registry.records = append(registry.records, &leaseRecord{
+		Identity: types.Identity{Name: "my-ssh"}, Hostname: "my-ssh.relay.example.com", ExpiresAt: time.Now().Add(time.Hour), tcpPort: 40001,
+	})
+	for _, test := range []struct {
+		name, accept, wantType string
+	}{
+		{"curl default", "*/*", "application/json"},
+		{"no accept", "", "application/json"},
+		{"json", "application/json", "application/json"},
+		{"browser", "text/html,application/xhtml+xml,*/*;q=0.8", "text/html"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "https://my-ssh.relay.example.com/", nil)
+			if test.accept != "" {
+				req.Header.Set("Accept", test.accept)
+			}
+			if !server.handleTransportFallback(rec, req, "my-ssh.relay.example.com") {
+				t.Fatal("handleTransportFallback returned false for TCP service")
+			}
+			if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, test.wantType) {
+				t.Fatalf("Content-Type = %q, want %s", got, test.wantType)
+			}
+			if got := rec.Header().Get("Vary"); got != "Accept" {
+				t.Fatalf("Vary = %q, want Accept", got)
+			}
+		})
+	}
+}

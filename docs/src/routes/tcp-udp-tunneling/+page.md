@@ -83,8 +83,9 @@ protocol needs confidentiality.
 The lease hostname on the relay HTTPS port (for example
 `https://myapp.relay.example.com/`) does not reach the backend from a browser.
 When a TLS client offers the `h2` or `http/1.1` ALPN protocol, the relay
-answers with a landing page that shows the TCP address. A client that asks for
-`application/json` gets the same data as JSON. A TLS client that offers no ALPN
+answers with a landing page that shows the TCP address. A client that does
+not ask for `text/html` (for example `curl` with its default `Accept: */*`)
+gets the same data as JSON. A TLS client that offers no ALPN
 or a different protocol is still bridged to the backend by SNI.
 
 ## UDP Relay
