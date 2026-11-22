@@ -206,14 +206,25 @@ func TestInspectorRedactsCredentialQueries(t *testing.T) {
 		"/hook?access_token=secret&q=ok",
 		"/hook?access_token=secret&invalid=%xx",
 		"/hook?access_token=secret&large=" + strings.Repeat("x", inspectPathLimit),
+		"/callback?session=secret&q=ok",
+		"/callback?session_id=secret&q=ok",
+		"/callback?sig=secret&q=ok",
+		"/callback?jwt=secret&q=ok",
+		"/callback?sid=secret&q=ok",
+		"/callback?X-Amz-Signature=secret&q=ok",
 	} {
 		i.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://preview.example"+path, nil))
 		captured := readInspection(t, inspectorRequest(t, i, http.MethodGet, fmt.Sprintf("/transactions/%d", n+1)))
 		if strings.Contains(captured.Path, "secret") || captured.Replayable {
 			t.Fatalf("credential query capture = %+v", captured)
 		}
-		if n == 0 && !strings.Contains(captured.Path, "q=ok") {
+		if n != 1 && n != 2 && !strings.Contains(captured.Path, "q=ok") {
 			t.Fatal("non-sensitive query was lost")
+		}
+	}
+	for _, name := range []string{"design", "signal", "q", "page"} {
+		if sensitiveQuery(name) {
+			t.Fatalf("%q must not be treated as a credential", name)
 		}
 	}
 }

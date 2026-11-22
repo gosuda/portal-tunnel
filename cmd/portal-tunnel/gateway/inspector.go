@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const (
@@ -216,11 +217,24 @@ func inspectHeaders(source http.Header) (http.Header, http.Header) {
 	return visible, eligible
 }
 
+// Long credential words match anywhere in the name. Short ones (sig, sid)
+// match only as a whole separator-delimited part, so "design" stays visible.
 func sensitiveQuery(name string) bool {
 	name = strings.ToLower(name)
-	return name == "code" || strings.Contains(name, "auth") || strings.Contains(name, "token") ||
-		strings.Contains(name, "key") || strings.Contains(name, "secret") || strings.Contains(name, "password") ||
-		strings.Contains(name, "credential") || strings.Contains(name, "signature")
+	if name == "code" {
+		return true
+	}
+	for _, word := range []string{"auth", "token", "key", "secret", "password", "credential", "signature", "session", "jwt"} {
+		if strings.Contains(name, word) {
+			return true
+		}
+	}
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		if part == "sig" || part == "sid" {
+			return true
+		}
+	}
+	return false
 }
 
 type inspectBody struct {
