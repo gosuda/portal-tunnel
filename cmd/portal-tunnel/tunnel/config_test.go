@@ -37,19 +37,19 @@ func TestParseHTTPRoute(t *testing.T) {
 	}
 }
 
-func TestConfigSpecRejectsBlankPaymentMethods(t *testing.T) {
+func TestConfigResolveRejectsBlankPaymentMethods(t *testing.T) {
 	for _, methods := range [][]string{{""}, {" "}, {"GET", " "}} {
 		cfg := Config{HTTPRoutes: []HTTPRoute{{
 			Prefix: "/paid", Upstream: "127.0.0.1:3000", Amount: "0.01", Methods: methods,
 		}}}
 		cfg.PayTo = "recipient"
-		if _, err := cfg.Spec(); err == nil || !strings.Contains(err.Error(), "payment method is required") {
-			t.Errorf("methods %q: Spec() error = %v, want a blank-method error", methods, err)
+		if _, err := cfg.Resolve(); err == nil || !strings.Contains(err.Error(), "payment method is required") {
+			t.Errorf("methods %q: Resolve() error = %v, want a blank-method error", methods, err)
 		}
 	}
 }
 
-func TestConfigSpecModes(t *testing.T) {
+func TestConfigResolveModes(t *testing.T) {
 	const wallet = "0x0000000000000000000000000000000000000001"
 	routes := []HTTPRoute{{Prefix: "/", Upstream: "http://localhost:3000"}}
 	for _, tc := range []struct {
@@ -68,6 +68,12 @@ func TestConfigSpecModes(t *testing.T) {
 		{name: "routes and tcp", edit: func(c *Config) { c.HTTPRoutes, c.TCPEnabled = routes, true }},
 		{name: "routes and udp", edit: func(c *Config) { c.HTTPRoutes, c.UDPEnabled = routes, true }},
 		{name: "strip request headers", edit: func(c *Config) { c.HTTPRoutes, c.StripRequestHeaders = routes, []string{"X-Tenant-User"} }, valid: true},
+		{name: "strip Host", edit: func(c *Config) { c.TargetAddr, c.StripRequestHeaders = "3000", []string{"Host"} }},
+		{name: "strip trusted scheme", edit: func(c *Config) { c.TargetAddr, c.StripRequestHeaders = "3000", []string{"X-Forwarded-Proto"} }},
+		{name: "strip identity headers", edit: func(c *Config) {
+			c.TargetAddr, c.Provider, c.StripRequestHeaders = "3000", "siwe", []string{"X-Portal-User", "X-Portal-Auth"}
+		}, valid: true},
+		{name: "gateway validates header syntax", edit: func(c *Config) { c.TargetAddr, c.StripRequestHeaders = "3000", []string{"X Tenant"} }, valid: true},
 		{name: "strip request headers on static", edit: func(c *Config) { c.Serve, c.StripRequestHeaders = "./dist", []string{"X-Tenant-User"} }},
 		{name: "strip request headers without upstream", edit: func(c *Config) { c.Provider, c.StripRequestHeaders = "siwe", []string{"X-Tenant-User"} }},
 		{name: "siwe", edit: func(c *Config) { c.TargetAddr, c.Provider = "localhost:3000", "siwe" }, valid: true},
@@ -113,8 +119,8 @@ func TestConfigSpecModes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg Config
 			tc.edit(&cfg)
-			if _, err := cfg.Spec(); (err == nil) != tc.valid {
-				t.Fatalf("Spec() = %v, want valid=%v", err, tc.valid)
+			if _, err := cfg.Resolve(); (err == nil) != tc.valid {
+				t.Fatalf("Resolve() = %v, want valid=%v", err, tc.valid)
 			}
 		})
 	}
@@ -122,9 +128,9 @@ func TestConfigSpecModes(t *testing.T) {
 
 func TestReplicaConfigResolvesHTTPAndRejectsUnsupportedModes(t *testing.T) {
 	cfg := Config{Replica: true, TargetAddr: "localhost:3000"}
-	spec, err := cfg.Spec()
-	if err != nil || spec.HTTP == nil || !spec.Transport.Replica {
-		t.Fatalf("replica did not resolve to HTTP: %+v, %v", spec, err)
+	resolved, err := cfg.Resolve()
+	if err != nil || !resolved.usesHTTP() || !resolved.Replica {
+		t.Fatalf("replica did not resolve to HTTP: %+v, %v", resolved, err)
 	}
 	for _, invalid := range []Config{
 		{Replica: true, TargetAddr: "localhost:3000", Overlay: true},
@@ -132,7 +138,7 @@ func TestReplicaConfigResolvesHTTPAndRejectsUnsupportedModes(t *testing.T) {
 		{Replica: true, TargetAddr: "localhost:3000", UDPEnabled: true},
 		{Replica: true, Serve: ".", Cache: &CacheConfig{}},
 	} {
-		if _, err := invalid.Spec(); err == nil {
+		if _, err := invalid.Resolve(); err == nil {
 			t.Fatalf("unsupported replica mode accepted: %+v", invalid)
 		}
 	}
@@ -148,11 +154,11 @@ func TestReplicaAuthCompatibility(t *testing.T) {
 	} {
 		t.Run(auth.Provider, func(t *testing.T) {
 			cfg := Config{TargetAddr: "localhost:3000", AuthConfig: auth}
-			if _, err := cfg.Spec(); err != nil {
+			if _, err := cfg.Resolve(); err != nil {
 				t.Fatalf("exclusive auth config rejected: %v", err)
 			}
 			cfg.Replica = true
-			_, err := cfg.Spec()
+			_, err := cfg.Resolve()
 			reject := auth.Provider == appauth.ProviderEmail || auth.Provider == appauth.ProviderSAML
 			if reject {
 				if !errors.Is(err, errReplicaApplicationAuth) {
@@ -185,7 +191,7 @@ func TestReplicaRejectsPaidNanoRoutes(t *testing.T) {
 				HTTPRoutes: []HTTPRoute{{Prefix: "/", Upstream: "localhost:3000", Amount: tc.amount}},
 				X402Config: gateway.X402Config{Network: tc.network, PayTo: "recipient"},
 			}
-			_, err := cfg.Spec()
+			_, err := cfg.Resolve()
 			if tc.reject {
 				if !errors.Is(err, errReplicaNanoPayments) {
 					t.Fatalf("got %v, want incompatible-Nano error", err)
@@ -197,7 +203,7 @@ func TestReplicaRejectsPaidNanoRoutes(t *testing.T) {
 	}
 }
 
-func TestConfigSpecDefaults(t *testing.T) {
+func TestConfigResolveDefaults(t *testing.T) {
 	off, on := false, true
 	for _, tc := range []struct {
 		name               string
@@ -210,18 +216,18 @@ func TestConfigSpecDefaults(t *testing.T) {
 		{name: "explicit default values", cfg: Config{TargetAddr: "localhost:3000", Discovery: &on, BanMITM: &off}, discovery: true, maxActive: discovery.DefaultMaxActiveRelays},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			spec, err := tc.cfg.Spec()
+			resolved, err := tc.cfg.Resolve()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := spec.Relays; got.Discovery != tc.discovery || got.BanMITM != tc.banMITM || got.MaxActive != tc.maxActive {
+			if got := resolved; *got.Discovery != tc.discovery || *got.BanMITM != tc.banMITM || got.MaxActiveRelays != tc.maxActive {
 				t.Fatalf("relays = %+v, want discovery=%v ban_mitm=%v max_active=%d", got, tc.discovery, tc.banMITM, tc.maxActive)
 			}
 		})
 	}
 }
 
-func TestConfigSpecHTTPMode(t *testing.T) {
+func TestConfigResolveHTTPMode(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		edit     func(*Config)
@@ -239,23 +245,23 @@ func TestConfigSpecHTTPMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Config{TargetAddr: "localhost:3000"}
 			tc.edit(&cfg)
-			spec, err := cfg.Spec()
+			resolved, err := cfg.Resolve()
 			if (err != nil) != tc.hasError {
-				t.Fatalf("Spec() error = %v, want error=%v", err, tc.hasError)
+				t.Fatalf("Resolve() error = %v, want error=%v", err, tc.hasError)
 			}
-			if (spec.HTTP != nil) != tc.http || (spec.HTTP != nil && spec.HTTP.Auth != nil) != tc.auth {
-				t.Fatalf("HTTP = %+v, want http=%v auth=%v", spec.HTTP, tc.http, tc.auth)
+			if (resolved.usesHTTP()) != tc.http || (resolved.usesHTTP() && !resolved.IsZero()) != tc.auth {
+				t.Fatalf("HTTP = %+v, want http=%v auth=%v", resolved, tc.http, tc.auth)
 			}
 		})
 	}
 }
 
-func TestConfigSpecResolvesOIDC(t *testing.T) {
+func TestConfigResolveOIDC(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", "")
 	cfg := Config{TargetAddr: " localhost:3000 "}
 	cfg.Provider, cfg.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
 	cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
-	spec, err := cfg.Spec()
+	resolved, err := cfg.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,23 +270,23 @@ func TestConfigSpecResolvesOIDC(t *testing.T) {
 		Allow:      []string{"bob@example.com"},
 		OIDCConfig: appauth.OIDCConfig{OIDCIssuerURL: "https://accounts.google.com", OIDCClientID: "client-123", OIDCClientSecret: "secret"},
 	}
-	if spec.Transport.Target != "localhost:3000" || !reflect.DeepEqual(*spec.HTTP.Auth, want) {
-		t.Fatalf("target = %q, auth = %+v", spec.Transport.Target, *spec.HTTP.Auth)
+	if resolved.TargetAddr != "localhost:3000" || !reflect.DeepEqual(resolved.AuthConfig, want) {
+		t.Fatalf("target = %q, auth = %+v", resolved.TargetAddr, resolved.AuthConfig)
 	}
 	fresh := Config{TargetAddr: " localhost:3000 "}
 	fresh.Provider, fresh.Allow = " OIDC ", []string{"Bob@Example.com", "bob@example.com"}
 	fresh.OIDCIssuerURL, fresh.OIDCClientID, fresh.OIDCClientSecret = " https://accounts.google.com ", " client-123 ", " secret "
 	if !reflect.DeepEqual(cfg, fresh) {
-		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
+		t.Fatalf("Resolve changed the config it resolved: %+v", cfg)
 	}
 }
 
-func TestConfigSpecResolvesSAML(t *testing.T) {
+func TestConfigResolveSAML(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", "")
 	cfg := Config{TargetAddr: "localhost:3000"}
 	cfg.Provider, cfg.Allow, cfg.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
 	cfg.SAMLMetadataURL, cfg.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
-	spec, err := cfg.Spec()
+	resolved, err := cfg.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,52 +296,52 @@ func TestConfigSpecResolvesSAML(t *testing.T) {
 		IdentityHeaders: true,
 		SAMLConfig:      appauth.SAMLConfig{SAMLMetadataURL: "https://idp.example/metadata", SAMLSubjectAttribute: "email"},
 	}
-	if !reflect.DeepEqual(*spec.HTTP.Auth, want) {
-		t.Fatalf("auth = %+v", *spec.HTTP.Auth)
+	if !reflect.DeepEqual(resolved.AuthConfig, want) {
+		t.Fatalf("auth = %+v", resolved.AuthConfig)
 	}
 	fresh := Config{TargetAddr: "localhost:3000"}
 	fresh.Provider, fresh.Allow, fresh.IdentityHeaders = "saml", []string{"@example.com", "sub:G-7f3a"}, true
 	fresh.SAMLMetadataURL, fresh.SAMLSubjectAttribute = " https://idp.example/metadata ", " email "
 	if !reflect.DeepEqual(cfg, fresh) {
-		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
+		t.Fatalf("Resolve changed the config it resolved: %+v", cfg)
 	}
 }
 
-func TestConfigSpecResolvesX402(t *testing.T) {
+func TestConfigResolveX402(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", "")
 	cfg := Config{HTTPRoutes: []HTTPRoute{{Prefix: " /paid ", Upstream: "127.0.0.1:3001", Methods: []string{"get", "GET", " post "}, Amount: " 0.01 "}}}
 	cfg.PayTo, cfg.Network, cfg.Endpoints = " 0x1234 ", " SUI:TESTNET ", []string{" https://rpc.example ", ""}
 	cfg.FacilitatorToken = " token "
-	spec, err := cfg.Spec()
+	resolved, err := cfg.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantRoutes := []HTTPRoute{{Prefix: "/paid", Upstream: "127.0.0.1:3001", Methods: []string{"GET", "POST"}, Amount: "0.01"}}
 	wantPayment := gateway.X402Config{PayTo: "0x1234", Network: "sui:testnet", Endpoints: []string{"https://rpc.example"}, FacilitatorToken: "token"}
-	if !reflect.DeepEqual(spec.HTTP.Routes, wantRoutes) || !reflect.DeepEqual(spec.HTTP.Payment, wantPayment) || spec.HTTP.Auth != nil {
-		t.Fatalf("routes = %+v, payment = %+v, auth = %+v", spec.HTTP.Routes, spec.HTTP.Payment, spec.HTTP.Auth)
+	if !reflect.DeepEqual(resolved.HTTPRoutes, wantRoutes) || !reflect.DeepEqual(resolved.X402Config, wantPayment) || !resolved.IsZero() {
+		t.Fatalf("routes = %+v, payment = %+v, auth = %+v", resolved.HTTPRoutes, resolved.X402Config, resolved.AuthConfig)
 	}
 	fresh := Config{HTTPRoutes: []HTTPRoute{{Prefix: " /paid ", Upstream: "127.0.0.1:3001", Methods: []string{"get", "GET", " post "}, Amount: " 0.01 "}}}
 	fresh.PayTo, fresh.Network, fresh.Endpoints = " 0x1234 ", " SUI:TESTNET ", []string{" https://rpc.example ", ""}
 	fresh.FacilitatorToken = " token "
 	if !reflect.DeepEqual(cfg, fresh) {
-		t.Fatalf("Spec changed the config it resolved: %+v", cfg)
+		t.Fatalf("Resolve changed the config it resolved: %+v", cfg)
 	}
 }
 
-func TestConfigSpecDoesNotReadEnvironment(t *testing.T) {
+func TestConfigResolveDoesNotReadEnvironment(t *testing.T) {
 	t.Setenv("CSPR_CLOUD_API_KEY", " env-token ")
 	cfg := Config{HTTPRoutes: []HTTPRoute{{Prefix: "/", Upstream: "127.0.0.1:3001"}}}
-	spec, err := cfg.Spec()
+	resolved, err := cfg.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := spec.HTTP.Payment.FacilitatorToken; got != "" {
+	if got := resolved.FacilitatorToken; got != "" {
 		t.Fatalf("token = %q, want empty explicit input", got)
 	}
 	cfg.FacilitatorToken = "config-token"
-	if spec, _ = cfg.Spec(); spec.HTTP.Payment.FacilitatorToken != "config-token" {
-		t.Fatalf("token = %q, want the config one", spec.HTTP.Payment.FacilitatorToken)
+	if resolved, _ = cfg.Resolve(); resolved.FacilitatorToken != "config-token" {
+		t.Fatalf("token = %q, want the config one", resolved.FacilitatorToken)
 	}
 }
 
@@ -363,12 +369,12 @@ func TestLocalTLSCertificateConfiguration(t *testing.T) {
 		{"relay cache", Config{Serve: "site", TLSCert: "cert.pem", TLSKey: "key.pem", Cache: &CacheConfig{}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			spec, err := tc.config.Spec()
+			resolved, err := tc.config.Resolve()
 			if (err != nil) != tc.wantError {
-				t.Fatalf("Spec() error = %v, want error %v", err, tc.wantError)
+				t.Fatalf("Resolve() error = %v, want error %v", err, tc.wantError)
 			}
-			if !tc.wantError && (spec.TLSCert != tc.config.TLSCert || spec.TLSKey != tc.config.TLSKey) {
-				t.Fatalf("certificate paths = %q, %q", spec.TLSCert, spec.TLSKey)
+			if !tc.wantError && (resolved.TLSCert != tc.config.TLSCert || resolved.TLSKey != tc.config.TLSKey) {
+				t.Fatalf("certificate paths = %q, %q", resolved.TLSCert, resolved.TLSKey)
 			}
 		})
 	}
@@ -376,11 +382,11 @@ func TestLocalTLSCertificateConfiguration(t *testing.T) {
 
 func TestLocalTLSPathsAreNotNormalizedAway(t *testing.T) {
 	cfg := Config{TargetAddr: "3000", TLSCert: " ", TLSKey: " "}
-	spec, err := cfg.Spec()
+	resolved, err := cfg.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.TLSCert != " " || spec.TLSKey != " " {
+	if resolved.TLSCert != " " || resolved.TLSKey != " " {
 		t.Fatal("configured local TLS file paths were silently removed")
 	}
 }
@@ -404,14 +410,14 @@ func TestAutomaticTLSConfiguration(t *testing.T) {
 		{"cache", Config{Serve: "site", TLSAuto: true, TLSStateDir: "certs", Cache: &CacheConfig{}}, "certs", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			spec, err := tc.config.Spec()
+			resolved, err := tc.config.Resolve()
 			if (err != nil) != tc.wantError {
-				t.Fatalf("Spec() = %v, want error %v", err, tc.wantError)
+				t.Fatalf("Resolve() = %v, want error %v", err, tc.wantError)
 			}
-			if !tc.wantError && spec.TLSStateDir != tc.wantDir {
-				t.Fatalf("state directory = %q, want %q", spec.TLSStateDir, tc.wantDir)
+			if !tc.wantError && resolved.TLSStateDir != tc.wantDir {
+				t.Fatalf("state directory = %q, want %q", resolved.TLSStateDir, tc.wantDir)
 			}
-			if spec.TLSRequireLocal != tc.config.TLSRequireLocal {
+			if resolved.TLSRequireLocal != tc.config.TLSRequireLocal {
 				t.Fatal("require-local policy was lost")
 			}
 		})
@@ -436,14 +442,14 @@ func TestCertificateMonitoringConfiguration(t *testing.T) {
 		{"relay cache", Config{Serve: "site", TLSMonitorStateDir: "evidence", Cache: &CacheConfig{}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			spec, err := tc.config.Spec()
+			resolved, err := tc.config.Resolve()
 			if (err != nil) != tc.wantError {
-				t.Fatalf("Spec() error = %v, want error %v", err, tc.wantError)
+				t.Fatalf("Resolve() error = %v, want error %v", err, tc.wantError)
 			}
 			if tc.wantError {
 				return
 			}
-			monitor := spec.CertificateMonitor
+			monitor := resolved.certificateMonitor()
 			if tc.config.TLSMonitorStateDir == "" {
 				if monitor != nil {
 					t.Fatal("monitoring enabled without an explicit request")
@@ -453,7 +459,7 @@ func TestCertificateMonitoringConfiguration(t *testing.T) {
 			if monitor == nil || monitor.StateDir != tc.config.TLSMonitorStateDir || monitor.BaselineFile != tc.config.TLSMonitorBaseline || monitor.DNSResolver != tc.config.TLSMonitorDNSResolver {
 				t.Fatalf("monitoring configuration was changed: %+v", monitor)
 			}
-			if spec.TLSAuto != tc.config.TLSAuto || spec.TLSRequireLocal != tc.config.TLSRequireLocal {
+			if resolved.TLSAuto != tc.config.TLSAuto || resolved.TLSRequireLocal != tc.config.TLSRequireLocal {
 				t.Fatal("monitoring changed certificate provisioning policy")
 			}
 		})
@@ -465,11 +471,11 @@ func TestLocalTLSSelectsHTTPHandler(t *testing.T) {
 		{TargetAddr: "3000", TLSAuto: true, TLSStateDir: "certs"},
 		{TargetAddr: "3000", TLSCert: "cert.pem", TLSKey: "key.pem"},
 	} {
-		spec, err := config.Spec()
+		resolved, err := config.Resolve()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if spec.HTTP == nil {
+		if !resolved.usesHTTP() {
 			t.Fatal("Local TLS targets need HTTP handling for h2 translation")
 		}
 	}

@@ -217,9 +217,9 @@ func TestExistingConfigKeysFillComponents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	specs := make(map[string]tunnel.Spec, len(cfg.Tunnels))
+	specs := make(map[string]tunnel.Config, len(cfg.Tunnels))
 	for _, tunnelCfg := range cfg.Tunnels {
-		if specs[tunnelCfg.ID], err = tunnelCfg.Spec(); err != nil {
+		if specs[tunnelCfg.ID], err = tunnelCfg.Resolve(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -239,16 +239,16 @@ func TestExistingConfigKeysFillComponents(t *testing.T) {
 		Endpoints: []string{"/paid"}, FacilitatorToken: "facilitator-token",
 		Options: map[string]string{"nano_claims_file": "/var/lib/portal/claims.jsonl"},
 	}
-	if got := *specs["web"].HTTP.Auth; !reflect.DeepEqual(got, oidc) {
+	if got := specs["web"].AuthConfig; !reflect.DeepEqual(got, oidc) {
 		t.Errorf("web auth = %+v, want %+v", got, oidc)
 	}
-	if got := *specs["sso"].HTTP.Auth; !reflect.DeepEqual(got, saml) {
+	if got := specs["sso"].AuthConfig; !reflect.DeepEqual(got, saml) {
 		t.Errorf("sso auth = %+v, want %+v", got, saml)
 	}
-	if got := specs["paid"].HTTP.Payment; !reflect.DeepEqual(got, payment) {
+	if got := specs["paid"].X402Config; !reflect.DeepEqual(got, payment) {
 		t.Errorf("paid payment = %+v, want %+v", got, payment)
 	}
-	if got := specs["web"].Relays; got.Discovery || !got.BanMITM || got.MaxActive != 5 || !got.Overlay {
+	if got := specs["web"]; *got.Discovery || !*got.BanMITM || got.MaxActiveRelays != 5 || !got.Overlay {
 		t.Errorf("web relays = %+v", got)
 	}
 }
@@ -402,12 +402,12 @@ func TestLocalTLSCertificateConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, err := reloaded.Tunnels[0].Spec()
+	resolved, err := reloaded.Tunnels[0].Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.TLSCert != filepath.Join(dir, "certs", "tenant.pem") || spec.TLSKey != filepath.Join(dir, "certs", "tenant.key") {
-		t.Fatalf("certificate paths after restart = %q, %q", spec.TLSCert, spec.TLSKey)
+	if resolved.TLSCert != filepath.Join(dir, "certs", "tenant.pem") || resolved.TLSKey != filepath.Join(dir, "certs", "tenant.key") {
+		t.Fatalf("certificate paths after restart = %q, %q", resolved.TLSCert, resolved.TLSKey)
 	}
 }
 
@@ -429,20 +429,20 @@ func TestAutomaticTLSConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, err := cfg.Tunnels[0].Spec()
+	resolved, err := cfg.Tunnels[0].Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !spec.TLSAuto || !spec.TLSRequireLocal || spec.TLSStateDir != filepath.Join(dir, "certs") {
-		t.Fatalf("persisted automatic TLS options = %+v", spec)
+	if !resolved.TLSAuto || !resolved.TLSRequireLocal || resolved.TLSStateDir != filepath.Join(dir, "certs") {
+		t.Fatalf("persisted automatic TLS options = %+v", resolved)
 	}
 	cfg.Tunnels[0].TLSStateDir = ""
-	spec, err = cfg.Tunnels[0].Spec()
+	resolved, err = cfg.Tunnels[0].Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.TLSStateDir != filepath.Join(dir, "identity.json")+".tls" {
-		t.Fatalf("identity-scoped default = %q", spec.TLSStateDir)
+	if resolved.TLSStateDir != filepath.Join(dir, "identity.json")+".tls" {
+		t.Fatalf("identity-scoped default = %q", resolved.TLSStateDir)
 	}
 }
 
@@ -470,12 +470,12 @@ tls_monitor_dns_resolver = "9.9.9.9:53"
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, err := cfg.Tunnels[0].Spec()
+	resolved, err := cfg.Tunnels[0].Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	monitor := spec.CertificateMonitor
-	if monitor == nil || monitor.StateDir != filepath.Join(dir, "evidence") || monitor.BaselineFile != filepath.Join(dir, "baseline.json") || monitor.DNSResolver != "9.9.9.9:53" {
+	monitor := resolved
+	if monitor.TLSMonitorStateDir != filepath.Join(dir, "evidence") || monitor.TLSMonitorBaseline != filepath.Join(dir, "baseline.json") || monitor.TLSMonitorDNSResolver != "9.9.9.9:53" {
 		t.Fatalf("persisted monitoring configuration = %+v", monitor)
 	}
 }

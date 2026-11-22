@@ -217,13 +217,9 @@ func startUDPTestTunnel(t *testing.T, relayHost, relayName, originAddress string
 	}
 	restart := ownUDPServerRestart(t, ctx, config, relayHost, port)
 
-	runtime, err := tunnel.Start(ctx, tunnel.Spec{
-		Identity: tunnel.IdentitySpec{Name: "udp"},
-		Relays:   tunnel.RelaySpec{URLs: []string{relayURL}},
-		Transport: tunnel.TransportSpec{
-			Target: originAddress,
-			UDP:    &tunnel.UDPConfig{},
-		},
+	runtime, err := tunnel.Start(ctx, tunnel.Config{
+		Name: "udp", RelayURLs: []string{relayURL}, Discovery: new(false),
+		TargetAddr: originAddress, UDPEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("start UDP tunnel: %v", err)

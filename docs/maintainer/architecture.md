@@ -41,7 +41,7 @@ granted friendly alias. The Local TLS canonical origin remains tunnel-owned.
 - `cmd/portal-tunnel/tunnel`: owns the tunnel configuration of the CLI and the
   agent. `tunnel.Config` holds what the user set through `portal expose` flags, a
   `[[tunnels]]` entry of the agent config, or an Agent API request.
-  `Config.Spec` is the one step from a `Config` to the runtime `Spec`: it
+  `Config.Resolve` prepares an execution copy of the same type: it
   normalizes the values, fills in the defaults, and validates the result. A
   component with settings of its own keeps its type and its keys with its owner:
   `appauth.Config` with `OIDCConfig`, `SAMLConfig`, and `EmailConfig`,
