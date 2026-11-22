@@ -300,8 +300,10 @@ ClientHello inspection and tenant bridges have separate server-wide budgets:
 at most 128 sockets may await inspection, and at most 1024 tenant connections
 may be pending or active. Root API and reverse-connect handoff does not consume
 the tenant budget, so tenant saturation does not prevent a fresh root connection.
-Within the inspection budget, one IPv4 address or IPv6 /64 may hold at most 16
-sockets; unparseable peer addresses share the same fallback budget. This keeps
+Within the inspection budget, one IPv4 address or IPv6 /64 may hold at most
+`InspectionsPerSource` sockets (`INSPECTIONS_PER_SOURCE`, default 16 in the relay
+server; zero disables the per-source budget); unparseable peer addresses share
+the same fallback budget. This keeps
 one source from occupying every slot until the two-second deadlines expire while
 the aggregate cap continues to bound memory and workers. Root capacity is not
 reserved, so distributed floods or many clients behind one proxy still require

@@ -20,6 +20,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 func TestTenantIssuanceStartupRequiresUsableState(t *testing.T) {
@@ -71,10 +72,15 @@ func TestPublicIngressAggregateAdmissionAndRelease(t *testing.T) {
 	checkIngressShutdown(t, &server, conns, extra)
 }
 
+func newInspectionTestServer(perSource int) *Server {
+	return &Server{cfg: utils.NewSnapshot(ServerConfig{InspectionsPerSource: perSource}, ServerConfig.snapshot)}
+}
+
 func TestPublicIngressInspectionPreservesCapacityAcrossSources(t *testing.T) {
-	var server Server
+	const perSource = 16
+	server := newInspectionTestServer(perSource)
 	var held []net.Conn
-	for i := range publicInspectionSourceLimit {
+	for i := range perSource {
 		conn := newPublicIngressTestConn(t, net.IPv4(192, 0, 2, 1), 10000+i)
 		if !server.admitIngress(conn, true) {
 			t.Fatal("connection within source inspection limit rejected")
@@ -112,8 +118,42 @@ func TestPublicIngressInspectionPreservesCapacityAcrossSources(t *testing.T) {
 	server.ingressWorkers.Wait()
 }
 
+// Behind a TCP proxy every visitor shares the proxy's address. With the
+// per-source budget disabled, one address reaches the server-wide budget and
+// no further.
+func TestPublicIngressInspectionSharedProxySource(t *testing.T) {
+	proxy := net.IPv4(10, 0, 0, 1)
+	for _, tc := range []struct {
+		name      string
+		perSource int
+		admitted  int
+	}{
+		{"per-source budget", 16, 16},
+		{"per-source budget raised", 64, 64},
+		{"per-source budget disabled", 0, publicInspectionLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newInspectionTestServer(tc.perSource)
+			var conns []net.Conn
+			for i := range publicInspectionLimit + 1 {
+				conn := newPublicIngressTestConn(t, proxy, 10000+i)
+				if server.admitIngress(conn, true) {
+					conns = append(conns, conn)
+				}
+			}
+			if len(conns) != tc.admitted {
+				t.Fatalf("admitted %d inspections from one proxy address, want %d", len(conns), tc.admitted)
+			}
+			for _, conn := range conns {
+				server.releaseIngress(conn, true)
+			}
+			server.ingressWorkers.Wait()
+		})
+	}
+}
+
 func TestPublicIngressInspectionRetainsAggregateLimit(t *testing.T) {
-	var server Server
+	server := newInspectionTestServer(16)
 	var conns []net.Conn
 	for i := range publicInspectionLimit {
 		conn := newPublicIngressTestConn(t, net.IPv4(198, 51, 100, byte(i+1)), 10000+i)

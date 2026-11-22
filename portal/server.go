@@ -63,6 +63,11 @@ type ServerConfig struct {
 	// UnapprovedLeasesPerSource bounds the leases one source can hold without
 	// being routable. Zero disables the bound.
 	UnapprovedLeasesPerSource int
+	// InspectionsPerSource bounds the public sockets one IPv4 address or IPv6
+	// /64 can hold while the relay waits for their ClientHello. Zero leaves
+	// only the server-wide inspection budget, for relays behind a TCP proxy
+	// where every visitor shares the proxy's address.
+	InspectionsPerSource int
 	// DefaultIdentityBPS is the stream budget in bytes/second for identities
 	// without an operator override. Zero permits unlimited traffic.
 	DefaultIdentityBPS int
@@ -171,6 +176,9 @@ func ValidateServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	if cfg.UnapprovedLeasesPerSource < 0 {
 		return ServerConfig{}, errUnapprovedLeaseLimitNegative
 	}
+	if cfg.InspectionsPerSource < 0 {
+		return ServerConfig{}, errInspectionsPerSourceNegative
+	}
 	cfg.IVNPConfigPath = strings.TrimSpace(cfg.IVNPConfigPath)
 	if cfg.IVNPConfigPath != "" && !cfg.DiscoveryEnabled {
 		return ServerConfig{}, errRelayOverlayRequiresDiscovery
@@ -264,6 +272,7 @@ var (
 	errRootHostIsRequired                        = errors.New("root host is required")
 	errTransportMaxLeasesMustNonNegative         = errors.New("transport max leases must be non-negative")
 	errUnapprovedLeaseLimitNegative              = errors.New("unapproved leases per source must be non-negative")
+	errInspectionsPerSourceNegative              = errors.New("inspections per source must be non-negative")
 	errTransportEnablementRequiresLeasePortRange = errors.New("transport enablement requires a lease port range")
 	errEnablingUDPRequiresRelayRestart           = errors.New("enabling udp requires a relay restart")
 	errServerAlreadyStarted                      = errors.New("server already started")
@@ -548,7 +557,6 @@ const (
 	quicBackhaulPerSourceLimit   = 4
 	publicIngressLimit           = 1024
 	publicInspectionLimit        = 128
-	publicInspectionSourceLimit  = 16
 )
 
 // Serve runs the complete relay lifecycle around the composed handler: the
@@ -1241,7 +1249,7 @@ func (s *Server) admitIngress(conn net.Conn, inspecting bool) bool {
 			return false
 		}
 		source, _ = remoteSourcePrefix(conn.RemoteAddr())
-		if s.ingressSources[source] >= publicInspectionSourceLimit {
+		if limit := s.config().InspectionsPerSource; limit > 0 && s.ingressSources[source] >= limit {
 			return false
 		}
 	} else if s.ingressTenants >= publicIngressLimit {
