@@ -1635,13 +1635,7 @@ func (s *Server) servePublicIngressConn(ctx context.Context, conn net.Conn) {
 	serverName := utils.NormalizeHostname(clientHello.ServerName)
 	localTLS := namespace.IsLocalTLSHostname(serverName, s.registry.rootHostname)
 	relayAPI := serverName == "" || serverName == s.identity.Name
-	transportOnly := false
-	if !localTLS && !relayAPI {
-		if record, ok := s.registry.Lookup(serverName); ok && (record.tcpPort > 0 || record.datagram != nil) {
-			transportOnly = true
-		}
-	}
-	if !localTLS && (relayAPI || transportOnly || s.registry.cache.Has(serverName)) {
+	if !localTLS && (relayAPI || s.servesTransportFallback(serverName) || s.registry.cache.Has(serverName)) {
 		select {
 		case s.apiHandoff.conns <- wrappedConn:
 		case <-s.apiHandoff.done:

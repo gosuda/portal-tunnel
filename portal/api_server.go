@@ -764,9 +764,16 @@ func (s *Server) serveCachedSiteFallbackTransport(host string, record *leaseReco
 	}
 }
 
+// servesTransportFallback reports whether public HTTPS ingress for host should
+// terminate at the relay and show the transport landing page.
+func (s *Server) servesTransportFallback(host string) bool {
+	record, ok := s.registry.Lookup(host)
+	return ok && record.isTransportOnly()
+}
+
 func (s *Server) handleTransportFallback(w http.ResponseWriter, req *http.Request, host string) bool {
 	record, ok := s.registry.Lookup(host)
-	if !ok || (record.tcpPort <= 0 && record.datagram == nil) {
+	if !ok || !record.isTransportOnly() {
 		return false
 	}
 	serviceName := record.Name

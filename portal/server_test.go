@@ -20,6 +20,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
+	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -1078,5 +1079,36 @@ func TestTransportServiceHTTPFallback(t *testing.T) {
 	bodyJSON := recJSON.Body.String()
 	if !strings.Contains(bodyJSON, "relay.example.com:40001") || !strings.Contains(bodyJSON, `"transport":true`) {
 		t.Fatalf("unexpected JSON body: %s", bodyJSON)
+	}
+}
+
+func TestTransportFallbackOnlyTakesRawTCPLeases(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	server := &Server{
+		registry: registry,
+		identity: identity.RelayIdentity{Identity: types.Identity{Name: "relay.example.com"}},
+	}
+	expires := time.Now().Add(time.Hour)
+	registry.records = append(registry.records,
+		&leaseRecord{Identity: types.Identity{Name: "raw-tcp"}, Hostname: "raw-tcp.relay.example.com", ExpiresAt: expires, tcpPort: 40001},
+		&leaseRecord{Identity: types.Identity{Name: "udp-web"}, Hostname: "udp-web.relay.example.com", ExpiresAt: expires, datagram: transport.NewRelayDatagram(types.ServiceIdentityKey{}, 40002)},
+		&leaseRecord{Identity: types.Identity{Name: "tcp-udp"}, Hostname: "tcp-udp.relay.example.com", ExpiresAt: expires, tcpPort: 40003, datagram: transport.NewRelayDatagram(types.ServiceIdentityKey{}, 40003)},
+		&leaseRecord{Identity: types.Identity{Name: "web"}, Hostname: "web.relay.example.com", ExpiresAt: expires},
+	)
+	for host, want := range map[string]bool{
+		"raw-tcp.relay.example.com": true,
+		"tcp-udp.relay.example.com": true,
+		"udp-web.relay.example.com": false,
+		"web.relay.example.com":     false,
+		"missing.relay.example.com": false,
+	} {
+		if got := server.servesTransportFallback(host); got != want {
+			t.Errorf("servesTransportFallback(%q) = %v, want %v", host, got, want)
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://"+host+"/", nil)
+		if got := server.handleTransportFallback(rec, req, host); got != want {
+			t.Errorf("handleTransportFallback(%q) = %v, want %v", host, got, want)
+		}
 	}
 }

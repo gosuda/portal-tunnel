@@ -59,6 +59,13 @@ func (r *leaseRecord) isPublicEntry() bool {
 	return r != nil && (r.CanonicalHostname != "" || r.Hostname != "" || r.tcpPort > 0 || r.datagram != nil)
 }
 
+// isTransportOnly reports whether the lease hostname has no HTTP backend.
+// A raw TCP lease sends its SNI stream to a non-TLS target. A UDP lease keeps
+// its default SNI stream, so it can still serve HTTP.
+func (r *leaseRecord) isTransportOnly() bool {
+	return r != nil && r.tcpPort > 0
+}
+
 func (r *leaseRecord) hostnames() []string {
 	if !r.isPublicEntry() {
 		return nil
