@@ -140,6 +140,15 @@ jobs:
           cp cmd/portal-tunnel/installer/install.sh release/install.sh
           cp cmd/portal-tunnel/installer/install.ps1 release/install.ps1
 
+      # Portal Desktop ships beside the CLI at the same version; the installers
+      # and portal update fetch it only for installations that opted in.
+      - name: Build desktop packages
+        shell: bash
+        run: |
+          make install-ggui
+          make build-desktop
+          cp bin/desktop/portal-desktop-* release/
+
       - name: Generate SHA256 checksums
         shell: bash
         run: |

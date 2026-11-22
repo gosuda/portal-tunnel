@@ -3,7 +3,6 @@ package dashboard
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"net/url"
 	"os/exec"
 	"runtime"
@@ -52,7 +51,7 @@ func (m agentDashboardModel) openRelayTunnelURL(tunnelID, relayURL string) (tea.
 		m.selectRelay(relayURL)
 	}
 	_, relay, ok := m.selectedTunnelRelay()
-	publicURL := relayDashboardPublicURL(relayDashboardEndpoint(relay))
+	publicURL := relay.URL()
 	if !ok || publicURL == "" {
 		return m, nil
 	}
@@ -95,7 +94,7 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 		if i == selected {
 			marker = th.glyph.selected
 		}
-		line := marker + " " + agentDashboardRelayRow(width-agentDashboardRelayLead, relayDashboardMode(relay), relayDashboardVersion(relay), relayDashboardURL(relay))
+		line := marker + " " + agentDashboardRelayRow(width-agentDashboardRelayLead, relay.Mode(), relayDashboardVersion(relay), relayDashboardURL(relay))
 		style := agentDashboardRelayStyle(th, i == selected, relay)
 		pane.addClickRow(line, width, style, agentDashboardActionOpenTunnelURL, tunnel.ID, relay.RelayURL)
 	}
@@ -126,35 +125,7 @@ func relayDashboardVersion(relay agent.AgentRelayStatus) string {
 }
 
 func relayDashboardURL(relay agent.AgentRelayStatus) string {
-	if publicURL := relayDashboardPublicURL(relayDashboardEndpoint(relay)); publicURL != "" {
-		return publicURL
-	}
-	return relayDashboardRelayLabel(relay.RelayURL)
-}
-
-func relayDashboardEndpoint(relay agent.AgentRelayStatus) string {
-	return cmp.Or(relay.AliasURL, relay.PublicURL)
-}
-
-func relayDashboardPublicURL(rawURL string) string {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return ""
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return rawURL
-	}
-	host := parsed.Hostname()
-	host = cmp.Or(host, parsed.Host)
-	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
-		host = "[" + host + "]"
-	}
-	parsed.Host = host
-	parsed.User = nil
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String()
+	return cmp.Or(relay.URL(), relayDashboardRelayLabel(relay.RelayURL))
 }
 
 func relayDashboardRelayLabel(rawURL string) string {
@@ -171,25 +142,6 @@ func relayDashboardRelayLabel(rawURL string) string {
 		return strings.TrimSpace(parsed.Host)
 	}
 	return host
-}
-
-func relayDashboardMode(relay agent.AgentRelayStatus) string {
-	switch {
-	case relay.Approval == sdk.RelayApprovalPending:
-		return "waiting"
-	case relay.Approval == sdk.RelayApprovalRefused:
-		return "refused"
-	case relay.State == sdk.RelayFailed:
-		return "failed"
-	case relay.State == sdk.RelayReady && relay.PublicURL == "" && relay.CertificateError != "":
-		return "legacy TLS"
-	case relay.State == sdk.RelayReady:
-		return "direct"
-	case relay.State == sdk.RelayConnecting:
-		return "connecting..."
-	default:
-		return "-"
-	}
 }
 
 func agentDashboardRelayRow(width int, mode, version, displayURL string) string {
@@ -230,20 +182,9 @@ func agentDashboardURLCell(value string, width int) string {
 	return agentDashboardFit(value, width)
 }
 
+// openDashboardURL opens a relay's URL, which AgentRelayStatus.URL keeps to
+// http and https.
 func openDashboardURL(rawURL string) error {
-	rawURL = strings.TrimSpace(rawURL)
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return err
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "http", "https":
-	default:
-		return fmt.Errorf("unsupported url scheme %q", parsed.Scheme)
-	}
-	if strings.TrimSpace(parsed.Host) == "" {
-		return fmt.Errorf("url host is required")
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	return startDashboardURLProcess(ctx, rawURL)

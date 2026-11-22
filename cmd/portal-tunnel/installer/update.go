@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,36 +47,43 @@ func StartUpdateCheck(currentVersion string) {
 }
 
 func checkForAvailableUpdate(currentVersion, binURL string) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, binURL, nil)
+	version, err := latestReleaseVersion(binURL)
 	if err != nil {
 		return
 	}
+	current := strings.TrimSpace(currentVersion)
+	if current != "" && !strings.HasPrefix(current, "v") {
+		current = "v" + current
+	}
+	if !semver.IsValid(current) || semver.Compare(version, current) <= 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\nA new version is available: %s. Run 'portal update' to upgrade.\n", version)
+}
+
+// latestReleaseVersion is the release a latest/download asset URL redirects
+// to, such as v2.8.0.
+func latestReleaseVersion(latestURL string) (string, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, latestURL, nil)
+	if err != nil {
+		return "", err
+	}
 	resp, err := updateCheckClient.Do(req)
 	if err != nil {
-		return
+		return "", err
 	}
 	location := resp.Header.Get("Location")
 	_ = resp.Body.Close()
 
 	parsed, err := url.Parse(location)
 	if err != nil {
-		return
+		return "", err
 	}
 	segments := strings.Split(strings.TrimPrefix(parsed.Path, "/"), "/")
-	if len(segments) < 5 {
-		return
+	if len(segments) < 5 || !strings.HasPrefix(segments[4], "v") || !semver.IsValid(segments[4]) {
+		return "", fmt.Errorf("%s redirects to no release: %q", latestURL, location)
 	}
-
-	version := segments[4]
-	current := strings.TrimSpace(currentVersion)
-	if current != "" && !strings.HasPrefix(current, "v") {
-		current = "v" + current
-	}
-	latestValid := strings.HasPrefix(version, "v") && semver.IsValid(version)
-	if !latestValid || !semver.IsValid(current) || semver.Compare(version, current) <= 0 {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "\nA new version is available: %s. Run 'portal update' to upgrade.\n", version)
+	return segments[4], nil
 }
 
 func resolveExecutablePath() (string, error) {
@@ -90,8 +98,10 @@ func resolveExecutablePath() (string, error) {
 	return execPath, nil
 }
 
-func fetchUpdateBinary(binURL string) (string, error) {
-	tmpFile, err := os.CreateTemp("", "portal-update-*")
+// fetchUpdateBinary downloads binURL into a new file in dir, or in the
+// temporary directory when dir is empty, and returns its path.
+func fetchUpdateBinary(dir, binURL string) (string, error) {
+	tmpFile, err := os.CreateTemp(dir, "portal-update-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -215,32 +225,65 @@ func digestVerifyUpdateChecksumFile(tmpPath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func UpdateCurrentBinary(version string) error {
-	binURL, checksumURL, ok := assetURLs(version)
-	if !ok {
-		return fmt.Errorf("unsupported platform: %s/%s", runtime.GOOS, runtime.GOARCH)
+// Update installs a release, the latest when version is empty, over the
+// running CLI. When Portal Desktop is installed with the CLI, it updates the
+// desktop to the same release, so the two stay compatible; a CLI-only
+// installation stays CLI-only. It downloads and verifies everything before it
+// replaces anything, replaces the desktop first, and puts the desktop back
+// when the CLI cannot be replaced. It returns the desktop it updated, or "".
+func Update(version string) (string, error) {
+	if _, _, ok := assetURLs(version); !ok {
+		return "", fmt.Errorf("unsupported platform: %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
-
 	execPath, err := resolveExecutablePath()
 	if err != nil {
-		return err
+		return "", err
 	}
+	desktop, hasDesktop := Desktop(execPath)
+	if hasDesktop && strings.TrimSpace(version) == "" {
+		// Pin "latest" once, so a release published meanwhile cannot split
+		// the pair.
+		latestURL, _, _ := assetURLs("")
+		if version, err = latestReleaseVersion(latestURL); err != nil {
+			return "", fmt.Errorf("find the latest release: %w", err)
+		}
+	}
+	binURL, checksumURL, _ := assetURLs(version)
 
-	tmpPath, err := fetchUpdateBinary(binURL)
+	tmpPath, err := fetchUpdateBinary("", binURL)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = os.Remove(tmpPath) }()
-
 	if err := verifyUpdateChecksum(tmpPath, checksumURL); err != nil {
-		return err
+		return "", err
+	}
+	if !hasDesktop {
+		if err := replaceBinary(tmpPath, execPath); err != nil {
+			return "", fmt.Errorf("failed to replace binary: %w", err)
+		}
+		return "", nil
 	}
 
+	staged, stageDir, err := stageDesktop(version, desktop)
+	if stageDir != "" {
+		defer func() { _ = os.RemoveAll(stageDir) }()
+	}
+	if err != nil {
+		return "", fmt.Errorf("update Portal Desktop: %w", err)
+	}
+	restore, commit, err := swapIn(staged, desktop)
+	if err != nil {
+		return "", fmt.Errorf("update Portal Desktop: %w", err)
+	}
 	if err := replaceBinary(tmpPath, execPath); err != nil {
-		return fmt.Errorf("failed to replace binary: %w", err)
+		if restoreErr := restore(); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore Portal Desktop: %w", restoreErr))
+		}
+		return "", fmt.Errorf("failed to replace binary: %w", err)
 	}
-
-	return nil
+	commit()
+	return desktop, nil
 }
 
 func assetURLs(version string) (binURL, checksumURL string, ok bool) {
@@ -249,7 +292,13 @@ func assetURLs(version string) (binURL, checksumURL string, ok bool) {
 	if !ok {
 		return "", "", false
 	}
+	binURL = releaseAssetURL(version, filename)
+	return binURL, binURL + ".sha256", true
+}
 
+// releaseAssetURL is where the official release of version, the latest when
+// empty, publishes filename.
+func releaseAssetURL(version, filename string) string {
 	baseURL := types.OfficialReleaseBaseURL + "/latest/download"
 	version = strings.TrimSpace(version)
 	if version != "" {
@@ -258,9 +307,7 @@ func assetURLs(version string) (binURL, checksumURL string, ok bool) {
 		}
 		baseURL = types.OfficialReleaseBaseURL + "/download/" + version
 	}
-
-	binURL = baseURL + "/" + filename
-	return binURL, binURL + ".sha256", true
+	return baseURL + "/" + filename
 }
 
 func replaceBinary(srcPath, dstPath string) error {

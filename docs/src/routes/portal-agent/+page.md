@@ -300,6 +300,9 @@ by default. It polls agent status every two seconds and edits the same TOML
 config file that the service uses. It is laid out for a terminal of at least
 80 columns by 24 rows and uses the extra room of a larger one.
 
+For a native desktop window over the same Control API, see
+[Portal Desktop](/portal-desktop).
+
 For a ready named tunnel, the Relays pane displays and opens the short URL
 without an Ethereum address when the relay granted that name. Otherwise it uses
 the identity-bound URL. `/agent/status` keeps `public_url` as the identity-bound
@@ -630,3 +633,4 @@ or a transport disabled on the relay.
 - [Configuration Reference](/configuration#configtoml): every agent config field
 - [Wallet and ENS](/wallet-and-ens): admin tokens, wallet auth, and ENS gasless behavior
 - [CLI Reference](/cli-reference): command flags and examples
+- [Portal Desktop](/portal-desktop): manage the agent's tunnels in a desktop window

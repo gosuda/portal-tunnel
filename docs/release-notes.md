@@ -22,6 +22,30 @@ when offline and never fall back to cached content.
 
 ## Unreleased
 
+### Portal Desktop: a desktop window for the agent
+
+Portal Desktop shows the tunnels that the Portal agent runs. It adds, changes,
+and removes them through the local Control API of the agent, as
+`portal agent dashboard` does. It shows relay approval, failures, and
+certificate errors, copies URLs and TCP addresses, and opens `http` and `https`
+URLs in the browser. It sends desktop notifications. On macOS and Windows, it
+stays in the tray. Closing or quitting it leaves the agent and its tunnels
+running.
+
+Portal Desktop is opt-in. `install.sh --with-gui` and
+`PORTAL_WITH_GUI=1` for `install.ps1` install it with the CLI from one release,
+and verify each download with its own SHA-256 sidecar. `portal gui` opens it.
+`portal update` updates it with the CLI, and a CLI-only installation stays
+CLI-only. The install script of a relay installs only the CLI. Releases publish
+`portal-desktop-*` assets for macOS, Windows, and Linux on amd64 and arm64. The
+desktop is a Go module of its own, so the CLI, the SDK, the relay, and the
+container images do not depend on its GUI libraries. See
+[Portal Desktop](/portal-desktop).
+
+The terminal dashboard now keeps the port of a relay URL that it opens.
+`portal agent dashboard` without `--config` reads the state directory from the
+default agent config when one exists.
+
 ### Kubernetes: Helm charts for the relay and the tunnel client
 
 `docs/examples/helm/portal-relay` runs the relay and `docs/examples/helm/portal-tunnel` runs

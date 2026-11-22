@@ -334,11 +334,13 @@ func runAgentDashboardCommand(args []string) error {
 		}
 		return err
 	}
-	resolvedStateDir, err := resolveDashboardStateDir(configPath, stateDir)
-	if err != nil {
-		return err
+	if stateDir == "" {
+		stateDir, err = agent.StateDir(configPath)
+		if err != nil {
+			return err
+		}
 	}
-	return dashboard.RunDashboard(configPath, resolvedStateDir, theme, false)
+	return dashboard.RunDashboard(configPath, stateDir, theme, false)
 }
 
 func parseRunAgentDashboardCommandArgs(args []string) (string, string, string, error) {
@@ -363,24 +365,6 @@ func parseRunAgentDashboardCommandArgs(args []string) (string, string, string, e
 	configPath = strings.TrimSpace(configPath)
 	stateDir = strings.TrimSpace(stateDir)
 	return cmp.Or(configPath, service.DefaultConfigPath()), stateDir, theme, nil
-}
-
-func resolveDashboardStateDir(configPath, stateDir string) (string, error) {
-	if stateDir != "" {
-		return stateDir, nil
-	}
-	_, statErr := os.Stat(configPath)
-	if statErr == nil {
-		cfg, err := agent.LoadExistingConfig(configPath)
-		if err != nil {
-			return "", err
-		}
-		return cfg.Agent.StateDir, nil
-	}
-	if errors.Is(statErr, os.ErrNotExist) {
-		return service.DefaultDataDir(), nil
-	}
-	return "", statErr
 }
 
 func validateDashboardTheme(fs *flag.FlagSet, theme string) error {

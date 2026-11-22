@@ -1,0 +1,23 @@
+# Packaging of Portal Desktop for `ggui build`. `make build-desktop` builds
+# every release target with the version from the repository's config.toml.
+
+[app]
+name = "Portal Desktop"
+# appID in main.go: macOS, Windows and Linux key the app's settings to it.
+id = "org.gosuda.portal.desktop"
+version = "0.0.0"
+icon = "icon.svg"
+
+[macos]
+category = "public.app-category.developer-tools"
+icon_inset = true
+
+[windows]
+description = "Portal Desktop"
+company = "Go Suda"
+
+[linux]
+description = "Publish local services through Portal relays"
+categories = ["Network", "Development"]
+homepage = "https://github.com/gosuda/portal-tunnel"
+license = "MIT"

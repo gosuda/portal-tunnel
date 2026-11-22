@@ -73,6 +73,24 @@ func LoadExistingConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
+// StateDir is the state directory of the agent the config at path describes,
+// where the agent publishes its control endpoint. Without a config there yet,
+// it is the directory a new agent uses by default.
+func StateDir(path string) (string, error) {
+	path = cmp.Or(strings.TrimSpace(path), service.DefaultConfigPath())
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return service.DefaultDataDir(), nil
+		}
+		return "", err
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		return "", err
+	}
+	return cfg.Agent.StateDir, nil
+}
+
 func loadConfigDocument(path string) (Config, string, os.FileMode, error) {
 	path = strings.TrimSpace(path)
 	path = cmp.Or(path, service.DefaultConfigPath())

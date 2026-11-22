@@ -1,4 +1,4 @@
-.PHONY: help install install-lint fmt vet lint lint-auto test test-unit test-go-unit test-e2e tidy all run build build-frontend build-docs build-tunnel build-wasm build-server build-server-bin clean check-env-example check-charts env-reference
+.PHONY: help install install-lint install-ggui fmt vet lint lint-auto test test-unit test-go-unit test-e2e tidy all run build build-frontend build-docs build-tunnel build-desktop build-wasm build-server build-server-bin clean check-env-example check-charts env-reference
 
 .DEFAULT_GOAL := help
 
@@ -9,6 +9,11 @@ GO_TOOLCHAIN_VERSION := $(shell awk '/^go / { print "go" $$2; exit }' go.mod)
 GOIMPORTS_VERSION := v0.52.0
 GOLANGCI_LINT_VERSION := v2.15.0
 GOIMPORTS_LOCAL := github.com/gosuda/portal-tunnel/v2
+# Portal Desktop is a Go module of its own, so its GUI dependencies stay out of
+# the module the CLI, SDK and relay build from. The Go targets cover it too.
+DESKTOP_DIR := cmd/portal-desktop
+DESKTOP_OUT := bin/desktop
+GGUI_COMMAND_VERSION := v0.7.5
 
 export GOTOOLCHAIN := $(GO_TOOLCHAIN_VERSION)
 
@@ -26,6 +31,7 @@ help:
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-docs        - Build documentation site (SvelteKit)"
 	@echo "  make build-tunnel      - Build portal-tunnel binaries"
+	@echo "  make build-desktop     - Build Portal Desktop release packages (needs make install-ggui)"
 	@echo "  make build-wasm        - Build portal-tunnel WebAssembly client"
 	@echo "  make build-server      - Build Go relay server"
 	@echo "  make run               - Run relay server"
@@ -37,23 +43,31 @@ install: install-lint
 install-lint:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
+install-ggui:
+	go install github.com/ironpark/ggui/cmd/ggui@$(GGUI_COMMAND_VERSION)
+
 fmt:
 	gofmt -w .
 	goimports -local $(GOIMPORTS_LOCAL) -w .
 
 vet:
 	go vet $(GO_PACKAGES)
+	cd $(DESKTOP_DIR) && go vet ./...
 
 lint:
 	golangci-lint run $(GO_PACKAGES)
+	cd $(DESKTOP_DIR) && golangci-lint run ./...
 
 lint-auto:
 	gofmt -w .
 	goimports -local $(GOIMPORTS_LOCAL) -w .
 	golangci-lint run --fix $(GO_PACKAGES)
+	cd $(DESKTOP_DIR) && golangci-lint run --fix ./...
 
+# ggui_debug makes a Probe panic on a state write from the wrong goroutine.
 test:
 	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
+	cd $(DESKTOP_DIR) && go test -tags ggui_debug ./...
 	cd frontend && npm test
 
 test-unit: test-go-unit
@@ -61,6 +75,7 @@ test-unit: test-go-unit
 
 test-go-unit:
 	go test -v -coverprofile=coverage.out $(GO_UNIT_PACKAGES)
+	cd $(DESKTOP_DIR) && go test -tags ggui_debug ./...
 
 test-e2e:
 	go test -count=1 -v ./e2e/...
@@ -69,6 +84,7 @@ tidy:
 	go get -u ./...
 	go mod tidy
 	go mod verify
+	cd $(DESKTOP_DIR) && go get -u ./... && go mod tidy && go mod verify
 
 # Relay keys are owned by the flag definitions in cmd/relay-server/main.go.
 # This deployment check excludes listener values fixed directly by the bundled
@@ -178,6 +194,31 @@ build-tunnel: build-wasm
 			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build $(GO_BUILD_FLAGS) -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \
 	done
+
+# Build Portal Desktop for release with the ggui command: per architecture, a
+# macOS app bundle in a tarball, a Windows program, and a Linux install tree in
+# a tarball. ggui.toml keeps a placeholder version; the build stamps the
+# release version from config.toml into a copy of it.
+build-desktop:
+	@rm -rf $(DESKTOP_OUT)
+	@mkdir -p $(DESKTOP_OUT)
+	@set -e; \
+	version=$$(awk -F'"' '/^version/ { print $$2; exit }' config.toml | sed -E 's/^v//; s/[-+].*//'); \
+	out="$(CURDIR)/$(DESKTOP_OUT)"; \
+	trap 'rm -f $(DESKTOP_DIR)/ggui.release.toml' EXIT; \
+	sed -E "s/^version = .*/version = \"$$version\"/" $(DESKTOP_DIR)/ggui.toml > $(DESKTOP_DIR)/ggui.release.toml; \
+	for arch in amd64 arm64; do \
+		echo " - $(DESKTOP_OUT)/portal-desktop-darwin-$$arch.tar.gz"; \
+		(cd $(DESKTOP_DIR) && GOARCH=$$arch ggui build --config ggui.release.toml --target macos --out "$$out/build/darwin-$$arch" >/dev/null); \
+		tar -C "$$out/build/darwin-$$arch" -czf "$$out/portal-desktop-darwin-$$arch.tar.gz" "Portal Desktop.app"; \
+		echo " - $(DESKTOP_OUT)/portal-desktop-windows-$$arch.exe"; \
+		(cd $(DESKTOP_DIR) && GOARCH=$$arch ggui build --config ggui.release.toml --target windows --out "$$out/build/windows-$$arch" >/dev/null); \
+		mv "$$out/build/windows-$$arch/Portal Desktop.exe" "$$out/portal-desktop-windows-$$arch.exe"; \
+		echo " - $(DESKTOP_OUT)/portal-desktop-linux-$$arch.tar.gz"; \
+		(cd $(DESKTOP_DIR) && GOARCH=$$arch ggui build --config ggui.release.toml --target linux --format tar --out "$$out/build/linux-$$arch" >/dev/null); \
+		mv "$$out/build/linux-$$arch/portal-desktop-$$version-linux-$$arch.tar.gz" "$$out/portal-desktop-linux-$$arch.tar.gz"; \
+	done
+	@rm -rf $(DESKTOP_OUT)/build
 
 # Build Go relay server
 build-server: build-tunnel build-frontend build-server-bin

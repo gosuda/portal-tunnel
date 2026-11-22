@@ -58,6 +58,7 @@ export const guidesNavigation: NavSection[] = [
 		items: [
 			{ title: 'Self-Hosting', href: '/self-hosting' },
 			{ title: 'Portal Agent', href: '/portal-agent' },
+			{ title: 'Portal Desktop', href: '/portal-desktop' },
 			{ title: 'TCP/UDP Tunneling', href: '/tcp-udp-tunneling' },
 			{ title: 'Game Server Hosting', href: '/game-server-hosting' },
 			{ title: 'Webhook and Discord Endpoints', href: '/webhook-endpoints' },

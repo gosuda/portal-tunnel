@@ -35,6 +35,21 @@ curl -sSL https://portal.example.com/api/install.sh | bash
 The installer downloads the `portal` binary and adds it to your `PATH`. It does
 not create a config file.
 
+### With Portal Desktop
+
+The installers install Portal Desktop only when you opt in:
+
+```bash
+curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | sh -s -- --with-gui
+```
+
+```powershell
+$env:PORTAL_WITH_GUI = '1'; irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex
+```
+
+The install script of a relay installs only the CLI. See
+[Portal Desktop](/portal-desktop#install).
+
 ## Command Overview
 
 | Command | Purpose |
@@ -43,7 +58,8 @@ not create a config file.
 | `portal auth issue` | Issue a Portal-native application access credential |
 | `portal list` | Print relay URLs resolved for this invocation |
 | `portal agent` | Run a durable local multi-tunnel agent |
-| `portal update` | Replace the CLI with the latest release |
+| `portal gui` | Open Portal Desktop, the desktop window for the agent |
+| `portal update` | Replace the CLI, and Portal Desktop when installed, with the latest release |
 | `portal version` | Print the current version |
 
 ## `portal expose`
@@ -664,6 +680,24 @@ Agent flags:
 | `portal agent stop` | `--state-dir` | config/default | Agent state directory to stop |
 | `portal agent restart` | `--config` | platform default | Config path used to reinstall and restart the service |
 
+## `portal gui`
+
+Open [Portal Desktop](/portal-desktop):
+
+```bash
+portal gui
+portal gui --config ./agent.toml
+```
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--config` | platform default | Agent config path that Portal Desktop reads to find the agent |
+
+`portal gui` opens the Portal Desktop installed with this CLI and returns. It
+does not install anything, and it does not start or stop the agent. If Portal
+Desktop is not installed, it shows the install command. On Linux, it stops with
+an error if `DISPLAY` is not set.
+
 ## `portal update`
 
 Update the CLI binary:
@@ -675,6 +709,11 @@ portal update
 The updater resolves the latest GitHub release, compares it with the installed
 version, downloads the matching asset, verifies its SHA256 checksum, and
 replaces the current executable.
+
+If Portal Desktop is installed with the CLI, the updater updates it to the same
+release. It verifies both downloads before it replaces either, and it puts the
+old Portal Desktop back if it cannot replace the CLI. An installation without
+Portal Desktop stays CLI-only.
 
 ## `portal version`
 

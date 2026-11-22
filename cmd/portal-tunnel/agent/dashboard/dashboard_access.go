@@ -460,7 +460,7 @@ func (m agentDashboardModel) renderAccess(width, height int) agentDashboardView 
 	content.addView(body.window(focusLine, rows))
 
 	var out agentDashboardView
-	out.addFrame(th, "ACCESS: "+tunnelDashboardName(tunnel), true, width, max(0, height-agentDashboardFrameHeight), content)
+	out.addFrame(th, "ACCESS: "+tunnel.Label(), true, width, max(0, height-agentDashboardFrameHeight), content)
 	return out
 }
 

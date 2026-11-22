@@ -114,6 +114,15 @@ portal agent dashboard --config config.toml
 
 See the [Portal Agent Guide](https://gosuda.github.io/portal-tunnel/portal-agent) for configuration syntax and OS service installation.
 
+To manage the agent's tunnels in a desktop window, install Portal Desktop with the CLI and open it:
+
+```bash
+curl -fsSL https://github.com/gosuda/portal-tunnel/releases/latest/download/install.sh | sh -s -- --with-gui
+portal gui
+```
+
+See [Portal Desktop](https://gosuda.github.io/portal-tunnel/portal-desktop) for Windows, platform support, and updates.
+
 ### Run a relay. Stay in control.
 
 A relay exposes a public endpoint on your IP and domain. Budget for egress and finite compute and ports, plan for outages, and be prepared to handle abuse complaints and IP, domain or CA reputation damage. Approved publishers and their visitors can still generate costs. A stream rate limit in bytes/second cannot guarantee a monthly traffic bill or remove legal liability.
@@ -178,6 +187,7 @@ If you operate a public Portal relay, open a pull request to add your relay URL 
 - **[Keyless TLS Explained](https://gosuda.github.io/portal-tunnel/keyless-tls)** - Technical article on transcript signing, MITM self-probes, and delegation.
 - **[CLI Reference](https://gosuda.github.io/portal-tunnel/cli-reference)** - Complete command-line syntax and flag guide.
 - **[Portal Agent](https://gosuda.github.io/portal-tunnel/portal-agent)** - Multi-tunnel daemon and interactive dashboard.
+- **[Portal Desktop](https://gosuda.github.io/portal-tunnel/portal-desktop)** - Desktop window for the agent's tunnels.
 - **[Self-Hosting](https://gosuda.github.io/portal-tunnel/self-hosting)** - Running and securing your own relay instances.
 - **[Configuration](https://gosuda.github.io/portal-tunnel/configuration)** - Environment variables and configuration options.
 - **[API Reference](https://gosuda.github.io/portal-tunnel/api-reference)** - Relay wire protocol and client APIs.

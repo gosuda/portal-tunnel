@@ -52,6 +52,7 @@ func main() {
 		"agent":  runAgentCommand,
 		"auth":   runAuthCommand,
 		"list":   runListCommand,
+		"gui":    runGUICommand,
 		"update": runUpdateCommand,
 		"version": func(args []string) error {
 			fmt.Fprintln(os.Stdout, types.ReleaseVersion)
@@ -62,6 +63,7 @@ func main() {
 			{Name: "agent", Usage: printAgentUsage},
 			{Name: "auth", Usage: printAuthUsage},
 			{Name: "list", Usage: printListUsage},
+			{Name: "gui", Usage: printGUIUsage},
 			{Name: "update", Usage: printUpdateUsage},
 		}),
 	}); err != nil {
@@ -410,11 +412,15 @@ func runUpdateCommand(args []string) error {
 		return err
 	}
 
-	if err := installer.UpdateCurrentBinary(version); err != nil {
+	desktop, err := installer.Update(version)
+	if err != nil {
 		return err
 	}
-
-	fmt.Fprintln(os.Stderr, "Updated portal.")
+	if desktop == "" {
+		fmt.Fprintln(os.Stderr, "Updated portal.")
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "Updated portal and Portal Desktop at %s. Reopen Portal Desktop if it is running; the agent and its tunnels keep running.\n", desktop)
 	return nil
 }
 
@@ -509,6 +515,7 @@ func printRootUsage(w io.Writer) {
 			"portal agent stop [flags]",
 			"portal agent restart [flags]",
 			"portal list [flags]",
+			"portal gui [flags]",
 			"portal update [flags]",
 			"portal version",
 		},
@@ -530,6 +537,7 @@ func printRootUsage(w io.Writer) {
 			"portal agent restart",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal list",
+			"portal gui",
 			"portal update",
 			"portal update --version v2.1.7",
 			"portal version",
