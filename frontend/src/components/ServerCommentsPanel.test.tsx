@@ -46,7 +46,6 @@ describe("comments federation", () => {
     expect(screen.getByText("Remote comment")).toBeDefined();
     expect(screen.getByText("Deleted at its origin.")).toBeDefined();
     expect(screen.queryByText("Former content")).toBeNull();
-    expect(screen.getByText(/Partial coverage/)).toBeDefined();
     expect(screen.getAllByRole("button", { name: "Delete comment" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Recommend comment" })).toHaveLength(1);
     expect(screen.getByLabelText("Add a comment")).toBeDefined();

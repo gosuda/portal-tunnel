@@ -640,10 +640,9 @@ export function ServerCard({
             </div>
           );
         })()}
-        {server.remoteOnly && (
+        {server.remoteOnly && !effectiveLink && (
           <p className="mt-2 text-xs text-muted-foreground">
-            Relay-reported · {effectiveLink ? "Opens available relay"
-              : server.locations?.some((location) => location.url) ? "No relay available now" : "No HTTP URL available"}
+            {server.locations?.some((location) => location.url) ? "No relay available now" : "No HTTP URL available"}
           </p>
         )}
         {children && (

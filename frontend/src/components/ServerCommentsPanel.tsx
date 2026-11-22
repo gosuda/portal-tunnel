@@ -233,17 +233,6 @@ function CommentsBody({ server, loading, comments, error, busy, onRemove, onVote
       {loading && <p role="status" className="text-sm text-muted-foreground">Loading comments from this relay…</p>}
       {federation.loading && <p role="status" className="text-sm text-muted-foreground">Checking other relay comments…</p>}
       {federation.error && <p role="status" className="text-sm text-muted-foreground">{federation.error}</p>}
-      {federation.response && (
-        <p className="text-xs text-muted-foreground">
-          {federation.response.relays_checked} other relays checked; {federation.response.relays_skipped} unavailable or skipped.
-          {federation.response.partial ? " Partial coverage." : ""}
-        </p>
-      )}
-      {(server.remoteOnly || remote.length > 0) && (
-        <p className="text-xs text-muted-foreground">
-          Remote comments are read-only here. Times are reported by their originating relays. Refresh to recheck this snapshot. To post or manage a remote comment, open its source relay.
-        </p>
-      )}
       {entries.length > 0 ? (
         <ol className="space-y-6">
           {entries.map((entry) => "local" in entry
