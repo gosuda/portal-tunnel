@@ -250,6 +250,27 @@ func TestInspectorKeepsReplayHeadersBeforeCustomHeaders(t *testing.T) {
 	}
 }
 
+func TestInspectorRecordsResponseHeadersAsSent(t *testing.T) {
+	t.Parallel()
+	i := newTestInspector(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		// Changes after WriteHeader are not sent to the client.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = io.WriteString(w, "{}")
+	}), true)
+	i.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "https://preview.example/", nil))
+	captured := readInspection(t, inspectorRequest(t, i, http.MethodGet, "/transactions/1"))
+	if captured.Status != http.StatusAccepted || captured.ResponseHeaders.Get("Content-Type") != "application/json" ||
+		captured.ResponseHeaders.Get("Content-Encoding") != "" {
+		t.Fatalf("recorded headers differ from sent headers: %d %v", captured.Status, captured.ResponseHeaders)
+	}
+	if captured.ResponseBody != "{}" || !captured.Replayable {
+		t.Fatalf("unsent event-stream type changed the capture: %+v", captured)
+	}
+}
+
 func TestInspectorUIShutdownDoesNotStopForwarding(t *testing.T) {
 	t.Parallel()
 	i := newTestInspector(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

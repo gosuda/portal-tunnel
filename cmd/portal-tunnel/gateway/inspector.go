@@ -160,7 +160,13 @@ func (i *httpInspector) capture(w http.ResponseWriter, r *http.Request, replayed
 		t.Status = http.StatusOK
 	}
 	t.DurationMS = float64(time.Since(started)) / float64(time.Millisecond)
-	t.ResponseHeaders, _ = inspectHeaders(response.Header())
+	t.ResponseHeaders = response.headers
+	contentType := response.contentType
+	if t.ResponseHeaders == nil {
+		// No final WriteHeader ran, so net/http sends the map as it is now.
+		t.ResponseHeaders, _ = inspectHeaders(response.Header())
+		contentType = response.Header().Get("Content-Type")
+	}
 	t.ResponseBody, t.ResponseTruncated = string(response.body), response.truncated
 	if body != nil {
 		var complete bool
@@ -170,7 +176,7 @@ func (i *httpInspector) capture(w http.ResponseWriter, r *http.Request, replayed
 			t.ReplayDisabled = "Request body is incomplete or exceeds 8 KiB."
 		}
 	}
-	if strings.HasPrefix(response.Header().Get("Content-Type"), "text/event-stream") {
+	if strings.HasPrefix(contentType, "text/event-stream") {
 		t.ReplayDisabled = "Event streams cannot be replayed."
 	}
 	t.Replayable = t.ReplayDisabled == ""
@@ -284,17 +290,22 @@ func (b *inspectBody) snapshot() ([]byte, bool, bool) {
 // preserve handlers using the traditional streaming/upgrade interfaces.
 type inspectResponse struct {
 	http.ResponseWriter
-	status    int
-	bodies    bool
-	body      []byte
-	truncated bool
+	status      int
+	headers     http.Header
+	contentType string
+	bodies      bool
+	body        []byte
+	truncated   bool
 }
 
 func (w *inspectResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *inspectResponse) WriteHeader(status int) {
 	if status >= 200 && w.status == 0 {
+		// Snapshot what this call sends; later map changes are not sent.
 		w.status = status
+		w.headers, _ = inspectHeaders(w.Header())
+		w.contentType = w.Header().Get("Content-Type")
 	}
 	w.ResponseWriter.WriteHeader(status)
 }
@@ -304,7 +315,7 @@ func (w *inspectResponse) Write(p []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	n, err := w.ResponseWriter.Write(p)
-	if w.bodies && !strings.HasPrefix(w.Header().Get("Content-Type"), "text/event-stream") {
+	if w.bodies && !strings.HasPrefix(w.contentType, "text/event-stream") {
 		kept := min(n, inspectBodyLimit-len(w.body))
 		w.body = append(w.body, p[:kept]...)
 		w.truncated = w.truncated || kept < n
