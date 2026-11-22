@@ -28,15 +28,16 @@ The admin surface is the relay's own API on its public `443` listener: `/api/adm
 ## Read
 
 - `GET /api/admin/auth/status` with the bearer: `authenticated` must be `true` before anything else.
-- `GET /api/policy/state`: the policy plus every lease. Report per lease `name`, `identity_key`, `client_ip`, `is_approved`, `is_denied`, `is_banned`, `bps`, and readiness. Redact `client_ip` and `reported_ip` unless the operator asked for addresses.
+- `GET /api/policy/state`: the effective policy, active leases, and a separate `pending` array of authenticated identity keys and expiration times. Report per lease `name`, `identity_key`, `client_ip`, `is_approved`, `is_denied`, `is_banned`, `bps`, and readiness. Redact `client_ip` and `reported_ip` unless the operator asked for addresses.
 - `GET /api/policy`: approval mode and UDP/TCP lease settings.
 - `GET /api/admin/metrics`: Prometheus text. Summarize `portal_relay_active_leases`, `portal_relay_active_connections`, and `portal_relay_active_udp_flows`.
 
 ## Write
 
-- **One identity**: `POST /api/policy/leases` with `identity_key` and only the fields that change: `is_approved`, `is_denied` (`true` also revokes approval), `is_banned`, or `bps` (`0` removes the limit). A lease that stops being routable drops its idle streams; after approval it reconnects within about 3 seconds without re-registering.
+- **One identity**: `POST /api/policy/leases` with `identity_key` and only the fields that change: `is_approved`, `is_denied` (`true` also revokes approval), `is_banned`, or `bps` (`0` removes the limit). Pre-approve a public `name:address` even without a live lease. Manual revocation evicts existing leases and invalidates port and offline-cache reservations. Waiting publishers retry automatically. Denial or ban ends registration attempts.
+
 - **Relay policy**: `POST /api/policy` takes the whole `PolicySettings` object. Read it first, change only the requested field, and send the full object back so the other fields keep their values. `approval_mode` is `auto` or `manual`; `max_leases` is non-negative and `0` means unlimited.
-- Switching to `manual` stops routing for every lease that is not approved yet. Say how many active leases that affects before asking for approval.
+- Switching to `manual` evicts every lease without explicit approval and all denied/banned leases. Count `explicitly_approved` separately from effective auto approval. Say how many active leases that affects before asking for approval.
 - The saved mode in `policy.json` wins over `APPROVAL_MODE` at the next start, so set the mode here, not by editing `.env`.
 
 ## Verify and hand off

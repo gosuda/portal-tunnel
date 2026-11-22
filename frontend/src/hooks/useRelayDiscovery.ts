@@ -44,7 +44,7 @@ async function loadRelayDiscovery(
       normalizeKnownRelays(discovery?.relays, currentRelayURL),
       discovery?.incompatible_relays,
       currentRelayURL
-    ),
+    ).map((relay) => relay.isCurrent ? { ...relay, approvalMode: domain?.approval_mode } : relay),
     relayReleases: {
       versions,
       discovery: {

@@ -8,11 +8,15 @@
 
 ## Relay Transport Architecture & Subsystems
 
+The [SDK compatibility policy](sdk-compatibility.md) owns the supported released
+SDK matrix, SDK protocol negotiation, and rollout constraints. Discovery protocol
+compatibility remains independent of SDK tunnel compatibility.
+
 Public clients reach a Portal relay through its existing HTTPS/SNI ingress.
 Tunnel clients establish an outbound reverse backhaul to their selected public
 relay. Tenant TLS normally terminates at the tunnel client. Explicitly opted-in
 static caches terminate browser TLS at the selected relay and serve only the
-identity-bound canonical hostname; friendly aliases remain live-origin routes.
+granted friendly alias. The Local TLS canonical origin remains tunnel-owned.
 
 ### Package Boundaries
 
@@ -37,7 +41,7 @@ identity-bound canonical hostname; friendly aliases remain live-origin routes.
 - `cmd/portal-tunnel/tunnel`: owns the tunnel configuration of the CLI and the
   agent. `tunnel.Config` holds what the user set through `portal expose` flags, a
   `[[tunnels]]` entry of the agent config, or an Agent API request.
-  `Config.Spec` is the one step from a `Config` to the runtime `Spec`: it
+  `Config.Resolve` prepares an execution copy of the same type: it
   normalizes the values, fills in the defaults, and validates the result. A
   component with settings of its own keeps its type and its keys with its owner:
   `appauth.Config` with `OIDCConfig`, `SAMLConfig`, and `EmailConfig`,
@@ -256,8 +260,8 @@ and application body limits remain enforced at their respective boundaries.
 Relay startup and config diagnostics share one side-effect-free preparation
 path, retaining Portal's normalized settings and rejecting invalid environment
 values. Portal owns static transport-policy validation; a running server also
-checks listener availability before applying changes. Tunnel config-to-spec
-conversion uses explicit settings only. The expose CLI resolves environment
+checks listener availability before applying changes. Tunnel config
+resolution uses explicit settings only. The expose CLI resolves environment
 defaults during flag registration; the agent applies its facilitator-token
 default to a runtime copy without writing that secret into its config file.
 
@@ -300,10 +304,17 @@ ClientHello inspection and tenant bridges have separate server-wide budgets:
 at most 128 sockets may await inspection, and at most 1024 tenant connections
 may be pending or active. Root API and reverse-connect handoff does not consume
 the tenant budget, so tenant saturation does not prevent a fresh root connection.
-The inspection budget is shared across source addresses and the root API; a
-single source can occupy all 128 slots until their two-second deadlines expire.
-It bounds memory and workers but does not guarantee source fairness or root
-availability during a sustained ClientHello flood.
+Within the inspection budget, one IPv4 address or IPv6 /64 may hold at most
+`InspectionsPerSource` sockets (`INSPECTIONS_PER_SOURCE`, default 16 in the relay
+server; zero disables the per-source budget); unparseable peer addresses share
+the same fallback budget. This keeps
+one source from occupying every slot until the two-second deadlines expire while
+the aggregate cap continues to bound memory and workers. Root capacity is not
+reserved, and the budget only covers sources with distinct addresses: eight
+IPv4 addresses, or one routed IPv6 /56 split into /64s, still fill all 128 slots.
+Distributed floods, address rotation within one network, and many clients
+behind one proxy still require protection at the deployment boundary when root
+availability must be guaranteed.
 
 A lease independently admits at most 128 pending reverse acquisitions and active
 bridges; the SDK also limits its local TCP proxy workers to 128. Idle established
@@ -388,8 +399,9 @@ aliases use the relay-backed Keyless engine. New exact
 endpoint based on Go `crypto/tls`; they never use Keyless or relay static cache.
 Each endpoint retains atomic certificate rotation and in-flight handshake safety.
 The SDK dispatches by exact lease hostname and advertises canonical readiness
-only while usable local material exists. Legacy clients and relays retain their
-original URL and cache behavior through capability negotiation.
+only while usable local material exists. The compatibility matrix defines which
+SDK protocols can use this contract; namespace negotiation does not restore
+removed legacy canonical routes.
 
 The listener publishes certificate installation and expiry through the same
 status path as reverse transport changes. `Relays`, `Updates`, and `WaitReady`

@@ -275,7 +275,7 @@ func (c *Client) TenantTLSConfig() *tls.Config {
 }
 
 func resolveRelayEndpoint(relayURL string) (string, string, error) {
-	normalizedRelayURL, err := types.NormalizeRelayURL(relayURL)
+	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return "", "", err
 	}

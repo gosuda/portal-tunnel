@@ -56,6 +56,35 @@ func TestDefaultIdentityBPSConfiguration(t *testing.T) {
 	}
 }
 
+func TestInspectionsPerSourceConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		environ []string
+		want    int
+	}{
+		{nil, 16},
+		{[]string{"INSPECTIONS_PER_SOURCE=64"}, 64},
+		{[]string{"INSPECTIONS_PER_SOURCE=0"}, 0},
+	} {
+		cfg, env, err := resolveAppConfig(nil, tc.environ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := prepareAppConfig(&cfg, env.Issues); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Relay.InspectionsPerSource != tc.want {
+			t.Fatalf("%v: inspections per source = %d, want %d", tc.environ, cfg.Relay.InspectionsPerSource, tc.want)
+		}
+	}
+	cfg, env, err := resolveAppConfig(nil, []string{"INSPECTIONS_PER_SOURCE=-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := prepareAppConfig(&cfg, env.Issues); err == nil {
+		t.Fatal("negative inspections per source accepted")
+	}
+}
+
 func TestConfigReportRedactsEABCredentials(t *testing.T) {
 	const kid = "test-eab-account-id"
 	const hmac = "test-eab-hmac-secret"

@@ -6,6 +6,7 @@ package types
 const KeylessUnknownCertificateMessage = "relay does not hold the key of the presented certificate"
 
 const (
+	APIErrorCodeProtocolIncompatible      = "protocol_incompatible"
 	APIErrorCodeTenantIssuanceDisabled    = "tenant_issuance_disabled"
 	APIErrorCodeTenantIssuanceNotApproved = "tenant_issuance_not_approved"
 	APIErrorCodeFeatureUnavailable        = "feature_unavailable"
@@ -18,6 +19,7 @@ const (
 	APIErrorCodeInvalidMode               = "invalid_mode"
 	APIErrorCodeInvalidRequest            = "invalid_request"
 	APIErrorCodeInternal                  = "internal"
+	APIErrorCodeApprovalQueueFull         = "approval_queue_full"
 	APIErrorCodeLeaseDenied               = "lease_denied"
 	APIErrorCodeLeaseNotFound             = "lease_not_found"
 	APIErrorCodeLeaseRejected             = "lease_rejected"

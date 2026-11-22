@@ -9,8 +9,13 @@ This guide is for developers who want their own relay for a single project or
 team. The `portal` image serves the dashboard, relay APIs, and tunnel ingress
 from one public HTTPS origin.
 
-You should have a relay running and accepting tunnel connections in about 10 minutes.
 To run the relay on Kubernetes instead, see [Kubernetes](/kubernetes).
+
+## Run a relay. Stay in control.
+
+A relay exposes a public endpoint on your IP and domain. Budget for egress and finite compute and ports, plan for outages, and be prepared to handle abuse complaints and IP, domain or CA reputation damage. Approved publishers and their visitors can still generate costs. A stream rate limit in bytes/second cannot guarantee a monthly traffic bill or remove legal liability.
+
+Choose **Public (`auto`)** to accept registrations by default, or **Approval Required (`manual`)** to review authenticated service identities before allocating resources. For a first or capacity-constrained relay, start with manual approval. Check the effective mode in `/admin` or the relay’s public `/sdk/domain` report. A saved `policy.json` overrides the startup setting.
 
 ## Prerequisites
 
@@ -171,6 +176,9 @@ IPv6-only deployments publish AAAA glue; dual-stack deployments publish both.
 Allow TCP and UDP port 53, the public relay ports, and enabled raw TCP/UDP ranges
 through the host, container network, and upstream firewall for every published
 family. Discovering a public address does not verify inbound reachability.
+When clients reach the relay on another address than its outbound one, such
+as a load balancer, a floating IP, or a DNAT rule, set `PUBLIC_IPS` to that
+address.
 A client needs a reachable relay address in a family it can use; see
 [IPv4 and IPv6 configuration](/configuration#ipv4-and-ipv6).
 
@@ -222,34 +230,15 @@ environment:
   APPROVAL_MODE: "manual"
 ```
 
-A new tunnel then registers and appears in the admin dashboard, but no traffic
-reaches it until you approve it. Meanwhile, `portal expose` logs
-`waiting for relay approval`. The tunnel does not need to restart after
-approval.
+The publisher signs a challenge. The relay retains the verified public `name:address` key, source and timestamps in memory. It assigns no alias, port, lease token, cache allocation or reverse connection. The dashboard lists these requests separately from leases. Select a request, or enter a known public key before its first connection, then choose **Pre-approve** and **Apply**. A waiting publisher retries automatically.
 
-The setting applies on startup, and a mode saved in `policy.json` wins. The
-relay saves the mode on any admin change, such as a ban or a bandwidth limit.
-So a relay that once ran on `auto` and saved that mode stays open after you set
-`APPROVAL_MODE=manual`. The relay logs a warning in that case. Set the mode from
-the admin dashboard instead.
+Pending identities share a global limit of 256 and a per-source limit of `UNAPPROVED_LEASES_PER_SOURCE` (default 64). Source budgets group IPv4 by address and IPv6 by `/64`, including pre-auth requests and unapproved leases. A repeat request refreshes the existing entry. Entries expire after 15 minutes without an authenticated refresh. Restart clears pending requests and retains saved decisions. A saturated queue asks the publisher to retry later.
 
-An unapproved tunnel routes no traffic, but it still holds its name alias and
-any UDP or TCP port it was given, and those ports count against the relay's
-capacity limits.
+Pre-approve the keys you want to keep before switching from auto to manual. Explicitly approved leases continue using their endpoints. Other leases lose their aliases, port reservations and offline cache eligibility. Revoking manual approval has the same effect. A running publisher can request approval again. Denied or banned publishers receive a terminal registration refusal. After lifting that decision, approve the public key and start the exposure again. Switching back to auto clears pending requests and lets waiting clients register on their next attempt, subject to existing bans and budgets.
 
-`UNAPPROVED_LEASES_PER_SOURCE` (default `64`) bounds that hold. It is a budget,
-not a judgment about who is squatting. A lease that you have not approved, or
-have denied or banned, counts against the IP that asked to register it. Over the budget,
-a new registration gets `429 rate_limited` with `Retry-After`, and the SDK retries
-every 5 minutes, so a tunnel can take that long to register after a slot frees.
-This budget never refuses an approved identity, and a repeat registration of one
-identity does not count against itself. Concurrent registrations can pass the
-limit by a few. Waiting tunnels spend their IP's pre-auth budget, so at the default
-pre-auth settings about 50 of them on one IP keep an approved identity on that IP
-from registering until they stop. Behind one NAT with that many tunnels, raise the
-pre-auth budget or lower this limit. On an `auto` relay only denied and banned
-leases count. Each IPv6 address is its own source, so this budget stops one host,
-not a network.
+Any admin change can save the mode in `policy.json`. A saved auto mode overrides a new `APPROVAL_MODE=manual` on restart. Check the effective mode in the startup log or dashboard and use the dashboard to change it.
+
+Inspect active leases, connections and UDP flows at the authenticated `/api/admin/metrics` endpoint. Treat publisher-reported IPs and remote discovery observations as self-reported. Per-identity BPS controls limit forwarded stream bytes per second across connections. UDP, cache traffic and cumulative monthly usage fall outside that limit.
 
 ### Accept tunnels only from your networks
 

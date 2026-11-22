@@ -19,6 +19,7 @@ function props(): ComponentProps<typeof ServerCommentsPanel> {
     loading: false,
     pending: null,
     votingCommentId: null,
+    busy: false,
     error: "",
     refresh: vi.fn(async () => {}),
     submit: vi.fn(async () => {}),
@@ -46,7 +47,7 @@ describe("comments federation", () => {
     expect(screen.getByText("Remote comment")).toBeDefined();
     expect(screen.getByText("Deleted at its origin.")).toBeDefined();
     expect(screen.queryByText("Former content")).toBeNull();
-    expect(screen.getByText(/Partial coverage/)).toBeDefined();
+    expect(screen.getByText("Some comments may be missing.")).toBeDefined();
     expect(screen.getAllByRole("button", { name: "Delete comment" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Recommend comment" })).toHaveLength(1);
     expect(screen.getByLabelText("Add a comment")).toBeDefined();
@@ -64,5 +65,23 @@ describe("comments federation", () => {
     expect(screen.getByText("Other relay comments could not be checked.")).toBeDefined();
     expect(screen.queryByLabelText("Add a comment")).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete comment" })).toBeNull();
+  });
+
+  it("shows incomplete comment coverage even when all checked relays responded", () => {
+    const view = props();
+    const response = { relays_checked: 2, relays_skipped: 0, partial: true, comments: [] };
+    const { rerender } = render(<ServerCommentsPanel
+      {...view}
+      server={{ ...view.server, remoteOnly: true }}
+      federation={{ ...view.federation, response }}
+    />);
+    expect(screen.getByText("Some comments may be missing.")).toBeDefined();
+
+    rerender(<ServerCommentsPanel
+      {...view}
+      server={{ ...view.server, remoteOnly: true }}
+      federation={{ ...view.federation, response: { ...response, relays_skipped: 0, partial: false } }}
+    />);
+    expect(screen.queryByText("Some comments may be missing.")).toBeNull();
   });
 });

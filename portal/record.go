@@ -257,9 +257,9 @@ func (s *Server) deleteLeaseDNS(ctx context.Context, record *leaseRecord) {
 		if s.isDNSHostnameOwnedLocked(hostname, now) {
 			continue
 		}
-		// Delete is an enqueue-only operation. Keeping the registry read lock
-		// through the enqueue orders this command against lease registration's
-		// write lock and its later DNS sync enqueue.
+		// Delete only records intent; the DNS worker performs provider I/O.
+		// Keeping the registry read lock through admission orders withdrawal
+		// against registration's write lock and its later DNS publication.
 		err := s.acmeManager.DeleteLeaseHostname(ctx, hostname)
 		if err != nil {
 			log.Warn().

@@ -118,27 +118,19 @@ func TestCommentsPersistAndStayWithTheirAppIdentity(t *testing.T) {
 	if comments[0].Text != "First comment\nwith another line." || comments[0].ID == "" || comments[0].CreatedAt.IsZero() {
 		t.Fatalf("invalid comment: %+v", comments[0])
 	}
-	store = checkCommentsRestartSurvival(t, path, comments)
-	checkCommentsDeleteAuthor(t, store, path, comments[0].ID)
-}
 
-func checkCommentsRestartSurvival(t *testing.T, path string, want []types.AppComment) *ReputationStore {
-	t.Helper()
-	store, err := NewReputationStore(path)
+	store, err = NewReputationStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := store.ListComments("app-owner-a", "", "author"); len(got) != 1 || got[0] != want[0] {
+	if got := store.ListComments("app-owner-a", "", "author"); len(got) != 1 || got[0] != comments[0] {
 		t.Fatalf("comment did not survive restart: %v", got)
 	}
 	if got := store.ListComments("app-owner-b", "", "author"); len(got) != 0 {
 		t.Fatalf("another owner inherited comments: %v", got)
 	}
-	return store
-}
 
-func checkCommentsDeleteAuthor(t *testing.T, store *ReputationStore, path, commentID string) {
-	t.Helper()
+	commentID := comments[0].ID
 	if _, err := store.DeleteComment("app-owner-a", commentID, "", "stranger"); !errors.Is(err, ErrCommentNotFound) {
 		t.Fatalf("stranger was able to delete comment: %v", err)
 	}
@@ -267,33 +259,25 @@ func TestCommentsPersistOnlySourceData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	thread := loadPersistedCommentsThread(t, store.path)
-	if len(thread) != 1 || len(thread[0]) != 3 || thread[0]["id"] == nil || thread[0]["text"] == nil || thread[0]["created_at"] == nil {
-		t.Fatalf("persisted comment contains response fields or lost source data: %+v", thread)
-	}
-	checkCommentsResponseProjection(t, store.path, cookie)
-}
 
-func loadPersistedCommentsThread(t *testing.T, path string) []map[string]json.RawMessage {
-	t.Helper()
 	var persisted struct {
 		Comments struct {
 			Threads map[string][]map[string]json.RawMessage `json:"threads"`
 		} `json:"comments"`
 	}
-	if _, err := utils.ReadJSONFileIfExists(path, &persisted); err != nil {
+	if _, err := utils.ReadJSONFileIfExists(store.path, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	return persisted.Comments.Threads["app"]
-}
+	thread := persisted.Comments.Threads["app"]
+	if len(thread) != 1 || len(thread[0]) != 3 || thread[0]["id"] == nil || thread[0]["text"] == nil || thread[0]["created_at"] == nil {
+		t.Fatalf("persisted comment contains response fields or lost source data: %+v", thread)
+	}
 
-func checkCommentsResponseProjection(t *testing.T, path, cookie string) {
-	t.Helper()
-	reloaded, err := NewReputationStore(path)
+	reloaded, err := NewReputationStore(store.path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	comments := reloaded.ListComments("app", reloaded.ViewerHashFor(cookie), "author")
+	comments = reloaded.ListComments("app", reloaded.ViewerHashFor(cookie), "author")
 	if len(comments) != 1 || comments[0].Up != 1 || comments[0].ViewerVote != VoteUp || !comments[0].CanDelete {
 		t.Fatalf("response projection did not survive restart: %+v", comments)
 	}

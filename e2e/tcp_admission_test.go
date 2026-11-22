@@ -125,6 +125,105 @@ func TestSNIPendingAdmissionAndShutdown(t *testing.T) {
 	assertShutdownClosesPending(t, relay, pending)
 }
 
+func bootInspectionRelay(t *testing.T, perSource int) string {
+	t.Helper()
+	port := harnessPort(t, "127.0.0.1")
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	relay, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://" + addr, StateDir: t.TempDir(), SNIListenAddr: addr, SNIPort: port, InspectionsPerSource: perSource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := relay.Start(ctx, relayHandler(relay, nil)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); _ = relay.Shutdown(context.Background()); _ = relay.Wait() })
+	return addr
+}
+
+// holdInspections opens sockets that never send a ClientHello, so each holds
+// an inspection slot until the relay's ClientHello deadline.
+func holdInspections(t *testing.T, addr string, n int) []net.Conn {
+	t.Helper()
+	conns := make([]net.Conn, 0, n)
+	for range n {
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		conns = append(conns, conn)
+	}
+	return conns
+}
+
+// rootHandshakes completes n simultaneous TLS handshakes with the relay API
+// and reports how many succeeded.
+func rootHandshakes(addr string, local net.Addr, n int) int {
+	results := make(chan bool, n)
+	for range n {
+		go func() {
+			dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: time.Second, LocalAddr: local}, Config: &tls.Config{InsecureSkipVerify: true}}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err == nil {
+				_ = conn.Close()
+			}
+			results <- err == nil
+		}()
+	}
+	succeeded := 0
+	for range n {
+		if <-results {
+			succeeded++
+		}
+	}
+	return succeeded
+}
+
+// One source may hold up to INSPECTIONS_PER_SOURCE sockets in ClientHello
+// inspection. Concurrent handshakes below the budget all complete, the budget
+// rejects only the overflow, and other sources keep their own budget.
+func TestSNIInspectionPerSourceBudget(t *testing.T) {
+	const perSource = 16
+	addr := bootInspectionRelay(t, perSource)
+
+	held := holdInspections(t, addr, perSource-4)
+	if got := rootHandshakes(addr, nil, 4); got != 4 {
+		t.Fatalf("%d of 4 concurrent handshakes below the per-source budget completed", got)
+	}
+
+	held = append(held, holdInspections(t, addr, 4)...)
+	if got := rootHandshakes(addr, nil, 4); got != 0 {
+		t.Fatalf("%d handshakes passed a saturated per-source budget", got)
+	}
+	other := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2)}
+	if probe, err := net.ListenTCP("tcp", other); err != nil {
+		t.Logf("skip second source: %v", err)
+	} else {
+		_ = probe.Close()
+		if got := rootHandshakes(addr, other, 4); got != 4 {
+			t.Fatalf("saturated source blocked %d of 4 handshakes from another source", 4-got)
+		}
+	}
+
+	for _, conn := range held {
+		_ = conn.Close()
+	}
+	awaitSNIAdmissionRecovery(t, t.Context(), addr)
+}
+
+// Behind a TCP proxy every visitor shares one address. With the per-source
+// budget disabled, that address keeps the whole server-wide budget.
+func TestSNIInspectionSharedProxySource(t *testing.T) {
+	addr := bootInspectionRelay(t, 0)
+	holdInspections(t, addr, 32)
+	if got := rootHandshakes(addr, nil, 8); got != 8 {
+		t.Fatalf("%d of 8 handshakes from a shared proxy address completed", got)
+	}
+}
+
 func bootSaturationRelay(t *testing.T) (context.Context, *http.Client, *url.URL) {
 	t.Helper()
 	minPort := harnessPort(t, "127.0.0.1")

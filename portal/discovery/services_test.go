@@ -312,16 +312,22 @@ func TestServiceLookupGroupsIdentityAndRelayLocations(t *testing.T) {
 	// The other owner may repeat the alias claim, but cannot borrow the first
 	// identity's tally by claiming its canonical hostname.
 	otherOwner.CanonicalHostname = remoteBlog.CanonicalHostname
+	unnamed := types.Lease{
+		Address: serviceTestAddress, Ready: 1, ExpiresAt: first.ExpiresAt,
+		CanonicalHostname: strings.TrimPrefix(serviceTestAddress, "0x") + ".remote.example",
+	}
+	legacyBlog := unnamed
+	legacyBlog.Name, legacyBlog.CanonicalHostname = "Blog", "blog-"+unnamed.CanonicalHostname
 	hidden := remoteBlog
 	hidden.Name, hidden.Hostname, hidden.Metadata.Hide = "secret", "secret.remote.example", true
-	api := remoteBlog
-	api.Name, api.Hostname = "api", "api.remote.example"
+	api := unnamed
+	api.Name, api.CanonicalHostname = "api", "api-"+unnamed.CanonicalHostname
 	spoofed := remoteBlog
 	spoofed.Name, spoofed.Hostname = "spoofed", "spoofed.evil.example"
 	expired := remoteBlog
 	expired.Name, expired.Hostname, expired.ExpiresAt = "expired", "expired.remote.example", now.Add(-time.Second)
 	lookup.cache[remote] = serviceObservation{
-		leases:     []types.Lease{remoteBlog, remoteBlog, otherOwner, api, hidden, spoofed, expired},
+		leases:     []types.Lease{legacyBlog, remoteBlog, otherOwner, api, unnamed, hidden, spoofed, expired},
 		reputation: parseObservedReputation(fmt.Appendf(nil, `[{"hostname":%q,"up":4,"down":1,"total":5}]`, remoteBlog.CanonicalHostname)),
 		at:         now, until: now.Add(serviceCacheTTL),
 	}
@@ -329,14 +335,23 @@ func TestServiceLookupGroupsIdentityAndRelayLocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Partial || result.RelaysChecked != 2 || len(result.Services) != 2 {
+	if result.Partial || result.RelaysChecked != 2 || len(result.Services) != 3 {
 		t.Fatalf("unexpected lookup: %+v", result)
 	}
-	if result.Services[0].Name != "api" || result.Services[1].Name != "blog" || len(result.Services[1].Locations) != 2 {
+	if result.Services[0].Name != "" || result.Services[1].Name != "api" || result.Services[2].Name != "blog" {
 		t.Fatalf("identity grouping lost services or duplicated locations: %+v", result.Services)
 	}
-	blog := result.Services[1]
-	if blog.Locations[0].URL != "https://blog.local.example:444/" || !blog.Locations[0].CurrentRelay || blog.Locations[1].URL != "https://blog.remote.example:445/" {
+	for _, service := range result.Services[:2] {
+		if service.Address != serviceTestAddress || len(service.Locations) != 1 {
+			t.Fatalf("legacy service identity or location missing: %+v", service)
+		}
+		location := service.Locations[0]
+		if location.RelayURL != remote || location.CurrentRelay || !location.ReportedReady || location.URL != "" || location.AliasURL != "" || location.CanonicalURL != "" {
+			t.Fatalf("expected a remote observation without HTTP links: %+v", location)
+		}
+	}
+	blog := result.Services[2]
+	if len(blog.Locations) != 2 || blog.Locations[0].URL != "https://blog.local.example:444/" || !blog.Locations[0].CurrentRelay || blog.Locations[1].URL != "https://blog.remote.example:445/" {
 		t.Fatalf("relay URLs lost their independent origins: %+v", blog.Locations)
 	}
 	for _, service := range result.Services {
@@ -350,17 +365,17 @@ func TestServiceLookupGroupsIdentityAndRelayLocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if network.Partial || len(network.Services) != 3 {
+	if network.Partial || len(network.Services) != 4 {
 		t.Fatalf("unfiltered lookup omitted remote owners or exposed invalid entries: %+v", network)
 	}
-	if network.Services[0].Name != "api" || network.Services[0].Locations[0].CurrentRelay ||
-		network.Services[1].Name != "blog" || network.Services[1].Address != serviceTestAddress || len(network.Services[1].Locations) != 2 ||
-		network.Services[2].Name != "blog" || network.Services[2].Address != otherOwner.Address || len(network.Services[2].Locations) != 1 {
+	if network.Services[0].Name != "" || network.Services[1].Name != "api" || network.Services[1].Locations[0].CurrentRelay ||
+		network.Services[2].Name != "blog" || network.Services[2].Address != serviceTestAddress || len(network.Services[2].Locations) != 2 ||
+		network.Services[3].Name != "blog" || network.Services[3].Address != otherOwner.Address || len(network.Services[3].Locations) != 1 {
 		t.Fatalf("network directory lost remote-only services or merged distinct owners: %+v", network.Services)
 	}
-	localTally := network.Services[1].Locations[0].Reputation
-	remoteTally := network.Services[1].Locations[1].Reputation
-	otherOwnerTally := network.Services[2].Locations[0].Reputation
+	localTally := network.Services[2].Locations[0].Reputation
+	remoteTally := network.Services[2].Locations[1].Reputation
+	otherOwnerTally := network.Services[3].Locations[0].Reputation
 	if localTally != nil || remoteTally == nil || remoteTally.Up != 4 || remoteTally.Down != 1 || otherOwnerTally != nil {
 		t.Fatalf("reputation was lost or attributed to the wrong source/identity: %+v", network.Services)
 	}
@@ -441,6 +456,7 @@ func TestServiceLookupDoesNotServeStaleDataOnFailure(t *testing.T) {
 func TestServiceLocationValidatesNamespaceAndDoesNotPromoteLegacyURLs(t *testing.T) {
 	now := time.Now().UTC()
 	id := types.Identity{Name: "blog", Address: serviceTestAddress}
+	legacyCanonical := "blog-" + strings.TrimPrefix(id.Address, "0x") + ".relay.example"
 	canonical, err := namespace.LocalTLSHostname(id.Name, id.Address, "relay.example")
 	if err != nil {
 		t.Fatal(err)
@@ -451,8 +467,10 @@ func TestServiceLocationValidatesNamespaceAndDoesNotPromoteLegacyURLs(t *testing
 		valid bool
 		want  string
 	}{
-		{"legacy alias", types.Lease{Hostname: "blog.relay.example", CanonicalHostname: "blog-" + strings.TrimPrefix(id.Address, "0x") + ".relay.example"}, true, "https://blog.relay.example:444/"},
-		{"legacy canonical only", types.Lease{CanonicalHostname: "blog-" + strings.TrimPrefix(id.Address, "0x") + ".relay.example"}, false, ""},
+		{"legacy alias", types.Lease{Hostname: "blog.relay.example", CanonicalHostname: legacyCanonical}, true, "https://blog.relay.example:444/"},
+		{"legacy canonical only", types.Lease{CanonicalHostname: legacyCanonical, CanonicalReady: true}, true, ""},
+		{"legacy canonical claimed as alias", types.Lease{Hostname: legacyCanonical}, false, ""},
+		{"no advertised hostname", types.Lease{}, true, ""},
 		{"canonical", types.Lease{Namespace: types.LocalTLSNamespaceV1, CanonicalHostname: canonical, CanonicalReady: true}, true, "https://" + canonical + ":444/"},
 		{"pending canonical", types.Lease{Namespace: types.LocalTLSNamespaceV1, CanonicalHostname: canonical}, true, ""},
 		{"spoofed alias", types.Lease{Hostname: "blog.evil.example"}, false, ""},

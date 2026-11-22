@@ -108,7 +108,7 @@ env-reference:
 
 # Each *.values.yaml example renders through the chart its name starts with;
 # the other examples are plain manifests. Needs helm and kubeconform.
-HELM_CHARTS_DIR := deploy/helm
+HELM_CHARTS_DIR := docs/examples/helm
 K8S_EXAMPLES_DIR := docs/static/examples/kubernetes
 
 check-charts:

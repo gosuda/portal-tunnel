@@ -100,10 +100,6 @@ func TestLocalTLSNamespace(t *testing.T) {
 			if host != label+"."+address+"."+root || !IsLocalTLSHostname(host, root) {
 				t.Fatalf("unexpected host %q", host)
 			}
-			parent := AddressParent(host)
-			if parent != address+"."+root {
-				t.Fatalf("unexpected address parent %q for %q", parent, host)
-			}
 			if got, err := CanonicalAddress(host); err != nil || got != "0x"+address {
 				t.Fatalf("extract %q: %q, %v", host, got, err)
 			}

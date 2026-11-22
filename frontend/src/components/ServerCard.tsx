@@ -8,7 +8,7 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import type { BaseServer } from "@/lib/server";
+import { isLocationAvailable, type BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes, isReputationWarning } from "@/utils/reputation";
@@ -78,8 +78,8 @@ function CommentsTrigger({ server, onOpenComments }: {
         event.stopPropagation();
         onOpenComments(server);
       }}
-      aria-label={server.remoteOnly ? "View network comments" : "Comments"}
-      title={server.remoteOnly ? "View relay-reported comments" : `Comments: ${server.reputation?.comments ?? 0}`}
+      aria-label="Comments"
+      title={server.remoteOnly ? "Comments" : `Comments: ${server.reputation?.comments ?? 0}`}
       className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
     >
       <MessageSquare className="size-3.5 shrink-0" />
@@ -156,10 +156,74 @@ function ServerHoverDetails({ description, tags, isTransportService, endpointCou
     </div>
   );
 }
-function buildEndpoints(tcpAddr: string | undefined, udpAddr: string | undefined): { protocol: string; address: string }[] {
+function isLoopbackOrEmpty(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    !normalized ||
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "0.0.0.0" ||
+    normalized === "::1" ||
+    normalized === "::"
+  );
+}
+
+function extractRelayHostname(server: BaseServer): string {
+  if (server.locations && server.locations.length > 0) {
+    const loc =
+      server.locations.find((l) => l.current_relay && (l.url || l.relay_url)) ||
+      server.locations.find((l) => l.reported_ready && (l.url || l.relay_url)) ||
+      server.locations.find((l) => l.url || l.relay_url);
+    if (loc) {
+      const urlStr = loc.relay_url || loc.url;
+      if (urlStr) {
+        try {
+          const parsed = new URL(urlStr.startsWith("http") ? urlStr : `https://${urlStr}`);
+          if (parsed.hostname && !isLoopbackOrEmpty(parsed.hostname)) {
+            return parsed.hostname;
+          }
+        } catch {}
+      }
+    }
+  }
+  if (typeof window !== "undefined" && window.location.hostname && !isLoopbackOrEmpty(window.location.hostname)) {
+    return window.location.hostname;
+  }
+  return "";
+}
+
+function formatEndpointAddress(address: string, fallbackHost?: string): string {
+  if (!address) return "";
+  const trimmed = address.trim();
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon === -1) {
+    return trimmed;
+  }
+  const hostPart = trimmed.slice(0, lastColon);
+  const portPart = trimmed.slice(lastColon + 1);
+
+  if (isLoopbackOrEmpty(hostPart) && fallbackHost) {
+    return `${fallbackHost}:${portPart}`;
+  }
+  return trimmed;
+}
+
+function resolveRepresentativeLink(server: BaseServer): string {
+  if (server.link) {
+    return server.link;
+  }
+  // Navigate only to a relay that is ready, unexpired, and serves HTTPS.
+  return server.locations?.find((location) => isLocationAvailable(location))?.url ?? "";
+}
+
+function buildEndpoints(
+  tcpAddr: string | undefined,
+  udpAddr: string | undefined,
+  fallbackHost?: string,
+): { protocol: string; address: string }[] {
   return [
-    ...(tcpAddr ? [{ protocol: "TCP", address: tcpAddr }] : []),
-    ...(udpAddr ? [{ protocol: "UDP", address: udpAddr }] : []),
+    ...(tcpAddr ? [{ protocol: "TCP", address: formatEndpointAddress(tcpAddr, fallbackHost) }] : []),
+    ...(udpAddr ? [{ protocol: "UDP", address: formatEndpointAddress(udpAddr, fallbackHost) }] : []),
   ];
 }
 
@@ -169,11 +233,11 @@ function resolveVoteRequest(server: BaseServer, targetVote: "up" | "down"): { ta
   return { targetHost, nextVote };
 }
 
-function resolveDetailPath(server: BaseServer, serverId: string, isWarning: boolean): string {
+function resolveDetailPath(serverId: string, isWarning: boolean, effectiveLink: string): string {
   if (isWarning && serverId) {
     return `/server/${encodeURIComponent(serverId)}`;
   }
-  return server.link || "#";
+  return effectiveLink;
 }
 
 function AppLink({
@@ -210,9 +274,13 @@ function AppLink({
       </Link>
     );
   }
+  // Only relay-reported services leave this relay; local apps keep same-tab navigation.
+  const isExternal = Boolean(server.remoteOnly);
   return (
     <a
-      href={server.link || "#"}
+      href={detailPath || "#"}
+      target={isExternal ? "_blank" : undefined}
+      rel={isExternal ? "noopener noreferrer" : undefined}
       aria-label={ariaLabel ?? `Open ${name}`}
       className={className}
     >
@@ -330,7 +398,7 @@ function VoteControls({ server, isVoting, onVote, onSelect }: { server: BaseServ
     return server.observedReputation ? (
       <span
         className="inline-flex h-7 items-center gap-2 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] text-muted-foreground"
-        title="Observed totals across remote relays; voters are not deduplicated. Open Relays for source counts."
+        title="Observed reputation"
       >
         Observed +{server.observedReputation.up}/−{server.observedReputation.down}
       </span>
@@ -362,8 +430,10 @@ function VoteControls({ server, isVoting, onVote, onSelect }: { server: BaseServ
   );
 }
 
+// The count is every relay that has reported this service, live or not.
+// Availability is shown by the card link and the relays panel, not here.
 function RelaysTrigger({ count, onClick }: { count: number; onClick: () => void }): JSX.Element {
-  const countLabel = count === 1 ? "1 relay" : `${count} relays`;
+  const countLabel = count === 1 ? "1 known relay" : `${count} known relays`;
   return (
     <button
       type="button"
@@ -372,9 +442,9 @@ function RelaysTrigger({ count, onClick }: { count: number; onClick: () => void 
         event.stopPropagation();
         onClick();
       }}
-      aria-label={`${countLabel} connected`}
+      aria-label={countLabel}
       aria-haspopup="dialog"
-      title={`${countLabel} connected`}
+      title={countLabel}
       className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-secondary/50 px-2 text-[11px] font-medium text-muted-foreground shadow-2xs transition-all hover:bg-secondary hover:text-foreground active:scale-95 cursor-pointer"
     >
       <Globe className="size-3.5 shrink-0" />
@@ -454,7 +524,6 @@ interface ServerCardProps {
   onOpenComments?: (server: BaseServer) => void;
   onVote?: (hostname: string, vote: ReputationVoteAction) => void | Promise<void>;
   onOpenRelays?: (server: BaseServer) => void;
-  relayCount?: number;
   onSelectIdentity?: (identity: string) => void;
 }
 
@@ -466,7 +535,6 @@ export function ServerCard({
   onOpenComments,
   onVote,
   onOpenRelays,
-  relayCount,
   onSelectIdentity,
 }: ServerCardProps): JSX.Element {
   const {
@@ -481,10 +549,12 @@ export function ServerCard({
   const normalizedPaymentLabel = paymentLabel.trim();
   const showPaymentBadge = paymentEnabled || normalizedPaymentLabel !== "";
   const effectivePaymentLabel = normalizedPaymentLabel || "Paid app";
-  const endpoints = buildEndpoints(tcpAddr, udpAddr);
+  const fallbackHost = extractRelayHostname(server);
+  const endpoints = buildEndpoints(tcpAddr, udpAddr, fallbackHost);
   const isTransportService = endpoints.length > 0;
-  const isNavigable = navigable && !isTransportService && !server.remoteOnly;
-  const observedRelayCount = relayCount ?? server.locations?.length ?? (server.remoteOnly ? 0 : 1);
+  const effectiveLink = resolveRepresentativeLink(server);
+  const isNavigable = navigable && !isTransportService && Boolean(effectiveLink);
+  const observedRelayCount = server.locations?.length ?? (server.remoteOnly ? 0 : 1);
   const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
   const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
 
@@ -509,7 +579,7 @@ export function ServerCard({
   const handleSelectVote = (event: React.MouseEvent, direction: "up" | "down") => void handleVote(event, direction);
   const handleThumbnailError = () => setFailedThumbnail(thumbnail);
   const isWarning = isReputationWarning(server.reputation);
-  const detailPath = resolveDetailPath(server, serverId, isWarning);
+  const detailPath = resolveDetailPath(serverId, isWarning, effectiveLink);
 
   return (
     <div className="relative" title={description || undefined}>
@@ -568,6 +638,11 @@ export function ServerCard({
             </div>
           );
         })()}
+        {server.remoteOnly && !effectiveLink && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {server.locations?.some((location) => location.url) ? "No relay available now" : "No HTTP URL available"}
+          </p>
+        )}
         {children && (
           <div className="pointer-events-auto relative z-30 mt-3 border-t border-border pt-3">
             {children}

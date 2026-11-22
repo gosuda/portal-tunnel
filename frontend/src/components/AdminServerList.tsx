@@ -17,12 +17,13 @@ import { TransportPolicyControl } from "@/components/TransportPolicyControl";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AdminServerListProps {
-  title?: string;
   searchQuery: string;
   status: StatusFilter;
   sortBy: SortOption;
   selectedTags: string[];
   availableTags: string[];
+  pending: { identity_key: string; expires_at: string }[];
+  onRefresh: () => Promise<void>;
   filteredServers: AdminServer[];
   onSearchChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;
@@ -74,7 +75,6 @@ function useAdminSelection(filteredServers: AdminServer[]): {
   isAllSelected: boolean;
   allIdentityKeys: string[];
   handleToggleSelect: (identityKey: string) => void;
-  handleClearSelection: () => void;
   handleSelectAll: () => void;
   runBulkAction: (handler: (identityKeys: string[]) => void | Promise<void>) => Promise<void>;
 } {
@@ -137,14 +137,14 @@ function useAdminSelection(filteredServers: AdminServer[]): {
     isAllSelected,
     allIdentityKeys,
     handleToggleSelect,
-    handleClearSelection,
     handleSelectAll,
     runBulkAction,
   };
 }
 
 export function AdminServerList({
-  title = "PORTAL ADMIN",
+  pending,
+  onRefresh,
   searchQuery,
   status,
   sortBy,
@@ -173,6 +173,10 @@ export function AdminServerList({
   onBulkBan,
   auth,
 }: AdminServerListProps): JSX.Element {
+  const [identityKey, setIdentityKey] = useState("");
+  const [identityAction, setIdentityAction] = useState("approve");
+  const [policyMessage, setPolicyMessage] = useState("");
+  const [editingIdentity, setEditingIdentity] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const {
     selectedIdentityKeys,
@@ -296,7 +300,38 @@ export function AdminServerList({
       <div className="flex h-full grow flex-col">
         <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
           <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
-            <AdminHeader title={title} auth={auth} />
+            <AdminHeader auth={auth} />
+            <button type="button" onClick={() => void onRefresh()} className="self-start rounded bg-secondary px-3 py-2">Refresh policy</button>
+            <p className="text-sm">Effective approval mode: <strong>{approvalMode}</strong>. Auto admits public registrations. Manual holds requests for approval before assigning resources. Saved policy overrides the startup setting.</p>
+            <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={async (event) => {
+              event.preventDefault();
+              const key = identityKey.trim();
+              if (!key || editingIdentity) return;
+              setEditingIdentity(true);
+              try {
+                if (identityAction === "ban" || identityAction === "unban") {
+                  await onBanStatusChange(key, identityAction === "ban");
+                } else if (identityAction === "deny" || identityAction === "undeny") {
+                  await onDenyStatusChange(key, identityAction === "deny");
+                } else {
+                  await onApproveStatusChange(key, identityAction === "approve");
+                }
+                setPolicyMessage(`Saved ${identityAction} for ${key}.`);
+              } catch (err) {
+                setPolicyMessage(err instanceof Error ? err.message : "Could not save identity policy.");
+              } finally {
+                setEditingIdentity(false);
+              }
+            }}>
+              <Input className="max-w-sm" aria-label="Service identity key" placeholder="Service identity key (name:address)" required value={identityKey} onChange={(e) => setIdentityKey(e.target.value)} />
+              <select aria-label="Identity policy action" value={identityAction} onChange={(e) => setIdentityAction(e.target.value)}>
+                <option value="approve">Pre-approve</option><option value="revoke">Revoke approval</option>
+                <option value="deny">Deny</option><option value="undeny">Undeny</option>
+                <option value="ban">Ban</option><option value="unban">Unban</option>
+              </select>
+              <button disabled={editingIdentity} type="submit" className="rounded bg-secondary px-3 py-2">Apply</button>
+              <span role="status">{policyMessage}</span>
+            </form>
             <div className="flex items-center gap-2">
               <div className="flex-1">{searchBar}</div>
             </div>
@@ -318,6 +353,14 @@ export function AdminServerList({
         </div>
         <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-0">
           <main className="z-0 flex-1">
+            {pending.length > 0 && <section aria-label="Pending requests" className="p-4">
+              <h2>Pending approval requests ({pending.length})</h2>
+              <ul>{pending.map((request) => <li key={request.identity_key} className="flex flex-wrap items-center gap-3 py-1">
+                <code>{request.identity_key}</code>
+                <span>Expires {new Date(request.expires_at).toLocaleTimeString()}</span>
+                <button onClick={() => { setIdentityKey(request.identity_key); setIdentityAction("approve"); }}>Select for review</button>
+              </li>)}</ul>
+            </section>}
             {serverGrid ?? (
               <div className="py-12 text-center">
                 {noMatchingServersMessage}

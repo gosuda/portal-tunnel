@@ -29,21 +29,12 @@ func TestAccessNamesTheDecision(t *testing.T) {
 	if got := access.Access(key); got != types.LeaseRoutable {
 		t.Fatalf("auto mode = %q", got)
 	}
-	checkStoreAccessManualPending(t, &access, key)
-	checkStoreAccessApproveCycle(t, &access, key)
-	checkStoreAccessDenyBan(t, &access, key)
-}
 
-func checkStoreAccessManualPending(t *testing.T, access *State, key types.ServiceIdentityKey) {
-	t.Helper()
 	access.SetMode(ModeManual)
 	if got := access.Access(key); got != types.LeasePending {
 		t.Fatalf("not approved = %q", got)
 	}
-}
 
-func checkStoreAccessApproveCycle(t *testing.T, access *State, key types.ServiceIdentityKey) {
-	t.Helper()
 	access.Approve(key)
 	if got := access.Access(key); got != types.LeaseRoutable {
 		t.Fatalf("approved = %q", got)
@@ -52,10 +43,7 @@ func checkStoreAccessApproveCycle(t *testing.T, access *State, key types.Service
 	if got := access.Access(key); got != types.LeasePending {
 		t.Fatalf("revoked = %q", got)
 	}
-}
 
-func checkStoreAccessDenyBan(t *testing.T, access *State, key types.ServiceIdentityKey) {
-	t.Helper()
 	access.Deny(key)
 	if got := access.Access(key); got != types.LeaseDenied {
 		t.Fatalf("denied = %q", got)
@@ -93,76 +81,45 @@ func TestAccessDecisionsAreMutuallyExclusive(t *testing.T) {
 func TestPolicyCommitsCompoundDecisionsAtomically(t *testing.T) {
 	key := types.NewServiceIdentityKey("demo", "0x1234")
 	access := NewStore()
-	fixture := storeCompoundDecisionsFixture{access: access, key: key}
-	commitStoreCompoundInitialBan(t, fixture)
-	proposed := proposeStoreCompoundUnban(t, fixture)
-	committed := commitStoreCompoundDenial(t, fixture, proposed)
-	checkStoreCompoundCommitted(t, fixture, committed)
-	checkStoreCompoundProposalIsolated(t, fixture, proposed)
-}
-
-type storeCompoundDecisionsFixture struct {
-	access *Store
-	key    types.ServiceIdentityKey
-}
-
-func commitStoreCompoundInitialBan(t *testing.T, fixture storeCompoundDecisionsFixture) {
-	t.Helper()
-	initial := fixture.access.Snapshot()
-	initial.Ban(fixture.key)
+	initial := access.Snapshot()
+	initial.Ban(key)
 	initial.UDP = types.PolicyPortSettings{Enabled: true, MaxLeases: 2}
 	initial.TCPPort = types.PolicyPortSettings{Enabled: true, MaxLeases: 3}
-	initial.IdentityBPS = map[types.ServiceIdentityKey]int64{fixture.key: 100}
-	fixture.access.Commit(initial)
-}
+	initial.IdentityBPS = map[types.ServiceIdentityKey]int64{key: 100}
+	access.Commit(initial)
 
-func proposeStoreCompoundUnban(t *testing.T, fixture storeCompoundDecisionsFixture) State {
-	t.Helper()
-	proposed := fixture.access.Snapshot()
-	proposed.Unban(fixture.key)
+	proposed := access.Snapshot()
+	proposed.Unban(key)
 	proposed.UDP.Enabled = false
 	proposed.TCPPort.MaxLeases = 4
-	proposed.IdentityBPS[fixture.key] = 200
-	before := fixture.access.Snapshot()
-	if !before.UDP.Enabled || before.TCPPort.MaxLeases != 3 || before.IdentityBPS[fixture.key] != 100 {
+	proposed.IdentityBPS[key] = 200
+	before := access.Snapshot()
+	if !before.UDP.Enabled || before.TCPPort.MaxLeases != 3 || before.IdentityBPS[key] != 100 {
 		t.Fatal("editing candidate transport or bandwidth settings changed committed policy")
 	}
-	observed := make(chan bool, 1)
-	go func() { observed <- fixture.access.Snapshot().Access(fixture.key) == types.LeaseRoutable }()
-	if <-observed {
+	if access.Snapshot().Access(key) == types.LeaseRoutable {
 		t.Fatal("uncommitted unban became routable")
 	}
-	return proposed
-}
 
-func commitStoreCompoundDenial(t *testing.T, fixture storeCompoundDecisionsFixture, proposed State) State {
-	t.Helper()
-	proposed.Deny(fixture.key)
-	fixture.access.Commit(proposed)
-	return fixture.access.Snapshot()
-}
-
-func checkStoreCompoundCommitted(t *testing.T, fixture storeCompoundDecisionsFixture, committed State) {
-	t.Helper()
+	proposed.Deny(key)
+	access.Commit(proposed)
+	committed := access.Snapshot()
 	if committed.Revision() != 2 {
 		t.Fatalf("committed revision = %d, want 2", committed.Revision())
 	}
-	if committed.IsBanned(fixture.key) || !committed.IsDenied(fixture.key) || committed.Access(fixture.key) == types.LeaseRoutable {
+	if committed.IsBanned(key) || !committed.IsDenied(key) || committed.Access(key) == types.LeaseRoutable {
 		t.Fatal("compound change did not atomically replace the ban with a denial")
 	}
-	if committed.UDP.Enabled || committed.TCPPort.MaxLeases != 4 || committed.IdentityBPS[fixture.key] != 200 {
+	if committed.UDP.Enabled || committed.TCPPort.MaxLeases != 4 || committed.IdentityBPS[key] != 200 {
 		t.Fatal("compound commit lost transport or bandwidth settings")
 	}
-}
 
-func checkStoreCompoundProposalIsolated(t *testing.T, fixture storeCompoundDecisionsFixture, proposed State) {
-	t.Helper()
-	proposed.Undeny(fixture.key)
-	proposed.IdentityBPS[fixture.key] = 300
-	if fixture.access.Snapshot().Access(fixture.key) == types.LeaseRoutable {
+	proposed.Undeny(key)
+	proposed.IdentityBPS[key] = 300
+	if access.Snapshot().Access(key) == types.LeaseRoutable {
 		t.Fatal("editing the proposal after commit changed live access")
 	}
-	if fixture.access.Snapshot().IdentityBPS[fixture.key] != 200 {
+	if access.Snapshot().IdentityBPS[key] != 200 {
 		t.Fatal("editing the proposal after commit changed the live bandwidth limit")
 	}
 }

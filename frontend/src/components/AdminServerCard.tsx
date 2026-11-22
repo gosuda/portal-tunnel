@@ -114,7 +114,7 @@ function IPLine({ isApproved, ip, displayIP }: { isApproved: boolean; ip: string
           Client IP: <span className="font-mono">{ip}</span>
         </div>
         <div>
-          Reported IP: <span className="font-mono">{displayIP}</span>
+          Publisher-reported IP: <span className="font-mono">{displayIP}</span>
         </div>
       </div>
     );
@@ -168,7 +168,7 @@ function IdentityPanel({ server, bps, onBPSSettingsClick, onApproveClick, onDeny
     <div className="flex flex-col gap-2 w-full mt-2">
       <div className="flex items-center justify-between w-full">
         <span className="text-xs text-muted-foreground">
-          BPS: <span className="font-medium text-foreground">{formatBPS(bps)}</span>
+          Stream limit (bytes/s): <span className="font-medium text-foreground">{formatBPS(bps)}</span>
         </span>
         <button
           onClick={onBPSSettingsClick}
@@ -271,17 +271,10 @@ export function AdminServerCard({
   const { identityKey, bps } = server;
   const [showBPSModal, setShowBPSModal] = useState(false);
   const [bpsInput, setBpsInput] = useState(bps.toString());
-
-  const [sliderIndex, setSliderIndex] = useState(sliderIndexForBPS(bps));
+  const sliderIndex = sliderIndexForBPS(parseBPSInput(bpsInput));
 
   const handleSliderChange = (idx: number) => {
-    setSliderIndex(idx);
     setBpsInput(BPS_STEPS[idx].toString());
-  };
-
-  const syncSliderFromInput = (value: number) => {
-    const idx = sliderIndexForBPS(value);
-    setSliderIndex(idx);
   };
 
   const handleSelectClick = (event: React.MouseEvent) => {
@@ -306,7 +299,6 @@ export function AdminServerCard({
 
   const handleBPSSettingsClick = (event: React.MouseEvent) => {
     swallowCardClick(event);
-    setSliderIndex(sliderIndexForBPS(bps));
     setBpsInput(bps.toString());
     setShowBPSModal(true);
   };
@@ -318,7 +310,6 @@ export function AdminServerCard({
 
   const handleBPSInputChange = (value: string) => {
     setBpsInput(value);
-    syncSliderFromInput(parseBPSInput(value));
   };
 
   const handleBPSUseDefault = () => {

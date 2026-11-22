@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme"
@@ -178,16 +179,20 @@ func TestIssueRegisterChallengeBoundsPending(t *testing.T) {
 		name  string
 		limit int
 	}{
-		{"per IP", defaultRegisterChallengeOutstandingPerIP},
+		{"per source", defaultRegisterChallengeOutstandingPerSource},
+		{"IPv6 prefix", defaultRegisterChallengeOutstandingPerSource},
 		{"global", defaultRegisterChallengeOutstanding},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := newTestRegistry(t, false, false)
 			sourceAddr := netip.MustParseAddr("203.0.113.50")
+			if tc.name == "IPv6 prefix" {
+				sourceAddr = netip.MustParseAddr("2001:db8:1::1")
+			}
 			request := types.RegisterChallengeRequest{Identity: newTestLeaseIdentity(t, "pending")}
 			for i := range tc.limit {
 				issuePendingChallenge(t, registry, request, sourceAddr, i)
-				if tc.name == "global" {
+				if tc.name == "global" || tc.name == "IPv6 prefix" {
 					sourceAddr = sourceAddr.Next()
 				}
 			}
@@ -354,7 +359,7 @@ func checkUnapprovedSlotBurst(t *testing.T, registry *leaseRegistry, source neti
 	t.Helper()
 	newcomer := newTestLeaseIdentity(t, "third")
 	registry.setIdentityAccess(newcomer.ServiceKey(), types.LeasePending, 4)
-	for range defaultRegisterChallengeOutstandingPerIP + 1 {
+	for range defaultRegisterChallengeOutstandingPerSource + 1 {
 		if _, err := askUnapprovedSlotChallenge(t, registry, newcomer, source); !errors.Is(err, errUnapprovedLeaseLimit) {
 			t.Fatalf("third unapproved lease = %v", err)
 		}
@@ -2249,5 +2254,362 @@ func TestCanonicalReadinessFollowsRenewedCertificateValidity(t *testing.T) {
 	}
 	if leases := registry.PolicyLeases(now); len(leases) != 1 || leases[0].CanonicalReady {
 		t.Fatalf("withdrawn material still advertised: %+v", leases)
+	}
+}
+
+func TestPendingApprovalBudgetsAndExpiry(t *testing.T) {
+	r := &leaseRegistry{pending: make(map[types.ServiceIdentityKey]approvalRequest), unapprovedPerSource: 1}
+	source := netip.MustParseAddr("192.0.2.1")
+	now := time.Now()
+	first := types.NewServiceIdentityKey("demo", "one")
+	if _, err := r.requestApproval(first, source, now); err != nil {
+		t.Fatal(err)
+	}
+	other := types.NewServiceIdentityKey("demo", "two")
+	if _, err := r.requestApproval(other, source, now); err == nil {
+		t.Fatal("per-source limit exceeded")
+	}
+	for i := 1; i < maxApprovalRequests; i++ {
+		source = source.Next()
+		if _, err := r.requestApproval(types.NewServiceIdentityKey("demo", fmt.Sprint(i)), source, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.requestApproval(other, source.Next(), now); err == nil {
+		t.Fatal("global limit exceeded")
+	}
+	if _, err := r.requestApproval(first, netip.MustParseAddr("192.0.2.1"), now.Add(time.Minute)); err != nil {
+		t.Fatal("refresh of existing request refused:", err)
+	}
+	if _, err := r.requestApproval(first, source.Next(), now.Add(time.Minute)); err != nil {
+		t.Fatal("moving an existing request at the global limit refused:", err)
+	}
+	now = now.Add(approvalRequestTTL)
+	if got := r.PendingApprovals(now); len(got) != 1 || got[0].IdentityKey != first.String() {
+		t.Fatalf("unexpired requests: %+v", got)
+	}
+	if _, err := r.requestApproval(other, netip.MustParseAddr("192.0.2.1"), now); err != nil {
+		t.Fatal("expired capacity was not reusable:", err)
+	}
+}
+
+func TestPendingApprovalSourceMigration(t *testing.T) {
+	r := &leaseRegistry{pending: make(map[types.ServiceIdentityKey]approvalRequest), unapprovedPerSource: 1}
+	now := time.Unix(1700000000, 0)
+	source := netip.MustParseAddr("192.0.2.1")
+	destination := source.Next()
+	first := types.NewServiceIdentityKey("demo", "one")
+	second := types.NewServiceIdentityKey("demo", "two")
+	if _, err := r.requestApproval(first, source, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.requestApproval(second, destination, now); err != nil {
+		t.Fatal(err)
+	}
+	before := r.pending[first]
+	if _, err := r.requestApproval(first, destination, now.Add(time.Minute)); err == nil {
+		t.Fatal("migration exceeded destination source budget")
+	}
+	if r.pending[first] != before {
+		t.Fatal("rejected migration changed source or request lifetime")
+	}
+	destination = destination.Next()
+	refreshed := now.Add(2 * time.Minute)
+	if _, err := r.requestApproval(first, destination, refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.pending[first]; got.source != destination || got.first != now || got.last != refreshed {
+		t.Fatalf("migrated request: %+v", got)
+	}
+	third := types.NewServiceIdentityKey("demo", "three")
+	if _, err := r.requestApproval(third, destination, refreshed); err == nil {
+		t.Fatal("migrated request did not consume destination budget")
+	}
+	if _, err := r.requestApproval(third, source, refreshed); err != nil {
+		t.Fatal("migration did not release previous source budget:", err)
+	}
+}
+
+func TestPendingApprovalIPv6PrefixBudget(t *testing.T) {
+	r := &leaseRegistry{pending: make(map[types.ServiceIdentityKey]approvalRequest), unapprovedPerSource: 64}
+	now := time.Unix(1700000000, 0)
+	source := netip.MustParseAddr("2001:db8:1::1")
+	first := types.NewServiceIdentityKey("demo", "0")
+	for i := range 64 {
+		if _, err := r.requestApproval(types.NewServiceIdentityKey("demo", fmt.Sprint(i)), source, now); err != nil {
+			t.Fatal(err)
+		}
+		source = source.Next()
+	}
+	if _, err := r.requestApproval(types.NewServiceIdentityKey("demo", "overflow"), source, now); err == nil {
+		t.Fatal("rotating IPv6 addresses exceeded the prefix budget")
+	}
+	if _, err := r.requestApproval(first, source, now.Add(time.Minute)); err != nil {
+		t.Fatal("refresh within the same full prefix was refused:", err)
+	}
+	if _, err := r.requestApproval(types.NewServiceIdentityKey("demo", "other"), netip.MustParseAddr("2001:db8:2::1"), now); err != nil {
+		t.Fatal("one prefix exhausted another prefix's capacity:", err)
+	}
+}
+
+func TestUnapprovedLeaseIPv6PrefixBudget(t *testing.T) {
+	r := newTestRegistry(t, false, false)
+	r.unapprovedPerSource = 1
+	first := newTestLeaseIdentity(t, "first")
+	r.setIdentityAccess(first.ServiceKey(), types.LeasePending, 1)
+	registerUnapprovedSlotLease(t, r, first, netip.MustParseAddr("2001:db8:1::1"))
+	other := newTestLeaseIdentity(t, "other")
+	r.setIdentityAccess(other.ServiceKey(), types.LeasePending, 2)
+	if _, err := askUnapprovedSlotChallenge(t, r, other, netip.MustParseAddr("2001:db8:1::2")); !errors.Is(err, errUnapprovedLeaseLimit) {
+		t.Fatalf("rotating IPv6 address bypassed the unapproved lease limit: %v", err)
+	}
+	if _, err := askUnapprovedSlotChallenge(t, r, other, netip.MustParseAddr("2001:db8:2::1")); err != nil {
+		t.Fatal("unrelated IPv6 prefix was refused:", err)
+	}
+}
+
+func registerHTTPReplica(t *testing.T, registry *leaseRegistry, identity types.Identity) (*leaseRecord, types.RegisterResponse) {
+	t.Helper()
+	record, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record, response
+}
+
+func TestReplicaLeaseLifecycleIsIndependent(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "replicas")
+	first, firstResponse := registerHTTPReplica(t, registry, identity)
+	second, secondResponse := registerHTTPReplica(t, registry, identity)
+	if first.id == second.id || firstResponse.Hostname == "" || firstResponse.Hostname != secondResponse.Hostname {
+		t.Fatal("replicas must have independent leases at the same hostname")
+	}
+	for _, response := range []types.RegisterResponse{firstResponse, secondResponse} {
+		record, err := registry.admitReverseCapability(response.ReverseEndpoint.Capability)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaseID, ok := registry.verifySigningAccessTokenLease(signLeaseRequest(t, response.AccessToken))
+		if !ok || leaseID != record.id {
+			t.Fatal("signing and reverse capabilities resolved to different leases")
+		}
+	}
+	secondExpiry, secondSeen := second.ExpiresAt, second.LastSeenAt
+	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: firstResponse.AccessToken, TTL: 600}, netip.MustParseAddr("203.0.113.11"), nil); err != nil {
+		t.Fatal(err)
+	}
+	registry.Touch(identity.ServiceKey(), first.id, netip.MustParseAddr("203.0.113.12"), time.Now())
+	if !second.ExpiresAt.Equal(secondExpiry) || !second.LastSeenAt.Equal(secondSeen) || second.sourceAddr == first.sourceAddr {
+		t.Fatal("renew or reverse activity changed another replica")
+	}
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: firstResponse.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.verifySigningAccessTokenLease(signLeaseRequest(t, firstResponse.AccessToken)); ok {
+		t.Fatal("removed replica retained signing authority")
+	}
+	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: secondResponse.AccessToken}, netip.Addr{}, nil); err != nil {
+		t.Fatalf("removing one replica invalidated the other: %v", err)
+	}
+}
+
+func TestAliasEpochFollowsOwnershipRatherThanLeases(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "alias-epoch")
+	_, first := registerHTTPReplica(t, registry, owner)
+	_, second := registerHTTPReplica(t, registry, owner)
+	if first.AliasEpoch == "" || second.AliasEpoch != first.AliasEpoch {
+		t.Fatal("replicas must share an alias ownership epoch")
+	}
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: first.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, replacement, err := registry.Register(types.RegisterChallengeRequest{Identity: owner}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.AliasEpoch != first.AliasEpoch {
+		t.Fatal("replacing a live lease changed uninterrupted ownership")
+	}
+	other := newTestLeaseIdentity(t, owner.Name)
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errHostnameConflict) {
+		t.Fatalf("alias-only collision = %v, want hostname conflict", err)
+	}
+	_, _, fallback, err := registry.Register(types.RegisterChallengeRequest{Identity: other, Replica: true, Namespace: types.LocalTLSNamespaceV1}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.Hostname != "" || fallback.AliasEpoch != "" {
+		t.Fatal("a canonical fallback claimed alias ownership")
+	}
+	if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: replacement.AccessToken}); err != nil {
+		t.Fatal(err)
+	}
+	_, next := registerHTTPReplica(t, registry, owner)
+	if next.AliasEpoch == "" || next.AliasEpoch == first.AliasEpoch {
+		t.Fatal("releasing and reclaiming an alias reused its epoch")
+	}
+	// Expiry also ends ownership, even before background cleanup removes records.
+	for _, record := range registry.records {
+		if record.ServiceKey() == owner.ServiceKey() {
+			record.ExpiresAt = time.Now().Add(-time.Minute)
+		}
+	}
+	_, afterExpiry := registerHTTPReplica(t, registry, owner)
+	if afterExpiry.AliasEpoch == "" || afterExpiry.AliasEpoch == next.AliasEpoch {
+		t.Fatal("expired ownership survived re-registration")
+	}
+}
+
+func TestExclusiveRegistrationReplacesAllReplicas(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "exclusive")
+	_, first := registerHTTPReplica(t, registry, identity)
+	_, second := registerHTTPReplica(t, registry, identity)
+	_, _, exclusive, err := registry.Register(types.RegisterChallengeRequest{Identity: identity}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, previous := range []types.RegisterResponse{first, second} {
+		if _, _, err := registry.Renew(types.RenewRequest{AccessToken: previous.AccessToken}, netip.Addr{}, nil); !errors.Is(err, errUnauthorized) {
+			t.Fatalf("replaced token remains valid: %v", err)
+		}
+	}
+	if _, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errReplicaConflict) {
+		t.Fatalf("replica joined exclusive lease: %v", err)
+	}
+	if _, _, err := registry.Renew(types.RenewRequest{AccessToken: exclusive.AccessToken}, netip.Addr{}, nil); err != nil {
+		t.Fatalf("rejected replica changed exclusive lease: %v", err)
+	}
+}
+
+func TestReplicaChurnPreservesSharedBandwidthCredit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		registry := newTestRegistry(t, false, false)
+		identity := newTestLeaseIdentity(t, "bandwidth")
+		first, _ := registerHTTPReplica(t, registry, identity)
+		key := identity.ServiceKey()
+		registry.bps.SetServiceIdentityBPSLimits(map[types.ServiceIdentityKey]int64{key: 100})
+		_, limiter := registry.bps.identityLimiter(key)
+		if wait := limiter.reserve(10, 100); wait != 100*time.Millisecond {
+			t.Fatalf("initial credit: %v", wait)
+		}
+		// A second of refill credit survives only if the limiter is kept.
+		<-time.After(time.Second)
+		_, second := registerHTTPReplica(t, registry, identity)
+		first.ExpiresAt = time.Now().Add(-time.Second)
+		registry.cleanupExpired(time.Now())
+		_, limiter = registry.bps.identityLimiter(key)
+		if wait := limiter.reserve(10, 100); wait != 0 {
+			t.Fatalf("replica churn reset shared credit: %v", wait)
+		}
+		if _, err := registry.Unregister(types.UnregisterRequest{AccessToken: second.AccessToken}); err != nil {
+			t.Fatal(err)
+		}
+		_, limiter = registry.bps.identityLimiter(key)
+		if wait := limiter.reserve(10, 100); wait != 100*time.Millisecond {
+			t.Fatalf("last replica did not release ephemeral credit: %v", wait)
+		}
+	})
+}
+
+func TestReplicaSelectionUsesReadyRoutableLeases(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "selection")
+	first, _ := registerHTTPReplica(t, registry, identity)
+	second, _ := registerHTTPReplica(t, registry, identity)
+	empty, _ := registerHTTPReplica(t, registry, identity)
+	for _, record := range []*leaseRecord{first, second} {
+		server, client := net.Pipe()
+		t.Cleanup(func() { _ = client.Close() })
+		if err := record.reverse.Offer(server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := identity.ServiceKey()
+	selected := registry.selectReplica(key, "", nil, true)
+	if selected == nil || selected == empty {
+		t.Fatal("selected a replica without a ready reverse stream")
+	}
+	stream, err := selected.reverse.TryAcquire(context.Background())
+	if err != nil || stream == nil {
+		t.Fatalf("claim ready stream: %v", err)
+	}
+	_ = stream.Close()
+	stream, err = selected.reverse.TryAcquire(context.Background())
+	if err != nil || stream != nil {
+		t.Fatalf("empty pool must permit immediate failover: %v", err)
+	}
+	next := registry.selectReplica(key, "", map[string]bool{selected.id: true}, true)
+	if next == nil || next == selected || next == empty {
+		t.Fatal("did not select the other ready replica")
+	}
+	if waitOn := registry.selectReplica(key, "", map[string]bool{first.id: true, second.id: true}, false); waitOn != empty {
+		t.Fatal("a burst with no ready replica must wait on a live replica")
+	}
+	if public := registry.PublicLeases(time.Now()); len(public) != 1 || public[0].Ready != 1 {
+		t.Fatalf("directory must contain one service with aggregate readiness: %+v", public)
+	}
+	policyLeases := registry.PolicyLeases(time.Now())
+	if len(policyLeases) != 3 || policyLeases[0].LeaseID == policyLeases[1].LeaseID {
+		t.Fatal("admin listing lost independent lease identities")
+	}
+	registry.setIdentityAccess(key, types.LeaseDenied, 1)
+	if registry.selectReplica(key, "", nil, false) != nil || len(registry.PublicLeases(time.Now())) != 0 {
+		t.Fatal("identity denial did not cover all replicas")
+	}
+}
+
+func TestReplicaRegistrationIsBoundedPerIdentity(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "bounded")
+	for range defaultReplicaLimit {
+		record, _ := registerHTTPReplica(t, registry, identity)
+		t.Cleanup(record.Close)
+	}
+	_, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+	if !errors.Is(err, errReplicaLimit) {
+		t.Fatalf("replica beyond the per-identity limit: %v", err)
+	}
+}
+
+func TestReplicaRegistrationRejectsUnsupportedTransports(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	identity := newTestLeaseIdentity(t, "unsupported")
+	for _, request := range []types.RegisterChallengeRequest{
+		{Replica: true, UDPEnabled: true},
+		{Replica: true, TCPEnabled: true},
+		{Replica: true, Cache: true},
+		{Replica: true, Overlay: true},
+	} {
+		request.Identity = identity
+		if _, _, _, err := registry.Register(request, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil); !errors.Is(err, errReplicaMode) {
+			t.Fatalf("unsupported replica request accepted: %+v, %v", request, err)
+		}
+	}
+}
+
+func TestReplicaSelectionStaysInOneNamespace(t *testing.T) {
+	registry := newTestRegistry(t, false, false)
+	identity := newTestLeaseIdentity(t, "replicas")
+	register := func(namespace string) *leaseRecord {
+		t.Helper()
+		record, _, _, err := registry.Register(types.RegisterChallengeRequest{Identity: identity, Replica: true, Namespace: namespace}, netip.Addr{}, "", types.RelayDescriptor{}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	local, legacy := register(types.LocalTLSNamespaceV1), register("")
+	if local.CanonicalHostname == legacy.CanonicalHostname {
+		t.Fatal("namespaces must issue different canonical hostnames")
+	}
+	for _, want := range []*leaseRecord{local, legacy} {
+		for range 4 {
+			if got := registry.selectReplica(identity.ServiceKey(), want.Namespace, nil, false); got != want {
+				t.Fatalf("namespace %q traffic selected the %q replica", want.Namespace, got.Namespace)
+			}
+		}
 	}
 }

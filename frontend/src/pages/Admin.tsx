@@ -10,7 +10,7 @@ export function Admin(): JSX.Element {
   const { isAuthenticated, isLoading: authLoading } = auth;
 
   const {
-    servers,
+    pending,
     filteredServers,
     availableTags,
     searchQuery,
@@ -22,8 +22,10 @@ export function Admin(): JSX.Element {
     udpSettings,
     tcpPortSettings,
     policySaving,
+    loaded,
     loading,
     error,
+    refresh,
     handleSearchChange,
     handleStatusChange,
     handleSortByChange,
@@ -64,17 +66,22 @@ export function Admin(): JSX.Element {
     );
   }
 
-  if (loading && servers.length === 0) {
+  if (!loaded && loading) {
     return <div className="p-8 text-foreground">Loading...</div>;
   }
-  if (error && servers.length === 0) {
-    return <div className="p-8 text-red-500">Error: {error}</div>;
+  if (!loaded && error) {
+    return <div className="p-8 text-red-500">
+      <p role="alert">Error: {error}</p>
+      <button type="button" onClick={() => void refresh()}>Refresh policy</button>
+    </div>;
   }
 
   return (
     <SsgoiTransition id="admin">
+      {error && <p role="alert" className="p-4 text-red-500">Error: {error}</p>}
       <AdminServerList
-        title="PORTAL ADMIN"
+        pending={pending}
+        onRefresh={refresh}
         searchQuery={searchQuery}
         status={status}
         sortBy={sortBy}

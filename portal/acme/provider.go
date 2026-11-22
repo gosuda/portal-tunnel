@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/go-acme/lego/v4/challenge"
@@ -44,7 +45,7 @@ type dnsProvider interface {
 }
 
 func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil, nil
 	}
 	_, _, manual, err := m.manualCertificateOverride()
@@ -54,7 +55,7 @@ func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
 	if manual && m.dns.Name() != TypeEmbedded {
 		return nil, nil
 	}
-	publicIPs, err := utils.ResolvePublicIPs(ctx)
+	publicIPs, err := m.publicIPs(ctx)
 	if err != nil {
 		if manual && m.dns.Name() == TypeEmbedded && ctx.Err() == nil {
 			m.commandMu.Lock()
@@ -70,7 +71,16 @@ func (m *Manager) syncDNS(ctx context.Context) ([]string, error) {
 	}
 	m.commandMu.Lock()
 	m.pendingDNSAddress = false
+	changed := !slices.Equal(m.publishedIPs, publicIPs)
+	m.publishedIPs = publicIPs
 	m.commandMu.Unlock()
+	if changed {
+		source := "discovery"
+		if len(m.cfg.PublicIPs) > 0 {
+			source = "PUBLIC_IPS"
+		}
+		log.Info().Strs("public_ips", publicIPs).Str("source", source).Str("base_domain", m.cfg.BaseDomain).Msg("published relay address records")
+	}
 	return publicIPs, nil
 }
 

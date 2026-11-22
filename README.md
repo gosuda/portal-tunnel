@@ -114,13 +114,18 @@ portal agent dashboard --config config.toml
 
 See the [Portal Agent Guide](https://gosuda.github.io/portal-tunnel/portal-agent) for configuration syntax and OS service installation.
 
-### 4. Run your own relay
+### Run a relay. Stay in control.
 
-Deploy an open-source relay in seconds:
+A relay exposes a public endpoint on your IP and domain. Budget for egress and finite compute and ports, plan for outages, and be prepared to handle abuse complaints and IP, domain or CA reputation damage. Approved publishers and their visitors can still generate costs. A stream rate limit in bytes/second cannot guarantee a monthly traffic bill or remove legal liability.
+
+Choose **Public (`auto`)** to accept registrations by default, or **Approval Required (`manual`)** to review authenticated service identities before allocating resources. For a first or capacity-constrained relay, start with manual approval. Check the effective mode in `/admin` or the relay’s public `/sdk/domain` report. A saved `policy.json` overrides the startup setting.
+
+Set `APPROVAL_MODE=manual` in your new deployment’s `.env` to use approval requests:
 
 ```bash
 git clone https://github.com/gosuda/portal-tunnel
 cd portal-tunnel && cp .env.example .env
+# Set APPROVAL_MODE=manual and ADMIN_TOKEN in .env before first startup.
 docker compose up
 ```
 
@@ -159,6 +164,8 @@ Portal includes the official public relay registry by default:
 ```text
 https://raw.githubusercontent.com/gosuda/portal-tunnel/main/registry.json
 ```
+
+Registry membership is voluntary. Check the relay’s `/sdk/domain` report for its admission mode. Older relays may omit this field.
 
 If you operate a public Portal relay, open a pull request to add your relay URL to `registry.json`.
 

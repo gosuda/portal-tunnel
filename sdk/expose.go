@@ -23,6 +23,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -234,9 +235,9 @@ func WithTLSCertificate(certFile, keyFile string) Option {
 
 // WithAutomaticTLS obtains and renews tenant certificates through the relay.
 // The tunnel generates and persists private keys in directory. New canonical
-// hostnames never fall back to Keyless. requireLocal additionally rejects old
-// relays without namespace support and waits for canonical readiness; false
-// allows a live alias to satisfy WaitReady while issuance is pending.
+// hostnames never fall back to Keyless. A namespace-capable relay is required.
+// requireLocal waits for canonical readiness; false allows a live alias
+// endpoint to satisfy WaitReady while issuance is pending on that relay.
 // This is local-key ownership, not independent authentication of the relay.
 func WithAutomaticTLS(directory string, requireLocal bool) Option {
 	return func(opts *options) {
@@ -341,7 +342,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 			_ = source.Close()
 		}
 	}()
-	relayURLs, err := types.NormalizeRelayURLs(relays...)
+	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +481,7 @@ func (e *Exposure) runDiscoveryLoop(exposureCtx context.Context) {
 }
 
 func (e *Exposure) applyRelays(relays []string) error {
-	relayURLs, err := types.NormalizeRelayURLs(relays...)
+	relayURLs, err := utils.NormalizeRelayURLs(relays...)
 	if err != nil {
 		return err
 	}
@@ -513,7 +514,7 @@ func (e *Exposure) setRelays(relayURLs []string, failOnError bool) error {
 // selectable) as one atomic unit; re-selection republishes membership
 // through the selection loop.
 func (e *Exposure) AddRelay(relayURL string) error {
-	relayURL, err := types.NormalizeRelayURL(relayURL)
+	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}
@@ -540,7 +541,7 @@ func (e *Exposure) AddRelay(relayURL string) error {
 // as one atomic unit; re-selection republishes membership through the
 // selection loop.
 func (e *Exposure) RemoveRelay(relayURL string) error {
-	relayURL, err := types.NormalizeRelayURL(relayURL)
+	relayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return err
 	}

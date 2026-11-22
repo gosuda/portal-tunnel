@@ -45,6 +45,7 @@ type Config struct {
 	ENSGaslessEnabled      bool
 	ENSGaslessAddress      string
 	EmbeddedDNSPort        int
+	PublicIPs              []string // replaces public IP discovery for both families when set
 	CloudflareToken        string
 	GCPProjectID           string
 	GCPManagedZone         string
@@ -73,19 +74,26 @@ type Manager struct {
 	stopOnce     sync.Once
 	ensStatus    *utils.Snapshot[types.ENSStatus]
 	ensCommands  chan ensDNSCommand
+	pendingENS   map[string]ensDNSCommand // latest unapplied lease DNS intent, guarded by commandMu
 	material     *utils.Snapshot[servedMaterial]
 
 	pendingDNSAddress bool
+	// publishedIPs are the apex addresses of the last successful DNS sync,
+	// logged when they change.
+	publishedIPs []string
 }
 
 func NewManager(cfg Config) (*Manager, error) {
-	cfg.BaseDomain = types.NormalizeBaseDomain(cfg.BaseDomain)
+	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
 	caDirURL, err := NormalizeCADirURL(cfg.CADirURL)
 	if err != nil {
 		return nil, err
 	}
 	cfg.CADirURL = caDirURL
+	if cfg.PublicIPs, err = NormalizePublicIPs(cfg.PublicIPs); err != nil {
+		return nil, err
+	}
 	cfg.EABKID = strings.TrimSpace(cfg.EABKID)
 	cfg.EABHMAC = strings.TrimSpace(cfg.EABHMAC)
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
@@ -124,7 +132,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.BaseDomain == "" {
 		return nil, errACMEBaseDomainIsRequired
 	}
-	if types.IsLocalRelayHost(cfg.BaseDomain) {
+	if utils.IsLocalRelayHost(cfg.BaseDomain) {
 		return &Manager{
 			cfg:       cfg,
 			stopCh:    make(chan struct{}),
@@ -135,7 +143,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	manager := &Manager{
 		cfg:         cfg,
 		stopCh:      make(chan struct{}),
-		ensCommands: make(chan ensDNSCommand, 256),
+		ensCommands: make(chan ensDNSCommand, 1),
 		ensStatus:   utils.NewSnapshot(newENSStatus(cfg, nil)),
 		material:    utils.NewSnapshot(servedMaterial{}),
 	}
@@ -151,7 +159,8 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if m == nil {
 		return "", "", errACMEManagerIsNil
 	}
-	if types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		m.warnPublicIPs(false)
 		if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
 			return "", "", err
 		}
@@ -167,6 +176,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	if err != nil {
 		return "", "", err
 	}
+	m.warnPublicIPs(manual)
 	if _, err := m.syncDNS(ctx); err != nil {
 		return "", "", fmt.Errorf("ensure dns records: %w", err)
 	}
@@ -193,7 +203,7 @@ func (m *Manager) EnsureTLSMaterial(ctx context.Context) error {
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return
 	}
 
@@ -244,7 +254,7 @@ func (m *Manager) TLSFiles() (string, string, error) {
 }
 
 func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
-	if m == nil || types.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return "", "", false, nil
 	}
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)

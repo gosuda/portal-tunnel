@@ -3,9 +3,14 @@
 Only friendly aliases and negotiated Local TLS canonical URLs remain. Old
 `<address>.<root>`, `<name>-<address>.<root>`, and `<hash>--<address>.<root>`
 canonical URLs, `legacy_canonical_hostname`, and `LegacyURL` are removed with
-no redirects. Clients requiring these URLs must upgrade; clients able to use
-only a granted alias may continue to do so. Unnamed HTTP services require Local
-TLS. Dedicated raw TCP/UDP addresses use the relay control hostname.
+no redirects. The tunnel protocol remains `10`; discovery remains `9`.
+SDK v2.7.3 and v2.7.4 require the removed canonical field even when callers use
+only an alias. They pass protocol negotiation but cannot complete registration
+with the current response contract. Keeping protocol 10 preserves main's
+version negotiation behavior; it does not repair this existing limitation. See
+[the compatibility matrix and rollout](maintainer/sdk-compatibility.md).
+Unnamed HTTP services require Local TLS. Dedicated raw TCP/UDP addresses use
+the relay control hostname.
 
 `--cache` / `--cache-ttl` now target the currently granted friendly alias and
 can coexist with canonical Local TLS. An absent alias makes caching unavailable.
@@ -17,15 +22,37 @@ when offline and never fall back to cached content.
 
 ## Unreleased
 
+### Relay: a per-source budget for ClientHello inspection
+
+`--inspections-per-source` (`INSPECTIONS_PER_SOURCE`, default `16`) bounds the
+public sockets one IPv4 address or IPv6 /64 can hold while the relay waits for
+their TLS ClientHello, inside the existing 128-socket budget. Over the budget,
+the relay closes the new connection. Behind a TCP proxy every visitor shares
+the proxy's address: set `0` there and limit clients at the proxy. An embedder
+of `portal.Server` sets `ServerConfig.InspectionsPerSource`; zero keeps the old
+behavior.
+
 ### Kubernetes: Helm charts for the relay and the tunnel client
 
-`deploy/helm/portal-relay` runs the relay and `deploy/helm/portal-tunnel` runs
+`docs/examples/helm/portal-relay` runs the relay and `docs/examples/helm/portal-tunnel` runs
 a tunnel client for an in-cluster Service. Release tags publish both to
 `oci://ghcr.io/gosuda/charts` with the release version. Example values files
-and plain client manifests are in `docs/static/examples/kubernetes`. The relay
-publishes DNS records for the address of its outbound connections, so the
-cluster's outbound address must be the relay Service address. See
+and plain client manifests are in `docs/static/examples/kubernetes`. Set
+`env.PUBLIC_IPS` to the relay Service address so DNS points at it. See
 [Kubernetes](/kubernetes).
+
+### Relay: `PUBLIC_IPS` sets the addresses published in DNS
+
+`PUBLIC_IPS` (`--public-ips`) lists the relay's public IPv4 and/or IPv6
+address, at most one per family. When it is set, the relay publishes exactly
+these addresses in A and AAAA records for the apex, the wildcard, and tracked
+ENS hostnames, and no longer asks external services for the address of its
+outbound connections. Use it behind a load balancer, a NAT gateway, a floating
+IP, or a DNAT rule, where that outbound address is not the one clients reach.
+A family left out of the list is not published, and existing records of that
+family at an external provider stay until you remove them. Empty, the default,
+keeps discovery. The relay now logs the addresses it publishes and their
+source. See [IPv4 and IPv6](/configuration#ipv4-and-ipv6).
 
 ### Agent: relay status and configuration compatibility
 

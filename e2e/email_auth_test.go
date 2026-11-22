@@ -375,16 +375,16 @@ func awaitMailLease(t *testing.T, ctx context.Context, expose *tunnel.Runtime) [
 func exposeMailTunnel(t *testing.T, ctx context.Context, sniAddr, target string, catcher *mailCatcher) (string, string) {
 	t.Helper()
 	tunnelCtx, tunnelCancel := context.WithCancel(ctx)
-	expose, err := tunnel.Start(tunnelCtx, tunnel.Spec{
-		Identity:  tunnel.IdentitySpec{Name: "mail", Path: filepath.Join(t.TempDir(), "identity.json")},
-		Relays:    tunnel.RelaySpec{URLs: []string{"https://" + sniAddr}},
-		Transport: tunnel.TransportSpec{Target: target},
-		HTTP: &tunnel.HTTPConfig{Auth: &appauth.Config{
+	expose, err := tunnel.Start(tunnelCtx, tunnel.Config{
+		Name: "mail", IdentityPath: filepath.Join(t.TempDir(), "identity.json"),
+		RelayURLs: []string{"https://" + sniAddr}, Discovery: new(false),
+		TargetAddr: target,
+		AuthConfig: appauth.Config{
 			Provider:        appauth.ProviderEmail,
 			EmailList:       []string{"@example.com"},
 			IdentityHeaders: true,
 			EmailConfig:     appauth.EmailConfig{SMTPAddr: catcher.addr, SMTPFrom: "Portal <login@portal.test>"},
-		}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("start tunnel: %v", err)

@@ -11,6 +11,7 @@ import (
 	suifacilitator "github.com/gosuda/x402-facilitator/scheme/sui/facilitator"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal-tunnel/v2/cmd/relay-server/policy"
 	"github.com/gosuda/portal-tunnel/v2/portal"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -56,7 +57,7 @@ type domainResponse struct {
 	X402 x402FacilitatorInfo `json:"x402"`
 }
 
-func mountRelayRoutes(settings x402FacilitatorSettings, server *portal.Server, mux *http.ServeMux) error {
+func mountRelayRoutes(settings x402FacilitatorSettings, server *portal.Server, policies *policy.Store, mux *http.ServeMux) error {
 	network := "sui:mainnet"
 	if settings.Testnet {
 		network = "sui:testnet"
@@ -82,6 +83,7 @@ func mountRelayRoutes(settings x402FacilitatorSettings, server *portal.Server, m
 			return
 		}
 		report := domainResponse{DomainResponse: server.DomainReport()}
+		report.ApprovalMode = string(policies.Mode())
 		if settings.Enabled {
 			baseURL := strings.TrimRight(server.PortalURL(), "/")
 			report.X402 = x402FacilitatorInfo{

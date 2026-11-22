@@ -48,10 +48,12 @@ as terminal for that relay.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `protocol_version` | `string` | SDK tunnel protocol version |
+| `protocol_version` | `string` | default SDK tunnel protocol, currently `10` |
+| `supported_protocol_versions` | `string[]` | optional authoritative protocol list, currently `["10"]`; absent or null falls back to the default, an empty list supports nothing |
 | `replicas` | `boolean` | `true` when opt-in concurrent HTTP leases are supported; absent means unsupported |
 | `release_version` | `string` | relay software release |
 | `namespaces` | `string[]` | optional; includes `local-tls-v1` when new canonical Local TLS is supported |
+| `approval_mode` | `string` | effective local publisher admission mode (`auto` or `manual`); older relays may omit it |
 | `tenant_certificate_issuance` | `boolean` | optional; whether automatic tenant issuance is enabled; independent of manual Local TLS support. An absent field means an older relay did not report this capability |
 | `cache` | `StaticCacheLimits` | optional; advertised when static caching is enabled |
 | `ens` | `ENSStatus` | gasless ENS status |
@@ -82,8 +84,8 @@ which are configured locally by the tunnel process.
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `identity` | `Identity` | yes | `name` and `address` |
-| `namespace` | `string` | no | `local-tls-v1` requests the new Local TLS canonical; omitted keeps legacy hostname policy. Unknown values are rejected |
-| `allow_canonical_fallback` | `boolean` | no | allow canonical-only registration when the friendly alias is unavailable; defaults to `false` for protocol-10 compatibility |
+| `protocol_version` | `string` | no | selected SDK protocol; omission uses the advertised default, unsupported values return HTTP 426 `protocol_incompatible` before a challenge is allocated |
+| `namespace` | `string` | no | `local-tls-v1` requests the Local TLS canonical; omission grants only a friendly alias. Unknown values are rejected |
 | `replica` | `boolean` | no | join concurrent HTTP leases for this identity; requires `replicas: true` from `/sdk/domain`; defaults to exclusive replacement |
 | `metadata` | `LeaseMetadata` | no | public lease metadata |
 | `overlay` | `boolean` | no | prefer an [IVNP overlay path](/concepts#ivnp-backed-overlay-networking) when available; defaults to `false` |
@@ -123,8 +125,8 @@ friendly alias. Canonical URLs are never cache eligible. Local TLS and alias cac
 |-------|------|-------|
 | `identity` | `Identity` | normalized lease identity |
 | `namespace` | `string` | optional; must match the negotiated request namespace |
-| `hostname` | `string` | friendly hostname; empty when a client that allows canonical fallback finds the friendly name owned by another identity |
-| `canonical_hostname` | `string` | relay-derived identity-bound hostname used by the SDK |
+| `hostname` | `string` | granted friendly hostname; may be empty for Local TLS or dedicated TCP/UDP registrations |
+| `canonical_hostname` | `string` | identity-bound Local TLS hostname; empty when no namespace is requested |
 | `alias_epoch` | `string` | optional alias ownership generation shared by replicas; omitted without a friendly alias or on older relays |
 | `expires_at` | `string` | lease expiry |
 | `access_token` | `string` | token for renew, unregister, signer access, and direct datagram backhaul |
@@ -143,8 +145,9 @@ belong to the tunnel; there is no Keyless or relay cache fallback.
 An absent namespace grants only a friendly alias. Negotiating `local-tls-v1`
 adds the independent canonical Local TLS endpoint. Old one-label canonical
 URLs and `legacy_canonical_hostname` / `LegacyURL` have been removed, without
-redirects. Clients that require those URLs must upgrade; older clients may
-still use a granted alias if they can operate without a canonical hostname.
+redirects. SDK v2.7.3 and v2.7.4 require the removed canonical field even when
+their caller wants only an alias. They are rejected by protocol negotiation and
+need a protocol-10 relay until upgraded. See [Upgrading](/deployment#upgrading).
 
 `RelayStatus.PublicURL` is the canonical URL with Local TLS, empty until its
 certificate is usable; otherwise it is the granted alias. `AliasURL` names the
@@ -346,35 +349,30 @@ tenant bytes between the browser side and the SDK side.
 
 ### Waiting for approval
 
-A relay reports its routing decision only as the answer to a reverse connect.
-`RegisterResponse` and `RenewResponse` carry no approval field.
+A manual relay verifies the registration signature before accepting an approval request. The request never receives a token or endpoint. A full queue returns `503 approval_queue_full` with retry guidance. Pre-auth budgets can independently return `429 rate_limited`.
 
-| Reverse connect answers | Meaning | `RelayStatus` |
-|-------------------------|---------|---------------|
-| `101` | lease may route | `State` is `ready`, `Approval` is empty |
-| `403 lease_rejected` | not approved yet, or approval was revoked | `State` is `connecting`, `Approval` is `pending` |
-| `403 lease_denied` | denied or banned | `State` is `connecting`, `Approval` is `refused` |
+An authenticated retry from a different source IP moves the pending request to that source's budget only if capacity is available. A rejected retry leaves the existing request and its expiry unchanged.
 
-The SDK retries every 3 seconds, so an approved lease becomes ready without a
-new registration. When a lease stops being routable, the relay closes its idle
-reverse streams, and the lease leaves `ready` at once.
+Denying or banning an identity in either mode removes its existing leases and releases alias and port reservations. Revoking approval does the same in manual mode; in auto mode, revoking approval alone keeps the lease routable.
 
-While `Approval` is set, `PublicURL`, `AliasURL`, `TCPAddr`, and `UDPAddr` are
-empty and `Active()` is false, because nothing routes. The lease still exists on
-the relay and renews normally.
+DNS publication and withdrawal use one maintenance owner. Policy changes record the latest desired state for each hostname without waiting for DNS provider work. Failed work is retried by the maintenance retry timer, not by ordinary wakeups or repeated identical registrations. DNS readiness checks process only the requested hostname. A changed desired state supersedes older work. Hostname ownership is checked before submitting a withdrawal.
 
-An empty `Approval` means that no refusal was reported. It never means approved.
-Show `Approval.Message()` to people: `waiting for relay approval` or
-`refused by relay`.
+| Operation | Response | Publisher behavior |
+| --- | --- | --- |
+| Register, awaiting manual approval | `503 lease_rejected` with `Retry-After` (5–60 seconds) | Repeat the signed registration exchange after the delay |
+| Register, denied or banned in either mode | `403 lease_denied` | Terminal refusal before lease allocation |
+| Connect or renew a removed lease | Missing or invalid lease | Obtain a fresh registration |
+| Reverse connect on a legacy pending lease | `403 lease_rejected` | Wait for approval on the existing lease |
 
-| SDK and relay | While waiting | After a revoke |
-|---------------|---------------|----------------|
-| Old SDK, new relay | `connecting` | leaves `ready` for `connecting` |
-| New SDK, old relay | `pending`, also when denied | stays `ready`; an old relay does not report it |
-| New SDK, new relay | `pending` or `refused` | `pending` or `refused` |
+**Protocol 10 compatibility.** The baseline for the following checks is commit `9b249c1`. Both mixed-version tests run a single publisher process across approval and request the published HTTP service. The following behavior assumes a compatible SDK tunnel protocol.
 
-The browser SDK stays at `connecting`, because a failed WebSocket does not
-expose its status.
+| Publisher | Relay | Before and after approval |
+| --- | --- | --- |
+| Baseline | Updated | The CLI shows connecting. It honors the registration retry delay and becomes ready after approval. The relay holds only a pending request. |
+| Updated | Baseline | The CLI reports pending on the existing reverse-connect refusal and becomes ready on the original lease. The baseline relay allocates its usual pending lease. |
+| Updated | Updated | The CLI reports pending before receiving a lease. It registers on its next attempt after approval. |
+
+To repeat the mixed-version tests, build `./cmd/portal-tunnel` and `./cmd/relay-server` from the baseline checkout. Set `PORTAL_V10_BASE_CLI` and `PORTAL_V10_BASE_RELAY` to their absolute paths and run `go test -v ./e2e -run '^TestManualProtocol10Compatibility$' -count=1` in the updated checkout.
 
 ## Browser/WASM SDK Runtime
 

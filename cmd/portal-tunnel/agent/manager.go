@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -500,13 +501,9 @@ func (t *managedTunnel) updateSettings() error {
 	if runtime == nil {
 		return nil
 	}
-	spec, err := cfg.Spec()
-	if err != nil {
-		return err
-	}
 	return errors.Join(
-		runtime.Exposure.UpdateMetadata(spec.Metadata),
-		runtime.Exposure.SetMaxActiveRelays(spec.Relays.MaxActive),
+		runtime.Exposure.UpdateMetadata(cfg.LeaseMetadata),
+		runtime.Exposure.SetMaxActiveRelays(cfg.RelayLimit()),
 	)
 }
 
@@ -541,7 +538,6 @@ func (cfg TunnelConfig) renderTunnelStatus(runtime *tunnel.Runtime, done chan st
 		state = "starting"
 	}
 
-	spec, _ := cfg.Spec()
 	auth := cfg.AuthConfig
 	status := AgentTunnelStatus{
 		Address:                 address,
@@ -551,22 +547,27 @@ func (cfg TunnelConfig) renderTunnelStatus(runtime *tunnel.Runtime, done chan st
 		TargetAddr:              cfg.TargetAddr,
 		LastError:               lastError,
 		Serve:                   cfg.Serve,
-		Discovery:               spec.Relays.Discovery,
+		Discovery:               cfg.DiscoveryEnabled(),
 		Overlay:                 cfg.Overlay,
 		Replica:                 cfg.Replica,
-		MaxActiveRelays:         spec.Relays.MaxActive,
-		Metadata:                spec.Metadata,
+		MaxActiveRelays:         cfg.RelayLimit(),
+		Metadata:                cfg.Copy(),
 		AuthConfig:              auth.Public(),
 		AuthOIDCClientSecretSet: auth.OIDCClientSecret != "",
 		AuthSMTPPasswordSet:     auth.SMTPPassword != "",
 		X402Config:              cfg.X402Config,
 	}
 	status.Endpoints = slices.Clone(status.Endpoints)
-	attachTunnelLiveStatus(&status, cfg.Provider, spec.HTTP, runtime)
+	status.Options = maps.Clone(status.Options)
+	status.HTTPRoutes = slices.Clone(cfg.HTTPRoutes)
+	for i := range status.HTTPRoutes {
+		status.HTTPRoutes[i].Methods = slices.Clone(status.HTTPRoutes[i].Methods)
+	}
+	attachTunnelLiveStatus(&status, cfg.Provider, runtime)
 	return status
 }
 
-func attachTunnelLiveStatus(status *AgentTunnelStatus, provider string, httpSpec *tunnel.HTTPConfig, runtime *tunnel.Runtime) {
+func attachTunnelLiveStatus(status *AgentTunnelStatus, provider string, runtime *tunnel.Runtime) {
 	hasProviderCheck := provider == appauth.ProviderOIDC || provider == appauth.ProviderSAML || provider == appauth.ProviderEmail
 	if runtime != nil && hasProviderCheck {
 		checked, err := runtime.AuthProviderCheck()
@@ -574,9 +575,6 @@ func attachTunnelLiveStatus(status *AgentTunnelStatus, provider string, httpSpec
 		if err != nil {
 			status.AuthProviderError = err.Error()
 		}
-	}
-	if httpSpec != nil {
-		status.HTTPRoutes = httpSpec.Routes
 	}
 	if runtime != nil {
 		status.Relays = agentRelayStatuses(runtime.Exposure.Relays())
@@ -638,11 +636,7 @@ func (t *managedTunnel) runOnce(ctx context.Context) error {
 	t.mu.Unlock()
 
 	cfg.FacilitatorToken = cmp.Or(strings.TrimSpace(cfg.FacilitatorToken), strings.TrimSpace(os.Getenv("CSPR_CLOUD_API_KEY")))
-	spec, err := cfg.Spec()
-	if err != nil {
-		return err
-	}
-	runtime, err := tunnel.Start(ctx, spec)
+	runtime, err := tunnel.Start(ctx, cfg.Config)
 	if err != nil {
 		return err
 	}
