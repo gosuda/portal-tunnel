@@ -8,6 +8,8 @@ function commentErrorMessage(reason: unknown, fallback: string): string {
   return reason instanceof Error ? reason.message : fallback;
 }
 
+const LOAD_COMMENTS_ERROR = "Could not load comments.";
+
 function subscribeInitialComments(
   path: string,
   setComments: (comments: AppComment[]) => void,
@@ -18,7 +20,7 @@ function subscribeInitialComments(
   void apiClient.get<CommentListResponse>(path).then((data) => {
     if (!cancelled) setComments(data.comments);
   }).catch((reason: unknown) => {
-    if (!cancelled) setError(commentErrorMessage(reason, "Could not load comments."));
+    if (!cancelled) setError(commentErrorMessage(reason, LOAD_COMMENTS_ERROR));
   }).finally(() => {
     if (!cancelled) setLoading(false);
   });
@@ -65,7 +67,7 @@ export function useServerComments(server: BaseServer, enabled = true): { comment
       () => apiClient.get<CommentListResponse>(path),
       setComments,
       setError,
-      "Could not load comments."
+      LOAD_COMMENTS_ERROR
     );
     setLoading(false);
   };
