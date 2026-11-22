@@ -794,6 +794,12 @@ func (s *Server) handleTransportFallback(w http.ResponseWriter, req *http.Reques
 	if record.datagram != nil {
 		udpAddr = net.JoinHostPort(s.identity.Name, strconv.Itoa(record.datagram.UDPPort()))
 	}
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		// No HTTP backend exists, so a write must not look accepted.
+		w.Header().Set("Allow", "GET, HEAD")
+		utils.WriteAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "this hostname serves a raw TCP service")
+		return true
+	}
 	w.Header().Set("Vary", "Accept")
 	// Browsers ask for text/html. Other clients, such as curl with its
 	// default "Accept: */*", get the JSON envelope.

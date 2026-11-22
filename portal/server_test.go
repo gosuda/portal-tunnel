@@ -1233,3 +1233,33 @@ func TestTransportFallbackServesJSONUnlessHTMLRequested(t *testing.T) {
 		})
 	}
 }
+
+func TestTransportFallbackRejectsWriteMethods(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	server := &Server{
+		registry: registry,
+		identity: identity.RelayIdentity{Identity: types.Identity{Name: "relay.example.com"}},
+	}
+	registry.records = append(registry.records, &leaseRecord{
+		Identity: types.Identity{Name: "my-ssh"}, Hostname: "my-ssh.relay.example.com", ExpiresAt: time.Now().Add(time.Hour), tcpPort: 40001,
+	})
+	for method, want := range map[string]int{
+		http.MethodGet:    http.StatusOK,
+		http.MethodHead:   http.StatusOK,
+		http.MethodPost:   http.StatusMethodNotAllowed,
+		http.MethodPut:    http.StatusMethodNotAllowed,
+		http.MethodDelete: http.StatusMethodNotAllowed,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "https://my-ssh.relay.example.com/", nil)
+		if !server.handleTransportFallback(rec, req, "my-ssh.relay.example.com") {
+			t.Fatalf("%s: handleTransportFallback returned false for TCP service", method)
+		}
+		if rec.Code != want {
+			t.Errorf("%s: status = %d, want %d", method, rec.Code, want)
+		}
+		if want == http.StatusMethodNotAllowed && rec.Header().Get("Allow") != "GET, HEAD" {
+			t.Errorf("%s: Allow = %q, want GET, HEAD", method, rec.Header().Get("Allow"))
+		}
+	}
+}
