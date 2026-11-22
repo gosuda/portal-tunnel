@@ -91,7 +91,7 @@ curl -H "X-Portal-Access-Credential: $PORTAL_CREDENTIAL" https://myapp.example.c
 
 Portal validates and removes this header before forwarding the request.
 
-## Private Review Preview
+## Private Agent Preview
 
 For an explicitly private review, agree on the exact app/port, reviewers, and
 review window before opening the tunnel. Use a fresh preview identity where
@@ -125,11 +125,9 @@ unverified checks. See the
 for secret-safe issuance, verification, handoff, and owned-process cleanup.
 
 Stop the owned preview at review end or cancellation, preserving unrelated
-services. Expiry ends credential access, not the tunnel. There is no per-link
-revocation: remove a subject from a still non-empty allowlist and restart, or
-stop the isolated preview, especially for the final reviewer. Emptying the list
-reopens valid credential access. Cleanup after crashes or detachment is best
-effort, not guaranteed automatic teardown.
+services. Credential expiry does not stop the tunnel, and links cannot be revoked
+one by one; the linked workflow describes expiry, subject revocation, and cleanup
+limits.
 
 ## SIWE Application Access
 
