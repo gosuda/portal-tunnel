@@ -229,6 +229,8 @@ func newTunnelConfig(req AgentTunnelRequest) (TunnelConfig, error) {
 		Serve:               req.Serve,
 		HTTPRoutes:          req.HTTPRoutes,
 		StripRequestHeaders: req.StripRequestHeaders,
+		Inspect:             req.Inspect,
+		InspectBodies:       req.InspectBodies,
 		RelayURLs:           req.RelayURLs,
 		Discovery:           req.Discovery,
 		Overlay:             req.Overlay,
@@ -547,6 +549,8 @@ func (cfg TunnelConfig) renderTunnelStatus(runtime *tunnel.Runtime, done chan st
 		TargetAddr:              cfg.TargetAddr,
 		LastError:               lastError,
 		Serve:                   cfg.Serve,
+		Inspect:                 cfg.Inspect,
+		InspectBodies:           cfg.InspectBodies,
 		Discovery:               cfg.DiscoveryEnabled(),
 		Overlay:                 cfg.Overlay,
 		Replica:                 cfg.Replica,
@@ -577,6 +581,7 @@ func attachTunnelLiveStatus(status *AgentTunnelStatus, provider string, runtime 
 		}
 	}
 	if runtime != nil {
+		status.InspectorURL = runtime.InspectorURL
 		status.Relays = agentRelayStatuses(runtime.Exposure.Relays())
 	}
 }
