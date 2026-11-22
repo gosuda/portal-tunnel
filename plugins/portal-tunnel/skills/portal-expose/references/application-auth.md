@@ -50,28 +50,33 @@ portal expose 127.0.0.1:3000 --name private-review \
 
 After the ready event, set `url` to the exact granted `alias_url`, or `public_url` if there is no alias. Issue only for that host, with an explicit short TTL no longer than the remaining approved review window. `1h` below assumes the full hour remains; the CLI default of 30 days is inappropriate for this review. The credential TTL is not a tunnel lifetime flag.
 
-The following Bash example captures secrets in memory without printing them. Disable shell tracing and command/output recording before issuance; do not paste expanded commands, headers, or raw issuance output into an agent transcript. Use a known read-only app path in place of `/` if needed:
+The following Bash example fails closed: it issues a credential only after both anonymous checks pass, and it prints the redeem URL only after the authorized request reaches the app. Each check stops the function with `return`, so a failure never closes the shell. Disable shell tracing and command/output recording before issuance; do not paste expanded commands, headers, or raw issuance output into an agent transcript. Use a known read-only app path in place of `/` if needed, and set `want` to that path's known app status:
 
 ```bash
 url='https://<ready-host>'
-host=${url#https://}
-curl --max-time 10 -sS -D - -o /dev/null "$url/"
-# Require 303 and Location: /_portal/auth/login?next=%2F; do not follow redirects.
-curl --max-time 10 -sS -o /dev/null -w '%{http_code}\n' -X POST "$url/"
-# Require 401. Stop the owned preview if either anonymous check fails.
+identity=/absolute/path/outside-project/private-review.json
+want=200
 
-set +x
-issued=$(portal auth issue "$host" --subject alice-review --expires 1h \
-  --identity-path /absolute/path/outside-project/private-review.json) || exit 1
-# Pass the credential through stdin, keeping it out of curl's process arguments.
-printf '%s\n' "$issued" | sed -n 's/^Credential: /X-Portal-Access-Credential: /p' |
-  curl --max-time 10 -sS --header @- -o /dev/null -w '%{http_code}\n' "$url/"
-# Require the known app response, e.g. 200; not a login or Portal error page.
-redeem_url=$(printf '%s\n' "$issued" | sed -n 's/^Redeem URL: //p')
-unset issued
+private_preview_handoff() {
+  local got issued redeem_url
+  got=$(curl --max-time 10 -sS -o /dev/null -w '%{http_code} %{redirect_url}' "$url/") || return 1
+  [ "$got" = "303 $url/_portal/auth/login?next=%2F" ] || { echo "anonymous GET: $got" >&2; return 1; }
+  got=$(curl --max-time 10 -sS -o /dev/null -w '%{http_code}' -X POST "$url/") || return 1
+  [ "$got" = 401 ] || { echo "anonymous POST: $got" >&2; return 1; }
+  issued=$(portal auth issue "${url#https://}" --subject alice-review --expires 1h \
+    --identity-path "$identity") || { echo "credential issuance failed" >&2; return 1; }
+  # Pass the credential through stdin, keeping it out of curl's process arguments.
+  got=$(printf '%s\n' "$issued" | sed -n 's/^Credential: /X-Portal-Access-Credential: /p' |
+    curl --max-time 10 -sS --header @- -o /dev/null -w '%{http_code}' "$url/") || return 1
+  [ "$got" = "$want" ] || { echo "authorized GET: $got" >&2; return 1; }
+  redeem_url=$(printf '%s\n' "$issued" | sed -n 's/^Redeem URL: //p')
+  [ -n "$redeem_url" ] || { echo "no redeem URL in issuance output" >&2; return 1; }
+  printf 'Redeem URL: %s\n' "$redeem_url"
+}
+(set +x; private_preview_handoff) || echo "private preview check failed: stop the preview and deliver nothing" >&2
 ```
 
-Check the indicated responses before proceeding to issuance or delivery. If issuance or verification fails, stop the owned preview and report the failure. If the app has a local request counter or a controlled access-log harness, record its baseline after the local health check, with other traffic paused. The two anonymous probes must leave origin hits unchanged; the authorized GET must add exactly one hit. This distinguishes a gate response from an app that happens to redirect. Without such instrumentation, report origin isolation as unverified. The existing `sdk/appauth/api_test.go` tests `TestRequestWithoutSessionNeverReachesTheApplication` and `TestPrincipalReachesTheApplicationWithoutIdentityHeaders` also protect the underlying gate invariant and authorized forwarding.
+A failed check prints which step failed and no link. Then stop the owned preview, report the failure, and do not retry without authentication. A credential issued before a failed authorized check is never printed, so it is not delivered. If the app has a local request counter or a controlled access-log harness, record its baseline after the local health check, with other traffic paused. The two anonymous probes must leave origin hits unchanged; the authorized GET must add exactly one hit. This distinguishes a gate response from an app that happens to redirect. Without such instrumentation, report origin isolation as unverified. The existing `sdk/appauth/api_test.go` tests `TestRequestWithoutSessionNeverReachesTheApplication` and `TestPrincipalReachesTheApplicationWithoutIdentityHeaders` also protect the underlying gate invariant and authorized forwarding.
 
 Deliver `redeem_url` once through the approved channel, with subject, absolute expiry, exact host, and the warning that anyone holding the link can reuse it until expiry. Do not deliver the raw credential as well. Clear the variable after delivery. For another provider, use its allowlist and Verify steps below; do not sign in on the reviewer's behalf or claim authorized access was tested when it was not.
 
