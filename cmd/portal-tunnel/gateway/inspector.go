@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -181,38 +182,51 @@ func (i *httpInspector) capture(w http.ResponseWriter, r *http.Request, replayed
 	return t
 }
 
+// inspectAllowedHeaders lists the only headers whose values are stored and
+// replayed. The list is far below the 32-name and 8 KiB limits, so these
+// headers always fit before any redacted name uses the budget.
+var inspectAllowedHeaders = []string{"Content-Type", "Content-Encoding", "Content-Length", "Accept",
+	"Accept-Encoding", "Accept-Language", "User-Agent", "X-Request-Id", "X-Forwarded-Proto"}
+
 // Capture selected headers only. Unrecognized values, including custom API
 // keys, signatures, cookies and Portal identity proofs, never enter storage.
+// Allowed headers are kept first, so many custom headers cannot push out a
+// header that replay needs. Other names follow in sorted order as redacted
+// metadata, so the kept set does not depend on map iteration order.
 func inspectHeaders(source http.Header) (http.Header, http.Header) {
 	visible, eligible := make(http.Header), make(http.Header)
 	remaining := inspectHeaderLimit
-	for name, values := range source {
-		if len(visible) >= 32 {
-			break
-		}
-		if len(name) > 128 || remaining < len(name)+16 {
+	allowed := make(map[string]bool, len(inspectAllowedHeaders))
+	for _, name := range inspectAllowedHeaders {
+		allowed[name] = true
+		values := source.Values(name)
+		if len(values) == 0 {
 			continue
 		}
-		name = strings.Clone(name)
 		remaining -= len(name)
-		switch strings.ToLower(name) {
-		case "accept", "accept-encoding", "accept-language", "content-type", "content-length", "content-encoding", "user-agent", "x-request-id", "x-forwarded-proto":
-			for index, value := range values {
-				if index >= 16 {
-					break
-				}
-				if len(value) > remaining {
-					break
-				}
-				value = strings.Clone(value)
-				visible.Add(name, value)
-				eligible.Add(name, value)
-				remaining -= len(value) + 1
+		for index, value := range values {
+			if index >= 16 || len(value) > remaining {
+				break
 			}
-		default:
-			visible.Set(name, "[redacted]")
-			remaining -= 10
+			value = strings.Clone(value)
+			visible.Add(name, value)
+			eligible.Add(name, value)
+			remaining -= len(value) + 1
 		}
+	}
+	others := make([]string, 0, len(source))
+	for name := range source {
+		if !allowed[http.CanonicalHeaderKey(name)] && len(name) <= 128 {
+			others = append(others, name)
+		}
+	}
+	slices.Sort(others)
+	for _, name := range others {
+		if len(visible) >= 32 || remaining < len(name)+16 {
+			break
+		}
+		visible.Set(strings.Clone(name), "[redacted]")
+		remaining -= len(name) + 10
 	}
 	return visible, eligible
 }

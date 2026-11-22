@@ -229,6 +229,27 @@ func TestInspectorRedactsCredentialQueries(t *testing.T) {
 	}
 }
 
+func TestInspectorKeepsReplayHeadersBeforeCustomHeaders(t *testing.T) {
+	t.Parallel()
+	source := make(http.Header)
+	for n := range 64 {
+		source.Set(fmt.Sprintf("X-Custom-%02d", n), strings.Repeat("v", 64))
+	}
+	source.Set("Content-Type", "application/json")
+	source.Set("Content-Encoding", "gzip")
+	// Map iteration order changes between runs, so repeat to catch an
+	// order-dependent drop.
+	for range 50 {
+		visible, eligible := inspectHeaders(source)
+		if eligible.Get("Content-Type") != "application/json" || eligible.Get("Content-Encoding") != "gzip" {
+			t.Fatalf("replay headers lost: %v", eligible)
+		}
+		if len(visible) != 32 || visible.Get("X-Custom-00") != "[redacted]" || visible.Get("X-Custom-63") != "" {
+			t.Fatalf("redacted names are not bounded in sorted order: %v", visible)
+		}
+	}
+}
+
 func TestInspectorUIShutdownDoesNotStopForwarding(t *testing.T) {
 	t.Parallel()
 	i := newTestInspector(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
