@@ -14,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -765,8 +766,14 @@ func (s *Server) serveCachedSiteFallbackTransport(host string, record *leaseReco
 }
 
 // servesTransportFallback reports whether public HTTPS ingress for host should
-// terminate at the relay and show the transport landing page.
-func (s *Server) servesTransportFallback(host string) bool {
+// terminate at the relay and show the transport landing page. Only clients
+// that offer an HTTP ALPN get the page. Other TLS clients still reach the raw
+// TCP backend through the SNI bridge, so a backend that runs its own TLS keeps
+// working on the relay HTTPS port.
+func (s *Server) servesTransportFallback(host string, alpn []string) bool {
+	if !slices.ContainsFunc(alpn, func(proto string) bool { return proto == "http/1.1" || proto == "h2" }) {
+		return false
+	}
 	record, ok := s.registry.Lookup(host)
 	return ok && record.isTransportOnly()
 }

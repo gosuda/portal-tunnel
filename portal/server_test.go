@@ -1102,7 +1102,7 @@ func TestTransportFallbackOnlyTakesRawTCPLeases(t *testing.T) {
 		"web.relay.example.com":     false,
 		"missing.relay.example.com": false,
 	} {
-		if got := server.servesTransportFallback(host); got != want {
+		if got := server.servesTransportFallback(host, []string{"h2", "http/1.1"}); got != want {
 			t.Errorf("servesTransportFallback(%q) = %v, want %v", host, got, want)
 		}
 		rec := httptest.NewRecorder()
@@ -1110,5 +1110,32 @@ func TestTransportFallbackOnlyTakesRawTCPLeases(t *testing.T) {
 		if got := server.handleTransportFallback(rec, req, host); got != want {
 			t.Errorf("handleTransportFallback(%q) = %v, want %v", host, got, want)
 		}
+	}
+}
+
+func TestTransportFallbackKeepsNonHTTPTLSOnRawTCPBridge(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	server := &Server{
+		registry: registry,
+		identity: identity.RelayIdentity{Identity: types.Identity{Name: "relay.example.com"}},
+	}
+	registry.records = append(registry.records, &leaseRecord{
+		Identity: types.Identity{Name: "raw-tls"}, Hostname: "raw-tls.relay.example.com", ExpiresAt: time.Now().Add(time.Hour), tcpPort: 40001,
+	})
+	for _, test := range []struct {
+		name string
+		alpn []string
+		want bool
+	}{
+		{"browser", []string{"h2", "http/1.1"}, true},
+		{"http/1.1 only", []string{"http/1.1"}, true},
+		{"no alpn", nil, false},
+		{"custom protocol", []string{"imap"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := server.servesTransportFallback("raw-tls.relay.example.com", test.alpn); got != test.want {
+				t.Fatalf("servesTransportFallback(alpn=%v) = %v, want %v", test.alpn, got, test.want)
+			}
+		})
 	}
 }
