@@ -116,6 +116,10 @@ func fetchUpdateBinary(dir, binURL string) (string, error) {
 	return tmpPath, nil
 }
 
+// errReleaseAssetNotFound is a release that does not publish the asset, such
+// as a release older than Portal Desktop.
+var errReleaseAssetNotFound = errors.New("the release has no such asset")
+
 func acquireFetchUpdateBinaryResponse(binURL string, tmpFile *os.File, tmpPath string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, binURL, nil)
 	if err != nil {
@@ -133,6 +137,9 @@ func acquireFetchUpdateBinaryResponse(binURL string, tmpFile *os.File, tmpPath s
 		_ = resp.Body.Close()
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("failed to download %s: %w", binURL, errReleaseAssetNotFound)
+		}
 		return nil, fmt.Errorf("failed to download binary: unexpected status %d", resp.StatusCode)
 	}
 	return resp, nil

@@ -90,6 +90,9 @@ func stageDesktop(version, dst string) (string, string, error) {
 	}
 	assetURL := releaseAssetURL(version, filename)
 	asset, err := fetchUpdateBinary(dir, assetURL)
+	if errors.Is(err, errReleaseAssetNotFound) {
+		return "", dir, desktopMissingError(version, dst)
+	}
 	if err != nil {
 		return "", dir, err
 	}
@@ -114,6 +117,15 @@ func stageDesktop(version, dst string) (string, string, error) {
 		return "", dir, errDesktopPackageIncomplete
 	}
 	return staged, dir, os.Chmod(staged, 0o755)
+}
+
+// desktopMissingError says why an update to a release without Portal Desktop,
+// such as one older than it, stops before it changes anything: the CLI and the
+// installed desktop move only together.
+func desktopMissingError(version, desktop string) error {
+	return fmt.Errorf("release %s has no Portal Desktop for %s/%s, and Portal Desktop is installed at %s; "+
+		"portal update keeps the CLI and the desktop at one release, so choose a release with Portal Desktop, "+
+		"or remove %s to update the CLI alone", version, runtime.GOOS, runtime.GOARCH, desktop, desktop)
 }
 
 // swapIn renames src over dst and keeps the old dst beside it, as dst.old,

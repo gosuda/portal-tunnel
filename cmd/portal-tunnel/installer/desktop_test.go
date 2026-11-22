@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -49,6 +52,25 @@ func writeTarGz(t *testing.T, entries ...tarEntry) string {
 }
 
 func keepAll(string) bool { return true }
+
+// A release that does not publish the desktop, such as one older than it, is
+// told apart from a failed download, so the update can say why it stops.
+func TestFetchTellsAMissingAssetApart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/missing" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "down", http.StatusBadGateway)
+	}))
+	defer server.Close()
+	if _, err := fetchUpdateBinary(t.TempDir(), server.URL+"/missing"); !errors.Is(err, errReleaseAssetNotFound) {
+		t.Fatalf("missing asset: err = %v, want errReleaseAssetNotFound", err)
+	}
+	if _, err := fetchUpdateBinary(t.TempDir(), server.URL+"/down"); err == nil || errors.Is(err, errReleaseAssetNotFound) {
+		t.Fatalf("failed download: err = %v, want another error", err)
+	}
+}
 
 // The update unpacks a downloaded package next to the installed desktop, so
 // nothing in the package may write outside the directory it is unpacked in.
