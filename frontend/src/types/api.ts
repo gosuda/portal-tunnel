@@ -85,11 +85,10 @@ export interface DiscoveredService {
   locations: ServiceLocation[];
 }
 
+// The backend also reports partial and relay coverage counts. The UI keeps
+// every location it has seen, so one snapshot's coverage is not shown.
 export interface ServiceDiscoveryResponse {
   services: DiscoveredService[];
-  partial: boolean;
-  relays_checked: number;
-  relays_skipped: number;
 }
 
 export interface PolicyPortSettings {

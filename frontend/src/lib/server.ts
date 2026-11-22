@@ -31,6 +31,32 @@ export interface BaseServer {
   observedReputation?: ObservedReputation;
 }
 
+// A newer observation from a relay replaces its older one; other relays stay.
+export function mergeLocations(
+  existing: ServiceLocation[],
+  incoming: ServiceLocation[],
+): ServiceLocation[] {
+  const byRelay = new Map(existing.map((location) => [location.relay_url, location]));
+  for (const location of incoming) byRelay.set(location.relay_url, location);
+  return [...byRelay.values()];
+}
+
+// A live location is reported ready by its relay and its observation has not expired.
+export function isLocationLive(location: ServiceLocation, now = Date.now()): boolean {
+  const expires = Date.parse(location.expires_at);
+  return location.reported_ready === true && Number.isFinite(expires) && expires > now;
+}
+
+// An available location is live and has an HTTPS URL, so it is a navigation target.
+export function isLocationAvailable(location: ServiceLocation, now = Date.now()): boolean {
+  if (!isLocationLive(location, now) || !location.url) return false;
+  try {
+    return new URL(location.url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 // The directory groups observations by name and owner. Prefer local card data
 // when available so its link, thumbnail, community actions, and status stay intact.
 export function mergeDiscoveredServices(
@@ -56,7 +82,8 @@ export function mergeDiscoveredServices(
     const key = identityKey(service.name, service.address);
     const existing = byIdentity.get(key);
     if (existing) {
-      byIdentity.set(key, { ...existing, locations: service.locations });
+      const mergedLocations = mergeLocations(existing.locations ?? [], service.locations);
+      byIdentity.set(key, { ...existing, locations: mergedLocations });
       continue;
     }
     // A local-only snapshot is not a substitute for the live local card list.
@@ -83,7 +110,7 @@ export function mergeDiscoveredServices(
       tags: metadata.tags,
       owner: metadata.owner,
       thumbnail: "",
-      online: locations.some((location) => location.reported_ready),
+      online: locations.some((location) => isLocationLive(location)),
       dns: "",
       link: "",
       remoteOnly: true,

@@ -24,9 +24,6 @@ const IDENTITY_B = "0x2222222222222222222222222222222222222222";
 
 function discoveryFor(address: string, serviceName: string): ServiceDiscoveryResponse {
   return {
-    partial: false,
-    relays_checked: 1,
-    relays_skipped: 0,
     services: [
       {
         name: serviceName,
