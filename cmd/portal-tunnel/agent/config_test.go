@@ -140,6 +140,8 @@ udp_addr = "127.0.0.1:19133"
 id = "replica"
 target = "127.0.0.1:3004"
 replica = true
+inspect = true
+inspect_bodies = true
 `
 
 func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
