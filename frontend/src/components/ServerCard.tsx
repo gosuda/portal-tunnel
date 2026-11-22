@@ -156,7 +156,7 @@ function ServerHoverDetails({ description, tags, isTransportService, endpointCou
     </div>
   );
 }
-export function isLoopbackOrEmpty(host: string): boolean {
+function isLoopbackOrEmpty(host: string): boolean {
   const normalized = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
   return (
     !normalized ||
@@ -168,7 +168,7 @@ export function isLoopbackOrEmpty(host: string): boolean {
   );
 }
 
-export function extractRelayHostname(server: BaseServer): string {
+function extractRelayHostname(server: BaseServer): string {
   if (server.locations && server.locations.length > 0) {
     const loc =
       server.locations.find((l) => l.current_relay && (l.url || l.relay_url)) ||
@@ -192,7 +192,7 @@ export function extractRelayHostname(server: BaseServer): string {
   return "";
 }
 
-export function formatEndpointAddress(address: string, fallbackHost?: string): string {
+function formatEndpointAddress(address: string, fallbackHost?: string): string {
   if (!address) return "";
   const trimmed = address.trim();
   const lastColon = trimmed.lastIndexOf(":");
@@ -208,7 +208,7 @@ export function formatEndpointAddress(address: string, fallbackHost?: string): s
   return trimmed;
 }
 
-export function resolveRepresentativeLink(server: BaseServer): string {
+function resolveRepresentativeLink(server: BaseServer): string {
   if (server.link) {
     return server.link;
   }
@@ -216,7 +216,7 @@ export function resolveRepresentativeLink(server: BaseServer): string {
   return server.locations?.find((location) => isLocationAvailable(location))?.url ?? "";
 }
 
-export function buildEndpoints(
+function buildEndpoints(
   tcpAddr: string | undefined,
   udpAddr: string | undefined,
   fallbackHost?: string,

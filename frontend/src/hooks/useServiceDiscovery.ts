@@ -23,7 +23,7 @@ function nextLocationExpiry(response: ServiceDiscoveryResponse, now: number): nu
 // Keep every location seen for this filter. expires_at decides only whether a
 // location is available, never whether it is listed. The newest snapshot owns
 // service metadata.
-export function mergeDiscoveryResponses(
+function mergeDiscoveryResponses(
   previous: ServiceDiscoveryResponse | undefined,
   incoming: ServiceDiscoveryResponse,
 ): ServiceDiscoveryResponse {
