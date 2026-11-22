@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net"
 	"net/http"
@@ -1136,6 +1137,63 @@ func TestTransportFallbackKeepsNonHTTPTLSOnRawTCPBridge(t *testing.T) {
 			if got := server.servesTransportFallback("raw-tls.relay.example.com", test.alpn); got != test.want {
 				t.Fatalf("servesTransportFallback(alpn=%v) = %v, want %v", test.alpn, got, test.want)
 			}
+		})
+	}
+}
+
+func TestPublicIngressRoutesTransportFallbackByLeaseAndALPN(t *testing.T) {
+	registry := newTestRegistry(t, true, true)
+	root := registry.rootHostname
+	expires := time.Now().Add(time.Hour)
+	registry.records = append(registry.records,
+		&leaseRecord{Identity: types.Identity{Name: "raw-tcp"}, Hostname: "raw-tcp." + root, ExpiresAt: expires, tcpPort: 40001},
+		&leaseRecord{Identity: types.Identity{Name: "udp-web"}, Hostname: "udp-web." + root, ExpiresAt: expires, datagram: transport.NewRelayDatagram(types.ServiceIdentityKey{}, 40002)},
+		&leaseRecord{Identity: types.Identity{Name: "web"}, Hostname: "web." + root, ExpiresAt: expires},
+	)
+	for _, test := range []struct {
+		name, host  string
+		alpn        []string
+		wantHandoff bool
+	}{
+		{"raw tcp browser", "raw-tcp." + root, []string{"h2", "http/1.1"}, true},
+		{"raw tcp custom tls", "raw-tcp." + root, nil, false},
+		{"udp lease with http", "udp-web." + root, []string{"h2", "http/1.1"}, false},
+		{"http lease", "web." + root, []string{"h2", "http/1.1"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := &Server{
+				registry:   registry,
+				identity:   identity.RelayIdentity{Identity: types.Identity{Name: root}},
+				cfg:        utils.NewSnapshot(ServerConfig{}, ServerConfig.snapshot),
+				apiHandoff: &handoffListener{conns: make(chan net.Conn, 1), done: make(chan struct{})},
+			}
+			relaySide, clientSide := net.Pipe()
+			defer clientSide.Close()
+			conn := &publicIngressTestConn{Conn: relaySide, remote: &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 10000}}
+			if !server.admitIngress(conn, true) {
+				t.Fatal("ingress admission rejected")
+			}
+			client := tls.Client(clientSide, &tls.Config{ServerName: test.host, NextProtos: test.alpn, InsecureSkipVerify: true})
+			go func() { _ = client.Handshake() }()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan struct{})
+			go func() { server.servePublicIngressConn(ctx, conn); close(done) }()
+			select {
+			case handed := <-server.apiHandoff.conns:
+				_ = handed.Close()
+				if !test.wantHandoff {
+					t.Fatal("connection went to the relay API handoff, want the lease bridge")
+				}
+			case <-done:
+				if test.wantHandoff {
+					t.Fatal("connection went to the lease bridge, want the relay API handoff")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("ingress routing did not finish")
+			}
+			_ = clientSide.Close()
+			<-done
 		})
 	}
 }
