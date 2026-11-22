@@ -12,7 +12,6 @@ import (
 	legonjalla "github.com/go-acme/lego/v4/providers/dns/njalla"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -251,8 +250,8 @@ func (p *Provider) findZone(ctx context.Context, client *apiClient, domain strin
 	if client == nil {
 		return "", errNjallaClientIsNil
 	}
-	domain = types.NormalizeHostname(domain)
-	candidates := types.DomainCandidates(domain)
+	domain = utils.NormalizeHostname(domain)
+	candidates := utils.DomainCandidates(domain)
 
 	zones := p.zones.Load()
 	var lastErr error

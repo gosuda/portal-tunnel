@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -80,11 +81,11 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	normalizedRelayURL, err := types.NormalizeRelayURL(config.RelayURL)
+	normalizedRelayURL, err := utils.NormalizeRelayURL(config.RelayURL)
 	if err != nil {
 		return nil, err
 	}
-	hostname := types.NormalizeHostname(config.Hostname)
+	hostname := utils.NormalizeHostname(config.Hostname)
 	if hostname == "" {
 		return nil, errLocalHostnameIsRequired
 	}
@@ -271,7 +272,7 @@ func (c *Client) TerminateConn(ctx context.Context, raw net.Conn, _ []byte) (net
 	}
 	config := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pin.certificate}, NextProtos: protos,
 		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-			if types.NormalizeHostname(hello.ServerName) != c.hostname {
+			if utils.NormalizeHostname(hello.ServerName) != c.hostname {
 				return nil, fmt.Errorf("local TLS SNI does not match service hostname")
 			}
 			return nil, nil

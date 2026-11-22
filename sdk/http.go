@@ -114,7 +114,7 @@ func relayHTTPServer(relayListener net.Listener, handler http.Handler) *http.Ser
 					r.TLS = &state.connection
 				}
 			}
-			if strictAuthority && r.TLS.ServerName != "" && types.NormalizeHostWithoutPort(r.Host) != types.NormalizeHostname(r.TLS.ServerName) {
+			if strictAuthority && r.TLS.ServerName != "" && utils.NormalizeHostWithoutPort(r.Host) != utils.NormalizeHostname(r.TLS.ServerName) {
 				http.Error(w, "authority does not match TLS server name", http.StatusMisdirectedRequest)
 				return
 			}
@@ -354,7 +354,7 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 		prefix:         prefix,
 		upstream:       upstream,
 		upstreamPath:   upstream.Path,
-		upstreamDomain: types.NormalizeHostname(upstream.Hostname()),
+		upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
 	}, nil
 }
 
@@ -506,7 +506,7 @@ func (r *httpRoute) rewriteProxyCookies(header http.Header, publicHost string) {
 	if host, port, err := net.SplitHostPort(publicDomain); err == nil && port != "" {
 		publicDomain = host
 	}
-	publicDomain = types.NormalizeHostname(strings.Trim(publicDomain, "[]"))
+	publicDomain = utils.NormalizeHostname(strings.Trim(publicDomain, "[]"))
 	header.Del("Set-Cookie")
 	for _, value := range values {
 		cookie, err := http.ParseSetCookie(value)
@@ -521,8 +521,8 @@ func (r *httpRoute) rewriteProxyCookies(header http.Header, publicHost string) {
 				changed = true
 			}
 		}
-		domain := types.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
-		matchesDomain := domain == r.upstreamDomain || types.IsLocalRelayHost(domain)
+		domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
+		matchesDomain := domain == r.upstreamDomain || utils.IsLocalRelayHost(domain)
 		if domain != "" && domain != publicDomain && matchesDomain {
 			cookie.Domain = ""
 			changed = true

@@ -17,6 +17,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 const unreachableRelay = "https://127.0.0.1:1"
@@ -556,7 +557,7 @@ func checkUpdateRejectionUnchanged(t *testing.T, m *manager, path, secret string
 }
 
 func TestUpdateTunnelAuthRestartsOnlyThatTunnel(t *testing.T) {
-	addedRelay, err := types.NormalizeRelayURL("https://127.0.0.1:2")
+	addedRelay, err := utils.NormalizeRelayURL("https://127.0.0.1:2")
 	if err != nil {
 		t.Fatal(err)
 	}

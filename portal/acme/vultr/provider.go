@@ -14,7 +14,6 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/gosuda/portal-tunnel/v2/portal/acme/internal/dnsrecord"
-	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
@@ -298,8 +297,8 @@ func (p *Provider) findZone(ctx context.Context, client *govultr.Client, domain 
 	if client == nil {
 		return "", errVultrClientIsNil
 	}
-	domain = types.NormalizeHostname(domain)
-	candidates := types.DomainCandidates(domain)
+	domain = utils.NormalizeHostname(domain)
+	candidates := utils.DomainCandidates(domain)
 	candidateSet := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
 		candidateSet[candidate] = struct{}{}
@@ -336,7 +335,7 @@ func searchFindZonePages(ctx context.Context, p *Provider, client *govultr.Clien
 func matchFindZonePage(domains []govultr.Domain, candidateSet map[string]struct{}) string {
 	var best string
 	for _, item := range domains {
-		zone := types.NormalizeBaseDomain(item.Domain)
+		zone := utils.NormalizeBaseDomain(item.Domain)
 		if _, ok := candidateSet[zone]; ok && len(zone) > len(best) {
 			best = zone
 		}

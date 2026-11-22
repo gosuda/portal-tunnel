@@ -11,6 +11,7 @@ import (
 
 	"github.com/gosuda/portal-tunnel/v2/portal/identity"
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -133,7 +134,7 @@ func NormalizeRelayDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor
 		desc.ExpiresAt = desc.ExpiresAt.UTC()
 	}
 	if desc.APIHTTPSAddr != "" {
-		normalized, err := types.NormalizeRelayURL(desc.APIHTTPSAddr)
+		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
 		if err != nil {
 			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
 		}

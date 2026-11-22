@@ -52,7 +52,7 @@ func (api *RelayAPI) decodeCommentWriteRequest(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return "", "", false
 	}
-	return types.NormalizeHostname(req.Hostname), req.Text, true
+	return utils.NormalizeHostname(req.Hostname), req.Text, true
 }
 
 func writeCommentErrorResponse(w http.ResponseWriter, err error) {
@@ -72,7 +72,7 @@ func (api *RelayAPI) serveComments(w http.ResponseWriter, r *http.Request) {
 	var hostname, text string
 	switch r.Method {
 	case http.MethodGet:
-		hostname = types.NormalizeHostname(r.URL.Query().Get("hostname"))
+		hostname = utils.NormalizeHostname(r.URL.Query().Get("hostname"))
 	case http.MethodPost:
 		var ok bool
 		hostname, text, ok = api.decodeCommentWriteRequest(w, r)
@@ -146,7 +146,7 @@ func (api *RelayAPI) deleteComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	lease := api.publicLeaseFor(types.NormalizeHostname(req.Hostname))
+	lease := api.publicLeaseFor(utils.NormalizeHostname(req.Hostname))
 	if lease == nil {
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeInvalidRequest, "This app is no longer in the public directory.")
 		return
@@ -173,7 +173,7 @@ func (api *RelayAPI) publicLeaseFor(hostname string) *types.PolicyLease {
 		return nil
 	}
 	for _, lease := range publicIdentityLeases(api.server.PublicLeases(), api.server.PolicyLeases()) {
-		if types.NormalizeHostname(lease.Hostname) == hostname || types.NormalizeHostname(lease.CanonicalHostname) == hostname {
+		if utils.NormalizeHostname(lease.Hostname) == hostname || utils.NormalizeHostname(lease.CanonicalHostname) == hostname {
 			return &lease
 		}
 	}

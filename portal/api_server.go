@@ -126,8 +126,8 @@ func (s *Server) apiHandler(base http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := types.NormalizeHostWithoutPort(r.Host)
-		if r.TLS != nil && r.TLS.ServerName != "" && types.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
+		host := utils.NormalizeHostWithoutPort(r.Host)
+		if r.TLS != nil && r.TLS.ServerName != "" && utils.NormalizeHostname(r.TLS.ServerName) != s.identity.Name {
 			s.serveCachedSite(w, r, host)
 			return
 		}
@@ -246,7 +246,7 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
-	host := types.NormalizeHostname(announceURL.Hostname())
+	host := utils.NormalizeHostname(announceURL.Hostname())
 	if s.rejectAnnounceSelf(w, desc, host) {
 		return
 	}
@@ -274,12 +274,12 @@ func (s *Server) HandleRelayDiscoveryAnnounce(w http.ResponseWriter, r *http.Req
 
 func (s *Server) rejectAnnounceSelf(w http.ResponseWriter, desc types.RelayDescriptor, host string) bool {
 	cfg := s.config()
-	if selfURL, err := types.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
+	if selfURL, err := utils.NormalizeRelayURL(cfg.PortalURL); err == nil && desc.APIHTTPSAddr == selfURL {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
 			fmt.Sprintf("self-announce rejected: %q matches receiving relay url", desc.APIHTTPSAddr))
 		return true
 	}
-	if host != "" && host == types.NormalizeHostname(s.identity.Name) {
+	if host != "" && host == utils.NormalizeHostname(s.identity.Name) {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest,
 			fmt.Sprintf("self-announce rejected: host %q matches receiving relay host", host))
 		return true
@@ -704,7 +704,7 @@ func (s *Server) serveCachedSite(w http.ResponseWriter, req *http.Request, host 
 		http.Error(w, "local TLS hostnames require tunnel termination", http.StatusMisdirectedRequest)
 		return
 	}
-	if req.TLS == nil || types.NormalizeHostname(req.TLS.ServerName) != host {
+	if req.TLS == nil || utils.NormalizeHostname(req.TLS.ServerName) != host {
 		http.Error(w, "TLS name and request host must match", http.StatusMisdirectedRequest)
 		return
 	}

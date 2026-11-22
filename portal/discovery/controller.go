@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal-tunnel/v2/types"
+	"github.com/gosuda/portal-tunnel/v2/utils"
 )
 
 var (
@@ -90,7 +91,7 @@ func (c *Controller) SetExplicitRelays(urls []string) {
 	if c == nil {
 		return
 	}
-	normalized, err := types.NormalizeRelayURLs(urls...)
+	normalized, err := utils.NormalizeRelayURLs(urls...)
 	if err != nil {
 		normalized = urls
 	}
@@ -129,7 +130,7 @@ func (c *Controller) AddRelay(relayURL string) {
 	if c == nil || relayURL == "" {
 		return
 	}
-	if normalized, err := types.NormalizeRelayURL(relayURL); err == nil {
+	if normalized, err := utils.NormalizeRelayURL(relayURL); err == nil {
 		relayURL = normalized
 	}
 	c.mu.Lock()
@@ -297,7 +298,7 @@ func (c *Controller) buildRouteState() routeState {
 
 // BootstrapRelayURLs returns the normalized built-in bootstrap relay URLs.
 func BootstrapRelayURLs() ([]string, error) {
-	return types.NormalizeRelayURLs(types.BootstrapRelays...)
+	return utils.NormalizeRelayURLs(types.BootstrapRelays...)
 }
 
 // ResolveRelayURLs resolves explicit relay URLs, optionally merged with
@@ -305,7 +306,7 @@ func BootstrapRelayURLs() ([]string, error) {
 // explicit URLs are returned (normalized). When true, bootstrap URLs are
 // merged with explicit URLs, deduped.
 func ResolveRelayURLs(explicit []string, includeBootstrap bool) ([]string, error) {
-	explicit, err := types.NormalizeRelayURLs(explicit...)
+	explicit, err := utils.NormalizeRelayURLs(explicit...)
 	if err != nil {
 		return nil, err
 	}
@@ -319,5 +320,5 @@ func ResolveRelayURLs(explicit []string, includeBootstrap bool) ([]string, error
 	if len(defaults) == 0 {
 		return explicit, nil
 	}
-	return types.NormalizeRelayURLs(append(defaults, explicit...)...)
+	return utils.NormalizeRelayURLs(append(defaults, explicit...)...)
 }

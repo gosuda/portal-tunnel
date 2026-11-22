@@ -101,7 +101,7 @@ func runTCPCommand(args []string) error {
 }
 
 func normalizeDemoName(cfg demoConfig) (demoConfig, error) {
-	normalizedName, err := types.NormalizeDNSLabel(cfg.name)
+	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
 	if err != nil {
 		return cfg, fmt.Errorf("invalid --name value: %w", err)
 	}
@@ -232,7 +232,7 @@ func exposeRunUDPDemo(ctx context.Context, cfg demoConfig) (*sdk.Exposure, error
 }
 
 func exposeDemo(ctx context.Context, cfg demoConfig, identity types.Identity, opts ...sdk.Option) (*sdk.Exposure, error) {
-	explicitRelayURLs, err := types.NormalizeRelayURLs(cfg.relayURLs)
+	explicitRelayURLs, err := utils.NormalizeRelayURLs(cfg.relayURLs)
 	if err != nil {
 		return nil, err
 	}

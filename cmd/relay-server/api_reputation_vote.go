@@ -40,7 +40,7 @@ func (api *RelayAPI) serveVote(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.ID = ""
 	}
-	hostname := types.NormalizeHostname(req.Hostname)
+	hostname := utils.NormalizeHostname(req.Hostname)
 	if !commentVote && hostname == "" {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
 		return
