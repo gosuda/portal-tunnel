@@ -263,7 +263,7 @@ func (c *apiClient) confirmRegisterResponse(resp types.RegisterResponse, registe
 		// Older relays may return a removed canonical format. Only their alias is usable.
 		resp.CanonicalHostname = ""
 	}
-	if !namespace.MatchesAlias(resp.Hostname, registerReq.Identity.Name, registerReq.Identity.Address, c.relayURL.Hostname()) {
+	if !namespace.MatchesAlias(resp.Hostname, registerReq.Identity.Name, c.relayURL.Hostname()) {
 		resp.Hostname = ""
 	}
 	reverseEndpoint, err := validateReverseEndpoint(resp.ReverseEndpoint, resp.ExpiresAt)

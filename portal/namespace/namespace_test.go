@@ -142,43 +142,68 @@ func TestMatchesAlias(t *testing.T) {
 	t.Parallel()
 
 	const root = "relay.example"
-	owner := "0x" + strings.Repeat("a", 40)
-	unnamed := "default--" + strings.Repeat("a", 40) + ".relay.example"
+	automatic := NewUnnamedAlias() + ".relay.example"
 	tests := []struct {
-		name, hostname, service, address string
-		want                             bool
+		name, hostname, service string
+		want                    bool
 	}{
-		{"no alias", "", "demo", owner, true},
-		{"own alias", "demo.relay.example", "demo", owner, true},
-		{"normalized name", "demo.relay.example", "Demo", owner, true},
-		{"other name", "other.relay.example", "demo", owner, false},
-		{"other root", "demo.other.example", "demo", owner, false},
-		{"unnamed service", "demo.relay.example", "", owner, false},
-		{"unnamed alias", unnamed, "", owner, true},
-		{"unnamed alias of another address", unnamed, "", "0x" + strings.Repeat("b", 40), false},
-		{"named service on unnamed alias", unnamed, "demo", owner, false},
+		{"no alias", "", "demo", true},
+		{"own alias", "demo.relay.example", "demo", true},
+		{"normalized name", "demo.relay.example", "Demo", true},
+		{"other name", "other.relay.example", "demo", false},
+		{"other root", "demo.other.example", "demo", false},
+		{"unnamed service on a chosen name", "demo.relay.example", "", false},
+		{"unnamed service on an automatic alias", automatic, "", true},
+		{"automatic alias under another root", strings.TrimSuffix(automatic, root) + "other.example", "", false},
+		{"named service on an automatic alias", automatic, "demo", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := MatchesAlias(tc.hostname, tc.service, tc.address, root); got != tc.want {
-				t.Fatalf("MatchesAlias(%q, %q, %q) = %v, want %v", tc.hostname, tc.service, tc.address, got, tc.want)
+			if got := MatchesAlias(tc.hostname, tc.service, root); got != tc.want {
+				t.Fatalf("MatchesAlias(%q, %q) = %v, want %v", tc.hostname, tc.service, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestUnnamedAliasCannotBeChosen(t *testing.T) {
+// TestUnnamedAlias protects the automatic alias contract: a short readable
+// label with an 80-bit random suffix, no identity data, never claimable as a
+// chosen name, and never a Local TLS hostname.
+func TestUnnamedAlias(t *testing.T) {
 	t.Parallel()
-	alias, err := ServiceAliasHostname("", "0x"+strings.Repeat("A", 40), "relay.example")
-	if err != nil || alias != "default--"+strings.Repeat("a", 40)+".relay.example" {
-		t.Fatalf("ServiceAliasHostname() = %q, %v", alias, err)
+	seen := make(map[string]struct{})
+	for range 1000 {
+		label := NewUnnamedAlias()
+		if len(label) > 40 {
+			t.Fatalf("automatic alias %q is %d characters, want a short label", label, len(label))
+		}
+		hostname, err := UnnamedAliasHostname(label, "relay.example")
+		if err != nil || hostname != label+".relay.example" {
+			t.Fatalf("UnnamedAliasHostname(%q) = %q, %v", label, hostname, err)
+		}
+		if _, err := NormalizeServiceName(label); err == nil {
+			t.Fatalf("service name %q may claim an automatic alias", label)
+		}
+		if IsLocalTLSHostname(hostname, "relay.example") {
+			t.Fatalf("automatic alias %q is classified as a Local TLS canonical", hostname)
+		}
+		if _, dup := seen[label]; dup {
+			t.Fatalf("automatic alias %q repeated", label)
+		}
+		seen[label] = struct{}{}
 	}
-	label, _, _ := strings.Cut(alias, ".")
-	if _, err := NormalizeServiceName(label); err == nil {
-		t.Fatalf("service name %q may claim the automatic unnamed alias", label)
-	}
-	if IsLocalTLSHostname(alias, "relay.example") {
-		t.Fatal("automatic Keyless alias is classified as a Local TLS canonical")
+	for _, label := range []string{
+		"demo",
+		"sunny-otter-short",
+		"sunny-otter-k7m2q6rt3vx5z4a0", // 0 is not base32.
+		"Sunny-otter-k7m2q6rt3vx5z4ab",
+		"-k7m2q6rt3vx5z4ab",
+		"k7m2q6rt3vx5z4ab",
+		"demo-" + strings.Repeat("a", 40),
+	} {
+		if _, err := UnnamedAliasHostname(label, "relay.example"); err == nil {
+			t.Fatalf("UnnamedAliasHostname(%q) accepted a label that is not an automatic alias", label)
+		}
 	}
 }

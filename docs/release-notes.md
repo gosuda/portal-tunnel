@@ -23,12 +23,15 @@ when offline and never fall back to cached content.
 
 ### Unnamed HTTP services get a Keyless URL by default
 
-`portal expose 3000` without `--name` or Local TLS flags is ready at
-`https://default--<40-lowercase-hex-address>.<relay-root>/`. The relay assigns
-this Keyless alias to the unnamed service of each identity; no explicit
-`--name` can claim it, and it stays the same across reconnects. It makes no
+`portal expose 3000` without `--name` or Local TLS flags is ready at a short
+random Keyless URL such as `https://sunny-otter-k7m2q6rt3vx5z4ab.<relay-root>/`.
+The SDK draws the label once per exposure from a CSPRNG (80-bit suffix), sends
+it in the new optional `alias` field of the register challenge, and draws again
+on a hostname conflict. The URL stays the same across reconnects of that
+exposure and does not contain the signing address. No `--name` can claim this
+shape. SIWE registration and the lease identity are unchanged. It makes no
 tenant certificate order, so disabled or exhausted tenant issuance does not
-block it. With `--tls-auto` or `--tls-cert` the canonical
+block it. Use `--name` for a URL that survives restarts. With `--tls-auto` or `--tls-cert` the canonical
 `default.<address>.<relay-root>` stays independent and fail-closed. Raw TCP/UDP
 leases are unchanged.
 

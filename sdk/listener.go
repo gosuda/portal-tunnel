@@ -30,6 +30,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/keyless"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/portal/transport"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -59,6 +60,9 @@ const (
 	defaultRenewBefore      = 30 * time.Second
 	defaultReadyTarget      = 8
 	defaultRetryWait        = 3 * time.Second
+	// maxAliasDraws bounds fresh automatic aliases per registration. With 80
+	// random bits a real collision is rare, so repeated conflicts mean a fault.
+	maxAliasDraws = 4
 
 	defaultChainCheckInterval = time.Hour
 
@@ -74,6 +78,7 @@ type listenerConfig struct {
 	TLSKeyFile         string
 	Cache              *cache.Source
 	Identity           types.Identity
+	Alias              string
 	Overlay            bool
 	UDPEnabled         bool
 	TCPEnabled         bool
@@ -167,6 +172,7 @@ type listener struct {
 	metadataMu        sync.RWMutex
 	metadata          types.LeaseMetadata
 	identity          types.Identity
+	alias             string // Automatic alias label; owned by the run goroutine.
 	replica           bool
 	overlay           bool
 	warnOverlayDirect sync.Once
@@ -209,6 +215,7 @@ func newListener(ctx context.Context, relayURL string, cfg listenerConfig) (*lis
 		doneCh:             listenerCtx.Done(),
 		metadata:           cfg.Metadata.Copy(),
 		identity:           cfg.Identity,
+		alias:              cfg.Alias,
 		replica:            cfg.Replica,
 		overlay:            cfg.Overlay,
 		statusUpdates:      make(chan listenerStatus),
@@ -1188,14 +1195,25 @@ func (l *listener) registerAndConfigure(ctx context.Context) error {
 		UDPEnabled: l.udpEnabled,
 		TCPEnabled: l.tcpEnabled,
 		StartedAt:  l.startedAt,
+		Alias:      l.alias,
 	}
 	if l.tlsStateDir != "" || l.tlsCertFile != "" {
 		registerReq.Namespace = types.LocalTLSNamespaceV1
 	}
 	l.cache.ConfigureRegistration(&registerReq)
-	resp, err := l.api.register(ctx, registerReq, utils.ResolvePublicIP(ctx))
+	reportedIP := utils.ResolvePublicIP(ctx)
+	resp, err := l.api.register(ctx, registerReq, reportedIP)
+	for draws := 1; l.alias != "" && draws < maxAliasDraws && errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}); draws++ {
+		l.alias = namespace.NewUnnamedAlias()
+		registerReq.Alias = l.alias
+		resp, err = l.api.register(ctx, registerReq, reportedIP)
+	}
 	if err != nil {
 		return err
+	}
+	if label, _, ok := strings.Cut(resp.Hostname, "."); ok && l.alias != "" {
+		// Replicas share the alias of the first live replica; keep it.
+		l.alias = label
 	}
 	pending := &listenerSnapshot{
 		hostname:      cmp.Or(resp.CanonicalHostname, resp.Hostname),

@@ -75,8 +75,7 @@ type RegisterRequest struct {
 // hostnames. An absent namespace uses only a granted friendly alias.
 const LocalTLSNamespaceV1 = "local-tls-v1"
 
-// UnnamedServiceLabel names an unnamed service: its Local TLS label and the
-// prefix of its automatic default--<address> Keyless alias.
+// UnnamedServiceLabel is reserved only in the new Local TLS namespace.
 const UnnamedServiceLabel = "default"
 
 type RegisterChallengeRequest struct {
@@ -94,6 +93,9 @@ type RegisterChallengeRequest struct {
 	UDPEnabled bool          `json:"udp_enabled,omitempty"`
 	TCPEnabled bool          `json:"tcp_enabled,omitempty"`
 	StartedAt  time.Time     `json:"started_at,omitempty"`
+	// Alias is the automatic Keyless alias label of an unnamed HTTP service.
+	// The SDK draws it at random once per exposure; named services omit it.
+	Alias string `json:"alias,omitempty"`
 }
 
 type RegisterChallengeResponse struct {

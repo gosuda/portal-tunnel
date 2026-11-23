@@ -208,7 +208,7 @@ helm install my-app-tunnel oci://ghcr.io/gosuda/charts/portal-tunnel -f tunnel.v
 | Value | Effect |
 |---|---|
 | `target` | Address to expose, such as `my-app.default.svc.cluster.local:8080` |
-| `name` | Service name for the short URL (`--name`). Optional; an unnamed HTTP service gets `default--<address>.<relay-root>` |
+| `name` | Service name for the short URL (`--name`). Optional; an unnamed HTTP service gets a random URL that changes when the pod restarts |
 | `relays` | Relay URLs (`--relays`) |
 | `args` | Other `portal expose` flags, such as `--discovery=false`, `--tcp` or `--auth` |
 | `env`, `secretEnv`, `existingSecret` | Environment variables read by `portal expose`; secret ones, such as `AUTH_OIDC_CLIENT_SECRET`, go in a Secret |

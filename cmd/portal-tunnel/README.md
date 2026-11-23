@@ -176,8 +176,8 @@ The relay root can contain several labels. An unnamed service uses the reserved
 Hostname policy never changes in place:
 
 - `<name>.<root>` remains a first-come friendly alias with Keyless TLS and HTTP/1.1.
-- `default--<address>.<root>` is the automatic Keyless alias of the unnamed
-  service. No `--name` can claim it.
+- `<word>-<word>-<16 base32>.<root>` is the automatic Keyless alias of an
+  unnamed HTTP exposure, drawn at random for each run. No `--name` can claim it.
 - `<service>.<address>.<root>` uses only tunnel-owned Local TLS. It is advertised
   only after both peers negotiate support and an exact-hostname certificate is
   usable. Issuance failure, expiry, or lost state cannot downgrade it to Keyless.

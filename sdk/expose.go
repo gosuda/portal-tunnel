@@ -22,6 +22,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
 	"github.com/gosuda/portal-tunnel/v2/portal/localtls"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
 )
@@ -155,6 +156,7 @@ type Exposure struct {
 
 	startedAt time.Time
 	identity  types.Identity
+	alias     string // Automatic Keyless alias of an unnamed HTTP exposure.
 	options   options
 	metadata  types.LeaseMetadata
 	cache     *cache.Source
@@ -356,6 +358,7 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		done:           exposureCtx.Done(),
 		startedAt:      time.Now().UTC(),
 		identity:       identity,
+		alias:          unnamedAlias(identity, cfg),
 		options:        cfg,
 		metadata:       cfg.Metadata.Copy(),
 		cache:          source,
@@ -383,6 +386,15 @@ func Expose(ctx context.Context, identity types.Identity, relays []string, opts 
 		_ = exposure.Close()
 	}()
 	return exposure, nil
+}
+
+// unnamedAlias draws the automatic Keyless alias once per exposure, so it
+// stays the same across reconnects and relay restarts of this exposure.
+func unnamedAlias(identity types.Identity, cfg options) string {
+	if strings.TrimSpace(identity.Name) != "" || cfg.UDPEnabled || cfg.TCPEnabled {
+		return ""
+	}
+	return namespace.NewUnnamedAlias()
 }
 
 func validateExposeConfig(cfg options) error {
@@ -920,6 +932,7 @@ func (e *Exposure) publishRelayListenerLocked(relayURL string) (bool, error) {
 		CertificateMonitor: e.options.CertificateMonitor,
 		Cache:              e.cache,
 		Identity:           e.identity,
+		Alias:              e.alias,
 		Overlay:            e.options.Overlay,
 		UDPEnabled:         e.options.UDPEnabled,
 		TCPEnabled:         e.options.TCPEnabled,

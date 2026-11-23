@@ -273,7 +273,7 @@ registration and lifecycle behavior before deployment; the source release
 label alone does not establish compatibility.
 
 Named HTTP services can use their granted friendly alias with the current SDK.
-Unnamed HTTP services use their automatic `default--<address>` alias. Move traffic after replacement clients are ready and drain existing
+Unnamed HTTP services use a random automatic alias per exposure. Move traffic after replacement clients are ready and drain existing
 connections before retiring a relay. See the
 [compatibility matrix](https://github.com/gosuda/portal-tunnel/blob/main/docs/maintainer/sdk-compatibility.md)
 for the current limitations.
