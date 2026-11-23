@@ -205,7 +205,7 @@ jobs:
     name: Helm Charts
     needs: changes
     if: needs.changes.outputs.charts == 'true'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     env:
       KUBECONFORM_VERSION: v0.8.0

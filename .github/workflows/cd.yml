@@ -88,7 +88,7 @@ jobs:
   publish-charts:
     name: Publish Helm Charts
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     permissions:
       contents: read
       packages: write
