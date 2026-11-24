@@ -17,7 +17,7 @@ type LoadedSample = {
 // Called only by the open comments panel; only the current relay fans out.
 // Each load is one complete bounded sample that replaces the previous one, so
 // deleted or removed comments do not linger and no rows are appended twice.
-export function useFederatedComments(server: BaseServer) {
+export function useFederatedComments(server: BaseServer): { response: FederatedCommentsResponse | undefined; loading: boolean; error: string | undefined; refresh: () => void } {
   const address = server.address?.trim() ?? "";
   const valid = isIdentityAddress(address);
   const key = new URLSearchParams({ address, name: server.serviceName ?? "" }).toString();
