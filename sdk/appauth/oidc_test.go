@@ -1510,14 +1510,12 @@ func TestApplicationAuthOIDCPrincipalMatching(t *testing.T) {
 		want   string
 	}{
 		{"verified email exact", []string{"alice@example.com"}, "s1", "Alice@Example.com", true, "alice@example.com"},
-		{"absent email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", false, ""},
 		{"false email_verified does not authorize email", []string{"alice@example.com"}, "s1", "alice@example.com", false, ""},
 		{"sub allowlist ignores email_verified", []string{"sub:s1"}, "s1", "alice@example.com", false, "sub:s1"},
 		{"subject with leading space cannot impersonate an allowed subject", []string{"sub:s1"}, " s1", "", false, ""},
 		{"subject with trailing space cannot impersonate an allowed subject", []string{"sub:s1"}, "s1 ", "", false, ""},
 		{"subject with surrounding Unicode space cannot impersonate an allowed subject", []string{"sub:s1"}, " s1 ", "", false, ""},
 		{"email-shaped sub cannot satisfy an email entry", []string{"alice@example.com"}, "alice@example.com", "", false, ""},
-		{"email-shaped sub cannot satisfy an email entry without email_verified", []string{"alice@example.com"}, "alice@example.com", "", false, ""},
 		{"email-shaped sub matches a sub: entry", []string{"sub:alice@example.com"}, "alice@example.com", "", false, "sub:alice@example.com"},
 		{"sub: entry matches the subject in exactly its case", []string{"sub:Alice@Example.com"}, "Alice@Example.com", "", false, "sub:Alice@Example.com"},
 		{"sub: entry rejects a subject that differs only in case", []string{"sub:Alice@Example.com"}, "alice@example.com", "", false, ""},
