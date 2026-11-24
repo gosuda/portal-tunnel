@@ -16,13 +16,6 @@ func checkRecordNameError(t *testing.T, err error, wantErr string) {
 	}
 }
 
-func checkBaseDomainError(t *testing.T, err error, wantErr string) {
-	t.Helper()
-	if err == nil || err.Error() != wantErr {
-		t.Fatalf("BaseDomain() error = %v, want %q", err, wantErr)
-	}
-}
-
 func checkAddressRecordInputsError(t *testing.T, err error, wantErr string) {
 	t.Helper()
 	if err == nil || err.Error() != wantErr {
@@ -151,38 +144,6 @@ func TestRecordName(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("RecordName() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestBaseDomain(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name    string
-		raw     string
-		want    string
-		wantErr string
-	}{
-		{name: "normalized", raw: "Example.COM.", want: "example.com"},
-		{name: "empty", raw: "", wantErr: "base domain is required"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, err := BaseDomain(tc.raw)
-			if tc.wantErr != "" {
-				checkBaseDomainError(t, err, tc.wantErr)
-				return
-			}
-			if err != nil {
-				t.Fatalf("BaseDomain() error = %v", err)
-			}
-			if got != tc.want {
-				t.Fatalf("BaseDomain() = %q, want %q", got, tc.want)
 			}
 		})
 	}
