@@ -254,7 +254,7 @@ function selectVisibleServers(servers: BaseServer[], showHidden: boolean): BaseS
   return showHidden ? servers : servers.filter((server) => !isHiddenServer(server));
 }
 
-export function useServerList(identityAddress = "", networkScope = false): UseListReturn<BaseServer> & { identityDiscovery: ReturnType<typeof useServiceDiscovery>; commentServer: BaseServer | null; toggleComments: (server: BaseServer) => void; closeComments: () => void; browseView: BrowseView; favorites: number; showHidden: boolean; setShowHidden: (value: boolean) => void; hiddenCount: number; sidebarOpen: boolean; setSidebarOpen: (value: boolean) => void; filteredServers: BaseServer[]; handleBrowseViewChange: (view: BrowseView) => void; leases: Lease[] | null; onVote: (hostname: string, vote: ReputationVoteAction) => Promise<void> } {
+export function useServerList(identityAddress: string = "", networkScope: boolean = false): UseListReturn<BaseServer> & { identityDiscovery: ReturnType<typeof useServiceDiscovery>; commentServer: BaseServer | null; toggleComments: (server: BaseServer) => void; closeComments: () => void; browseView: BrowseView; favorites: number; showHidden: boolean; setShowHidden: (value: boolean) => void; hiddenCount: number; sidebarOpen: boolean; setSidebarOpen: (value: boolean) => void; filteredServers: BaseServer[]; handleBrowseViewChange: (view: BrowseView) => void; leases: Lease[] | null; onVote: (hostname: string, vote: ReputationVoteAction) => Promise<void> } {
   const [commentServerId, setCommentServerId] = useState<string | null>(null);
   const [browseView, setBrowseView] = useState<BrowseView>("home");
   const [showHidden, setShowHidden] = useState(false);
