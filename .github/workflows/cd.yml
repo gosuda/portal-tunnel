@@ -82,7 +82,11 @@ jobs:
           push: true
           tags: ${{ steps.tunnel_meta.outputs.tags }}
           labels: ${{ steps.tunnel_meta.outputs.labels }}
-          cache-from: type=gha,scope=portal-tunnel
+          # CI builds this same Dockerfile on linux/amd64 (scope portal-tunnel-ci);
+          # restore those layers instead of rebuilding them here.
+          cache-from: |
+            type=gha,scope=portal-tunnel
+            type=gha,scope=portal-tunnel-ci
           cache-to: type=gha,mode=max,scope=portal-tunnel
 
   publish-charts:
