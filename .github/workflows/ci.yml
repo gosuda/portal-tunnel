@@ -207,7 +207,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    # GitHub-hosted macOS queue wait (up to hours) sets the CI wall; Depot's
+    # macOS runner proves the same native behavior. Matrix values — and so the
+    # check names — stay unchanged; only the macOS cell's runner moves.
+    # Windows keeps windows-latest: its queue is consistently near zero.
+    runs-on: ${{ matrix.os == 'macos-latest' && 'depot-macos-latest' || matrix.os }}
     timeout-minutes: 20
     steps:
       - name: Checkout code
