@@ -6,8 +6,9 @@ permissions:
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+  merge_group:
+  schedule:
+    - cron: '53 4 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -23,20 +24,16 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
+      backend: ${{ github.event_name != 'pull_request' || steps.filter.outputs.backend == 'true' }}
       go: >-
-        ${{ github.event_name == 'workflow_dispatch' ||
+        ${{ github.event_name != 'pull_request' ||
         steps.filter.outputs.backend == 'true' ||
         steps.filter.outputs.appauth == 'true' }}
-      frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
-      charts: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.charts == 'true' }}
+      frontend: ${{ github.event_name != 'pull_request' || steps.filter.outputs.frontend == 'true' }}
+      charts: ${{ github.event_name != 'pull_request' || steps.filter.outputs.charts == 'true' }}
     steps:
-      - name: Checkout code
-        if: github.event_name == 'push'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
       - name: Detect changed inputs
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'pull_request'
         id: filter
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
@@ -61,7 +58,6 @@ jobs:
               - 'docs/static/examples/kubernetes/**'
               - 'Makefile'
               - '.github/workflows/ci.yml'
-
   verify:
     name: Verify
     needs: changes
@@ -131,7 +127,6 @@ jobs:
           npm test
           npm run lint
           npm run build
-
   e2e:
     name: E2E Tests
     needs: changes
@@ -154,12 +149,11 @@ jobs:
       # The full Linux suite includes TestPortalExposeStdinLifetime.
       - name: Run E2E tests
         run: make test-e2e
-
   charts:
     name: Helm Charts
     needs: changes
     if: needs.changes.outputs.charts == 'true'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     env:
       KUBECONFORM_VERSION: v0.8.0
@@ -175,7 +169,6 @@ jobs:
 
       - name: Lint charts and validate Kubernetes examples
         run: make check-charts
-
   tunnel-image:
     name: Build Tunnel Image
     needs: changes
@@ -198,20 +191,15 @@ jobs:
           push: false
           cache-from: type=gha,scope=portal-tunnel-ci
           cache-to: type=gha,mode=max,scope=portal-tunnel-ci
-
   expose-stdin-lifetime:
     name: Expose stdin lifetime (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.backend == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
-    # GitHub-hosted macOS queue wait (up to hours) sets the CI wall; Depot's
-    # macOS runner proves the same native behavior. Matrix values — and so the
-    # check names — stay unchanged; only the macOS cell's runner moves.
-    # Windows keeps windows-latest: its queue is consistently near zero.
-    runs-on: ${{ matrix.os == 'macos-latest' && 'depot-macos-latest' || matrix.os }}
+        os: [depot-macos-latest, depot-windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - name: Checkout code
