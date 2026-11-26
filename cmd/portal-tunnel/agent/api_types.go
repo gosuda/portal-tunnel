@@ -60,6 +60,11 @@ type AgentTunnelStatus struct {
 	Relays     []AgentRelayStatus `json:"relays,omitempty"`
 }
 
+// RelayDisconnected is the state of a relay that the tunnel's config names
+// and that the running tunnel does not use, because it was disconnected. A
+// connect request brings it back.
+const RelayDisconnected sdk.RelayState = "disconnected"
+
 type AgentRelayStatus struct {
 	RelayURL         string           `json:"relay_url"`
 	PublicURL        string           `json:"public_url,omitempty"`
@@ -123,6 +128,8 @@ func (r AgentRelayStatus) Mode() string {
 		return "direct"
 	case r.State == sdk.RelayConnecting:
 		return "connecting..."
+	case r.State == RelayDisconnected:
+		return "disconnected"
 	default:
 		return "-"
 	}

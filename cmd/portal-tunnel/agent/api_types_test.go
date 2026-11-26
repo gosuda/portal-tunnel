@@ -138,6 +138,7 @@ func TestAgentRelayStatusMode(t *testing.T) {
 		{name: "refused", relay: AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalRefused}, want: "refused"},
 		{name: "failed with retained URL", relay: AgentRelayStatus{State: sdk.RelayFailed, PublicURL: "https://app.example"}, want: "failed"},
 		{name: "ready over legacy TLS", relay: AgentRelayStatus{State: sdk.RelayReady, CertificateError: "unknown authority"}, want: "legacy TLS"},
+		{name: "disconnected", relay: AgentRelayStatus{State: RelayDisconnected}, want: "disconnected"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.relay.Mode(); got != tc.want {

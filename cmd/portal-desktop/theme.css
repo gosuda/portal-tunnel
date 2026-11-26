@@ -1,0 +1,48 @@
+/*
+ * Portal's colors and corner radius for Portal Desktop. The declarations
+ * are copied from frontend/src/index.css, and a test keeps them equal to it.
+ */
+:root {
+  --radius: 0.5rem;
+  --background: oklch(97% 0.005 250);
+  --foreground: oklch(25% 0.02 250);
+  --card: oklch(100% 0 0);
+  --card-foreground: oklch(25% 0.02 250);
+  --popover: oklch(100% 0 0);
+  --popover-foreground: oklch(25% 0.02 250);
+  --primary: oklch(50% 0.1 195);
+  --primary-foreground: oklch(100% 0 0);
+  --secondary: oklch(92% 0.01 250);
+  --secondary-foreground: oklch(45% 0.02 250);
+  --muted: oklch(95% 0.005 250);
+  --muted-foreground: oklch(55% 0.03 250);
+  --accent: oklch(92% 0.01 250);
+  --accent-foreground: oklch(25% 0.02 250);
+  --destructive: oklch(55% 0.2 25);
+  --destructive-foreground: oklch(100% 0 0);
+  --border: oklch(90% 0.01 250);
+  --input: oklch(95% 0.005 250);
+  --ring: oklch(50% 0.1 195);
+}
+
+.dark {
+  --background: #030e1e;
+  --foreground: #f8fafc;
+  --card: #0b192c;
+  --card-foreground: #f8fafc;
+  --popover: #0b192c;
+  --popover-foreground: #f8fafc;
+  --primary: #46efe4;
+  --primary-foreground: #031322;
+  --secondary: #10233a;
+  --secondary-foreground: #f8fafc;
+  --muted: #0e1e33;
+  --muted-foreground: #8fa3b8;
+  --accent: #132a44;
+  --accent-foreground: #f8fafc;
+  --destructive: oklch(62% 0.22 25);
+  --destructive-foreground: oklch(98% 0 0);
+  --border: rgba(148, 163, 184, 0.16);
+  --input: #081525;
+  --ring: #46efe4;
+}

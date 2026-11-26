@@ -22,9 +22,10 @@ case "$ARCH" in
 esac
 
 # Portal Desktop is opt-in: --with-gui (sh -s -- --with-gui when piped) or
-# PORTAL_WITH_GUI=1. Without it the installer installs the CLI alone.
+# PORTAL_WITH_GUI=1. Without it the installer installs the CLI alone. As in
+# install.ps1, PORTAL_WITH_GUI is read without case and spaces.
 WITH_GUI=""
-case "${PORTAL_WITH_GUI:-}" in
+case "$(printf '%s' "${PORTAL_WITH_GUI:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
   ""|0|false) ;;
   *) WITH_GUI=1 ;;
 esac
@@ -147,7 +148,17 @@ cleanup() {
   fi
   rm -rf "$WORKDIR"
 }
-trap cleanup EXIT INT TERM
+# A signal stops the install. Until the CLI is in place, which clears
+# TMP_INSTALL_PATH, it also puts back the desktop that install_desktop
+# replaced, so that the two stay of one release.
+on_signal() {
+  if [ -n "$DESKTOP_TARGET" ] && [ -n "${TMP_INSTALL_PATH:-}" ]; then
+    restore_desktop
+  fi
+  exit 1
+}
+trap cleanup EXIT
+trap on_signal INT TERM
 
 # verify_sha256 FILE URL LABEL compares FILE with the SHA256 sidecar at URL.
 verify_sha256() {
@@ -246,7 +257,6 @@ install_desktop() {
   if [ "$PORTAL_OS" = "darwin" ]; then
     DESKTOP_SOURCE="$DESKTOP_DIR/Portal Desktop.app"
     APPLICATIONS_DIR="${HOME:?HOME must be set to install Portal Desktop}/Applications"
-    mkdir -p "$APPLICATIONS_DIR"
     DESKTOP_PATH="$APPLICATIONS_DIR/Portal Desktop.app"
   else
     DESKTOP_SOURCE="$DESKTOP_DIR/usr/bin/portal-desktop"
@@ -256,6 +266,7 @@ install_desktop() {
     echo "The Portal Desktop package does not hold the app. Aborting." >&2
     exit 1
   fi
+  mkdir -p "$(dirname "$DESKTOP_PATH")"
   if [ -e "$DESKTOP_PATH" ]; then
     rm -rf "$DESKTOP_PATH.old"
     mv "$DESKTOP_PATH" "$DESKTOP_PATH.old"

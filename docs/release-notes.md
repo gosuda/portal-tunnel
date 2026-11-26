@@ -49,7 +49,10 @@ do not depend on its GUI libraries. See [Portal Desktop](/portal-desktop).
 
 The terminal dashboard now keeps the port of a relay URL that it opens.
 `portal agent dashboard` without `--config` reads the state directory from the
-default agent config when one exists.
+default agent config when one exists. `/agent/status` reports a relay from the
+tunnel config that was disconnected with the state `disconnected`, so the
+dashboard and Portal Desktop can connect it again. The CLI writes its logs
+without colors when the output is not a terminal, for example in service logs.
 
 ### Relay: a per-source budget for ClientHello inspection
 

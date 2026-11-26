@@ -28,7 +28,7 @@ func TestAgentRelayStatusAdvertisesAliasOnlyWhileReady(t *testing.T) {
 				AliasURL:   test.aliasURL,
 				State:      test.state,
 				Deselected: test.deselected,
-			}})
+			}}, nil)
 			if statuses[0].AliasURL != test.wantAlias || statuses[0].PublicURL != publicURL {
 				t.Fatalf("URLs = (%q, %q), want (%q, %q)", statuses[0].AliasURL, statuses[0].PublicURL, test.wantAlias, publicURL)
 			}
@@ -37,7 +37,7 @@ func TestAgentRelayStatusAdvertisesAliasOnlyWhileReady(t *testing.T) {
 }
 
 func TestAgentRelayStatusCarriesApproval(t *testing.T) {
-	statuses := agentRelayStatuses([]sdk.RelayStatus{{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalPending}})
+	statuses := agentRelayStatuses([]sdk.RelayStatus{{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalPending}}, nil)
 	if statuses[0].Approval != sdk.RelayApprovalPending || statuses[0].State != sdk.RelayConnecting {
 		t.Fatalf("status = %+v", statuses[0])
 	}
@@ -52,8 +52,21 @@ func TestStoppedTunnelSnapshotDoesNotAdvertiseRelayEndpoints(t *testing.T) {
 }
 
 func TestAgentRelayStatusCarriesFailure(t *testing.T) {
-	statuses := agentRelayStatuses([]sdk.RelayStatus{{State: sdk.RelayFailed, Failure: sdk.RelayFailureMITM}})
+	statuses := agentRelayStatuses([]sdk.RelayStatus{{State: sdk.RelayFailed, Failure: sdk.RelayFailureMITM}}, nil)
 	if statuses[0].State != sdk.RelayFailed || statuses[0].Failure != sdk.RelayFailureMITM {
 		t.Fatalf("status = %+v", statuses[0])
+	}
+}
+
+// A configured relay that the running tunnel no longer uses stays in the
+// status, so that a front end can connect it again after a disconnect.
+func TestAgentRelayStatusKeepsDisconnectedConfiguredRelays(t *testing.T) {
+	statuses := agentRelayStatuses(
+		[]sdk.RelayStatus{{RelayURL: "https://one.example.com", State: sdk.RelayReady}},
+		[]string{"https://one.example.com", "https://two.example.com"},
+	)
+	if len(statuses) != 2 || statuses[0].State != sdk.RelayReady ||
+		statuses[1].RelayURL != "https://two.example.com" || statuses[1].State != RelayDisconnected {
+		t.Fatalf("statuses = %+v", statuses)
 	}
 }

@@ -58,8 +58,14 @@ func runGUICommand(args []string) error {
 	}
 	if runtime.GOOS == "darwin" {
 		// Launch Services starts the bundle as the app it is, or brings
-		// forward the one already running.
-		open := exec.CommandContext(context.Background(), "open", append([]string{desktop, "--args"}, desktopArgs...)...)
+		// forward the one already running. With a config, -n starts a new
+		// instance, which hands the config to the running one, so that the
+		// running one can say that it shows another agent.
+		openArgs := []string{desktop}
+		if len(desktopArgs) > 0 {
+			openArgs = append([]string{"-n", desktop, "--args"}, desktopArgs...)
+		}
+		open := exec.CommandContext(context.Background(), "open", openArgs...)
 		if out, err := open.CombinedOutput(); err != nil {
 			return fmt.Errorf("open %s: %w: %s", desktop, err, out)
 		}

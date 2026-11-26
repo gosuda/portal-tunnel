@@ -46,7 +46,7 @@ var (
 
 func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	log.Logger = log.Output(zerolog.NewConsoleWriter())
+	log.Logger = log.Output(consoleWriter(os.Stdout))
 	if err := cli.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]cli.CommandFunc{
 		"expose": runExposeCommand,
 		"agent":  runAgentCommand,
@@ -67,10 +67,21 @@ func main() {
 			{Name: "update", Usage: printUpdateUsage},
 		}),
 	}); err != nil {
-		logger := log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+		logger := log.Output(consoleWriter(os.Stderr))
 		logger.Error().Err(err).Msg("portal tunnel exited with error")
 		os.Exit(1)
 	}
+}
+
+// consoleWriter writes readable log lines to f, in color only when f is a
+// terminal, so that service logs and programs that read the output, such as
+// Portal Desktop, get plain text.
+func consoleWriter(f *os.File) zerolog.ConsoleWriter {
+	return zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
+		w.Out = f
+		info, err := f.Stat()
+		w.NoColor = err != nil || info.Mode()&os.ModeCharDevice == 0
+	})
 }
 
 type exposeFlags struct {

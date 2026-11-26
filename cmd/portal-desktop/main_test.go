@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ironpark/ggui"
+	gguiruntime "github.com/ironpark/ggui/runtime"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
@@ -36,7 +38,7 @@ func sampleStatus() agent.AgentStatusResponse {
 		},
 		{
 			ID: "game", Name: "game", State: "running", TargetAddr: "127.0.0.1:25565",
-			Relays: []agent.AgentRelayStatus{{RelayURL: "https://relay-one.example.com", TCPAddr: "relay-one.example.com:40001", State: sdk.RelayReady}},
+			Relays: []agent.AgentRelayStatus{{RelayURL: "https://relay-one.example.com", PublicURL: "https://game.relay-one.example.com/", TCPAddr: "relay-one.example.com:40001", State: sdk.RelayReady}},
 		},
 	}}
 }
@@ -47,14 +49,15 @@ func hasText(p *ggui.Probe, text string) bool {
 }
 
 // An HTTP endpoint is a link to copy or open; a TCP one is an address to
-// copy, never handed to a browser.
+// copy, never handed to a browser. A TCP tunnel shows its address next to
+// the URL that the relay also reports for it.
 func TestDesktopShowsEndpointsByTransport(t *testing.T) {
 	t.Parallel()
 	m := newModel(t.TempDir(), "", "")
 	p := newProbe(t, m)
 	m.apply(p, sampleStatus(), nil)
 
-	for _, label := range []string{"Copy https://web.relay-one.example.com/", "Open https://web.relay-one.example.com/", "Copy relay-one.example.com:40001"} {
+	for _, label := range []string{"Copy https://web.relay-one.example.com/", "Open https://web.relay-one.example.com/", "Copy relay-one.example.com:40001", "Copy https://game.relay-one.example.com/"} {
 		if _, ok := p.Find(label); !ok {
 			t.Fatalf("%q is missing", label)
 		}
@@ -83,11 +86,68 @@ func TestDesktopShowsTunnelAndRelayErrors(t *testing.T) {
 		Relays: []agent.AgentRelayStatus{{RelayURL: "https://relay.example.com", State: sdk.RelayFailed, Failure: sdk.RelayFailureMITM, CertificateError: "issuance refused"}},
 	}}}, nil)
 
-	for _, text := range []string{"dial tcp 127.0.0.1:3000: connection refused", "Relay failure: mitm", "Certificate: issuance refused"} {
+	for _, text := range []string{"Tunnel error: dial tcp 127.0.0.1:3000: connection refused", "Relay failure: mitm", "Certificate: issuance refused"} {
 		if !hasText(p, text) {
 			t.Fatalf("diagnostic %q is hidden", text)
 		}
 	}
+}
+
+// A relay that was disconnected stays on the card with Connect, so that the
+// user can undo the disconnect.
+func TestDesktopOffersConnectForADisconnectedRelay(t *testing.T) {
+	t.Parallel()
+	m := newModel(t.TempDir(), "", "")
+	p := newProbe(t, m)
+	m.apply(p, agent.AgentStatusResponse{Tunnels: []agent.AgentTunnelStatus{{
+		ID: "web", State: "running",
+		Relays: []agent.AgentRelayStatus{{RelayURL: "https://relay.example.com", State: agent.RelayDisconnected}},
+	}}}, nil)
+
+	if _, ok := p.Find("Connect https://relay.example.com"); !ok {
+		t.Fatal("a disconnected relay offers no Connect")
+	}
+	if _, ok := p.Find("Disconnect https://relay.example.com"); ok {
+		t.Fatal("a disconnected relay offers Disconnect")
+	}
+}
+
+// At the smallest window size, the forms scroll above their actions, so the
+// actions stay in the window even with an error under the form.
+func TestDesktopFormsKeepTheirActionsInTheSmallestWindow(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	m := newModel(dir, filepath.Join(dir, "agent", "config.toml"), filepath.Join(dir, "portal"))
+	p := ggui.ProbeBuilder(func() ggui.Widget { return build(m) }, ggui.Sz(minWidth, minHeight))
+	t.Cleanup(p.Close)
+	m.apply(p, sampleStatus(), nil)
+	inWindow := func(form, label string) {
+		t.Helper()
+		m.FormError.Set(strings.Repeat("the agent refused the request. ", 10))
+		p.Advance(time.Second)
+		button, ok := p.Find(label)
+		if r := button.Rect; !ok || r.Size.H <= 0 || r.Origin.Y+r.Size.H > minHeight || r.Origin.X+r.Size.W > minWidth {
+			t.Fatalf("%s: %q is outside the window at %v", form, label, button.Rect)
+		}
+	}
+
+	p.Tap("Expose a service")
+	p.Advance(time.Second)
+	inWindow("expose", "Expose")
+	inWindow("expose", "Cancel")
+	p.Tap("Cancel")
+	p.Advance(time.Second)
+
+	p.Tap("Settings for web")
+	p.Advance(time.Second)
+	inWindow("settings", "Save")
+	p.Tap("Cancel")
+	p.Advance(time.Second)
+
+	m.apply(p, agent.AgentStatusResponse{}, agent.ErrNotRunning)
+	p.Tap("Set up and start")
+	p.Advance(time.Second)
+	inWindow("setup", "Install and start")
 }
 
 func notificationIDs(p *ggui.Probe) []string {
@@ -172,7 +232,7 @@ func TestDesktopKeepsContextWhileTheAgentIsAway(t *testing.T) {
 }
 
 // Setting up the agent creates its config and installs it as a service only
-// after the user agrees, and keeps the dialog open with the reason when
+// after the user agrees, and keeps the sheet open with the reason when
 // portal agent run fails.
 func TestDesktopAsksBeforeItSetsUpTheAgent(t *testing.T) {
 	t.Parallel()
@@ -198,7 +258,7 @@ func TestDesktopAsksBeforeItSetsUpTheAgent(t *testing.T) {
 		t.Fatalf("the agreed config was not created: %v", err)
 	}
 	if !ggui.Peek(m.SettingUp) {
-		t.Fatal("the setup dialog closed though the agent did not start")
+		t.Fatal("the setup sheet closed though the agent did not start")
 	}
 
 	without := newModel(dir, configPath, "")
@@ -244,6 +304,70 @@ func TestSettingsDraftClearsTags(t *testing.T) {
 	}
 	if got.Metadata == nil || got.Metadata.Tags == nil || len(*got.Metadata.Tags) != 0 {
 		t.Fatalf("request %s does not clear the tags", body)
+	}
+}
+
+// A save sends the relay count only when the user changed it, so that it
+// does not write the agent's default into the config, and refuses an
+// emptied count, which the agent cannot take back to its default.
+func TestSettingsDraftSendsOnlyAChangedRelayCount(t *testing.T) {
+	t.Parallel()
+	opened := settingsOf(agent.AgentTunnelStatus{MaxActiveRelays: 3})
+	req, err := opened.request()
+	if err != nil || req.MaxActiveRelays != nil {
+		t.Fatalf("unchanged count: request = %+v, err = %v", req, err)
+	}
+	changed := opened
+	changed.MaxRelays = " 5 "
+	if req, err := changed.request(); err != nil || req.MaxActiveRelays == nil || *req.MaxActiveRelays != 5 {
+		t.Fatalf("changed count: request = %+v, err = %v", req, err)
+	}
+	cleared := opened
+	cleared.MaxRelays = ""
+	if _, err := cleared.request(); err == nil {
+		t.Fatal("an emptied relay count was accepted")
+	}
+}
+
+// A later launch that names another agent is reported, so that it is not
+// dropped without a word; one that names nothing or this window's agent is
+// not.
+func TestOtherAgentOfALaterLaunch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "a.toml")
+	stateDir := filepath.Join(dir, "state")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{},
+		{args: []string{"--hidden"}},
+		{args: []string{"--config", "a.toml"}},
+		{args: []string{"--config", configPath}},
+		{args: []string{"--config", "b.toml"}, want: filepath.Join(dir, "b.toml")},
+		{args: []string{"--state-dir", filepath.Join(dir, "other")}, want: filepath.Join(dir, "other")},
+		{args: []string{"--unknown"}},
+	} {
+		if got := otherAgent(gguiruntime.Launch{Args: tc.args, Dir: dir}, configPath, stateDir); got != tc.want {
+			t.Errorf("otherAgent(%q) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+// The window wears Portal's colors and radius: theme.css holds the
+// declarations of the frontend's stylesheet, which stays their source.
+func TestThemeMatchesTheFrontend(t *testing.T) {
+	t.Parallel()
+	frontend, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", "index.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for decl := range strings.SplitSeq(themeCSS, ";") {
+		_, decl, _ = strings.Cut(decl, "--")
+		if decl = strings.TrimSpace(decl); decl != "" && !strings.Contains(string(frontend), "--"+decl+";") {
+			t.Errorf("theme.css declares --%s, which frontend/src/index.css does not", decl)
+		}
 	}
 }
 

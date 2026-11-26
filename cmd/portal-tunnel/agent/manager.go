@@ -563,11 +563,11 @@ func (cfg TunnelConfig) renderTunnelStatus(runtime *tunnel.Runtime, done chan st
 	for i := range status.HTTPRoutes {
 		status.HTTPRoutes[i].Methods = slices.Clone(status.HTTPRoutes[i].Methods)
 	}
-	attachTunnelLiveStatus(&status, cfg.Provider, runtime)
+	attachTunnelLiveStatus(&status, cfg.Provider, cfg.RelayURLs, runtime)
 	return status
 }
 
-func attachTunnelLiveStatus(status *AgentTunnelStatus, provider string, runtime *tunnel.Runtime) {
+func attachTunnelLiveStatus(status *AgentTunnelStatus, provider string, configured []string, runtime *tunnel.Runtime) {
 	hasProviderCheck := provider == appauth.ProviderOIDC || provider == appauth.ProviderSAML || provider == appauth.ProviderEmail
 	if runtime != nil && hasProviderCheck {
 		checked, err := runtime.AuthProviderCheck()
@@ -577,12 +577,15 @@ func attachTunnelLiveStatus(status *AgentTunnelStatus, provider string, runtime 
 		}
 	}
 	if runtime != nil {
-		status.Relays = agentRelayStatuses(runtime.Exposure.Relays())
+		status.Relays = agentRelayStatuses(runtime.Exposure.Relays(), configured)
 	}
 }
 
-func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
-	statuses := make([]AgentRelayStatus, 0, len(relays))
+// agentRelayStatuses reports the relays that the running tunnel uses, then
+// the configured relays that it does not use because they were disconnected,
+// so that a front end can connect them again.
+func agentRelayStatuses(relays []sdk.RelayStatus, configured []string) []AgentRelayStatus {
+	statuses := make([]AgentRelayStatus, 0, max(len(relays), len(configured)))
 	for _, relay := range relays {
 		aliasURL := ""
 		if relay.State == sdk.RelayReady && !relay.Deselected {
@@ -603,6 +606,11 @@ func agentRelayStatuses(relays []sdk.RelayStatus) []AgentRelayStatus {
 			Failure:          relay.Failure,
 			Approval:         relay.Approval,
 		})
+	}
+	for _, relayURL := range configured {
+		if !slices.ContainsFunc(relays, func(relay sdk.RelayStatus) bool { return relay.RelayURL == relayURL }) {
+			statuses = append(statuses, AgentRelayStatus{RelayURL: relayURL, State: RelayDisconnected})
+		}
 	}
 	return statuses
 }

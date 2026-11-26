@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -50,6 +51,9 @@ type model struct {
 	// cli is the portal CLI that starts the agent, or "" when the desktop
 	// found none.
 	cli string
+	// answered is whether the agent answered once, so that the window has a
+	// last state to show while the agent is away. The UI thread owns it.
+	answered bool
 
 	Status     *ggui.StateValue[agent.AgentStatusResponse]
 	Connection *ggui.StateValue[connection]
@@ -58,6 +62,9 @@ type model struct {
 	Problem    *ggui.StateValue[string]
 
 	SettingUp *ggui.StateValue[bool]
+	// OtherConfig is the config or state directory that a later launch
+	// named, which this window does not show.
+	OtherConfig *ggui.StateValue[string]
 
 	Adding    *ggui.StateValue[bool]
 	Draft     *ggui.StateValue[tunnelDraft]
@@ -74,18 +81,19 @@ func newModel(stateDir, configPath, cli string) *model {
 		configPath: configPath,
 		cli:        cli,
 		// Polls repeat the same answer; only a different one repaints.
-		Status:     ggui.State(agent.AgentStatusResponse{}).WithEqual(sameStatus),
-		Connection: ggui.State(connecting),
-		AgentError: ggui.State(""),
-		Busy:       ggui.State(false),
-		Problem:    ggui.State(""),
-		SettingUp:  ggui.State(false),
-		Adding:     ggui.State(false),
-		Draft:      ggui.State(newTunnelDraft()),
-		FormError:  ggui.State(""),
-		Editing:    ggui.State(""),
-		Settings:   ggui.State(settingsDraft{}),
-		Deleting:   ggui.State(""),
+		Status:      ggui.State(agent.AgentStatusResponse{}).WithEqual(sameStatus),
+		Connection:  ggui.State(connecting),
+		AgentError:  ggui.State(""),
+		Busy:        ggui.State(false),
+		Problem:     ggui.State(""),
+		SettingUp:   ggui.State(false),
+		OtherConfig: ggui.State(""),
+		Adding:      ggui.State(false),
+		Draft:       ggui.State(newTunnelDraft()),
+		FormError:   ggui.State(""),
+		Editing:     ggui.State(""),
+		Settings:    ggui.State(settingsDraft{}),
+		Deleting:    ggui.State(""),
 	}
 }
 
@@ -129,6 +137,7 @@ func (m *model) apply(h ggui.Host, status agent.AgentStatusResponse, err error) 
 		return
 	}
 	last := ggui.Peek(m.Status)
+	m.answered = true
 	m.Connection.Set(connected)
 	m.AgentError.Set("")
 	m.Status.Set(status)
@@ -255,7 +264,7 @@ func (m *model) openSetup() {
 }
 
 // startAgent sets up and starts the agent after the user agreed to it in the
-// setup dialog. It creates the config when there is none, then runs
+// setup sheet. It creates the config when there is none, then runs
 // portal agent run, which installs the agent as a service of the OS and waits
 // until it answers. The service runs the agent, so the agent and its tunnels
 // outlive the desktop.
@@ -268,11 +277,31 @@ func (m *model) startAgent(h ggui.Host) {
 		cmd := exec.CommandContext(ctx, m.cli, "agent", "run", "--config", m.configPath)
 		hideConsole(cmd)
 		out, err := cmd.CombinedOutput()
-		if msg := strings.TrimSpace(string(out)); err != nil && msg != "" {
-			return fmt.Errorf("%s: %s", startCommand, msg)
+		switch {
+		case err == nil:
+			return nil
+		case ctx.Err() != nil:
+			return fmt.Errorf("%s did not finish within %s", startCommand, setupTimeout)
 		}
-		return err
+		return fmt.Errorf("%s failed: %s. The agent config stays at %s. If %s wrote a service file before it failed, that file stays too. The next try uses both",
+			startCommand, strings.TrimSuffix(cmp.Or(cliError(string(out)), err.Error()), "."), m.configPath, startCommand)
 	}, m.failForm, func() { m.SettingUp.Set(false) })
+}
+
+// cliError is the error that the portal CLI logged last in out, without the
+// time and the level of its log line, or all of out when the last line holds
+// no error field.
+func cliError(out string) string {
+	out = strings.TrimSpace(out)
+	last := out[strings.LastIndexByte(out, '\n')+1:]
+	_, value, ok := strings.Cut(last, " error=")
+	if !ok {
+		return out
+	}
+	if msg, err := strconv.Unquote(value); err == nil {
+		return msg
+	}
+	return value
 }
 
 func (m *model) openAdd() {
@@ -363,6 +392,9 @@ type settingsDraft struct {
 	Description string
 	Tags        string
 	Hide        bool
+	// maxRelaysWas is MaxRelays as the form opened with it, so that a save
+	// sends the relay count only when the user changed it.
+	maxRelaysWas string
 }
 
 func settingsOf(tunnel agent.AgentTunnelStatus) settingsDraft {
@@ -374,15 +406,26 @@ func settingsOf(tunnel agent.AgentTunnelStatus) settingsDraft {
 	if tunnel.MaxActiveRelays > 0 {
 		draft.MaxRelays = strconv.Itoa(tunnel.MaxActiveRelays)
 	}
+	draft.maxRelaysWas = draft.MaxRelays
 	return draft
 }
 
 // request changes the fields the form shows and leaves the others, such as
-// the owner and the thumbnail, as the agent has them.
+// the owner and the thumbnail, as the agent has them. It sends the relay
+// count only when the user changed it, so that a save does not write the
+// agent's default into the config. The agent cannot go back to its default,
+// so an emptied count is refused.
 func (d settingsDraft) request() (agent.AgentTunnelUpdateRequest, error) {
-	maxRelays, err := parseMaxRelays(d.MaxRelays)
-	if err != nil {
-		return agent.AgentTunnelUpdateRequest{}, err
+	var maxRelays *int
+	if raw := strings.TrimSpace(d.MaxRelays); raw != d.maxRelaysWas {
+		n, err := parseMaxRelays(raw)
+		if err != nil {
+			return agent.AgentTunnelUpdateRequest{}, err
+		}
+		if n == 0 {
+			return agent.AgentTunnelUpdateRequest{}, errMaxRelays
+		}
+		maxRelays = &n
 	}
 	description := strings.TrimSpace(d.Description)
 	// An empty list, not nil: the agent reads a missing list as "keep the
@@ -392,12 +435,13 @@ func (d settingsDraft) request() (agent.AgentTunnelUpdateRequest, error) {
 		tags = []string{}
 	}
 	hide := d.Hide
-	req := agent.AgentTunnelUpdateRequest{Metadata: &agent.AgentMetadataRequest{Description: &description, Tags: &tags, Hide: &hide}}
-	if maxRelays > 0 {
-		req.MaxActiveRelays = &maxRelays
-	}
-	return req, nil
+	return agent.AgentTunnelUpdateRequest{
+		MaxActiveRelays: maxRelays,
+		Metadata:        &agent.AgentMetadataRequest{Description: &description, Tags: &tags, Hide: &hide},
+	}, nil
 }
+
+var errMaxRelays = errors.New("max relays must be a positive number")
 
 // parseMaxRelays reads a relay count; empty leaves the agent's default.
 func parseMaxRelays(raw string) (int, error) {
@@ -407,7 +451,7 @@ func parseMaxRelays(raw string) (int, error) {
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("max relays must be a positive number")
+		return 0, errMaxRelays
 	}
 	return n, nil
 }

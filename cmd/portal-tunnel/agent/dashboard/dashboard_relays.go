@@ -35,7 +35,7 @@ func (m agentDashboardModel) disconnectSelectedRelay() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if tunnel.State != "running" {
+	if tunnel.State != "running" || relay.State == agent.RelayDisconnected {
 		return m, nil
 	}
 	return m, agentDashboardRun(func(ctx context.Context) error {
@@ -70,7 +70,7 @@ func (m agentDashboardModel) renderRelaysSection(width, rows int) agentDashboard
 	}
 	relay, hasRelay := m.selectedRelayStatus()
 	connectDisabled := !hasRelay || tunnel.State != "running" || relay.State == sdk.RelayReady || relay.State == sdk.RelayConnecting
-	disconnectDisabled := !hasRelay || tunnel.State != "running"
+	disconnectDisabled := !hasRelay || tunnel.State != "running" || relay.State == agent.RelayDisconnected
 	pane.addButtons(th, width,
 		agentDashboardButton{label: "Connect", action: agentDashboardActionConnectRelay, disabled: connectDisabled},
 		agentDashboardButton{label: "Disconnect", action: agentDashboardActionDisconnectRelay, disabled: disconnectDisabled},

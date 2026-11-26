@@ -82,6 +82,18 @@ path to Portal Desktop:
 portal gui --config ./agent.toml
 ```
 
+If Portal Desktop is open for another config, the window comes to the front and
+says that it shows another agent. To open the other config, quit Portal
+Desktop, then open it again with that config.
+
+The `portal-desktop` program takes these flags:
+
+| Flag | Meaning |
+|------|---------|
+| `--config` | The agent config. The default is the default config of the agent. |
+| `--state-dir` | The state directory of the agent. The default is the directory that the config names. |
+| `--hidden` | Start in the menu bar or the notification area, without the window. Linux has no tray, so it shows the window. |
+
 ## Start The Agent
 
 Portal Desktop needs a running Portal agent. If the agent is not running,
@@ -124,17 +136,21 @@ and the number of relays that carry the tunnel at the same time.
 
 Each tunnel shows its state, its target, and its errors. "Settings" changes the
 relay count, the description, the tags, and whether relay service lists show
-the tunnel. "Delete" asks first, then removes the tunnel.
+the tunnel. Portal Desktop sends the relay count only if you change it, and the
+count cannot be empty, because the agent cannot go back to its default. "Delete"
+asks first, then removes the tunnel.
 
 Each relay shows how it carries the tunnel: `direct`, `connecting...`,
-`waiting` for approval, `refused`, `failed`, or `legacy TLS`. "Connect" and
-"Disconnect" change the relays of a running tunnel. A relay that waits for
-approval or refused the tunnel says so. Relay failures and certificate errors
-show the words of the agent.
+`waiting` for approval, `refused`, `failed`, `legacy TLS`, or `disconnected`.
+"Connect" and "Disconnect" change the relays of a running tunnel. A relay from
+the config that you disconnect stays on the tunnel as `disconnected`, so you
+can connect it again. A relay that waits for approval or refused the tunnel
+says so. Relay failures and certificate errors show the words of the agent.
 
 When a relay carries an HTTP tunnel, Portal Desktop shows its URL with "Copy"
 and "Open". "Open" gives only `http` and `https` URLs to the browser. A TCP
-tunnel shows its address with "Copy" only, because a browser cannot open it.
+tunnel shows its address with "Copy" only, because a browser cannot open it. If
+the relay also gives a TCP tunnel a URL, Portal Desktop shows both.
 
 If the agent stops or cannot be reached, Portal Desktop says why and keeps the
 last list that the agent sent. It disables the actions until the agent answers

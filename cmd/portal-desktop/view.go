@@ -9,6 +9,7 @@ import (
 	"github.com/ironpark/ggui"
 	gguiruntime "github.com/ironpark/ggui/runtime"
 	"github.com/ironpark/ggui/ui"
+	uitheme "github.com/ironpark/ggui/ui/theme"
 	"github.com/ironpark/ggui/widget"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
@@ -23,9 +24,11 @@ const (
 	agentGuideURL = "https://gosuda.github.io/portal-tunnel/portal-agent"
 )
 
-// view builds the window from the model. The forms live in dialogs above the
+// view builds the window from the model. The forms live in sheets above the
 // tunnel list, so the list can follow every answer of the agent without
-// taking a draft or the focus from the user.
+// taking a draft or the focus from the user. A sheet is as tall as the
+// window and scrolls its form above its actions, so the actions stay in
+// view at the smallest window size.
 type view struct {
 	m       *model
 	h       ggui.Host
@@ -42,14 +45,15 @@ func build(m *model) ggui.Widget {
 	page := widget.Column(
 		v.header(),
 		ggui.View(m.AgentError, v.agentNotice),
+		ggui.View(m.OtherConfig, v.otherConfigNotice),
 		ggui.View(m.Problem, v.problemNotice),
 		widget.Expanded(widget.Scroll(ggui.View(m.Status, v.tunnels))),
 	).Space(1.5).Stretch()
 	return widget.Stack(
 		widget.Box(page).Pad(24),
-		ggui.View(m.SettingUp, v.setupDialog),
-		v.addDialog(),
-		v.settingsDialog(),
+		ggui.View(m.SettingUp, v.setupSheet),
+		v.addSheet(),
+		v.settingsSheet(),
 		ggui.View(m.Deleting, v.deleteDialog),
 		v.toaster,
 	).Expand()
@@ -79,7 +83,10 @@ func (v *view) agentNotice(msg string) ggui.Widget {
 	if msg == "" {
 		return widget.Box()
 	}
-	text := msg + " The list shows the last state the agent reported."
+	text := msg
+	if v.m.answered {
+		text += " The list shows the last state the agent reported."
+	}
 	alert := ui.Alert("Portal agent unavailable", text).Destructive()
 	if msg != notRunningText {
 		return alert
@@ -99,9 +106,12 @@ func (v *view) agentNotice(msg string) ggui.Widget {
 	return widget.Column(alert, widget.Row(actions...).Space(1).Align(widget.AlignCenter)).Space(0.75).Stretch()
 }
 
-// setupDialog asks before the desktop creates the agent config or installs
+// sheetSize is the width of the sheets, which shrink to fit a smaller window.
+const sheetSize = 440
+
+// setupSheet asks before the desktop creates the agent config or installs
 // the agent as a service of the OS, and says what each step does.
-func (v *view) setupDialog(open bool) ggui.Widget {
+func (v *view) setupSheet(open bool) ggui.Widget {
 	if !open {
 		return widget.Box()
 	}
@@ -115,13 +125,13 @@ func (v *view) setupDialog(open bool) ggui.Widget {
 		widget.Text("The agent and its tunnels keep running after you quit Portal Desktop. To stop the agent and keep it from starting again, run portal agent stop."),
 		ggui.View(v.m.FormError, formError),
 	).Space(1).Stretch()
-	return ui.Dialog(v.m.SettingUp, body).
+	return ui.Sheet(v.m.SettingUp, widget.Scroll(body)).
 		Title("Set up the Portal agent").
 		Footer(
-			ui.Button("Cancel", func() { v.m.SettingUp.Set(false) }).Outline(),
 			ui.Button("Install and start", func() { v.m.startAgent(v.h) }).BindDisabled(v.m.Busy),
+			ui.Button("Cancel", func() { v.m.SettingUp.Set(false) }).Outline(),
 		).
-		Width(520)
+		Size(sheetSize)
 }
 
 // serviceScope is what portal agent run installs on this OS, and the rights
@@ -135,6 +145,17 @@ func serviceScope() string {
 	default:
 		return "It installs the agent as a systemd service of your user, which starts when you log in. As root, it installs a system service."
 	}
+}
+
+// otherConfigNotice says that a later launch asked for an agent that this
+// window does not show, because only one Portal Desktop runs at a time.
+func (v *view) otherConfigNotice(path string) ggui.Widget {
+	if path == "" {
+		return widget.Box()
+	}
+	dismiss := ui.Button("Dismiss", func() { v.m.OtherConfig.Set("") }).Outline().Size(ui.ButtonSmall)
+	text := "This window shows the agent of " + v.m.configPath + ". To open " + path + ", quit Portal Desktop and open it again."
+	return ui.Alert("Portal Desktop is already open", text).Action(dismiss)
 }
 
 func (v *view) problemNotice(msg string) ggui.Widget {
@@ -153,7 +174,7 @@ func (v *view) tunnels(status agent.AgentStatusResponse) ggui.Widget {
 	for _, tunnel := range status.Tunnels {
 		cards = append(cards, v.tunnelCard(tunnel))
 	}
-	return widget.Column(cards...).Space(1.5).Stretch()
+	return widget.Column(cards...).Space(2).Stretch()
 }
 
 func (v *view) tunnelCard(tunnel agent.AgentTunnelStatus) ggui.Widget {
@@ -161,14 +182,19 @@ func (v *view) tunnelCard(tunnel agent.AgentTunnelStatus) ggui.Widget {
 	settings := ui.Button("Settings", func() { v.m.openSettings(tunnel) }).Outline().Size(ui.ButtonSmall).Name("Settings for " + label).BindDisabled(v.blocked)
 	remove := ui.Button("Delete", func() { v.m.Deleting.Set(tunnel.ID) }).Outline().Size(ui.ButtonSmall).Name("Delete " + label).BindDisabled(v.blocked)
 	rows := []ggui.Widget{
-		widget.Row(ui.Heading(label), stateBadge(tunnel.State), widget.Spacer(), settings, remove).Space(1).Align(widget.AlignCenter),
+		widget.Row(
+			// The name gives way to the buttons: a long one ends in an
+			// ellipsis instead of pushing Settings and Delete out of the card.
+			widget.Expanded(widget.Row(widget.Flexible(ui.Heading(label).Ellipsis()), stateBadge(tunnel.State)).Space(1).Align(widget.AlignCenter)),
+			settings, remove,
+		).Space(1).Align(widget.AlignCenter),
 		ui.Caption(tunnelDetails(tunnel)),
 	}
 	if tunnel.LastError != "" {
-		rows = append(rows, ui.Alert("Tunnel error", tunnel.LastError).Destructive())
+		rows = append(rows, ui.Caption("Tunnel error: "+tunnel.LastError).Color(uitheme.Destructive))
 	}
 	if tunnel.AuthProviderError != "" {
-		rows = append(rows, ui.Alert("Sign-in provider check failed", tunnel.AuthProviderError).Destructive())
+		rows = append(rows, ui.Caption("Sign-in provider check failed: "+tunnel.AuthProviderError).Color(uitheme.Destructive))
 	}
 	if len(tunnel.Relays) == 0 {
 		rows = append(rows, ui.Caption("No relay carries this tunnel yet."))
@@ -228,7 +254,7 @@ func (v *view) relayRow(tunnel agent.AgentTunnelStatus, relay agent.AgentRelaySt
 	v.allowWhen(connect, running && relay.State != sdk.RelayReady && relay.State != sdk.RelayConnecting)
 	disconnect := ui.Button("Disconnect", func() { v.m.disconnectRelay(v.h, tunnel.ID, relay.RelayURL) }).
 		Outline().Size(ui.ButtonSmall).Name("Disconnect " + relay.RelayURL)
-	v.allowWhen(disconnect, running)
+	v.allowWhen(disconnect, running && relay.State != agent.RelayDisconnected)
 	rows := []ggui.Widget{
 		widget.Row(modeBadge(relay), widget.Expanded(ui.Mono(relay.RelayURL).Ellipsis()), connect, disconnect).Space(1).Align(widget.AlignCenter),
 	}
@@ -239,7 +265,8 @@ func (v *view) relayRow(tunnel agent.AgentTunnelStatus, relay agent.AgentRelaySt
 				ui.Button("Copy", func() { v.copy(publicURL) }).Ghost().Size(ui.ButtonSmall).Name("Copy "+publicURL),
 				ui.Button("Open", func() { v.open(publicURL) }).Ghost().Size(ui.ButtonSmall).Name("Open "+publicURL),
 			).Space(1).Align(widget.AlignCenter))
-		} else if relay.TCPAddr != "" {
+		}
+		if relay.TCPAddr != "" {
 			rows = append(rows, widget.Row(
 				ui.Caption("TCP"),
 				widget.Expanded(ui.Mono(relay.TCPAddr).Selectable()),
@@ -250,7 +277,7 @@ func (v *view) relayRow(tunnel agent.AgentTunnelStatus, relay agent.AgentRelaySt
 	for _, note := range relayNotes(relay) {
 		rows = append(rows, ui.Caption(note))
 	}
-	return widget.Column(rows...).Space(0.5).Stretch()
+	return widget.Column(rows...).Space(1).Stretch()
 }
 
 // relayNotes say why a relay does not carry the tunnel, in the agent's own
@@ -296,7 +323,7 @@ func (v *view) open(publicURL string) {
 	}
 }
 
-func (v *view) addDialog() ggui.Widget {
+func (v *view) addSheet() ggui.Widget {
 	d := v.m.Draft
 	target := d.Field(func(t *tunnelDraft) *string { return &t.Target })
 	name := d.Field(func(t *tunnelDraft) *string { return &t.Name })
@@ -315,17 +342,17 @@ func (v *view) addDialog() ggui.Widget {
 			Help("How many relays carry the tunnel at once."),
 		ggui.View(v.m.FormError, formError),
 	).Space(1.25).Stretch()
-	return ui.Dialog(v.m.Adding, form).
+	return ui.Sheet(v.m.Adding, widget.Scroll(form)).
 		Title("Expose a local service").
 		Description("The agent keeps the tunnel running after this window closes.").
 		Footer(
-			ui.Button("Cancel", func() { v.m.Adding.Set(false) }).Outline(),
 			ui.Button("Expose", func() { v.m.addTunnel(v.h) }).BindDisabled(v.blocked),
+			ui.Button("Cancel", func() { v.m.Adding.Set(false) }).Outline(),
 		).
-		Width(480)
+		Size(sheetSize)
 }
 
-func (v *view) settingsDialog() ggui.Widget {
+func (v *view) settingsSheet() ggui.Widget {
 	s := v.m.Settings
 	maxRelays := s.Field(func(d *settingsDraft) *string { return &d.MaxRelays })
 	description := s.Field(func(d *settingsDraft) *string { return &d.Description })
@@ -346,14 +373,14 @@ func (v *view) settingsDialog() ggui.Widget {
 		ui.Switch(hide, "Hide from relay service lists"),
 		ggui.View(v.m.FormError, formError),
 	).Space(1.25).Stretch()
-	return ui.Dialog(open, form).
+	return ui.Sheet(open, widget.Scroll(form)).
 		Title("Tunnel settings").
 		Description("The agent applies these to the running tunnel and keeps them in its config.").
 		Footer(
-			ui.Button("Cancel", func() { v.m.Editing.Set("") }).Outline(),
 			ui.Button("Save", func() { v.m.saveSettings(v.h) }).BindDisabled(v.blocked),
+			ui.Button("Cancel", func() { v.m.Editing.Set("") }).Outline(),
 		).
-		Width(480)
+		Size(sheetSize)
 }
 
 func formError(msg string) ggui.Widget {
