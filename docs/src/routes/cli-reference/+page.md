@@ -79,6 +79,9 @@ The payment suffix is optional; omit it for free routes.
 | Host and port | `localhost:8080` | `localhost:8080` |
 | URL host | `http://127.0.0.1:3000` | `127.0.0.1:3000` |
 
+A port is a number from 1 to 65535. A host without a port, such as `abc`,
+resolves to port 80.
+
 URL inputs are accepted for address parsing. Paths, queries, and fragments are
 not supported.
 
@@ -401,7 +404,7 @@ Fields on `event=relay_status` records:
 | `relay_url` | Relay API URL this status describes |
 | `state` | `connecting`, `ready`, or `failed` |
 | `failure` | Present when `state` is `failed`: `runtime` (recoverable), `terminal`, or `mitm` (TLS termination detected; requires `--ban-mitm`) |
-| `approval` | Present while the relay refuses this lease: `pending` (not approved yet) or `refused` (denied or banned). `state` is `connecting` and `public_url` is empty. Its absence does not mean approved |
+| `approval` | Present while the relay refuses this lease: `pending` (not approved yet) or `refused` (denied or banned). `public_url` is empty. `state` is `connecting` while the tunnel waits for approval, and `failed` with `failure` `terminal` when the relay refused the registration. Its absence does not mean approved |
 | `public_url` | Identity-bound canonical URL; usable only when nonempty and `state` is `ready`. Local TLS keeps it empty before usable material exists and withdraws it on expiry |
 | `legacy_url` | Separate one-label canonical compatibility URL for a Local TLS lease; use only while `state` is `ready` and not deselected |
 | `alias_url` | Short `<name>.<relay-domain>` URL without an Ethereum address; prefer this for sharing when present. Present **only while `state` is `ready` and granted**: a failed, deselected, or address-only relay never reports one |

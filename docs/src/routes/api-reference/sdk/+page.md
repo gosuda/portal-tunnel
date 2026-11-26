@@ -360,7 +360,7 @@ DNS publication and withdrawal use one maintenance owner. Policy changes record 
 | Operation | Response | Publisher behavior |
 | --- | --- | --- |
 | Register, awaiting manual approval | `503 lease_rejected` with `Retry-After` (5–60 seconds) | Repeat the signed registration exchange after the delay |
-| Register, denied or banned in either mode | `403 lease_denied` | Terminal refusal before lease allocation |
+| Register, denied or banned in either mode | `403 lease_denied` | Terminal refusal before lease allocation. The SDK reports `RelayStatus.Approval` `refused` with `State` `failed`, and that listener does not register again |
 | Connect or renew a removed lease | Missing or invalid lease | Obtain a fresh registration |
 | Reverse connect on a legacy pending lease | `403 lease_rejected` | Wait for approval on the existing lease |
 
