@@ -470,6 +470,8 @@ Common fields:
 | `target` | Local TCP target, equivalent to `portal expose <target>` |
 | `http_routes` | Routed HTTP mappings; cannot be combined with `target`, `serve`, `tcp`, or `udp` |
 | `serve` | Static site directory or HTML file; relative to the config file's directory |
+| `inspect` | Opt-in [local HTTP traffic inspector](/cli-reference#local-http-traffic-inspector), disabled by default; each tunnel gets its own ephemeral loopback listener |
+| `inspect_bodies` | Opt-in request/response body capture, up to 8 KiB each; may contain secrets; requires `inspect = true` |
 | `relays` | Explicit relay API URLs |
 | `discovery` | Include registry and relay discovery expansion |
 | `max_active_relays` | Maximum auto-selected relays kept connected; explicit relays are always included |
@@ -519,6 +521,16 @@ Constraints:
 - Application auth cannot be combined with `tcp` or `udp`; `auth_allowed_wallets`, `auth_email_list`, `auth_identity_headers`, and the `auth_oidc_*`, `auth_saml_*` and `auth_smtp_*` fields require `auth`, `auth_email_list` requires `auth = "oidc"`, `"saml"` or `"email"`, `auth_allowed_wallets` and `auth_email_list` cannot both be set, `auth = "email"` takes only `auth_email_list`, the `auth_oidc_*` fields require `auth = "oidc"`, the `auth_saml_*` fields require `auth = "saml"`, and the `auth_smtp_*` fields require `auth = "email"`.
 - `http_routes[].amount` requires `x402_pay_to`.
 - `http_routes[].methods` requires `http_routes[].amount`.
+
+For HTTP debugging, set `inspect = true` on the selected `[[tunnels]]` entry.
+Use `inspect_bodies = true` only when payload visibility is intended. The same
+options are accepted by `POST /agent/tunnels`; tunnel status reports `inspect`,
+`inspect_bodies`, and the running tunnel's `inspector_url`. Open that URL on the
+agent's machine. Configuration changes take effect when the tunnel restarts,
+which discards its captures and assigns a new inspector port. The inspector is
+not served through the agent Control API or the public relay. See the
+[inspector guide](/cli-reference#local-http-traffic-inspector) for redaction,
+replay limits and side effects.
 
 ## Identity Layout
 

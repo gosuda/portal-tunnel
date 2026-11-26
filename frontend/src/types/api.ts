@@ -70,6 +70,8 @@ export interface ServiceLocation {
   url?: string;
   canonical_url?: string;
   alias_url?: string;
+  tcp_addr?: string;
+  udp_addr?: string;
   current_relay: boolean;
   reported_ready: boolean;
   observed_at: string;

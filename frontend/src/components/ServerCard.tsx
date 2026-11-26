@@ -8,7 +8,7 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import { isLocationAvailable, type BaseServer } from "@/lib/server";
+import { isLocationAvailable, isLocationLive, type BaseServer } from "@/lib/server";
 import type { ReputationVoteAction } from "@/types/api";
 import { useCopy } from "@/hooks/useCopy";
 import { isHiddenByVotes, isReputationWarning } from "@/utils/reputation";
@@ -212,8 +212,20 @@ function resolveRepresentativeLink(server: BaseServer): string {
   if (server.link) {
     return server.link;
   }
-  // Navigate only to a relay that is ready, unexpired, and serves HTTPS.
-  return server.locations?.find((location) => isLocationAvailable(location))?.url ?? "";
+  // Navigate only to a relay that is ready, unexpired, and serves HTTPS. A
+  // TCP/UDP lease hostname is not a web app, as in leaseToServer, so its URL
+  // is not a link.
+  return server.locations?.find((location) => !location.tcp_addr && !location.udp_addr && isLocationAvailable(location))?.url ?? "";
+}
+
+// The card's own endpoints come from its local lease. Without one, take the
+// endpoint of a live remote relay so it can still be copied.
+function resolveTransportAddrs(server: BaseServer): { tcpAddr?: string; udpAddr?: string } {
+  const live = (server.locations ?? []).filter((location) => !location.current_relay && isLocationLive(location));
+  return {
+    tcpAddr: server.tcpAddr || live.find((location) => location.tcp_addr)?.tcp_addr,
+    udpAddr: server.udpAddr || live.find((location) => location.udp_addr)?.udp_addr,
+  };
 }
 
 function buildEndpoints(
@@ -466,6 +478,7 @@ function TitleRow({
   onSelectVote,
   onOpenRelays,
   relayCount,
+  endpoints,
 }: {
   server: BaseServer;
   name: string;
@@ -479,6 +492,7 @@ function TitleRow({
   onSelectVote: (event: React.MouseEvent, direction: "up" | "down") => void;
   onOpenRelays?: (server: BaseServer) => void;
   relayCount?: number;
+  endpoints?: { protocol: string; address: string }[];
 }): JSX.Element {
   const showRelays = Boolean(
     onOpenRelays &&
@@ -492,16 +506,23 @@ function TitleRow({
         title={name}
         className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-foreground"
       >
-        <AppLink
-          isNavigable={isNavigable}
-          isWarning={isWarning}
-          detailPath={detailPath}
-          server={server}
-          name={name}
-          className="hover:text-primary transition-colors cursor-pointer"
-        >
-          {name}
-        </AppLink>
+        <span className="inline-flex max-w-full items-center gap-1.5">
+          <AppLink
+            isNavigable={isNavigable}
+            isWarning={isWarning}
+            detailPath={detailPath}
+            server={server}
+            name={name}
+            className="hover:text-primary truncate transition-colors cursor-pointer"
+          >
+            {name}
+          </AppLink>
+          {endpoints && endpoints.length > 0 && (
+            <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-mono font-medium text-muted-foreground">
+              {endpoints.map((e) => e.protocol).join("/")}
+            </span>
+          )}
+        </span>
       </h3>
       {showActions && (
         <div className="relative z-30 flex shrink-0 items-center gap-1.5">
@@ -539,8 +560,9 @@ export function ServerCard({
 }: ServerCardProps): JSX.Element {
   const {
     id: serverId, name, description, tags, thumbnail,
-    tcpAddr, udpAddr, paymentEnabled = false, paymentLabel = "",
+    paymentEnabled = false, paymentLabel = "",
   } = server;
+  const { tcpAddr, udpAddr } = resolveTransportAddrs(server);
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const [isVoting, setIsVoting] = useState(false);
   const { copiedKey: copiedProtocol, copy } = useCopy(1500);
@@ -553,7 +575,8 @@ export function ServerCard({
   const endpoints = buildEndpoints(tcpAddr, udpAddr, fallbackHost);
   const isTransportService = endpoints.length > 0;
   const effectiveLink = resolveRepresentativeLink(server);
-  const isNavigable = navigable && !isTransportService && Boolean(effectiveLink);
+  // An HTTP URL stays a link even when another relay serves TCP/UDP.
+  const isNavigable = navigable && Boolean(effectiveLink);
   const observedRelayCount = server.locations?.length ?? (server.remoteOnly ? 0 : 1);
   const showRelaysChip = Boolean(onOpenRelays && observedRelayCount > 0);
   const showActions = Boolean(!children && (onVote || onOpenComments || server.reputation || server.observedReputation || showRelaysChip));
@@ -615,6 +638,7 @@ export function ServerCard({
           onSelectVote={handleSelectVote}
           onOpenRelays={onOpenRelays}
           relayCount={observedRelayCount}
+          endpoints={endpoints}
         />
         {server.address && (() => {
           const address = server.address;
@@ -640,7 +664,11 @@ export function ServerCard({
         })()}
         {server.remoteOnly && !effectiveLink && (
           <p className="mt-2 text-xs text-muted-foreground">
-            {server.locations?.some((location) => location.url) ? "No relay available now" : "No HTTP URL available"}
+            {isTransportService
+              ? `${endpoints.map((e) => e.protocol).join("/")} transport service`
+              : server.locations?.some((location) => location.url || location.tcp_addr || location.udp_addr)
+              ? "No relay available now"
+              : "No HTTP URL available"}
           </p>
         )}
         {children && (

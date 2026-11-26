@@ -46,13 +46,13 @@ export function mergeLocations(
 }
 
 // A live location is reported ready by its relay and its observation has not expired.
-export function isLocationLive(location: ServiceLocation, now = Date.now()): boolean {
+export function isLocationLive(location: ServiceLocation, now: number = Date.now()): boolean {
   const expires = Date.parse(location.expires_at);
   return location.reported_ready === true && Number.isFinite(expires) && expires > now;
 }
 
 // An available location is live and has an HTTPS URL, so it is a navigation target.
-export function isLocationAvailable(location: ServiceLocation, now = Date.now()): boolean {
+export function isLocationAvailable(location: ServiceLocation, now: number = Date.now()): boolean {
   if (!isLocationLive(location, now) || !location.url) return false;
   try {
     return new URL(location.url).protocol === "https:";
@@ -66,7 +66,7 @@ export function isLocationAvailable(location: ServiceLocation, now = Date.now())
 export function mergeDiscoveredServices(
   local: BaseServer[],
   services: DiscoveredService[],
-  address = "",
+  address: string = "",
 ): BaseServer[] {
   const wantedAddress = address.trim().toLowerCase();
   const matchesAddress = (candidate?: string) =>
@@ -86,8 +86,9 @@ export function mergeDiscoveredServices(
     const key = identityKey(service.name, service.address);
     const existing = byIdentity.get(key);
     if (existing) {
-      const mergedLocations = mergeLocations(existing.locations ?? [], service.locations);
-      byIdentity.set(key, { ...existing, locations: mergedLocations });
+      // tcpAddr/udpAddr of a local card stay the local lease's own endpoints;
+      // the card reads remote endpoints from these locations.
+      byIdentity.set(key, { ...existing, locations: mergeLocations(existing.locations ?? [], service.locations) });
       continue;
     }
     // A local-only snapshot is not a substitute for the live local card list.
@@ -105,6 +106,7 @@ export function mergeDiscoveredServices(
       },
       { up: 0, down: 0 }
     );
+    const live = locations.filter((location) => isLocationLive(location));
     byIdentity.set(key, {
       id: `service:${key}`,
       serviceName: service.name,
@@ -114,11 +116,15 @@ export function mergeDiscoveredServices(
       tags: metadata.tags,
       owner: metadata.owner,
       thumbnail: "",
-      online: locations.some((location) => isLocationLive(location)),
+      online: live.length > 0,
       dns: "",
       link: "",
       remoteOnly: true,
       locations,
+      // Only a live relay is a connect target. When every relay is offline the
+      // card shows no endpoint instead of an address that cannot answer.
+      tcpAddr: live.find((location) => location.tcp_addr)?.tcp_addr,
+      udpAddr: live.find((location) => location.udp_addr)?.udp_addr,
       observedReputation: reportedLocations.length ? totals : undefined,
     });
   }

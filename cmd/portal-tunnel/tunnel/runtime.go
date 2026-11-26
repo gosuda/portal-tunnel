@@ -23,6 +23,7 @@ import (
 type Runtime struct {
 	Identity     types.Identity
 	Exposure     *sdk.Exposure
+	InspectorURL string
 	gateway      *gateway.HTTPGateway
 	handler      http.Handler
 	target       string
@@ -94,6 +95,13 @@ func composeTunnelHandler(resolved Config, runtime *Runtime, listenerIdentity ty
 	var err error
 	if runtime.gateway, err = gateway.ComposeHTTPRoutes(routes, resolved.X402Config); err == nil {
 		handler = runtime.gateway
+	}
+	if err == nil && resolved.Inspect {
+		runtime.InspectorURL, err = runtime.gateway.StartInspector(resolved.InspectBodies)
+		if err == nil {
+			log.Info().Str("inspector_url", runtime.InspectorURL).Bool("capture_bodies", resolved.InspectBodies).
+				Msg("local HTTP inspector listening; captures are in memory; bodies may contain secrets when enabled")
+		}
 	}
 	if err == nil && !resolved.IsZero() {
 		auth := resolved.AuthConfig

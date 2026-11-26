@@ -81,13 +81,25 @@ func dialPendingPeers(t *testing.T, ctx context.Context, addr string) []*quic.Co
 	return peers
 }
 
-func assertExtraConnectionClosed(t *testing.T, extra *quic.Conn) {
+func dialExtraUntilRejected(t *testing.T, ctx context.Context, addr string) {
 	t.Helper()
-	select {
-	case <-extra.Context().Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("connection beyond pending-auth capacity remained open")
+	// The relay admits connections in handshake-completion order, which can
+	// lag behind dial order while the host is busy. An extra connection
+	// dialed before the relay has observed all 64 pending peers is admitted
+	// instead of rejected. Retry with a fresh source address until a
+	// rejection is observed; each address is used once so only the global
+	// bound can close the probe, and an admitted probe is closed to free
+	// its slot.
+	for attempt := 0; attempt < 5; attempt++ {
+		extra := dialQUICFrom(t, ctx, addr, fmt.Sprintf("127.0.0.%d", 17+attempt))
+		select {
+		case <-extra.Context().Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		_ = extra.CloseWithError(0, "test probe admitted during accept lag")
 	}
+	t.Fatal("connection beyond pending-auth capacity remained open")
 }
 
 func assertPeersAlive(t *testing.T, peers []*quic.Conn) {
@@ -124,8 +136,7 @@ func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
 	relay, addr := startQUICRelay(t, ctx)
 
 	peers := dialPendingPeers(t, ctx, addr)
-	extra := dialQUICFrom(t, ctx, addr, "127.0.0.17")
-	assertExtraConnectionClosed(t, extra)
+	dialExtraUntilRejected(t, ctx, addr)
 	assertPeersAlive(t, peers)
 	shutdownRelayAndAssertClosed(t, relay, peers)
 }

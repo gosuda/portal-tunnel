@@ -41,7 +41,7 @@ function mergeDiscoveryResponses(
 }
 
 // Mounted by the public-list page. Card rendering alone never starts a lookup.
-export function useServiceDiscovery(address: string | undefined, name?: string, enabled = true, refresh = false) {
+export function useServiceDiscovery(address: string | undefined, name?: string, enabled: boolean = true, refresh: boolean = false): { response: ServiceDiscoveryResponse | undefined; error: string | undefined; loading: boolean } {
   const query = new URLSearchParams();
   if (address !== undefined) query.set("address", address);
   if (name !== undefined) query.set("name", name);

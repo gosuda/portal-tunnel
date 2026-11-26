@@ -36,6 +36,9 @@ type AgentTunnelStatus struct {
 	State           string              `json:"state"`
 	TargetAddr      string              `json:"target_addr,omitempty"`
 	Serve           string              `json:"serve,omitempty"`
+	Inspect         bool                `json:"inspect,omitempty"`
+	InspectBodies   bool                `json:"inspect_bodies,omitempty"`
+	InspectorURL    string              `json:"inspector_url,omitempty"`
 	LastError       string              `json:"last_error,omitempty"`
 	Discovery       bool                `json:"discovery"`
 	Overlay         bool                `json:"overlay"`
@@ -167,6 +170,8 @@ type AgentTunnelRequest struct {
 	Serve               string             `json:"serve,omitempty"`
 	HTTPRoutes          []tunnel.HTTPRoute `json:"http_routes,omitempty"`
 	StripRequestHeaders []string           `json:"strip_request_headers,omitempty"`
+	Inspect             bool               `json:"inspect,omitempty"`
+	InspectBodies       bool               `json:"inspect_bodies,omitempty"`
 	RelayURLs           []string           `json:"relays,omitempty"`
 	Discovery           *bool              `json:"discovery,omitempty"`
 	Overlay             bool               `json:"overlay,omitempty"`
