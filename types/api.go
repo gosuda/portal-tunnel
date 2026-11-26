@@ -93,6 +93,9 @@ type RegisterChallengeRequest struct {
 	UDPEnabled bool          `json:"udp_enabled,omitempty"`
 	TCPEnabled bool          `json:"tcp_enabled,omitempty"`
 	StartedAt  time.Time     `json:"started_at,omitempty"`
+	// Alias is the automatic Keyless alias label of an unnamed HTTP service.
+	// The SDK draws it at random once per exposure; named services omit it.
+	Alias string `json:"alias,omitempty"`
 }
 
 type RegisterChallengeResponse struct {

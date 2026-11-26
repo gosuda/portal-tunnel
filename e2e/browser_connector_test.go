@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -224,7 +223,7 @@ func assertSmokeLeaseRegistered(t *testing.T, relay *portal.Server, ready browse
 		t.Fatalf("relay public leases = %d, want 1", len(leases))
 	}
 	if leases[0].Hostname == "" {
-		t.Fatal("named browser lease did not receive an alias")
+		t.Fatal("browser lease did not receive a Keyless alias")
 	}
 	if leases[0].CanonicalHostname != "" {
 		t.Fatalf("browser lease unexpectedly has a Local TLS canonical: %+v", leases[0])
@@ -265,15 +264,6 @@ func testPackagedBrowserWASM(t *testing.T, name string) {
 	browserDone, browserErr := launchSmokeBrowser(t, ctx, browser, relayURL+"/browser-smoke?name="+name, logFile)
 
 	ready := awaitBrowserResult(t, ctx, result, browserDone, browserErr, logFile.Name())
-	if name == "" {
-		if ready.err == nil || !strings.Contains(ready.err.Error(), "unnamed HTTP services require Local TLS") {
-			t.Fatalf("unnamed browser result = %+v, want Local TLS requirement", ready)
-		}
-		if leases := relay.PublicLeases(); len(leases) != 0 {
-			t.Fatalf("rejected browser lease was published: %+v", leases)
-		}
-		return
-	}
 	if ready.err != nil {
 		t.Fatal(ready.err)
 	}

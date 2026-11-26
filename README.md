@@ -60,8 +60,10 @@ irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1
 portal expose 3000
 ```
 
-Portal prints an HTTPS URL when the tunnel is ready. To get a short URL without
-an Ethereum address, use `--name myapp` to select the service. When that
+Portal prints an HTTPS URL when the tunnel is ready. Without `--name` it is a
+short random URL such as `https://sunny-otter-k7m2q6rt3vx5z4ab.<relay-domain>/`.
+It stays the same while the command runs, including reconnects, and changes on
+the next run. To choose a stable short URL, use `--name myapp` to select the service. When that
 name is available, share `https://myapp.<relay-domain>/`, printed as `short URL`
 in the readiness message (`alias_url` in JSON logs). The identity-bound URL is
 also available; it includes the Ethereum address and supports opt-in relay

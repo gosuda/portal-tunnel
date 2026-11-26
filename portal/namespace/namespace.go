@@ -2,6 +2,8 @@
 package namespace
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,6 +19,8 @@ var (
 	errNameMustNotLookLikeCanonical              = errors.New("name must not look like a canonical hostname (40 hexadecimal characters, alone or after a hyphen)")
 	errHostnameDoesNotContainCanonicalLease      = errors.New("hostname does not contain a canonical lease address")
 	errAddressMustContain40HexadecimalCharacters = errors.New("address must contain 40 hexadecimal characters")
+	errNameMustNotLookLikeUnnamedAlias           = errors.New("name must not look like an automatic alias (a hyphen and 16 base32 characters at the end)")
+	errInvalidUnnamedAlias                       = errors.New("unnamed alias must be a service name ending in a 16-character base32 suffix")
 )
 
 // AliasHostname composes a single DNS label under the relay root.
@@ -35,18 +39,75 @@ func AliasHostname(name, rootHost string) (string, error) {
 	return label + "." + rootHost, nil
 }
 
-// MatchesAlias checks an optional alias against its service name and relay root. An empty hostname means the alias was not granted.
+// MatchesAlias checks an optional alias against its service name and relay
+// root. An empty hostname means the alias was not granted. An unnamed service
+// accepts any automatic alias under the root, because replicas share the alias
+// that the first live replica chose.
 func MatchesAlias(hostname, name, rootHost string) bool {
 	if hostname == "" {
 		return true
+	}
+	if strings.TrimSpace(name) == "" {
+		label, _, _ := strings.Cut(hostname, ".")
+		expected, err := UnnamedAliasHostname(label, rootHost)
+		return err == nil && hostname == expected
 	}
 	expected, err := AliasHostname(name, rootHost)
 	return err == nil && hostname == expected
 }
 
+// unnamedAliasSuffixBytes is the CSPRNG entropy of an automatic alias: 80
+// bits, so a live alias cannot be guessed and claimed in advance.
+const unnamedAliasSuffixBytes = 10
+
+const unnamedAliasAlphabet = "abcdefghijklmnopqrstuvwxyz234567"
+
+var (
+	unnamedAliasSuffixEncoding = base32.NewEncoding(unnamedAliasAlphabet).WithPadding(base32.NoPadding)
+	unnamedAliasSuffixLength   = unnamedAliasSuffixEncoding.EncodedLen(unnamedAliasSuffixBytes)
+
+	unnamedAliasAdjectives = [32]string{
+		"bouncy", "bravo", "candy", "cosmic", "dapper", "fancy", "fizzy", "fuzzy",
+		"gentle", "golden", "happy", "hyper", "jazzy", "jolly", "lucky", "magic",
+		"mellow", "minty", "misty", "neon", "nova", "peppy", "pixel", "rapid",
+		"snappy", "sunny", "swift", "tidy", "turbo", "vivid", "wavy", "zesty",
+	}
+	unnamedAliasNouns = [32]string{
+		"alpaca", "badger", "banjo", "beacon", "comet", "cricket", "dragon", "falcon",
+		"fox", "gecko", "harbor", "heron", "koala", "lemur", "mango", "narwhal",
+		"nebula", "otter", "panda", "pepper", "phoenix", "puffin", "quokka", "radar",
+		"rocket", "taco", "tiger", "toucan", "walrus", "willow", "wombat", "yeti",
+	}
+)
+
+// NewUnnamedAlias returns a fresh automatic alias label for an unnamed HTTP
+// service, such as sunny-otter-k7m2q6rt3vx5z4ab. The words are for reading;
+// the 80-bit CSPRNG suffix makes the label unique. It holds no identity data.
+func NewUnnamedAlias() string {
+	var b [2 + unnamedAliasSuffixBytes]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never returns an error.
+	return unnamedAliasAdjectives[b[0]%32] + "-" + unnamedAliasNouns[b[1]%32] + "-" + unnamedAliasSuffixEncoding.EncodeToString(b[2:])
+}
+
+// UnnamedAliasHostname validates an automatic alias label and composes its
+// hostname. NormalizeServiceName rejects this shape, so no chosen name can
+// claim an automatic alias.
+func UnnamedAliasHostname(label, rootHost string) (string, error) {
+	if normalized, err := utils.NormalizeDNSLabel(label); err != nil || normalized != label || hasCanonicalShape(label) || !hasUnnamedAliasShape(label) {
+		return "", errInvalidUnnamedAlias
+	}
+	return AliasHostname(label, rootHost)
+}
+
+// hasUnnamedAliasShape reports a label that ends in -<16 base32 characters>.
+func hasUnnamedAliasShape(label string) bool {
+	i := strings.LastIndexByte(label, '-')
+	return i > 0 && len(label)-i-1 == unnamedAliasSuffixLength && strings.Trim(label[i+1:], unnamedAliasAlphabet) == ""
+}
+
 // NormalizeServiceName normalizes a service name to a DNS label that cannot
-// be mistaken for a canonical label, so a friendly hostname never collides
-// with an identity-bound one.
+// be mistaken for a canonical label or an automatic alias, so a friendly
+// hostname never collides with an identity-bound or automatic one.
 func NormalizeServiceName(raw string) (string, error) {
 	label, err := utils.NormalizeDNSLabel(raw)
 	if err != nil {
@@ -54,6 +115,9 @@ func NormalizeServiceName(raw string) (string, error) {
 	}
 	if hasCanonicalShape(label) {
 		return "", errNameMustNotLookLikeCanonical
+	}
+	if hasUnnamedAliasShape(label) {
+		return "", errNameMustNotLookLikeUnnamedAlias
 	}
 	return label, nil
 }

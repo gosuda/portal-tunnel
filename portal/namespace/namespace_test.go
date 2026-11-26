@@ -142,6 +142,7 @@ func TestMatchesAlias(t *testing.T) {
 	t.Parallel()
 
 	const root = "relay.example"
+	automatic := NewUnnamedAlias() + ".relay.example"
 	tests := []struct {
 		name, hostname, service string
 		want                    bool
@@ -151,7 +152,10 @@ func TestMatchesAlias(t *testing.T) {
 		{"normalized name", "demo.relay.example", "Demo", true},
 		{"other name", "other.relay.example", "demo", false},
 		{"other root", "demo.other.example", "demo", false},
-		{"unnamed service", "demo.relay.example", "", false},
+		{"unnamed service on a chosen name", "demo.relay.example", "", false},
+		{"unnamed service on an automatic alias", automatic, "", true},
+		{"automatic alias under another root", strings.TrimSuffix(automatic, root) + "other.example", "", false},
+		{"named service on an automatic alias", automatic, "demo", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,5 +164,46 @@ func TestMatchesAlias(t *testing.T) {
 				t.Fatalf("MatchesAlias(%q, %q) = %v, want %v", tc.hostname, tc.service, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestUnnamedAlias protects the automatic alias contract: a short readable
+// label with an 80-bit random suffix, no identity data, never claimable as a
+// chosen name, and never a Local TLS hostname.
+func TestUnnamedAlias(t *testing.T) {
+	t.Parallel()
+	seen := make(map[string]struct{})
+	for range 1000 {
+		label := NewUnnamedAlias()
+		if len(label) > 40 {
+			t.Fatalf("automatic alias %q is %d characters, want a short label", label, len(label))
+		}
+		hostname, err := UnnamedAliasHostname(label, "relay.example")
+		if err != nil || hostname != label+".relay.example" {
+			t.Fatalf("UnnamedAliasHostname(%q) = %q, %v", label, hostname, err)
+		}
+		if _, err := NormalizeServiceName(label); err == nil {
+			t.Fatalf("service name %q may claim an automatic alias", label)
+		}
+		if IsLocalTLSHostname(hostname, "relay.example") {
+			t.Fatalf("automatic alias %q is classified as a Local TLS canonical", hostname)
+		}
+		if _, dup := seen[label]; dup {
+			t.Fatalf("automatic alias %q repeated", label)
+		}
+		seen[label] = struct{}{}
+	}
+	for _, label := range []string{
+		"demo",
+		"sunny-otter-short",
+		"sunny-otter-k7m2q6rt3vx5z4a0", // 0 is not base32.
+		"Sunny-otter-k7m2q6rt3vx5z4ab",
+		"-k7m2q6rt3vx5z4ab",
+		"k7m2q6rt3vx5z4ab",
+		"demo-" + strings.Repeat("a", 40),
+	} {
+		if _, err := UnnamedAliasHostname(label, "relay.example"); err == nil {
+			t.Fatalf("UnnamedAliasHostname(%q) accepted a label that is not an automatic alias", label)
+		}
 	}
 }

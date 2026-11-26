@@ -352,9 +352,11 @@ func TestUnnamedNamespaceReservesDefaultService(t *testing.T) {
 	_, ready := namespaceService(t, h, id, "unnamed", sdk.WithAutomaticTLS(t.TempDir(), true))
 	parsed, _ := url.Parse(ready.PublicURL)
 	address := strings.ToLower(strings.TrimPrefix(id.Address, "0x"))
-	if parsed.Hostname() != "default."+address+".localhost" || ready.AliasURL != "" {
-		t.Fatalf("unnamed canonical=%+v", ready)
+	if parsed.Hostname() != "default."+address+".localhost" || ready.AliasURL == "" {
+		t.Fatalf("unnamed canonical=%+v, want canonical plus automatic alias", ready)
 	}
+	aliasURL, _ := url.Parse(ready.AliasURL)
+	assertAutomaticAlias(t, aliasURL.Hostname(), id.Address)
 	namespaceResponse(t, h, ready.PublicURL, "unnamed", true)
 	id.Name = "default"
 	reserved, err := sdk.Expose(t.Context(), id, []string{"https://" + h.sniAddr}, sdk.WithAutomaticTLS(t.TempDir(), true))

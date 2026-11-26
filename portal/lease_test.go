@@ -1124,20 +1124,26 @@ func TestLeaseRegistryUnnamedHostnameContract(t *testing.T) {
 	checkUnnamedListing(t, registry, leasedIdentity, expectedCanonical)
 }
 
-func TestUnnamedHTTPRegistrationRequiresLocalTLS(t *testing.T) {
+func TestUnnamedHTTPRegistrationEndpoints(t *testing.T) {
 	t.Parallel()
+	alias := namespace.NewUnnamedAlias()
 	for _, test := range []struct {
 		name    string
 		request types.RegisterChallengeRequest
+		alias   bool
 		allowed bool
 	}{
-		{name: "HTTP"},
-		{name: "cached HTTP", request: types.RegisterChallengeRequest{Cache: true}},
-		{name: "overlay HTTP", request: types.RegisterChallengeRequest{Overlay: true}},
-		{name: "HTTP replica", request: types.RegisterChallengeRequest{Replica: true}},
+		{name: "HTTP without alias"},
+		{name: "HTTP", request: types.RegisterChallengeRequest{Alias: alias}, alias: true, allowed: true},
+		{name: "cached HTTP", request: types.RegisterChallengeRequest{Alias: alias, Cache: true}, alias: true, allowed: true},
+		{name: "overlay HTTP", request: types.RegisterChallengeRequest{Alias: alias, Overlay: true}, alias: true, allowed: true},
+		{name: "HTTP replica", request: types.RegisterChallengeRequest{Alias: alias, Replica: true}, alias: true, allowed: true},
+		{name: "Local TLS with alias", request: types.RegisterChallengeRequest{Alias: alias, Namespace: types.LocalTLSNamespaceV1}, alias: true, allowed: true},
 		{name: "Local TLS", request: types.RegisterChallengeRequest{Namespace: types.LocalTLSNamespaceV1}, allowed: true},
 		{name: "raw UDP", request: types.RegisterChallengeRequest{UDPEnabled: true}, allowed: true},
 		{name: "raw TCP", request: types.RegisterChallengeRequest{TCPEnabled: true}, allowed: true},
+		{name: "raw TCP with alias", request: types.RegisterChallengeRequest{Alias: alias, TCPEnabled: true}},
+		{name: "chosen-name alias", request: types.RegisterChallengeRequest{Alias: "demo"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			registry := newTestRegistry(t, true, true)
@@ -1145,22 +1151,66 @@ func TestUnnamedHTTPRegistrationRequiresLocalTLS(t *testing.T) {
 			request.Identity = newTestLeaseIdentity(t, "")
 			record, _, response, err := registry.Register(request, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
 			if !test.allowed {
-				var apiErr *apiError
-				if !errors.Is(err, errUnnamedHTTPNeedsLocalTLS) || !errors.As(err, &apiErr) || apiErr.code != types.APIErrorCodeInvalidRequest || apiErr.status != http.StatusBadRequest {
-					t.Fatalf("Register() = %v, want invalid-request rejection for unnamed HTTP", err)
-				}
-				if record != nil || response.AccessToken != "" {
-					t.Fatal("rejected unnamed HTTP registration returned a lease or token")
+				if err == nil || record != nil || response.AccessToken != "" {
+					t.Fatalf("Register() = %v, want a rejection without a lease or token", err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("Register() = %v, want unnamed Local TLS or raw transport accepted", err)
+				t.Fatalf("Register() = %v, want unnamed service accepted", err)
 			}
-			if response.CanonicalHostname == "" && response.UDPAddr == "" && response.TCPAddr == "" {
-				t.Fatal("accepted unnamed service has no endpoint")
+			wantAlias := ""
+			if test.alias {
+				wantAlias = alias + ".example.com"
+			}
+			if response.Hostname != wantAlias || (wantAlias != "" && response.AliasEpoch == "") {
+				t.Fatalf("unnamed alias = %q (epoch %q), want %q", response.Hostname, response.AliasEpoch, wantAlias)
+			}
+			if strings.Contains(response.Hostname, strings.ToLower(strings.TrimPrefix(request.Identity.Address, "0x"))) {
+				t.Fatalf("automatic alias %q exposes the signing address", response.Hostname)
+			}
+			if wantLocal := request.Namespace == types.LocalTLSNamespaceV1; wantLocal != (response.CanonicalHostname != "") {
+				t.Fatalf("canonical hostname = %q, want Local TLS canonical only when negotiated", response.CanonicalHostname)
 			}
 		})
+	}
+}
+
+// TestUnnamedAliasOwnership protects the automatic alias registry contract:
+// the owner keeps its alias and epoch on reconnect, another identity gets a
+// conflict (so the SDK draws again) instead of the alias, and no chosen name
+// can claim it.
+func TestUnnamedAliasOwnership(t *testing.T) {
+	t.Parallel()
+	registry := newTestRegistry(t, false, false)
+	owner := newTestLeaseIdentity(t, "")
+	alias := namespace.NewUnnamedAlias()
+	register := func(id types.Identity, alias string) (types.RegisterResponse, error) {
+		t.Helper()
+		_, _, response, err := registry.Register(types.RegisterChallengeRequest{Identity: id, Alias: alias}, netip.MustParseAddr("203.0.113.10"), "", types.RelayDescriptor{}, nil, nil)
+		return response, err
+	}
+	first, err := register(owner, alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnect, err := register(owner, alias)
+	if err != nil || reconnect.Hostname != first.Hostname || reconnect.AliasEpoch != first.AliasEpoch {
+		t.Fatalf("reconnect = %q/%q, %v; want stable %q/%q", reconnect.Hostname, reconnect.AliasEpoch, err, first.Hostname, first.AliasEpoch)
+	}
+	other := newTestLeaseIdentity(t, "")
+	if _, err := register(other, alias); !errors.Is(err, errHostnameConflict) {
+		t.Fatalf("another identity on a live automatic alias: %v, want hostname conflict", err)
+	}
+	if retry, err := register(other, namespace.NewUnnamedAlias()); err != nil || retry.Hostname == "" || retry.Hostname == first.Hostname {
+		t.Fatalf("retry with a fresh alias = %q, %v; want a distinct alias", retry.Hostname, err)
+	}
+	squatter := newTestLeaseIdentity(t, alias)
+	if _, err := register(squatter, ""); err == nil {
+		t.Fatalf("explicit name %q claimed an automatic alias", alias)
+	}
+	if lookup, ok := registry.Lookup(first.Hostname); !ok || lookup.Name != "" || lookup.Address != owner.Address {
+		t.Fatalf("Lookup(%q) = %+v, %v; want the unnamed owner", first.Hostname, lookup, ok)
 	}
 }
 

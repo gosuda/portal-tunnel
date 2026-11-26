@@ -117,6 +117,13 @@ type membershipRelay struct {
 
 func startMembershipRelay(t *testing.T, ctx context.Context) membershipRelay {
 	t.Helper()
+	relay, _ := startMembershipRelayServer(t, ctx)
+	return relay
+}
+
+// startMembershipRelayServer starts a relay without tenant certificate issuance.
+func startMembershipRelayServer(t *testing.T, ctx context.Context) (membershipRelay, *portal.Server) {
+	t.Helper()
 	sniPort := harnessPort(t, "127.0.0.1")
 	sniAddr := "127.0.0.1:" + strconv.Itoa(sniPort)
 	relayURL := "https://" + sniAddr
@@ -143,7 +150,7 @@ func startMembershipRelay(t *testing.T, ctx context.Context) membershipRelay {
 		sniPort:  sniPort,
 		certPath: filepath.Join(stateDir, "fullchain.pem"),
 		stateDir: stateDir,
-	}
+	}, relay
 }
 
 func relayStatusOnPort(relays []sdk.RelayStatus, sniPort int) (sdk.RelayStatus, bool) {

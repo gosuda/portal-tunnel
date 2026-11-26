@@ -450,7 +450,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 	if err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
-	if _, _, err := r.resolveRegisterHostnames(challenge.Request.Identity, challenge.Request.Namespace); err != nil {
+	if _, _, err := r.resolveRegisterHostnames(challenge.Request); err != nil {
 		return types.RegisterChallengeResponse{}, err
 	}
 	r.mu.Lock()
@@ -974,20 +974,26 @@ func (r *leaseRegistry) refuseChallengeOverBudget(key types.ServiceIdentityKey, 
 	return nil
 }
 
-func (r *leaseRegistry) resolveRegisterHostnames(leaseIdentity types.Identity, namespaceID string) (string, string, error) {
+func (r *leaseRegistry) resolveRegisterHostnames(req types.RegisterChallengeRequest) (string, string, error) {
+	leaseIdentity := req.Identity
 	var publicHostname string
-	if leaseIdentity.Name != "" {
-		var err error
+	var err error
+	switch {
+	case req.Alias != "" && (leaseIdentity.Name != "" || req.UDPEnabled || req.TCPEnabled):
+		return "", "", errAliasNotAllowed
+	case req.Alias != "":
+		publicHostname, err = namespace.UnnamedAliasHostname(req.Alias, r.rootHostname)
+	case leaseIdentity.Name != "":
 		publicHostname, err = namespace.AliasHostname(leaseIdentity.Name, r.rootHostname)
-		if err != nil {
-			return "", "", err
-		}
 	}
-	if namespaceID == "" {
+	if err != nil {
+		return "", "", err
+	}
+	if req.Namespace == "" {
 		return publicHostname, "", nil
 	}
-	if namespaceID != types.LocalTLSNamespaceV1 {
-		return "", "", fmt.Errorf("unsupported namespace %q", namespaceID)
+	if req.Namespace != types.LocalTLSNamespaceV1 {
+		return "", "", fmt.Errorf("unsupported namespace %q", req.Namespace)
 	}
 	canonicalHostname, err := namespace.LocalTLSHostname(leaseIdentity.Name, leaseIdentity.Address, r.rootHostname)
 	if err != nil {
@@ -1020,12 +1026,12 @@ func (r *leaseRegistry) buildRegisterRecord(req types.RegisterChallengeRequest, 
 	if err != nil {
 		return nil, "", err
 	}
-	publicHostname, canonicalHostname, err := r.resolveRegisterHostnames(leaseIdentity, req.Namespace)
+	publicHostname, canonicalHostname, err := r.resolveRegisterHostnames(req)
 	if err != nil {
 		return nil, "", err
 	}
 	if publicHostname == "" && canonicalHostname == "" && !req.UDPEnabled && !req.TCPEnabled {
-		return nil, "", errUnnamedHTTPNeedsLocalTLS
+		return nil, "", errUnnamedHTTPNeedsHostname
 	}
 	udpEnabled, _ := r.udpPolicy()
 	tcpPortEnabled, _ := r.tcpPortPolicy()
@@ -1172,8 +1178,9 @@ func (r *leaseRegistry) checkRegisterHostnameLocked(record *leaseRecord, identit
 		if existing.Hostname != "" && existing.Hostname == record.Hostname {
 			// Raw endpoints use <root>:<port> and Local TLS has its own canonical
 			// hostname, so only alias-only HTTP leases need the alias.
+			// An automatic alias always conflicts, so the SDK draws a fresh one.
 			aliasOnlyHTTP := req.Namespace != types.LocalTLSNamespaceV1 && !req.UDPEnabled && !req.TCPEnabled
-			if aliasOnlyHTTP {
+			if aliasOnlyHTTP || req.Alias != "" {
 				return errHostnameConflict
 			}
 			record.Hostname = ""

@@ -208,7 +208,7 @@ helm install my-app-tunnel oci://ghcr.io/gosuda/charts/portal-tunnel -f tunnel.v
 | Value | Effect |
 |---|---|
 | `target` | Address to expose, such as `my-app.default.svc.cluster.local:8080` |
-| `name` | Service name for the short URL (`--name`). Required for HTTP services; the relay rejects an unnamed one unless `args` select `--tcp`, `--udp`, `--tls-auto` or `--tls-cert` |
+| `name` | Service name for the short URL (`--name`). Optional; an unnamed HTTP service gets a random URL that changes when the pod restarts |
 | `relays` | Relay URLs (`--relays`) |
 | `args` | Other `portal expose` flags, such as `--discovery=false`, `--tcp` or `--auth` |
 | `env`, `secretEnv`, `existingSecret` | Environment variables read by `portal expose`; secret ones, such as `AUTH_OIDC_CLIENT_SECRET`, go in a Secret |
@@ -330,7 +330,7 @@ port of the range, and that UDP and TCP are on in `env`.
 **The client runs but never logs `service ready at`.** The liveness probe
 checks only `/metrics`, so a client whose relays all refused it stays
 `Running`. Look for `failed permanently` in the client log; the error before
-it names the cause, such as `unnamed HTTP services require Local TLS`. An
+it names the cause, such as `hostname conflict`. An
 unnamed client with `--tls-auto` on a relay that does not issue tenant
 certificates logs the warning `tenant_issuance_disabled` instead.
 
