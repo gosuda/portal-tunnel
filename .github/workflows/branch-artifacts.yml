@@ -1,9 +1,5 @@
 name: Branch Artifacts
 
-permissions:
-  contents: read
-  packages: write
-
 on:
   workflow_dispatch:
     inputs:
@@ -24,6 +20,9 @@ jobs:
   build:
     name: Build Artifacts
     runs-on: depot-ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout selected ref
