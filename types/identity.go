@@ -97,12 +97,15 @@ func (i Identity) Key() string {
 	return i.ServiceKey().String()
 }
 
+// LeaseMetadata is public service metadata. Its TOML keys are those of the
+// agent config. TOML decoding ignores the case of keys, so a config that an
+// older agent wrote with the Go field names, such as Description, still loads.
 type LeaseMetadata struct {
-	Description string   `json:"description,omitempty"`
-	Owner       string   `json:"owner,omitempty"`
-	Thumbnail   string   `json:"thumbnail,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Hide        bool     `json:"hide,omitempty"`
+	Description string   `json:"description,omitempty" toml:"description,omitempty"`
+	Owner       string   `json:"owner,omitempty" toml:"owner,omitempty"`
+	Thumbnail   string   `json:"thumbnail,omitempty" toml:"thumbnail,omitempty"`
+	Tags        []string `json:"tags,omitempty" toml:"tags,omitempty"`
+	Hide        bool     `json:"hide,omitempty" toml:"hide,omitempty"`
 }
 
 // Validate bounds metadata retained by the relay, including unauthenticated challenges.

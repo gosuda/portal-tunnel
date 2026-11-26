@@ -14,6 +14,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/tunnel"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
+	"github.com/gosuda/portal-tunnel/v2/types"
 )
 
 func TestStaticServeConfigRoundTrip(t *testing.T) {
@@ -175,6 +176,36 @@ func TestSavedConfigKeepsEveryTunnelKey(t *testing.T) {
 	saveConfigFixture(t, path, 0o600, reloaded)
 	if again, err := os.ReadFile(path); err != nil || !bytes.Equal(again, saved) {
 		t.Fatalf("a second save wrote another document (err %v):\n%s", err, again)
+	}
+}
+
+func TestCapitalizedMetadataKeysLoadAndSaveLowerCase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeConfigFixture(t, path, `
+[[tunnels]]
+id = "web"
+target = "127.0.0.1:3000"
+Description = "described"
+Owner = "owner"
+Thumbnail = "https://example.com/thumb.png"
+Tags = ["tag"]
+Hide = true
+`)
+	want := types.LeaseMetadata{Description: "described", Owner: "owner", Thumbnail: "https://example.com/thumb.png", Tags: []string{"tag"}, Hide: true}
+	cfg := loadConfigFixture(t, path)
+	if got := cfg.Tunnels[0].LeaseMetadata; !reflect.DeepEqual(got, want) {
+		t.Fatalf("metadata = %+v, want %+v", got, want)
+	}
+	saveConfigFixture(t, path, 0o600, cfg)
+	saved := string(readConfigFixture(t, path))
+	for _, key := range []string{"description", "owner", "thumbnail", "tags", "hide"} {
+		capitalized := strings.ToUpper(key[:1]) + key[1:]
+		if !strings.Contains(saved, "\n"+key+" =") || strings.Contains(saved, "\n"+capitalized+" =") {
+			t.Errorf("saved config does not write %q in lower case:\n%s", key, saved)
+		}
+	}
+	if got := loadConfigFixture(t, path).Tunnels[0].LeaseMetadata; !reflect.DeepEqual(got, want) {
+		t.Fatalf("reloaded metadata = %+v, want %+v", got, want)
 	}
 }
 
