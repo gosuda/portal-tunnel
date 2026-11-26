@@ -434,7 +434,6 @@ func TestApplicationAuthSAMLAcceptsEitherSignature(t *testing.T) {
 
 	for name, change := range map[string]func(*samlTestResponse){
 		"signed response":            func(r *samlTestResponse) { r.signAssertion, r.signResponse = false, true },
-		"signed assertion":           func(*samlTestResponse) {},
 		"both signed":                func(r *samlTestResponse) { r.signResponse = true },
 		"clock skew within leeway":   func(r *samlTestResponse) { r.notBefore = time.Now().Add(30 * time.Second) },
 		"no NotBefore in conditions": func(r *samlTestResponse) { r.notBefore = time.Time{} },

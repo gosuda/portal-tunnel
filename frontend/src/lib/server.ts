@@ -46,13 +46,13 @@ export function mergeLocations(
 }
 
 // A live location is reported ready by its relay and its observation has not expired.
-export function isLocationLive(location: ServiceLocation, now = Date.now()): boolean {
+export function isLocationLive(location: ServiceLocation, now: number = Date.now()): boolean {
   const expires = Date.parse(location.expires_at);
   return location.reported_ready === true && Number.isFinite(expires) && expires > now;
 }
 
 // An available location is live and has an HTTPS URL, so it is a navigation target.
-export function isLocationAvailable(location: ServiceLocation, now = Date.now()): boolean {
+export function isLocationAvailable(location: ServiceLocation, now: number = Date.now()): boolean {
   if (!isLocationLive(location, now) || !location.url) return false;
   try {
     return new URL(location.url).protocol === "https:";
@@ -66,7 +66,7 @@ export function isLocationAvailable(location: ServiceLocation, now = Date.now())
 export function mergeDiscoveredServices(
   local: BaseServer[],
   services: DiscoveredService[],
-  address = "",
+  address: string = "",
 ): BaseServer[] {
   const wantedAddress = address.trim().toLowerCase();
   const matchesAddress = (candidate?: string) =>
