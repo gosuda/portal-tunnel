@@ -47,7 +47,7 @@ func build(m *model) ggui.Widget {
 		ggui.View(m.AgentError, v.agentNotice),
 		ggui.View(m.OtherConfig, v.otherConfigNotice),
 		ggui.View(m.Problem, v.problemNotice),
-		widget.Expanded(widget.Scroll(ggui.View(m.Status, v.tunnels))),
+		widget.Expanded(scroll(ggui.View(m.Status, v.tunnels))),
 	).Space(1.5).Stretch()
 	return widget.Stack(
 		widget.Box(page).Pad(24),
@@ -103,11 +103,23 @@ func (v *view) agentNotice(msg string) ggui.Widget {
 		ui.Button("Copy command", func() { v.copy(startCommand) }).Outline().Size(ui.ButtonSmall),
 		ui.Button("Agent guide", func() { v.open(agentGuideURL) }).Ghost().Size(ui.ButtonSmall),
 	)
-	return widget.Column(alert, widget.Row(actions...).Space(1).Align(widget.AlignCenter)).Space(0.75).Stretch()
+	// The actions flow onto more lines in a narrow window instead of
+	// squeezing a button narrower than its label.
+	return widget.Column(alert, widget.Wrap(actions...).Space(1).Align(widget.AlignCenter)).Space(0.75).Stretch()
 }
 
 // sheetSize is the width of the sheets, which shrink to fit a smaller window.
 const sheetSize = 440
+
+// barGutter is the room at the right of scrolled content for the scroll
+// bar, which the theme draws 8 px wide over the right edge of a scroll.
+const barGutter = 12
+
+// scroll scrolls content with the scroll bar beside it, not over the right
+// edge of a field or a card.
+func scroll(content ggui.Widget) *widget.ScrollWidget {
+	return widget.Scroll(widget.Box(content).Pad(0, barGutter, 0, 0))
+}
 
 // setupSheet asks before the desktop creates the agent config or installs
 // the agent as a service of the OS, and says what each step does.
@@ -125,7 +137,7 @@ func (v *view) setupSheet(open bool) ggui.Widget {
 		widget.Text("The agent and its tunnels keep running after you quit Portal Desktop. To stop the agent and keep it from starting again, run portal agent stop."),
 		ggui.View(v.m.FormError, formError),
 	).Space(1).Stretch()
-	return ui.Sheet(v.m.SettingUp, widget.Scroll(body)).
+	return ui.Sheet(v.m.SettingUp, scroll(body)).
 		Title("Set up the Portal agent").
 		Footer(
 			ui.Button("Install and start", func() { v.m.startAgent(v.h) }).BindDisabled(v.m.Busy),
@@ -183,9 +195,10 @@ func (v *view) tunnelCard(tunnel agent.AgentTunnelStatus) ggui.Widget {
 	remove := ui.Button("Delete", func() { v.m.Deleting.Set(tunnel.ID) }).Outline().Size(ui.ButtonSmall).Name("Delete " + label).BindDisabled(v.blocked)
 	rows := []ggui.Widget{
 		widget.Row(
-			// The name gives way to the buttons: a long one ends in an
-			// ellipsis instead of pushing Settings and Delete out of the card.
-			widget.Expanded(widget.Row(widget.Flexible(ui.Heading(label).Ellipsis()), stateBadge(tunnel.State)).Space(1).Align(widget.AlignCenter)),
+			// The name gives way to the buttons: a long one is cut to one
+			// line ending in an ellipsis instead of pushing Settings and
+			// Delete out of the card.
+			widget.Expanded(widget.Row(widget.Flexible(ui.Heading(label).MaxLines(1)), stateBadge(tunnel.State)).Space(1).Align(widget.AlignCenter)),
 			settings, remove,
 		).Space(1).Align(widget.AlignCenter),
 		ui.Caption(tunnelDetails(tunnel)),
@@ -342,7 +355,7 @@ func (v *view) addSheet() ggui.Widget {
 			Help("How many relays carry the tunnel at once."),
 		ggui.View(v.m.FormError, formError),
 	).Space(1.25).Stretch()
-	return ui.Sheet(v.m.Adding, widget.Scroll(form)).
+	return ui.Sheet(v.m.Adding, scroll(form)).
 		Title("Expose a local service").
 		Description("The agent keeps the tunnel running after this window closes.").
 		Footer(
@@ -373,7 +386,7 @@ func (v *view) settingsSheet() ggui.Widget {
 		ui.Switch(hide, "Hide from relay service lists"),
 		ggui.View(v.m.FormError, formError),
 	).Space(1.25).Stretch()
-	return ui.Sheet(open, widget.Scroll(form)).
+	return ui.Sheet(open, scroll(form)).
 		Title("Tunnel settings").
 		Description("The agent applies these to the running tunnel and keeps them in its config.").
 		Footer(

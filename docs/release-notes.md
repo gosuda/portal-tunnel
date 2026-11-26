@@ -53,6 +53,8 @@ default agent config when one exists. `/agent/status` reports a relay from the
 tunnel config that was disconnected with the state `disconnected`, so the
 dashboard and Portal Desktop can connect it again. The CLI writes its logs
 without colors when the output is not a terminal, for example in service logs.
+On macOS, `portal agent run` starts the agent service again after
+`portal agent stop`, which disabled its launchd label.
 
 ### Relay: a per-source budget for ClientHello inspection
 

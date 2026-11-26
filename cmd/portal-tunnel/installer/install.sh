@@ -152,7 +152,7 @@ cleanup() {
 # TMP_INSTALL_PATH, it also puts back the desktop that install_desktop
 # replaced, so that the two stay of one release.
 on_signal() {
-  if [ -n "$DESKTOP_TARGET" ] && [ -n "${TMP_INSTALL_PATH:-}" ]; then
+  if [ -n "${TMP_INSTALL_PATH:-}" ] && [ -n "$DESKTOP_BACKUP$DESKTOP_TARGET" ]; then
     restore_desktop
   fi
   exit 1
@@ -240,13 +240,14 @@ INSTALL_PATH="$(pick_install_path)" || {
 INSTALL_DIR="$(dirname "$INSTALL_PATH")"
 TMP_INSTALL_PATH="$(mktemp "$INSTALL_DIR/.portal.tmp.XXXXXX")"
 
-# restore_desktop puts back the desktop install_desktop replaced.
+# restore_desktop puts back the desktop install_desktop replaced, from
+# wherever the install stopped.
 restore_desktop() {
   if [ -n "$DESKTOP_TARGET" ]; then
     rm -rf "$DESKTOP_TARGET"
-    if [ -n "$DESKTOP_BACKUP" ]; then
-      mv "$DESKTOP_BACKUP" "$DESKTOP_TARGET"
-    fi
+  fi
+  if [ -n "$DESKTOP_BACKUP" ] && [ -e "$DESKTOP_BACKUP" ]; then
+    mv "$DESKTOP_BACKUP" "$DESKTOP_PATH"
   fi
 }
 
@@ -269,8 +270,8 @@ install_desktop() {
   mkdir -p "$(dirname "$DESKTOP_PATH")"
   if [ -e "$DESKTOP_PATH" ]; then
     rm -rf "$DESKTOP_PATH.old"
-    mv "$DESKTOP_PATH" "$DESKTOP_PATH.old"
     DESKTOP_BACKUP="$DESKTOP_PATH.old"
+    mv "$DESKTOP_PATH" "$DESKTOP_BACKUP"
   fi
   DESKTOP_TARGET="$DESKTOP_PATH"
   if ! mv "$DESKTOP_SOURCE" "$DESKTOP_TARGET"; then

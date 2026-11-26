@@ -13,6 +13,7 @@ import (
 
 	"github.com/ironpark/ggui"
 	gguiruntime "github.com/ironpark/ggui/runtime"
+	uitheme "github.com/ironpark/ggui/ui/theme"
 
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/agent"
 	"github.com/gosuda/portal-tunnel/v2/sdk"
@@ -112,13 +113,18 @@ func TestDesktopOffersConnectForADisconnectedRelay(t *testing.T) {
 	}
 }
 
-// At the smallest window size, the forms scroll above their actions, so the
-// actions stay in the window even with an error under the form.
+// At the smallest window size, in Portal's theme, the forms scroll above
+// their actions, so the actions stay in the window even with an error under
+// the form, and the actions of the notice without an agent keep their width.
 func TestDesktopFormsKeepTheirActionsInTheSmallestWindow(t *testing.T) {
 	t.Parallel()
+	light, _, err := portalThemes()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
 	m := newModel(dir, filepath.Join(dir, "agent", "config.toml"), filepath.Join(dir, "portal"))
-	p := ggui.ProbeBuilder(func() ggui.Widget { return build(m) }, ggui.Sz(minWidth, minHeight))
+	p := ggui.ProbeBuilder(func() ggui.Widget { return uitheme.With(light, build(m)) }, ggui.Sz(minWidth, minHeight))
 	t.Cleanup(p.Close)
 	m.apply(p, sampleStatus(), nil)
 	inWindow := func(form, label string) {
@@ -145,6 +151,22 @@ func TestDesktopFormsKeepTheirActionsInTheSmallestWindow(t *testing.T) {
 	p.Advance(time.Second)
 
 	m.apply(p, agent.AgentStatusResponse{}, agent.ErrNotRunning)
+	actions := []string{"Set up and start", "Copy command", "Agent guide"}
+	widths := map[string]float64{}
+	p.Resize(ggui.Sz(probeWidth, minHeight))
+	p.Advance(time.Second)
+	for _, label := range actions {
+		button, _ := p.Find(label)
+		widths[label] = button.Rect.Size.W
+	}
+	p.Resize(ggui.Sz(minWidth, minHeight))
+	p.Advance(time.Second)
+	for _, label := range actions {
+		button, ok := p.Find(label)
+		if r := button.Rect; !ok || r.Size.W < widths[label] || r.Origin.Y+r.Size.H > minHeight || r.Origin.X+r.Size.W > minWidth {
+			t.Fatalf("no agent: %q is %v, %v wide in a wide window", label, button.Rect, widths[label])
+		}
+	}
 	p.Tap("Set up and start")
 	p.Advance(time.Second)
 	inWindow("setup", "Install and start")
@@ -357,18 +379,47 @@ func TestOtherAgentOfALaterLaunch(t *testing.T) {
 
 // The window wears Portal's colors and radius: theme.css holds the
 // declarations of the frontend's stylesheet, which stays their source.
+// theme.css holds the :root and .dark blocks of the web UI's stylesheet,
+// declaration for declaration, and the --radius of its @theme block.
 func TestThemeMatchesTheFrontend(t *testing.T) {
 	t.Parallel()
 	frontend, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", "index.css"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for decl := range strings.SplitSeq(themeCSS, ";") {
-		_, decl, _ = strings.Cut(decl, "--")
-		if decl = strings.TrimSpace(decl); decl != "" && !strings.Contains(string(frontend), "--"+decl+";") {
-			t.Errorf("theme.css declares --%s, which frontend/src/index.css does not", decl)
+	index := string(frontend)
+	root := cssDecls(themeCSS, ":root")
+	radius := slices.IndexFunc(root, func(decl string) bool { return strings.HasPrefix(decl, "--radius:") })
+	if radius < 0 || !slices.Contains(cssDecls(index, "@theme"), root[radius]) {
+		t.Fatal("theme.css must set --radius as the @theme block of frontend/src/index.css does")
+	}
+	root = slices.Delete(root, radius, radius+1)
+	for _, block := range []struct {
+		sel         string
+		theme, want []string
+	}{
+		{":root", root, cssDecls(index, ":root")},
+		{".dark", cssDecls(themeCSS, ".dark"), cssDecls(index, ".dark")},
+	} {
+		if !slices.Equal(block.theme, block.want) {
+			t.Errorf("%s of theme.css differs from frontend/src/index.css:\n got %q\nwant %q", block.sel, block.theme, block.want)
 		}
 	}
+}
+
+// cssDecls are the custom property declarations of the first block of css
+// whose selector is sel, without comments.
+func cssDecls(css, sel string) []string {
+	var decls []string
+	for decl := range strings.SplitSeq(cssBlock(css, sel), ";") {
+		if end := strings.LastIndex(decl, "*/"); end >= 0 {
+			decl = decl[end+2:]
+		}
+		if decl = strings.TrimSpace(decl); strings.HasPrefix(decl, "--") {
+			decls = append(decls, decl)
+		}
+	}
+	return decls
 }
 
 // startAgent runs a real agent with no tunnels, as `portal agent run

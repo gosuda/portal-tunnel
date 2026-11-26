@@ -82,9 +82,10 @@ path to Portal Desktop:
 portal gui --config ./agent.toml
 ```
 
-If Portal Desktop is open for another config, the window comes to the front and
-says that it shows another agent. To open the other config, quit Portal
-Desktop, then open it again with that config.
+If Portal Desktop is open for another config or another state directory, the
+window comes to the front and says that it shows another agent. To open the
+other agent, quit Portal Desktop, then open it again with that config or state
+directory.
 
 The `portal-desktop` program takes these flags:
 
@@ -142,10 +143,13 @@ asks first, then removes the tunnel.
 
 Each relay shows how it carries the tunnel: `direct`, `connecting...`,
 `waiting` for approval, `refused`, `failed`, `legacy TLS`, or `disconnected`.
-"Connect" and "Disconnect" change the relays of a running tunnel. A relay from
-the config that you disconnect stays on the tunnel as `disconnected`, so you
-can connect it again. A relay that waits for approval or refused the tunnel
-says so. Relay failures and certificate errors show the words of the agent.
+"Connect" and "Disconnect" change the relays of a running tunnel, and the agent
+config stays as it is. A relay from the config, such as one that you gave in
+"Relays" when you exposed the service, stays on the tunnel as `disconnected`, so
+you can connect it again. A relay that discovery selected leaves the list when
+you disconnect it, and discovery can select it again after about a minute. A
+relay that waits for approval or refused the tunnel says so. Relay failures and
+certificate errors show the words of the agent.
 
 When a relay carries an HTTP tunnel, Portal Desktop shows its URL with "Copy"
 and "Open". "Open" gives only `http` and `https` URLs to the browser. A TCP

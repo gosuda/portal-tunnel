@@ -1,6 +1,7 @@
 /*
- * Portal's colors and corner radius for Portal Desktop. The declarations
- * are copied from frontend/src/index.css, and a test keeps them equal to it.
+ * Portal's colors and corner radius for Portal Desktop. The :root and .dark
+ * blocks are those of frontend/src/index.css, and --radius is the one of its
+ * @theme block. A test keeps them equal.
  */
 :root {
   --radius: 0.5rem;
@@ -23,6 +24,14 @@
   --border: oklch(90% 0.01 250);
   --input: oklch(95% 0.005 250);
   --ring: oklch(50% 0.1 195);
+
+  --green-status: oklch(55% 0.16 150);
+  --text-muted: oklch(55% 0.03 250);
+
+  /* Directory backdrop colors are RGB triplets for configurable alpha. */
+  --stage-bg: 238 244 250;
+  --stage-bg-edge: 247 249 252;
+  --stage-accent: 15 118 110;
 }
 
 .dark {
@@ -45,4 +54,11 @@
   --border: rgba(148, 163, 184, 0.16);
   --input: #081525;
   --ring: #46efe4;
+
+  --green-status: #10b981;
+  --text-muted: #8fa3b8;
+
+  --stage-bg: 4 20 40;
+  --stage-bg-edge: 2 11 24;
+  --stage-accent: 94 252 232;
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/ironpark/ggui"
 	gguiruntime "github.com/ironpark/ggui/runtime"
+	"github.com/ironpark/ggui/ui"
 	"github.com/ironpark/ggui/ui/icons"
 	uitheme "github.com/ironpark/ggui/ui/theme"
 
@@ -42,6 +43,34 @@ var iconSVG []byte
 
 //go:embed theme.css
 var themeCSS string
+
+// portalThemes are the light and dark themes of Portal's web UI: the colors
+// and the radius of theme.css over ggui's Vega style, whose controls have
+// the heights and corners of the shadcn/ui components that the web UI uses.
+// An outline button is the page background inside an --input border, as
+// it is there in both appearances.
+func portalThemes() (light, dark *uitheme.Theme, err error) {
+	root := cssBlock(themeCSS, ":root")
+	vega := uitheme.Preset{Style: uitheme.StyleVega}
+	if light, err = vega.Light().ApplyCSS(root); err != nil {
+		return nil, nil, err
+	}
+	// As in a browser, .dark keeps what it does not set from :root.
+	if dark, err = vega.Dark().ApplyCSS(root + ";" + cssBlock(themeCSS, ".dark")); err != nil {
+		return nil, nil, err
+	}
+	outline := func(t *uitheme.Theme) ui.ButtonStyle {
+		return ui.ButtonStyle{Fill: t.Bg, Hover: t.Accent, Label: t.Fg, HoverLabel: t.AccentFg, Border: t.InputBorder}
+	}
+	return ui.ButtonOutline.Restyle(light, outline), ui.ButtonOutline.Restyle(dark, outline), nil
+}
+
+// cssBlock is the body of the first block of css whose selector is sel.
+func cssBlock(css, sel string) string {
+	_, body, _ := strings.Cut(css, sel+" {")
+	body, _, _ = strings.Cut(body, "}")
+	return body
+}
 
 // options are the flags of portal-desktop, of the first launch and of each
 // later one.
@@ -70,7 +99,7 @@ func main() {
 }
 
 func run(o options) error {
-	light, dark, err := uitheme.FromCSS(themeCSS)
+	light, dark, err := portalThemes()
 	if err != nil {
 		return fmt.Errorf("read the theme: %w", err)
 	}
