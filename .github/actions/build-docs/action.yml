@@ -3,6 +3,13 @@ description: Install dependencies and build docs site
 runs:
   using: composite
   steps:
+    - name: Cache Bun store
+      uses: actions/cache@v5
+      with:
+        path: ~/.bun/install/cache
+        key: bun-docs-${{ runner.os }}-${{ hashFiles('docs/bun.lock') }}
+        restore-keys: |
+          bun-docs-${{ runner.os }}-
     - name: Set up Bun
       uses: oven-sh/setup-bun@v2
 
