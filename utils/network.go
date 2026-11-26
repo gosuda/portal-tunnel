@@ -297,11 +297,10 @@ func NormalizeLoopbackTarget(raw string) (string, error) {
 	}
 	if port, ok := strings.CutPrefix(raw, ":"); ok {
 		if _, err := strconv.Atoi(port); err == nil {
-			return net.JoinHostPort("127.0.0.1", port), nil
+			raw = net.JoinHostPort("127.0.0.1", port)
 		}
-	}
-	if _, err := strconv.Atoi(raw); err == nil {
-		return net.JoinHostPort("127.0.0.1", raw), nil
+	} else if _, err := strconv.Atoi(raw); err == nil {
+		raw = net.JoinHostPort("127.0.0.1", raw)
 	}
 	return NormalizeTargetAddr(raw)
 }
@@ -477,18 +476,16 @@ func enforceNormalizeRelayURLScheme(parsed *url.URL) error {
 }
 
 func checkRelayPort(parsed *url.URL) error {
-	port := parsed.Port()
-	if port == "" {
-		return nil
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil {
-		return fmt.Errorf("%w: %w", errRelayURLPortMustBetween1, err)
-	}
-	if n < 1 || n > 65535 {
+	if port := parsed.Port(); port != "" && !validPort(port) {
 		return errRelayURLPortMustBetween1
 	}
 	return nil
+}
+
+// validPort reports whether port is a decimal port number from 1 to 65535.
+func validPort(port string) bool {
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 func canonicalRelayURL(parsed *url.URL) string {

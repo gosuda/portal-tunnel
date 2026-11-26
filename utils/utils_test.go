@@ -55,6 +55,24 @@ func TestNormalizeTargetAddrIPv6(t *testing.T) {
 	}
 }
 
+func TestNormalizeLoopbackTargetPortRange(t *testing.T) {
+	for input, want := range map[string]string{
+		"3000":            "127.0.0.1:3000",
+		":3000":           "127.0.0.1:3000",
+		"abc":             "abc:80",
+		"localhost:65535": "localhost:65535",
+	} {
+		if got, err := NormalizeLoopbackTarget(input); err != nil || got != want {
+			t.Errorf("NormalizeLoopbackTarget(%q) = %q, %v, want %q", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"65536", ":65536", "localhost:65536", "localhost:0", "localhost:", "http://127.0.0.1:70000"} {
+		if got, err := NormalizeLoopbackTarget(input); err == nil {
+			t.Errorf("NormalizeLoopbackTarget(%q) = %q, want a port range error", input, got)
+		}
+	}
+}
+
 func TestNormalizeURLPathCollapsesBackslashLedPaths(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{`/\example`, `/\`, `/\/`} {
