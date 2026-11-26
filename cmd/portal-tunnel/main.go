@@ -46,12 +46,13 @@ var (
 
 func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	log.Logger = log.Output(zerolog.NewConsoleWriter())
+	log.Logger = log.Output(consoleWriter(os.Stdout))
 	if err := cli.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]cli.CommandFunc{
 		"expose": runExposeCommand,
 		"agent":  runAgentCommand,
 		"auth":   runAuthCommand,
 		"list":   runListCommand,
+		"gui":    runGUICommand,
 		"update": runUpdateCommand,
 		"version": func(args []string) error {
 			fmt.Fprintln(os.Stdout, types.ReleaseVersion)
@@ -62,13 +63,25 @@ func main() {
 			{Name: "agent", Usage: printAgentUsage},
 			{Name: "auth", Usage: printAuthUsage},
 			{Name: "list", Usage: printListUsage},
+			{Name: "gui", Usage: printGUIUsage},
 			{Name: "update", Usage: printUpdateUsage},
 		}),
 	}); err != nil {
-		logger := log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+		logger := log.Output(consoleWriter(os.Stderr))
 		logger.Error().Err(err).Msg("portal tunnel exited with error")
 		os.Exit(1)
 	}
+}
+
+// consoleWriter writes readable log lines to f, in color only when f is a
+// terminal, so that service logs and programs that read the output, such as
+// Portal Desktop, get plain text.
+func consoleWriter(f *os.File) zerolog.ConsoleWriter {
+	return zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
+		w.Out = f
+		info, err := f.Stat()
+		w.NoColor = err != nil || info.Mode()&os.ModeCharDevice == 0
+	})
 }
 
 type exposeFlags struct {
@@ -400,8 +413,10 @@ func issueRunAuthCommandCredential(tunnelIdentity types.Identity, host, subject 
 
 func runUpdateCommand(args []string) error {
 	var version string
+	var cliOnly bool
 	fs := cli.NewFlagSet("update", printUpdateUsage)
 	fs.StringVar(&version, "version", "", "Release version to install; defaults to latest")
+	fs.BoolVar(&cliOnly, "cli-only", false, "Update the CLI alone and leave an installed Portal Desktop at its release")
 
 	if err := cli.ParseFlagSet(fs, args, printUpdateUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -414,11 +429,17 @@ func runUpdateCommand(args []string) error {
 		return err
 	}
 
-	if err := installer.UpdateCurrentBinary(version); err != nil {
+	desktop, err := installer.Update(version, cliOnly)
+	switch {
+	case err != nil:
 		return err
+	case desktop == "":
+		fmt.Fprintln(os.Stderr, "Updated portal.")
+	case cliOnly:
+		fmt.Fprintf(os.Stderr, "Updated portal. Portal Desktop at %s keeps its release; run 'portal update' to move both to one release.\n", desktop)
+	default:
+		fmt.Fprintf(os.Stderr, "Updated portal and Portal Desktop at %s. Reopen Portal Desktop if it is running; the agent and its tunnels keep running.\n", desktop)
 	}
-
-	fmt.Fprintln(os.Stderr, "Updated portal.")
 	return nil
 }
 
@@ -513,6 +534,7 @@ func printRootUsage(w io.Writer) {
 			"portal agent stop [flags]",
 			"portal agent restart [flags]",
 			"portal list [flags]",
+			"portal gui [flags]",
 			"portal update [flags]",
 			"portal version",
 		},
@@ -534,6 +556,7 @@ func printRootUsage(w io.Writer) {
 			"portal agent restart",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal list",
+			"portal gui",
 			"portal update",
 			"portal update --version v2.1.7",
 			"portal version",
@@ -623,6 +646,7 @@ func printUpdateUsage(w io.Writer) {
 		[]string{
 			"portal update",
 			"portal update --version v2.1.9",
+			"portal update --cli-only",
 		},
 	)
 }

@@ -22,6 +22,40 @@ when offline and never fall back to cached content.
 
 ## Unreleased
 
+### Portal Desktop: a desktop window for the agent
+
+Portal Desktop shows the tunnels that the Portal agent runs. It adds, changes,
+and removes them through the local Control API of the agent, as
+`portal agent dashboard` does. It shows relay approval, failures, and
+certificate errors, copies URLs and TCP addresses, and opens `http` and `https`
+URLs in the browser. It sends desktop notifications. On macOS and Windows, it
+stays in the tray. Closing or quitting it leaves the agent and its tunnels
+running.
+
+If the agent is not running, Portal Desktop offers to set it up. After you
+agree, it creates an agent config without tunnels when there is none, and runs
+`portal agent run`, which installs the agent as a service of the OS.
+
+Portal Desktop is opt-in. `install.sh --with-gui` and
+`PORTAL_WITH_GUI=1` for `install.ps1` install it with the CLI from one release,
+and verify each download with its own SHA-256 sidecar. `portal gui` opens it.
+`portal update` updates it with the CLI, and a CLI-only installation stays
+CLI-only. `portal update --cli-only` updates the CLI alone. The install script
+of a relay installs only the CLI. Releases publish `portal-desktop-*` assets
+for macOS, Windows, and Linux on amd64 and arm64, in a job after the CLI
+assets, so a failed desktop build does not hold back the CLI. The desktop is a
+Go module of its own, so the CLI, the SDK, the relay, and the container images
+do not depend on its GUI libraries. See [Portal Desktop](/portal-desktop).
+
+The terminal dashboard now keeps the port of a relay URL that it opens.
+`portal agent dashboard` without `--config` reads the state directory from the
+default agent config when one exists. `/agent/status` reports a relay from the
+tunnel config that was disconnected with the state `disconnected`, so the
+dashboard and Portal Desktop can connect it again. The CLI writes its logs
+without colors when the output is not a terminal, for example in service logs.
+On macOS, `portal agent run` starts the agent service again after
+`portal agent stop`, which disabled its launchd label.
+
 ### Relay: a per-source budget for ClientHello inspection
 
 `--inspections-per-source` (`INSPECTIONS_PER_SOURCE`, default `16`) bounds the

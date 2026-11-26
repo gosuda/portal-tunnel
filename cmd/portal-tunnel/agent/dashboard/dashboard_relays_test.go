@@ -11,27 +11,6 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/sdk"
 )
 
-func TestRelayDashboardMode(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		relay agent.AgentRelayStatus
-		want  string
-	}{
-		{name: "unknown", want: "-"},
-		{name: "ready", relay: agent.AgentRelayStatus{State: sdk.RelayReady, PublicURL: "https://app.example"}, want: "direct"},
-		{name: "connecting", relay: agent.AgentRelayStatus{State: sdk.RelayConnecting}, want: "connecting..."},
-		{name: "waiting", relay: agent.AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalPending}, want: "waiting"},
-		{name: "refused", relay: agent.AgentRelayStatus{State: sdk.RelayConnecting, Approval: sdk.RelayApprovalRefused}, want: "refused"},
-		{name: "failed with retained URL", relay: agent.AgentRelayStatus{State: sdk.RelayFailed, PublicURL: "https://app.example"}, want: "failed"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := relayDashboardMode(tc.relay); got != tc.want {
-				t.Fatalf("mode = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestDashboardDisconnectFollowsMembershipRatherThanReadiness(t *testing.T) {
 	for _, tunnelState := range []string{"running", "stopped", "retrying"} {
 		for _, relayState := range []sdk.RelayState{sdk.RelayReady, sdk.RelayConnecting, sdk.RelayFailed} {

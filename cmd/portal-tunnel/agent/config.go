@@ -73,6 +73,40 @@ func LoadExistingConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
+// CreateConfig writes a config without tunnels at path, the default config
+// path when empty, unless a file is there already. The agent fills in its
+// defaults when it reads the file, and keeps there the tunnels that it is
+// asked to add.
+func CreateConfig(path string) error {
+	path = cmp.Or(strings.TrimSpace(path), service.DefaultConfigPath())
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	err := utils.CreatePrivateFile(path, []byte("[agent]\n"))
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	return err
+}
+
+// StateDir is the state directory of the agent the config at path describes,
+// where the agent publishes its control endpoint. Without a config there yet,
+// it is the directory a new agent uses by default.
+func StateDir(path string) (string, error) {
+	path = cmp.Or(strings.TrimSpace(path), service.DefaultConfigPath())
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return service.DefaultDataDir(), nil
+		}
+		return "", err
+	}
+	cfg, err := LoadExistingConfig(path)
+	if err != nil {
+		return "", err
+	}
+	return cfg.Agent.StateDir, nil
+}
+
 func loadConfigDocument(path string) (Config, string, os.FileMode, error) {
 	path = strings.TrimSpace(path)
 	path = cmp.Or(path, service.DefaultConfigPath())

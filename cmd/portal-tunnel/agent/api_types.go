@@ -2,9 +2,12 @@ package agent
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -60,6 +63,11 @@ type AgentTunnelStatus struct {
 	Relays     []AgentRelayStatus `json:"relays,omitempty"`
 }
 
+// RelayDisconnected is the state of a relay that the tunnel's config names
+// and that the running tunnel does not use, because it was disconnected. A
+// connect request brings it back.
+const RelayDisconnected sdk.RelayState = "disconnected"
+
 type AgentRelayStatus struct {
 	RelayURL         string           `json:"relay_url"`
 	PublicURL        string           `json:"public_url,omitempty"`
@@ -72,6 +80,85 @@ type AgentRelayStatus struct {
 	// Approval is pending or refused while the relay refuses this tunnel's
 	// lease. Empty never means approved.
 	Approval sdk.RelayApproval `json:"approval,omitempty"`
+}
+
+// Label is the name people know the tunnel by: its name, or its ID when it
+// has none.
+func (t AgentTunnelStatus) Label() string {
+	if name := strings.TrimSpace(t.Name); name != "" {
+		return t.Name
+	}
+	return t.ID
+}
+
+// TargetSummary says what the tunnel serves: the directory or file it serves,
+// the address it forwards to, or how many HTTP routes it has.
+func (t AgentTunnelStatus) TargetSummary() string {
+	if t.Serve != "" {
+		return t.Serve
+	}
+	if target := strings.TrimSpace(t.TargetAddr); target != "" {
+		return target
+	}
+	if len(t.HTTPRoutes) == 0 {
+		return "-"
+	}
+	paid := 0
+	for _, route := range t.HTTPRoutes {
+		if strings.TrimSpace(route.Amount) != "" {
+			paid++
+		}
+	}
+	if paid == 0 {
+		return fmt.Sprintf("%d routes", len(t.HTTPRoutes))
+	}
+	return fmt.Sprintf("%d routes, %d paid", len(t.HTTPRoutes), paid)
+}
+
+// Mode says how the relay carries the tunnel, approval first: a relay that
+// waits for or refused approval carries nothing whatever its state.
+func (r AgentRelayStatus) Mode() string {
+	switch {
+	case r.Approval == sdk.RelayApprovalPending:
+		return "waiting"
+	case r.Approval == sdk.RelayApprovalRefused:
+		return "refused"
+	case r.State == sdk.RelayFailed:
+		return "failed"
+	case r.State == sdk.RelayReady && r.PublicURL == "" && r.CertificateError != "":
+		return "legacy TLS"
+	case r.State == sdk.RelayReady:
+		return "direct"
+	case r.State == sdk.RelayConnecting:
+		return "connecting..."
+	case r.State == RelayDisconnected:
+		return "disconnected"
+	default:
+		return "-"
+	}
+}
+
+// URL is the address people open to reach the tunnel through the relay: the
+// friendly alias when the relay granted one, else the public URL, without
+// credentials, query or fragment. It is empty unless that address is an http
+// or https URL with a host, so a caller can hand it to a browser.
+func (r AgentRelayStatus) URL() string {
+	parsed, err := url.Parse(strings.TrimSpace(cmp.Or(r.AliasURL, r.PublicURL)))
+	if err != nil || parsed.Hostname() == "" {
+		return ""
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return ""
+	}
+	host := parsed.Hostname()
+	if port := parsed.Port(); port != "" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return (&url.URL{Scheme: strings.ToLower(parsed.Scheme), Host: host, Path: parsed.Path, RawPath: parsed.RawPath}).String()
 }
 
 // AgentTunnelRequest adds a tunnel. The auth and payment components are the

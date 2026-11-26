@@ -88,7 +88,8 @@ jobs:
         if: needs.changes.outputs.go == 'true'
         run: |
           go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          (cd cmd/portal-desktop && go mod tidy)
+          git diff --exit-code -- go.mod go.sum cmd/portal-desktop/go.mod cmd/portal-desktop/go.sum
 
       - name: Cache CI linter
         if: needs.changes.outputs.go == 'true'

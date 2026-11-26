@@ -65,7 +65,7 @@ func (m agentDashboardModel) tunnelsConfirmQuestion() string {
 	name := m.confirmDelete
 	for _, tunnel := range m.status.Tunnels {
 		if tunnel.ID == m.confirmDelete {
-			name = tunnelDashboardName(tunnel)
+			name = tunnel.Label()
 		}
 	}
 	return fmt.Sprintf("Delete tunnel %q?", name)
@@ -128,7 +128,7 @@ func (v *agentDashboardView) addTunnelRow(th *agentDashboardTheme, width int, tu
 	if selected {
 		marker, style = th.glyph.selected, th.selected
 	}
-	row := agentDashboardTunnelRow(width-agentDashboardTunnelLead, tunnel.State, tunnelDashboardTarget(tunnel), tunnelDashboardName(tunnel))
+	row := agentDashboardTunnelRow(width-agentDashboardTunnelLead, tunnel.State, tunnel.TargetSummary(), tunnel.Label())
 	v.addClickRow(marker+led+" "+row, width, style, agentDashboardActionSelectTunnel, tunnel.ID, "")
 }
 
@@ -143,35 +143,6 @@ func agentDashboardTunnelLook(th *agentDashboardTheme, state string) (string, li
 	default:
 		return th.glyph.ledIdle, th.muted
 	}
-}
-
-func tunnelDashboardName(tunnel agent.AgentTunnelStatus) string {
-	if strings.TrimSpace(tunnel.Name) != "" {
-		return tunnel.Name
-	}
-	return tunnel.ID
-}
-
-func tunnelDashboardTarget(tunnel agent.AgentTunnelStatus) string {
-	if tunnel.Serve != "" {
-		return tunnel.Serve
-	}
-	if target := strings.TrimSpace(tunnel.TargetAddr); target != "" {
-		return target
-	}
-	if len(tunnel.HTTPRoutes) == 0 {
-		return "-"
-	}
-	paid := 0
-	for _, route := range tunnel.HTTPRoutes {
-		if strings.TrimSpace(route.Amount) != "" {
-			paid++
-		}
-	}
-	if paid == 0 {
-		return fmt.Sprintf("%d routes", len(tunnel.HTTPRoutes))
-	}
-	return fmt.Sprintf("%d routes, %d paid", len(tunnel.HTTPRoutes), paid)
 }
 
 func agentDashboardTunnelRow(width int, state, target, name string) string {

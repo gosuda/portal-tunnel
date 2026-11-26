@@ -21,6 +21,8 @@ $ProgressPreference = 'SilentlyContinue';
 irm https://github.com/gosuda/portal-tunnel/releases/latest/download/install.ps1 | iex;
 ```
 
+The scripts install the CLI alone. To install [Portal Desktop](https://gosuda.github.io/portal-tunnel/portal-desktop) with it, add `sh -s -- --with-gui` on macOS and Linux, or set `$env:PORTAL_WITH_GUI = '1'` before the PowerShell command.
+
 ### Docker Compose
 
 Run the multi-architecture container image (`linux/amd64` and `linux/arm64`) using the bundled `compose.yaml`:
@@ -57,6 +59,7 @@ portal agent run [flags]
 portal agent dashboard [flags]
 portal agent stop [flags]
 portal agent restart [flags]
+portal gui [flags]
 portal version
 portal update
 ```
@@ -286,4 +289,5 @@ for the baseline schema, evidence format, and security limits.
 - **[Concepts](https://gosuda.github.io/portal-tunnel/concepts)**: Architecture, relay ownership, and transport mechanics.
 - **[Security Model](https://gosuda.github.io/portal-tunnel/security-model)**: Tenant TLS, keyless signing, and the static cache trust boundary.
 - **[Portal Agent Guide](https://gosuda.github.io/portal-tunnel/portal-agent)**: Running long-running multi-tunnel setups with `config.toml`.
+- **[Portal Desktop](https://gosuda.github.io/portal-tunnel/portal-desktop)**: Managing the agent's tunnels in a desktop window with `portal gui`.
 - **[Self-Hosting Guide](https://gosuda.github.io/portal-tunnel/self-hosting)**: Running your own private or public relay server.

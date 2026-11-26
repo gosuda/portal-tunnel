@@ -22,6 +22,8 @@ func Install(ctx context.Context, def Definition) error {
 		return err
 	}
 	_ = exec.CommandContext(ctx, "launchctl", "bootout", domain, plistPath).Run()
+	// StopDisable disables the label, and bootstrap refuses a disabled one.
+	_ = exec.CommandContext(ctx, "launchctl", "enable", domain+"/"+def.Name).Run()
 	return exec.CommandContext(ctx, "launchctl", "bootstrap", domain, plistPath).Run()
 }
 

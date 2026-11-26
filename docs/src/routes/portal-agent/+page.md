@@ -33,7 +33,8 @@ configured local target.
 ## Create A Config
 
 `portal agent run` requires an existing config file. The installer does not
-create one.
+create one. [Portal Desktop](/portal-desktop#start-the-agent) can create a
+config without tunnels and start the agent for you.
 
 Default config paths:
 
@@ -300,6 +301,9 @@ by default. It polls agent status every two seconds and edits the same TOML
 config file that the service uses. It is laid out for a terminal of at least
 80 columns by 24 rows and uses the extra room of a larger one.
 
+For a native desktop window over the same Control API, see
+[Portal Desktop](/portal-desktop).
+
 For a ready named tunnel, the Relays pane displays and opens the short URL
 without an Ethereum address when the relay granted that name. Otherwise it uses
 the identity-bound URL. `/agent/status` keeps `public_url` as the identity-bound
@@ -329,7 +333,9 @@ with a status LED, explained in the legend beside the panes:
 The bar at the bottom lists the keys that work in the active pane and state.
 Relay connect/disconnect commands require a running tunnel and apply to its
 current exposure. They survive metadata updates and adding or deleting other
-tunnels, but reset to the saved relay settings when that tunnel restarts.
+tunnels, but reset to the saved relay settings when that tunnel restarts. A
+relay from `config.toml` that you disconnect stays in the Relays pane as
+`disconnected`, so you can connect it again with `c`.
 Terminals such as macOS Terminal often keep function keys for themselves, so
 every function key has a letter or key alias:
 
@@ -599,12 +605,14 @@ Wallet auth endpoints also exist under `/agent/auth/*`. Wallet-authenticated
 requests are read-only and can only call `/agent/status`; mutating operations
 use the local bearer token from the state directory.
 
-Each relay in `/agent/status` carries `state` (`connecting`, `ready`, or
-`failed`), optional `failure` (`runtime`, `terminal`, or `mitm`), and optional
-`approval` (`pending` or `refused`). Use `state` for connection status; a failed
-relay can retain its last canonical URL. The Relays pane displays this state
-directly. A tunnel without a runtime has no relay entries, including while it
-is stopped or waiting to retry.
+Each relay in `/agent/status` carries `state` (`connecting`, `ready`,
+`failed`, or `disconnected`), optional `failure` (`runtime`, `terminal`, or
+`mitm`), and optional `approval` (`pending` or `refused`). Use `state` for
+connection status; a failed relay can retain its last canonical URL. A relay
+that the tunnel's `relays` setting names and that the running tunnel does not
+use, because it was disconnected, has the state `disconnected`. The Relays pane
+displays this state directly. A tunnel without a runtime has no relay entries,
+including while it is stopped or waiting to retry.
 
 ## Agent Wallet Access
 
@@ -642,3 +650,4 @@ or a transport disabled on the relay.
 - [Configuration Reference](/configuration#configtoml): every agent config field
 - [Wallet and ENS](/wallet-and-ens): admin tokens, wallet auth, and ENS gasless behavior
 - [CLI Reference](/cli-reference): command flags and examples
+- [Portal Desktop](/portal-desktop): manage the agent's tunnels in a desktop window

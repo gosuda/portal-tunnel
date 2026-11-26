@@ -11,6 +11,9 @@ bin/
 docs/
 *.md
 
+# Portal Desktop is not part of any image
+cmd/portal-desktop/
+
 # Local relay/tunnel state
 .portal-certs/
 *identity.json
