@@ -110,8 +110,8 @@ func splitNormalizeTargetAddrHost(raw string) (string, error) {
 
 func formatNormalizeTargetAddrEndpoint(raw string) (string, error) {
 	if _, port, err := net.SplitHostPort(raw); err == nil {
-		if !validPort(port) {
-			return "", fmt.Errorf("%w: %q", errTargetPortMustBetween1, raw)
+		if err := checkPort(port, errTargetPortMustBetween1); err != nil {
+			return "", fmt.Errorf("target address %q: %w", raw, err)
 		}
 		return raw, nil
 	}

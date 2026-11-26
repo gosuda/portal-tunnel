@@ -476,16 +476,23 @@ func enforceNormalizeRelayURLScheme(parsed *url.URL) error {
 }
 
 func checkRelayPort(parsed *url.URL) error {
-	if port := parsed.Port(); port != "" && !validPort(port) {
-		return errRelayURLPortMustBetween1
+	if port := parsed.Port(); port != "" {
+		return checkPort(port, errRelayURLPortMustBetween1)
 	}
 	return nil
 }
 
-// validPort reports whether port is a decimal port number from 1 to 65535.
-func validPort(port string) bool {
+// checkPort returns rangeErr unless port is a decimal port number from 1 to
+// 65535. A port that does not parse also wraps the parse error.
+func checkPort(port string, rangeErr error) error {
 	n, err := strconv.Atoi(port)
-	return err == nil && n >= 1 && n <= 65535
+	if err != nil {
+		return fmt.Errorf("%w: %w", rangeErr, err)
+	}
+	if n < 1 || n > 65535 {
+		return rangeErr
+	}
+	return nil
 }
 
 func canonicalRelayURL(parsed *url.URL) string {
