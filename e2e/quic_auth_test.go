@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -81,25 +82,68 @@ func dialPendingPeers(t *testing.T, ctx context.Context, addr string) []*quic.Co
 	return peers
 }
 
-func dialExtraUntilRejected(t *testing.T, ctx context.Context, addr string) {
+func dialExtraUntilRejected(t *testing.T, ctx context.Context, addr string) []*quic.Conn {
 	t.Helper()
 	// The relay admits connections in handshake-completion order, which can
 	// lag behind dial order while the host is busy. An extra connection
 	// dialed before the relay has observed all 64 pending peers is admitted
 	// instead of rejected. Retry with a fresh source address until a
 	// rejection is observed; each address is used once so only the global
-	// bound can close the probe, and an admitted probe is closed to free
-	// its slot.
+	// bound can close the probe.
+	var held []*quic.Conn
 	for attempt := 0; attempt < 5; attempt++ {
 		extra := dialQUICFrom(t, ctx, addr, fmt.Sprintf("127.0.0.%d", 17+attempt))
 		select {
 		case <-extra.Context().Done():
-			return
+			if isBoundRejection(extra) {
+				return held
+			}
+			// Admitted, then lost before the bound closed it (its
+			// authentication timer fired): its slot is already released,
+			// so it proves nothing. Keep probing.
+			continue
 		case <-time.After(2 * time.Second):
 		}
-		_ = extra.CloseWithError(0, "test probe admitted during accept lag")
+		// Admitted and still held: keep it open so its pending slot stays
+		// occupied. Closing it before the next probe would free a slot, and
+		// a later rejection would no longer prove the bound is exactly 64.
+		held = append(held, extra)
 	}
 	t.Fatal("connection beyond pending-auth capacity remained open")
+	return nil
+}
+
+// isBoundRejection reports whether the relay closed the connection for
+// lack of pending-auth capacity, rather than the connection timing out or
+// failing another way after admission.
+func isBoundRejection(conn *quic.Conn) bool {
+	_, err := conn.OpenStreamSync(context.Background())
+	var appErr *quic.ApplicationError
+	if !errors.As(err, &appErr) {
+		return false
+	}
+	return appErr.Remote && appErr.ErrorCode == 1 && appErr.ErrorMessage == "backhaul authentication busy"
+}
+
+// assertPendingBoundExact requires the relay to hold exactly the dialed
+// peers and nothing more: a rejection observed while an admitted probe was
+// already closed would also pass with the bound one slot too wide.
+func assertPendingBoundExact(t *testing.T, peers, held []*quic.Conn) {
+	t.Helper()
+	live := 0
+	for _, conn := range peers {
+		if conn.Context().Err() == nil {
+			live++
+		}
+	}
+	for _, conn := range held {
+		if conn.Context().Err() == nil {
+			live++
+		}
+	}
+	if live != len(peers) {
+		t.Fatalf("live pending connections = %d, want exactly %d", live, len(peers))
+	}
 }
 
 func assertPeersAlive(t *testing.T, peers []*quic.Conn) {
@@ -136,9 +180,10 @@ func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
 	relay, addr := startQUICRelay(t, ctx)
 
 	peers := dialPendingPeers(t, ctx, addr)
-	dialExtraUntilRejected(t, ctx, addr)
+	held := dialExtraUntilRejected(t, ctx, addr)
 	assertPeersAlive(t, peers)
-	shutdownRelayAndAssertClosed(t, relay, peers)
+	assertPendingBoundExact(t, peers, held)
+	shutdownRelayAndAssertClosed(t, relay, append(peers, held...))
 }
 
 func TestQUICPendingAuthPerSourceBoundAndTimeoutRelease(t *testing.T) {
