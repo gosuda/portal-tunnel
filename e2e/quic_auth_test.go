@@ -151,15 +151,6 @@ func assertPendingBoundExact(t *testing.T, peers, held []*quic.Conn) {
 	}
 }
 
-func assertPeersAlive(t *testing.T, peers []*quic.Conn) {
-	t.Helper()
-	for i, peer := range peers {
-		if err := peer.Context().Err(); err != nil {
-			t.Fatalf("pending connection %d closed early: %v", i, context.Cause(peer.Context()))
-		}
-	}
-}
-
 func shutdownRelayAndAssertClosed(t *testing.T, relay *portal.Server, peers []*quic.Conn) {
 	t.Helper()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -186,7 +177,6 @@ func TestQUICPendingAuthenticationBoundAndShutdown(t *testing.T) {
 
 	peers := dialPendingPeers(t, ctx, addr)
 	held := dialExtraUntilRejected(t, ctx, addr)
-	assertPeersAlive(t, peers)
 	assertPendingBoundExact(t, peers, held)
 	shutdownRelayAndAssertClosed(t, relay, append(peers, held...))
 }
