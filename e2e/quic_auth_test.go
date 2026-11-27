@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,14 +116,18 @@ func dialExtraUntilRejected(t *testing.T, ctx context.Context, addr string) []*q
 
 // isBoundRejection reports whether the relay closed the connection for
 // lack of pending-auth capacity, rather than the connection timing out or
-// failing another way after admission.
+// failing another way after admission. The busy and timeout paths share
+// close code 1 (see runQUICBackhaulListener and handleQUICBackhaulConn in
+// portal/server.go), so the reason has to carry the distinction. Match the
+// stable concept word instead of the full sentence, so rewording the
+// sentence alone cannot flip the classification without changing behavior.
 func isBoundRejection(conn *quic.Conn) bool {
 	_, err := conn.OpenStreamSync(context.Background())
 	var appErr *quic.ApplicationError
 	if !errors.As(err, &appErr) {
 		return false
 	}
-	return appErr.Remote && appErr.ErrorCode == 1 && appErr.ErrorMessage == "backhaul authentication busy"
+	return appErr.Remote && appErr.ErrorCode == 1 && strings.Contains(appErr.ErrorMessage, "busy")
 }
 
 // assertPendingBoundExact requires the relay to hold exactly the dialed
