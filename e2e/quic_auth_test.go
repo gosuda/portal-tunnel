@@ -132,22 +132,22 @@ func isBoundRejection(conn *quic.Conn) bool {
 
 // assertPendingBoundExact requires the relay to hold exactly the dialed
 // peers and nothing more: a rejection observed while an admitted probe was
-// already closed would also pass with the bound one slot too wide.
+// already closed would also pass with the bound one slot too wide. Observe
+// liveness in one pass with no substitution: every dialed peer must still
+// be open, and no held probe may still be open. Counting peers and probes
+// into one total would let a peer that times out during the count hide
+// behind a live probe and mask a bound one slot too wide.
 func assertPendingBoundExact(t *testing.T, peers, held []*quic.Conn) {
 	t.Helper()
-	live := 0
-	for _, conn := range peers {
-		if conn.Context().Err() == nil {
-			live++
+	for i, conn := range peers {
+		if err := conn.Context().Err(); err != nil {
+			t.Fatalf("pending connection %d closed early: %v", i, context.Cause(conn.Context()))
 		}
 	}
 	for _, conn := range held {
 		if conn.Context().Err() == nil {
-			live++
+			t.Fatalf("probe beyond pending-auth capacity stayed open: bound is wider than %d", len(peers))
 		}
-	}
-	if live != len(peers) {
-		t.Fatalf("live pending connections = %d, want exactly %d", live, len(peers))
 	}
 }
 
