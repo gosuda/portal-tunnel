@@ -329,26 +329,10 @@ func newHTTPRoute(routeConfig HTTPRouteConfig) (*httpRoute, error) {
 	if upstreamInput == "" {
 		return nil, fmt.Errorf("http route %q upstream is required", prefix)
 	}
-	if !strings.Contains(upstreamInput, "://") {
-		target, err := utils.NormalizeLoopbackTarget(upstreamInput)
-		if err != nil {
-			return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
-		}
-		upstreamInput = "http://" + target
-	}
-
-	upstream, err := url.Parse(upstreamInput)
+	upstream, err := utils.NormalizeHTTPUpstream(upstreamInput)
 	if err != nil {
 		return nil, fmt.Errorf("http route %q upstream: %w", prefix, err)
 	}
-	if upstream.Host == "" {
-		return nil, fmt.Errorf("http route %q upstream host is required", prefix)
-	}
-	if upstream.Scheme != "http" && upstream.Scheme != "https" {
-		return nil, fmt.Errorf("http route %q upstream scheme must be http or https", prefix)
-	}
-	upstream.Fragment = ""
-	upstream.Path = utils.NormalizeURLPath(upstream.Path)
 
 	return &httpRoute{
 		prefix:         prefix,

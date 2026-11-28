@@ -21,6 +21,8 @@ var (
 	errTargetURLQueryNotSupported    = errors.New("target url query is not supported")
 	errTargetURLFragmentNotSupported = errors.New("target url fragment is not supported")
 	errTargetPortMustBetween1        = errors.New("target port must be between 1 and 65535")
+	errURLHostIsRequired             = errors.New("url host is required")
+	errURLSchemeMustBeHTTP           = errors.New("url scheme must be http or https")
 )
 
 func SplitCSV(raw string) []string {

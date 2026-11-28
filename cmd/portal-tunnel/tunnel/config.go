@@ -184,12 +184,6 @@ func (c Config) validate() error {
 			return fmt.Errorf("tunnel name: %w", err)
 		}
 	}
-	if _, err := utils.NormalizeLoopbackTarget(c.TargetAddr); err != nil {
-		return fmt.Errorf("target: %w", err)
-	}
-	if _, err := utils.NormalizeLoopbackTarget(c.UDPAddr); err != nil {
-		return fmt.Errorf("udp_addr: %w", err)
-	}
 	if c.InspectBodies && !c.Inspect {
 		return fmt.Errorf("inspect_bodies requires inspect")
 	}
@@ -242,6 +236,12 @@ func (c Config) validate() error {
 		if c.TargetAddr == "" {
 			return fmt.Errorf("tunnel target is required")
 		}
+		if _, err := utils.NormalizeLoopbackTarget(c.TargetAddr); err != nil {
+			return fmt.Errorf("target: %w", err)
+		}
+		if _, err := utils.NormalizeLoopbackTarget(c.UDPAddr); err != nil {
+			return fmt.Errorf("udp_addr: %w", err)
+		}
 		return nil
 	}
 	if c.TCPEnabled || c.UDPEnabled {
@@ -256,6 +256,11 @@ func (c Config) validate() error {
 	}
 	if c.TargetAddr != "" && len(c.HTTPRoutes) > 0 {
 		return fmt.Errorf("HTTP tunnel cannot combine a target and routes")
+	}
+	if c.TargetAddr != "" {
+		if _, err := utils.NormalizeHTTPUpstream(c.TargetAddr); err != nil {
+			return fmt.Errorf("target: %w", err)
+		}
 	}
 	if c.Cache != nil {
 		if c.Serve == "" {

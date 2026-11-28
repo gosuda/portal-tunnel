@@ -83,7 +83,9 @@ A port is a number from 1 to 65535. A host without a port, such as `abc`,
 resolves to port 80.
 
 URL inputs are accepted for address parsing. Paths, queries, and fragments are
-not supported.
+not supported. An HTTP tunnel, for example with `--inspect` or application
+auth, is different: its target is an HTTP upstream, and a target URL keeps its
+base path and query.
 
 ### Mode Selection
 

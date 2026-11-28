@@ -305,6 +305,39 @@ func NormalizeLoopbackTarget(raw string) (string, error) {
 	return NormalizeTargetAddr(raw)
 }
 
+// NormalizeHTTPUpstream parses the upstream of an HTTP route. A value without
+// a scheme is a NormalizeLoopbackTarget target and becomes an http URL. A URL
+// keeps its path and query and loses its fragment. It must use http or https,
+// name a host, and give any port as a number from 1 to 65535.
+func NormalizeHTTPUpstream(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.Contains(raw, "://") {
+		target, err := NormalizeLoopbackTarget(raw)
+		if err != nil {
+			return nil, err
+		}
+		raw = "http://" + target
+	}
+	upstream, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if upstream.Host == "" {
+		return nil, errURLHostIsRequired
+	}
+	if upstream.Scheme != "http" && upstream.Scheme != "https" {
+		return nil, errURLSchemeMustBeHTTP
+	}
+	if port := upstream.Port(); port != "" {
+		if err := checkPort(port, errTargetPortMustBetween1); err != nil {
+			return nil, fmt.Errorf("url %q: %w", raw, err)
+		}
+	}
+	upstream.Fragment = ""
+	upstream.Path = NormalizeURLPath(upstream.Path)
+	return upstream, nil
+}
+
 var (
 	errNameIsRequired                    = errors.New("name is required")
 	errNameIsInvalid                     = errors.New("name is invalid")

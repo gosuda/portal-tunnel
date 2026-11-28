@@ -93,6 +93,13 @@ func TestConfigResolveModes(t *testing.T) {
 		{name: "target port 65535", edit: func(c *Config) { c.TargetAddr = "localhost:65535" }, valid: true},
 		{name: "target port above 65535", edit: func(c *Config) { c.TargetAddr = "localhost:65536" }},
 		{name: "bare port above 65535", edit: func(c *Config) { c.TargetAddr = "65536" }},
+		{name: "stream target with a path", edit: func(c *Config) { c.TargetAddr = "http://localhost:3000/api" }},
+		{name: "HTTP target with a base path and query", edit: func(c *Config) {
+			c.TargetAddr, c.Inspect = "http://localhost:3000/api?tenant=a", true
+		}, valid: true},
+		{name: "HTTP target port above 65535", edit: func(c *Config) {
+			c.TargetAddr, c.Inspect = "http://localhost:65536/api", true
+		}},
 		{name: "udp_addr port above 65535", edit: func(c *Config) {
 			c.TargetAddr, c.UDPEnabled, c.UDPAddr = "localhost:3000", true, "localhost:65536"
 		}},

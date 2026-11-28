@@ -73,6 +73,24 @@ func TestNormalizeLoopbackTargetPortRange(t *testing.T) {
 	}
 }
 
+func TestNormalizeHTTPUpstream(t *testing.T) {
+	for input, want := range map[string]string{
+		"3000":            "http://127.0.0.1:3000/",
+		"localhost:65535": "http://localhost:65535/",
+		"http://localhost:3000/api/?tenant=a#top": "http://localhost:3000/api?tenant=a",
+		"https://backend.example.com":             "https://backend.example.com/",
+	} {
+		if got, err := NormalizeHTTPUpstream(input); err != nil || got.String() != want {
+			t.Errorf("NormalizeHTTPUpstream(%q) = %v, %v, want %q", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"65536", "http://localhost:65536/api", "http://localhost:0", "ftp://localhost:21", "http:///api"} {
+		if got, err := NormalizeHTTPUpstream(input); err == nil {
+			t.Errorf("NormalizeHTTPUpstream(%q) = %v, want an error", input, got)
+		}
+	}
+}
+
 func TestNormalizeURLPathCollapsesBackslashLedPaths(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{`/\example`, `/\`, `/\/`} {

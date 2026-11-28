@@ -42,10 +42,16 @@ Now the request fails and the file does not change. A host without a port, such
 as `abc`, still resolves to `abc:80`.
 
 The check is part of the tunnel validation, so it also covers `udp_addr`,
-`config.toml`, and `portal expose`. A target URL with a path, a query, or a
-fragment also fails now, as the target formats already said. An agent whose
-`config.toml` holds such a tunnel no longer loads the file. Correct or remove
-that tunnel.
+`config.toml`, and `portal expose`. The check follows the tunnel mode. An HTTP
+tunnel, for example one with `inspect` or application auth, reads its target as
+an HTTP upstream, so a target URL with a base path or a query still works. A
+stream, TCP, or UDP tunnel reads its target as an address, so a target URL with
+a path, a query, or a fragment now fails when the file loads. Before, it failed
+when the tunnel started. An agent whose `config.toml` holds an invalid tunnel no
+longer loads the file. Correct or remove that tunnel.
+
+`sdk.NewHTTPRoutes` also refuses an upstream URL whose port is not a number
+from 1 to 65535. Before, the route accepted it, and each proxied request failed.
 
 ### Agent: metadata keys in `config.toml` are lower case
 
