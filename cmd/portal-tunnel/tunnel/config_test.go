@@ -89,6 +89,22 @@ func TestConfigResolveModes(t *testing.T) {
 		valid bool
 	}{
 		{name: "target", edit: func(c *Config) { c.TargetAddr = "localhost:3000" }, valid: true},
+		{name: "target host without port", edit: func(c *Config) { c.TargetAddr = "abc" }, valid: true},
+		{name: "target port 65535", edit: func(c *Config) { c.TargetAddr = "localhost:65535" }, valid: true},
+		{name: "target port above 65535", edit: func(c *Config) { c.TargetAddr = "localhost:65536" }},
+		{name: "bare port above 65535", edit: func(c *Config) { c.TargetAddr = "65536" }},
+		{name: "stream target with a path", edit: func(c *Config) { c.TargetAddr = "http://localhost:3000/api" }},
+		{name: "HTTP target with a base path and query", edit: func(c *Config) {
+			c.TargetAddr, c.Inspect = "http://localhost:3000/api?tenant=a", true
+		}, valid: true},
+		{name: "HTTP target port above 65535", edit: func(c *Config) {
+			c.TargetAddr, c.Inspect = "http://localhost:65536/api", true
+		}},
+		{name: "udp_addr port above 65535", edit: func(c *Config) {
+			c.TargetAddr, c.UDPEnabled, c.UDPAddr = "localhost:3000", true, "localhost:65536"
+		}},
+		{name: "name of 63 characters", edit: func(c *Config) { c.TargetAddr, c.Name = "localhost:3000", strings.Repeat("a", 63) }, valid: true},
+		{name: "name over 63 characters", edit: func(c *Config) { c.TargetAddr, c.Name = "localhost:3000", strings.Repeat("a", 64) }},
 		{name: "missing source", edit: func(c *Config) {}},
 		{name: "static", edit: func(c *Config) { c.Serve = "./dist" }, valid: true},
 		{name: "static and target", edit: func(c *Config) { c.Serve, c.TargetAddr = "./dist", "localhost:3000" }},

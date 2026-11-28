@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -286,6 +287,18 @@ func checkListenerRefusalReconnecting(t *testing.T, fixture *listenerRefusalFixt
 	fixture.l.clearLease("")
 	fixture.l.reportRefusal(fixture.pending)
 	fixture.quiet()
+}
+
+func TestRegisterDenialEndsTheListenerAsRefused(t *testing.T) {
+	l, update, _ := newRefusalListener(t)
+	l.lease = utils.NewSnapshot(listenerSnapshot{})
+	denied := &types.APIRequestError{StatusCode: http.StatusForbidden, Code: types.APIErrorCodeLeaseDenied}
+	if !l.closeForTerminalRelayError(denied) {
+		t.Fatal("a register denial did not end the listener")
+	}
+	if got := update(); got.state != RelayFailed || got.failure != RelayFailureTerminal || got.approval != RelayApprovalRefused || !errors.Is(got.err, denied) {
+		t.Fatalf("denied status = %+v", got)
+	}
 }
 
 func TestApprovalKeepsARelayOutOfTheActiveSet(t *testing.T) {

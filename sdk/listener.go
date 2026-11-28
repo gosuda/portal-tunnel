@@ -147,7 +147,7 @@ func (l *listener) closeForTerminalRelayError(err error) bool {
 		Str("relay_url", l.api.relayURL.String()).
 		Str("address", l.identity.Address).
 		Msg("relay operation failed permanently; closing listener")
-	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, err: err})
+	l.report(listenerStatus{state: RelayFailed, failure: RelayFailureTerminal, approval: relayApprovalFromError(err), err: err})
 	_ = l.Close()
 	return true
 }

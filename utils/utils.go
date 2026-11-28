@@ -20,6 +20,9 @@ var (
 	errTargetURLPathNotSupported     = errors.New("target url path is not supported")
 	errTargetURLQueryNotSupported    = errors.New("target url query is not supported")
 	errTargetURLFragmentNotSupported = errors.New("target url fragment is not supported")
+	errTargetPortMustBetween1        = errors.New("target port must be between 1 and 65535")
+	errURLHostIsRequired             = errors.New("url host is required")
+	errURLSchemeMustBeHTTP           = errors.New("url scheme must be http or https")
 )
 
 func SplitCSV(raw string) []string {
@@ -108,7 +111,10 @@ func splitNormalizeTargetAddrHost(raw string) (string, error) {
 }
 
 func formatNormalizeTargetAddrEndpoint(raw string) (string, error) {
-	if _, _, err := net.SplitHostPort(raw); err == nil {
+	if _, port, err := net.SplitHostPort(raw); err == nil {
+		if err := checkPort(port, errTargetPortMustBetween1); err != nil {
+			return "", fmt.Errorf("target address %q: %w", raw, err)
+		}
 		return raw, nil
 	}
 	if strings.Count(raw, ":") == 0 && !strings.ContainsAny(raw, "[]") {

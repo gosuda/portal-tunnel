@@ -235,7 +235,7 @@ func TestManualRelayApprovalLifecycle(t *testing.T) {
 
 	setLeasePolicy(t, ctx, client, base, types.LeasePolicyUpdate{IdentityKey: key, IsDenied: ptr(true)})
 	status := waitRelayStatus(t, exposure, "terminal denial", func(s sdk.RelayStatus) bool { return s.State == sdk.RelayFailed })
-	if !errors.Is(status.Err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}) {
+	if !errors.Is(status.Err, &types.APIRequestError{Code: types.APIErrorCodeLeaseDenied}) || status.Approval != sdk.RelayApprovalRefused {
 		t.Fatalf("denied publisher: %+v", status)
 	}
 }

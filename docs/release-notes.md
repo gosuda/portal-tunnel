@@ -22,6 +22,46 @@ when offline and never fall back to cached content.
 
 ## Unreleased
 
+### SDK and agent: a denied registration reports `refused`
+
+When a relay denies or bans a registration, `RelayStatus.Approval` is now
+`refused`, and `/agent/status` reports `approval` `refused` for that relay.
+Before, only `state` `failed` and `failure` `terminal` were set, so the
+dashboard showed `failed`, not `refused`. The refusal stays terminal: the
+listener does not register again. The relay sends no retry delay for a
+denial, and each new registration spends the pre-auth budget of the source.
+After the relay operator lifts the denial or ban, connect the relay again or
+restart the exposure.
+
+### Agent: tunnels with an invalid name or target port are not saved
+
+`POST /agent/tunnels` now refuses a tunnel whose name is longer than 63
+characters or whose target port is not a number from 1 to 65535. Before, the
+agent saved the tunnel to `config.toml`, and the tunnel failed when it started.
+Now the request fails and the file does not change. A host without a port, such
+as `abc`, still resolves to `abc:80`.
+
+The check is part of the tunnel validation, so it also covers `udp_addr`,
+`config.toml`, and `portal expose`. The check follows the tunnel mode. An HTTP
+tunnel, for example one with `inspect` or application auth, reads its target as
+an HTTP upstream, so a target URL with a base path or a query still works. A
+stream, TCP, or UDP tunnel reads its target as an address, so a target URL with
+a path, a query, or a fragment now fails when the file loads. Before, it failed
+when the tunnel started. An agent whose `config.toml` holds an invalid tunnel no
+longer loads the file. Correct or remove that tunnel.
+
+`sdk.NewHTTPRoutes` also refuses an upstream URL whose port is not a number
+from 1 to 65535. Before, the route accepted it, and each proxied request failed.
+
+### Agent: metadata keys in `config.toml` are lower case
+
+The agent now writes the metadata keys as `description`, `owner`,
+`thumbnail`, `tags`, and `hide`, as documented. Before, it wrote `Description`,
+`Owner`, `Thumbnail`, `Tags`, and `Hide`, and it wrote them for every tunnel,
+even when they were empty. A file with the capitalized keys still loads, and
+the next save writes them in lower case. The JSON fields and the relay wire
+format do not change.
+
 ### Relay: a per-source budget for ClientHello inspection
 
 `--inspections-per-source` (`INSPECTIONS_PER_SOURCE`, default `16`) bounds the

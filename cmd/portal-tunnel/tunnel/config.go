@@ -13,6 +13,7 @@ import (
 	"github.com/gosuda/portal-tunnel/v2/cmd/portal-tunnel/gateway"
 	"github.com/gosuda/portal-tunnel/v2/portal/certmonitor"
 	"github.com/gosuda/portal-tunnel/v2/portal/discovery"
+	"github.com/gosuda/portal-tunnel/v2/portal/namespace"
 	"github.com/gosuda/portal-tunnel/v2/sdk/appauth"
 	"github.com/gosuda/portal-tunnel/v2/types"
 	"github.com/gosuda/portal-tunnel/v2/utils"
@@ -178,6 +179,11 @@ var (
 )
 
 func (c Config) validate() error {
+	if c.Name != "" {
+		if _, err := namespace.NormalizeServiceName(c.Name); err != nil {
+			return fmt.Errorf("tunnel name: %w", err)
+		}
+	}
 	if c.InspectBodies && !c.Inspect {
 		return fmt.Errorf("inspect_bodies requires inspect")
 	}
@@ -230,6 +236,12 @@ func (c Config) validate() error {
 		if c.TargetAddr == "" {
 			return fmt.Errorf("tunnel target is required")
 		}
+		if _, err := utils.NormalizeLoopbackTarget(c.TargetAddr); err != nil {
+			return fmt.Errorf("target: %w", err)
+		}
+		if _, err := utils.NormalizeLoopbackTarget(c.UDPAddr); err != nil {
+			return fmt.Errorf("udp_addr: %w", err)
+		}
 		return nil
 	}
 	if c.TCPEnabled || c.UDPEnabled {
@@ -244,6 +256,11 @@ func (c Config) validate() error {
 	}
 	if c.TargetAddr != "" && len(c.HTTPRoutes) > 0 {
 		return fmt.Errorf("HTTP tunnel cannot combine a target and routes")
+	}
+	if c.TargetAddr != "" {
+		if _, err := utils.NormalizeHTTPUpstream(c.TargetAddr); err != nil {
+			return fmt.Errorf("target: %w", err)
+		}
 	}
 	if c.Cache != nil {
 		if c.Serve == "" {

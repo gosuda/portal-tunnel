@@ -305,7 +305,10 @@ without an Ethereum address when the relay granted that name. Otherwise it uses
 the identity-bound URL. `/agent/status` keeps `public_url` as the identity-bound
 URL and includes `alias_url` only for a ready relay with an assigned short name.
 It includes `approval` as `pending` or `refused` while the relay refuses the
-tunnel. Its absence does not mean approved.
+tunnel. Its absence does not mean approved. A relay that refuses the
+registration also reports `state` `failed` with `failure` `terminal`, and its
+listener stops. After the relay operator lifts the denial or ban, connect the
+relay again.
 
 Dashboard panes:
 
@@ -590,6 +593,8 @@ Control endpoints:
 `POST /agent/tunnels` accepts the `auth`, `auth_allowed_wallets`, `auth_email_list`, `auth_identity_headers`, `auth_oidc_*`, `auth_saml_*`, and `auth_smtp_*` fields, with the meaning they have in `config.toml`. The agent does not write the settings that the request leaves out, such as `discovery` or `max_active_relays`, to `config.toml`. `GET /agent/status` reports their defaults.
 
 `POST /agent/tunnels` accepts `serve`, a static site directory or HTML file with the meaning it has in `config.toml`. A tunnel with `serve` gets no default target, and `serve` cannot be combined with `target_addr` or `http_routes`. A relative `serve` path is resolved from the directory of `config.toml`, not from the caller's working directory, and saved as the resulting absolute path.
+
+The new tunnel must pass the same validation as `config.toml`. For example, `name` must be one normalized DNS label of at most 63 ASCII characters, and a port in `target_addr` must be a number from 1 to 65535. A host without a port, such as `abc`, resolves to `abc:80` as in the CLI. If the tunnel does not pass, the request fails and `config.toml` does not change.
 
 `PATCH /agent/tunnels/{id}` changes the fields it names (`max_active_relays`, `metadata`, `auth`, `auth_allowed_wallets`, `auth_email_list`, `auth_identity_headers`, `auth_oidc_issuer`, `auth_oidc_client_id`, `auth_oidc_client_secret`, `auth_saml_metadata_url`, `auth_saml_metadata_file`, `auth_saml_entity_id`, `auth_saml_subject_attribute`, `auth_smtp_addr`, `auth_smtp_username`, `auth_smtp_password`, `auth_smtp_from`) and leaves the others as they are. A field sent as `null` also stays as it is. The agent refuses an `auth_*` field that it does not know. Field names match without regard to case, and the agent refuses a request that sends one auth field twice, such as `auth` and `AUTH`. `"auth": ""` turns sign-in off and clears the other `auth_*` settings, so it is refused when the same request sets one of them. To change the provider, send the new `auth` with the fields that fit it and clear the ones that do not (for example empty `auth_oidc_issuer`, `auth_oidc_client_id` and `auth_oidc_client_secret` when leaving OIDC, the empty `auth_saml_*` fields when leaving SAML, or the empty `auth_smtp_*` fields when leaving email); a combination the validators refuse changes nothing. A tunnel cannot hold both lists, so send an empty `auth_allowed_wallets` or `auth_email_list` to clear the key that no longer fits, in the same request that sets the other. `auth_oidc_client_secret` and `auth_smtp_password` are write-only, and an empty value clears them. A username and a password are set together, so clear `auth_smtp_password` and `auth_smtp_username` in the same request. The resulting tunnel must pass the same validation as `config.toml`; if it does not, the request fails and neither the file nor the running tunnel changes. Changed sign-in settings restart that tunnel and no other, because the sign-in gate is built when the tunnel starts, and visitors on its alias sign in again. It starts again from its saved settings: relays connected to it with `POST /agent/tunnels/{id}/relays` are not saved in `config.toml`, so it comes back without them. Metadata and `max_active_relays` update the running tunnel in place.
 

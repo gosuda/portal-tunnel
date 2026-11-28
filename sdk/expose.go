@@ -52,7 +52,7 @@ const (
 	RelayFailed     RelayState = "failed"
 )
 
-// RelayApproval reports that a relay refused this lease's reverse connection.
+// RelayApproval reports that a relay refused this lease.
 type RelayApproval string
 
 const (
@@ -60,7 +60,8 @@ const (
 	// relay reports a denied lease this way too.
 	RelayApprovalPending RelayApproval = "pending"
 	// RelayApprovalRefused means the relay denied or banned the lease:
-	// lease_denied on the wire, types.LeaseDenied in the relay.
+	// lease_denied on the wire, types.LeaseDenied in the relay. A relay that
+	// refuses the registration this way ends the listener.
 	RelayApprovalRefused RelayApproval = "refused"
 )
 
@@ -121,10 +122,12 @@ type RelayStatus struct {
 	// CertificateError describes an automatic issuance policy refusal. A live
 	// alias or an already valid local certificate can still work.
 	CertificateError error
-	// Approval is set while the relay refuses this lease's reverse connection.
-	// State stays RelayConnecting and no endpoint field is set, because nothing
-	// routes. Empty means no refusal was reported, and it never means approved:
-	// an old relay reports no revoke, and the browser SDK cannot read a refusal.
+	// Approval is set while the relay refuses this lease, and no endpoint field
+	// is set, because nothing routes. State stays RelayConnecting while the
+	// listener waits for approval. A refused registration is terminal: State is
+	// RelayFailed, and only a new listener registers again. Empty means no
+	// refusal was reported, and it never means approved: an old relay reports
+	// no revoke, and the browser SDK cannot read a refusal.
 	Approval RelayApproval
 	// Deselected marks a best-effort removal notification, never a stored
 	// snapshot: the relay left the desired membership set (discovery
